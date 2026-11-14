@@ -3,11 +3,12 @@
 //! source is projected into the session's current unkeyed native pointer signals.
 //! This is not a picking/capture owner or a historical presented-frame cache.
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameError,
     PointerFrameSnapshot, PointerFrameView,
 };
-use noon::{ExecutionSession, ExecutionSessionInputError, LiveContinuation, LiveProgram};
+use noon::{ExecutionSessionInputError, LiveContinuation, LiveProgram};
 
 pub(crate) fn recoverable_frame_error(error: &PointerFrameError) -> bool {
     matches!(

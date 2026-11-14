@@ -1,200 +1,130 @@
-//! Shared bounds become inert geometry inputs, consumed by the ordinary or live owner.
+//! Typed shape matcher bindings over a Scene or detached authored handles.
 #![cfg(target_arch = "wasm32")]
 
-use noon::ManimGeometryOptions;
+use noon::{ManimGeometryOptions, MobjectTarget};
 use noon_core::Bounds2D64;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    WasmAuthoringFamilyLayout, WasmAuthoringMobjectHandle, WasmManimGeometryOptions,
-    WasmMobjectLayoutObservation,
+    authoring_error::js_error, CanonicalAuthoringSceneContext, WasmAuthoringFamilyHandle,
+    WasmAuthoringMobjectHandle, WasmManimGeometryOptions,
 };
 
-use crate::authoring_error::js_error;
-
-fn mobject_bounds(handle: &WasmAuthoringMobjectHandle) -> Result<Bounds2D64, JsValue> {
-    let object = handle.semantic_mobject();
-    Ok(match object.layout_bounds().map_err(js_error)? {
-        Some(bounds) => bounds,
-        None => {
-            let point = object.state().map_err(js_error)?.transform.translation;
-            Bounds2D64::point(point.x, point.y)
-        }
-    })
+fn coordinates(bounds: Bounds2D64) -> Vec<f64> {
+    vec![bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y]
 }
 
-fn cross_line(
-    bounds: Bounds2D64,
-    index: u32,
-    scale_factor: f64,
-) -> Result<WasmManimGeometryOptions, JsValue> {
-    let [first, second] =
-        ManimGeometryOptions::cross_lines(Some(bounds), scale_factor).map_err(js_error)?;
-    match index {
-        0 => Ok(WasmManimGeometryOptions::from_options(first)),
-        1 => Ok(WasmManimGeometryOptions::from_options(second)),
-        _ => Err(js_error("Cross line index must be 0 or 1")),
-    }
+fn parse_bounds(values: Vec<f64>) -> Result<Bounds2D64, JsValue> {
+    let [min_x, min_y, max_x, max_y] = values
+        .try_into()
+        .map_err(|_| js_error("shape matcher bounds require four coordinates"))?;
+    Ok(Bounds2D64 {
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+    })
 }
 
 #[wasm_bindgen]
 impl WasmAuthoringMobjectHandle {
     #[wasm_bindgen(js_name = beginUnderline)]
     pub fn begin_underline(&self, buff: f64) -> Result<WasmManimGeometryOptions, JsValue> {
-        let bounds = self
-            .semantic_mobject()
-            .layout_bounds()
+        self.semantic_mobject()
+            .underline_options(buff)
+            .map(WasmManimGeometryOptions::from_options)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = shapeMatcherBounds)]
+    pub fn shape_matcher_bounds(&self) -> Result<Vec<f64>, JsValue> {
+        MobjectTarget::from(self.semantic_mobject())
+            .shape_matcher_bounds()
+            .map(coordinates)
+            .map_err(js_error)
+    }
+}
+
+#[wasm_bindgen]
+impl WasmAuthoringFamilyHandle {
+    #[wasm_bindgen(js_name = shapeMatcherBounds)]
+    pub fn shape_matcher_bounds(&self) -> Result<Vec<f64>, JsValue> {
+        MobjectTarget::from(&self.semantic_family()?)
+            .shape_matcher_bounds()
+            .map(coordinates)
+            .map_err(js_error)
+    }
+}
+
+#[wasm_bindgen]
+impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = mobjectShapeMatcherBounds)]
+    pub fn mobject_shape_matcher_bounds(
+        &mut self,
+        target: &WasmAuthoringMobjectHandle,
+    ) -> Result<Vec<f64>, JsValue> {
+        self.inner
+            .local_authoring_scene()
             .map_err(js_error)?
-            .ok_or_else(|| js_error("Underline target has no layout bounds"))?;
-        ManimGeometryOptions::underline(bounds, buff)
-            .map(WasmManimGeometryOptions::from_options)
+            .shape_matcher_bounds(target.semantic_mobject().into())
+            .map(coordinates)
             .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = beginCrossLine)]
-    pub fn begin_cross_line(
-        &self,
-        index: u32,
-        scale_factor: f64,
-    ) -> Result<WasmManimGeometryOptions, JsValue> {
-        cross_line(mobject_bounds(self)?, index, scale_factor)
-    }
-
-    #[wasm_bindgen(js_name = beginSurroundingRectangle)]
-    pub fn begin_surrounding_rectangle(
-        &self,
-        buff_x: f64,
-        buff_y: f64,
-        corner_radius: f64,
-    ) -> Result<WasmManimGeometryOptions, JsValue> {
-        ManimGeometryOptions::surrounding_rectangle(
-            mobject_bounds(self)?,
-            buff_x,
-            buff_y,
-            corner_radius,
-        )
-        .map(WasmManimGeometryOptions::from_options)
-        .map_err(js_error)
-    }
-
-    #[wasm_bindgen(js_name = beginBackgroundRectangle)]
-    pub fn begin_background_rectangle(
-        &self,
-        buff_x: f64,
-        buff_y: f64,
-        corner_radius: f64,
-        fill_opacity: f64,
-    ) -> Result<WasmManimGeometryOptions, JsValue> {
-        ManimGeometryOptions::background_rectangle(
-            mobject_bounds(self)?,
-            buff_x,
-            buff_y,
-            corner_radius,
-            fill_opacity,
-        )
-        .map(WasmManimGeometryOptions::from_options)
-        .map_err(js_error)
+    #[wasm_bindgen(js_name = familyShapeMatcherBounds)]
+    pub fn family_shape_matcher_bounds(
+        &mut self,
+        target: &WasmAuthoringFamilyHandle,
+    ) -> Result<Vec<f64>, JsValue> {
+        self.inner
+            .local_authoring_scene()
+            .map_err(js_error)?
+            .shape_matcher_bounds((&target.semantic_family()?).into())
+            .map(coordinates)
+            .map_err(js_error)
     }
 }
 
 #[wasm_bindgen]
-impl WasmAuthoringFamilyLayout {
-    #[wasm_bindgen(js_name = beginCrossLine)]
-    pub fn begin_cross_line(
-        &self,
-        index: u32,
-        scale_factor: f64,
-    ) -> Result<WasmManimGeometryOptions, JsValue> {
-        cross_line(self.bounds(), index, scale_factor)
-    }
-
-    #[wasm_bindgen(js_name = beginSurroundingRectangle)]
-    pub fn begin_surrounding_rectangle(
-        &self,
+impl WasmManimGeometryOptions {
+    #[wasm_bindgen(js_name = surroundingRectangle)]
+    pub fn surrounding_rectangle(
+        bounds: Vec<f64>,
         buff_x: f64,
         buff_y: f64,
-        corner_radius: f64,
-    ) -> Result<WasmManimGeometryOptions, JsValue> {
-        ManimGeometryOptions::surrounding_rectangle(self.bounds(), buff_x, buff_y, corner_radius)
-            .map(WasmManimGeometryOptions::from_options)
+        radius: f64,
+    ) -> Result<Self, JsValue> {
+        ManimGeometryOptions::surrounding_rectangle(parse_bounds(bounds)?, buff_x, buff_y, radius)
+            .map(Self::from_options)
             .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = beginBackgroundRectangle)]
-    pub fn begin_background_rectangle(
-        &self,
+    #[wasm_bindgen(js_name = backgroundRectangle)]
+    pub fn background_rectangle(
+        bounds: Vec<f64>,
         buff_x: f64,
         buff_y: f64,
-        corner_radius: f64,
-        fill_opacity: f64,
-    ) -> Result<WasmManimGeometryOptions, JsValue> {
+        radius: f64,
+        opacity: f64,
+    ) -> Result<Self, JsValue> {
         ManimGeometryOptions::background_rectangle(
-            self.bounds(),
+            parse_bounds(bounds)?,
             buff_x,
             buff_y,
-            corner_radius,
-            fill_opacity,
+            radius,
+            opacity,
         )
-        .map(WasmManimGeometryOptions::from_options)
-        .map_err(js_error)
-    }
-}
-
-fn observed_bounds(observation: &WasmMobjectLayoutObservation) -> Bounds2D64 {
-    Bounds2D64 {
-        min_x: observation.critical_x(-1.0, 0.0),
-        min_y: observation.critical_y(0.0, -1.0),
-        max_x: observation.critical_x(1.0, 0.0),
-        max_y: observation.critical_y(0.0, 1.0),
-    }
-}
-
-// This immutable query result already came from the current Rust owner. Reuse
-// that one observation for every candidate, including both Cross children.
-#[wasm_bindgen]
-impl WasmMobjectLayoutObservation {
-    #[wasm_bindgen(js_name = beginCrossLine)]
-    pub fn begin_cross_line(
-        &self,
-        index: u32,
-        scale_factor: f64,
-    ) -> Result<WasmManimGeometryOptions, JsValue> {
-        cross_line(observed_bounds(self), index, scale_factor)
-    }
-
-    #[wasm_bindgen(js_name = beginSurroundingRectangle)]
-    pub fn begin_surrounding_rectangle(
-        &self,
-        buff_x: f64,
-        buff_y: f64,
-        corner_radius: f64,
-    ) -> Result<WasmManimGeometryOptions, JsValue> {
-        ManimGeometryOptions::surrounding_rectangle(
-            observed_bounds(self),
-            buff_x,
-            buff_y,
-            corner_radius,
-        )
-        .map(WasmManimGeometryOptions::from_options)
+        .map(Self::from_options)
         .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = beginBackgroundRectangle)]
-    pub fn begin_background_rectangle(
-        &self,
-        buff_x: f64,
-        buff_y: f64,
-        corner_radius: f64,
-        fill_opacity: f64,
-    ) -> Result<WasmManimGeometryOptions, JsValue> {
-        ManimGeometryOptions::background_rectangle(
-            observed_bounds(self),
-            buff_x,
-            buff_y,
-            corner_radius,
-            fill_opacity,
-        )
-        .map(WasmManimGeometryOptions::from_options)
-        .map_err(js_error)
+    #[wasm_bindgen(js_name = crossLines)]
+    pub fn cross_lines(bounds: Option<Vec<f64>>, scale: f64) -> Result<js_sys::Array, JsValue> {
+        let lines = ManimGeometryOptions::cross_lines(bounds.map(parse_bounds).transpose()?, scale)
+            .map_err(js_error)?;
+        Ok(lines
+            .into_iter()
+            .map(|line| JsValue::from(Self::from_options(line)))
+            .collect())
     }
 }

@@ -15,8 +15,9 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         scene.add(&source)?;
         let mut running = scene.into_execution()?;
         let selected = running.scene_mut().subcurve(&source, 0.875, 0.375)?;
-        let mut live = running.live();
-        live.shift(&selected, 4., 0.)?;
+        running
+            .scene_mut()
+            .shift_3d(&selected, crate::SemanticVec3::new(4.0, 0.0, 0.0))?;
         running.scene_mut().set_stroke_color(
             &selected,
             f64::from(noon_core::YELLOW.red),

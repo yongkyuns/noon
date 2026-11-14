@@ -31,7 +31,7 @@ class ManimInterpolateTests(unittest.TestCase):
         }
         with patch.object(
             handles, "_handle_for", side_effect=lambda value: context_handles[value]
-        ), patch.object(handles, "_live_mutation_context", return_value=None), patch.object(
+        ), patch.object(handles, "_path_authoring_context", return_value=None), patch.object(
             updaters, "_canonical_phase_context", return_value=None
         ):
             self.assertIs(receiver.interpolate(start, end, 0.25), receiver)
@@ -50,12 +50,12 @@ class ManimInterpolateTests(unittest.TestCase):
         }
         with patch.object(
             handles, "_handle_for", side_effect=lambda value: context_handles[value]
-        ), patch.object(handles, "_live_mutation_context", return_value=context), patch.object(
+        ), patch.object(handles, "_path_authoring_context", return_value=context), patch.object(
             updaters, "_canonical_phase_context", return_value=None
         ):
             self.assertIs(receiver.interpolate(start, end, 0.75), receiver)
 
-        context.liveInterpolateMobject.assert_called_once_with(
+        context.interpolateMobject.assert_called_once_with(
             receiver._semantic_handle,
             start._semantic_handle,
             end._semantic_handle,
@@ -82,7 +82,7 @@ class ManimInterpolateTests(unittest.TestCase):
         ):
             self.assertIs(receiver.interpolate(start, end, 0.75), receiver)
 
-        context.liveInterpolateFamilyManimStyle.assert_called_once_with(
+        context.interpolateFamilyManimStyle.assert_called_once_with(
             receiver._semantic_family_handle,
             start._semantic_family_handle,
             end._semantic_family_handle,

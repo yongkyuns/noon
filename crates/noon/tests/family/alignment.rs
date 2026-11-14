@@ -1,7 +1,5 @@
 use noon::ManimNextToArgs;
-use noon::{
-    FamilyLayoutTarget as AuthoredTarget, LayoutAnchor, LiveLayoutTarget, Scene, SemanticVec3,
-};
+use noon::{FamilyLayoutTarget as AuthoredTarget, LayoutAnchor, LayoutTarget, Scene, SemanticVec3};
 
 fn args() -> ManimNextToArgs {
     ManimNextToArgs {
@@ -95,38 +93,67 @@ fn live_alignment_uses_effective_target_bounds_and_one_local_publication() {
     for object in [&first, &second, &target] {
         scene.add(object).unwrap();
     }
-    let mut execution = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut execution);
-    live.set_value(&tracker, 2.0).unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    execution.scene_mut().set_value(&tracker, 2.0).unwrap();
     let source = LayoutAnchor::from(&source_family);
     let aligner = source.clone().member(-1);
     let destination = LayoutAnchor::from(&target_family).member(0);
-    let before = scene.integration_store().borrow().scene_revision();
-    let result = live
+    let before = execution
+        .scene()
+        .integration_store()
+        .borrow()
+        .scene_revision();
+    let result = execution
+        .scene_mut()
         .next_layout_to_aligned(
             &source,
-            LiveLayoutTarget::Anchor(&destination),
+            LayoutTarget::Anchor(&destination),
             &aligner,
             args(),
         )
         .unwrap();
     assert_eq!(result.impacts().len(), 2);
     assert_eq!(
-        scene.integration_store().borrow().scene_revision(),
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
         before.checked_next().unwrap()
     );
-    assert_eq!(live.effective_layout(&first).unwrap().center, (7.75, 0.0));
-    assert_eq!(live.effective_layout(&second).unwrap().center, (9.75, 0.0));
+    assert_eq!(
+        execution.scene().effective_layout(&first).unwrap().center,
+        (7.75, 0.0)
+    );
+    assert_eq!(
+        execution.scene().effective_layout(&second).unwrap().center,
+        (9.75, 0.0)
+    );
     assert_eq!(target.center().unwrap(), (6.0, 0.0));
-    let before = scene.integration_store().borrow().scene_revision();
-    assert!(live
+    let before = execution
+        .scene()
+        .integration_store()
+        .borrow()
+        .scene_revision();
+    assert!(execution
+        .scene_mut()
         .next_layout_to_aligned(
             &source,
-            LiveLayoutTarget::Anchor(&destination.clone().member(1)),
+            LayoutTarget::Anchor(&destination.clone().member(1)),
             &aligner,
             args()
         )
         .is_err());
-    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
-    assert_eq!(live.effective_layout(&first).unwrap().center, (7.75, 0.0));
+    assert_eq!(
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
+        before
+    );
+    assert_eq!(
+        execution.scene().effective_layout(&first).unwrap().center,
+        (7.75, 0.0)
+    );
 }

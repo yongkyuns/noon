@@ -6,8 +6,8 @@
 
 use std::{error::Error, fmt};
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::RuntimeIdentity;
-use noon::ExecutionSession;
 use noon_core::PublicationContext;
 
 use crate::{gpu, CaptureError, CaptureOptions, CapturePixelFormat, CaptureSummary, CaptureWork};

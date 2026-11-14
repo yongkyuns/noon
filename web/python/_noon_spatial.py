@@ -14,8 +14,8 @@ from operator import index as _integer_index
 import noon as _base
 from _noon_errors import engine_call
 from _manim_semantic_handles import (
-    _attach_shared_handle, _handle_for, _live_constructor_context,
-    _live_mutation_context, _group_target_context,
+    _attach_shared_handle, _handle_for, _path_authoring_context,
+    _group_target_context,
 )
 
 try:
@@ -99,30 +99,28 @@ def _prism_face_family_options(size, shade_in_3d=False):
 class _WorldMobject(_base.Mobject):
     """Motion routes through shared Rust authored/effective world operations."""
 
-    def _world_call(self, authored, live, *args):
+    def _world_call(self, authored, scene_method, *args):
         family = getattr(self, "_semantic_family_handle", None)
         handle = family if family is not None else _handle_for(self)
         if handle is None:
             raise NotImplementedError("world edits require an ordinary typed authoring context")
-        family_operations = {"shiftWorld", "rotateWorld", "scaleWorld"}
-        if family is not None and authored not in family_operations | {"worldFamilyCenter"}:
-            raise NotImplementedError("world transforms require one spatial Mobject; family transforms are unavailable")
-        context = _group_target_context(self) if family is not None else _live_mutation_context(self)
         if family is not None:
+            context = _group_target_context(self)
             if context is None:
                 if authored == "rotateWorld":
                     args = (args[3], _bulk(args[:3]), *args[4:])
                 return engine_call(getattr(handle, authored), *args)
-            family_live = {
+            family_methods = {
                 "shiftWorld": "shiftFamilyWorld",
                 "rotateWorld": "rotateFamilyWorld",
                 "scaleWorld": "scaleFamilyWorld",
                 "worldFamilyCenter": "effectiveWorldFamilyCenter",
             }
-            return engine_call(getattr(context, family_live[authored]), handle, *args)
+            return engine_call(getattr(context, family_methods[authored]), handle, *args)
+        context = _path_authoring_context(self)
         if context is None:
             return engine_call(getattr(handle, authored), *args)
-        return engine_call(getattr(context, live), handle, *args)
+        return engine_call(getattr(context, scene_method), handle, *args)
 
     @property
     def world_transform(self):
@@ -133,8 +131,7 @@ class _WorldMobject(_base.Mobject):
     def get_center(self):
         family = getattr(self, "_semantic_family_handle", None)
         authored = "worldFamilyCenter" if family is not None else "worldCenter"
-        live = "effectiveWorldFamilyCenter" if family is not None else "effectiveWorldCenter"
-        return _pose(self._world_call(authored, live))
+        return _pose(self._world_call(authored, "effectiveWorldCenter"))
 
     @property
     def animate(self):
@@ -170,7 +167,7 @@ class Mesh3D(_WorldMobject):
             fill = _as_color("mesh color", color)
             engine_call(candidate.setColor, fill.red, fill.green, fill.blue, fill.alpha)
             engine_call(candidate.setPointLit, point_lit)
-            context = _live_constructor_context("mesh")
+            context = _path_authoring_context()
         except BaseException:
             candidate.free()
             raise
@@ -337,10 +334,12 @@ class SpatialScene(_base.Scene):
         from _manim_compat import _as_color
         from _manim_scene import _context
         fill = _as_color("light color", color)
-        handle = engine_call(_context(self).createPointLight3D, _bulk(_vector(position)),
+        context = _context(self)
+        handle = engine_call(context.createPointLight3D, _bulk(_vector(position)),
                              _bulk((fill.red, fill.green, fill.blue, fill.alpha)), float(intensity))
         light = object.__new__(_WorldMobject)
         _attach_shared_handle(light, handle)
+        light._canonical_live_target_context = context
         light._semantic_point_light = True
         if hasattr(self, "_manim_camera_light_source") and self._manim_camera_light_source is None:
             self._manim_camera_light_source = light
@@ -491,7 +490,7 @@ class _RendererCameraProxy:
         if light is None:
             light = self._scene.point_light(position=(-7, -9, 10))
         # PointLight3D remains an ordinary Rust semantic object. Membership is
-        # edited through the same Scene/LiveSession operation as any Mobject.
+        # edited through the same Scene operation as any Mobject.
         self._scene.add_world_mobjects(light)
         return light
 

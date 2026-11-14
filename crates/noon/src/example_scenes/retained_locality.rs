@@ -5,8 +5,8 @@ use crate::{
     SemanticAnimationCompositionKind, SemanticVec3,
 };
 use noon_core::{
-    CompositionTimeMap, SemanticAnimationIntent, SemanticMutationTransaction,
-    SemanticObjectTrackProperty, SemanticObjectTrackValues, TrackTiming,
+    CompositionTimeMap, SemanticMutationTransaction, SemanticObjectTrackProperty,
+    SemanticObjectTrackValues, TrackTiming,
 };
 
 pub const OBJECT_COUNT: usize = 100_000;
@@ -35,18 +35,18 @@ pub fn scene() -> Result<(Scene, Vec<Mobject>), String> {
 }
 
 /// Add the single-target track used by the direct-WASM authored-time proof.
-pub fn target_animation(scene: &Scene, target: &Mobject) -> Result<DeclaredAnimation, String> {
+pub fn target_animation(scene: &mut Scene, target: &Mobject) -> Result<DeclaredAnimation, String> {
     target_animation_with_duration(scene, target, 1.0)
 }
 
 /// Add the single-target track with an explicit duration for sustained browser sampling.
 pub fn target_animation_with_duration(
-    scene: &Scene,
+    scene: &mut Scene,
     target: &Mobject,
     duration: f64,
 ) -> Result<DeclaredAnimation, String> {
-    let from = target
-        .state()
+    let from = scene
+        .authored(target)
         .map_err(|error| error.to_string())?
         .transform
         .translation;
@@ -61,16 +61,20 @@ pub fn target_animation_with_duration(
         TrackTiming::new(0.0, duration, RateFunction::Linear),
         CompositionTimeMap::identity(),
     );
-    let committed = transaction
-        .apply(&mut scene.integration_store().borrow_mut())
-        .map_err(|error| error.to_string())?;
-    scene.declare_animation(
-        SemanticAnimationIntent::Composition {
-            kind: SemanticAnimationCompositionKind::Parallel,
-            children: vec![committed.resolve(track).expect("committed position track")],
-        },
+    let root = transaction.create_animation_composition(
+        SemanticAnimationCompositionKind::Parallel,
+        [track],
         AnimationOptions::new(),
-    )
+    );
+    let node = scene
+        .apply_semantic_transaction(transaction)
+        .map_err(|error| error.to_string())?
+        .resolve(root)
+        .ok_or_else(|| "position track root was not resolved".to_owned())?;
+    Ok(DeclaredAnimation::new(
+        scene.integration_store().clone(),
+        node,
+    ))
 }
 
 #[cfg(test)]
@@ -83,7 +87,7 @@ mod tests {
         let mut scene = Scene::new();
         let target = scene.circle(0.25).unwrap();
         scene.add(&target).unwrap();
-        let animation = target_animation(&scene, &target).unwrap();
+        let animation = target_animation(&mut scene, &target).unwrap();
         let mut session = scene
             .execution_session_with_animation_root(&animation)
             .unwrap();

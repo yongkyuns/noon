@@ -27,17 +27,25 @@ class ManimNumberWrapperTests(unittest.TestCase):
                 def __init__(self, value): self._value = value; self.semantic = Semantic()
                 def mobject(self): return self.semantic
                 def value(self, context=None):
-                    return context.queryMobjectDecimalValue(self.semantic) if context is not None else self._value
+                    return context.decimalValue(self) if context is not None else self._value
                 def text(self): return f"{self._value:.2f}"
                 def fontSize(self, context):
                     calls.append(("font-size", context))
                     return 96.0 if context is not None else 48.0
                 def integerValue(self, context=None):
-                    return context.queryMobjectIntegerValue(self.semantic) if context is not None else round(self._value)
-                def setValue(self, value): calls.append(("set", value)); self._value = value
-                def incrementValue(self, delta): calls.append(("increment", delta)); self._value += delta
-                def setValueLive(self, context, value): context.liveSetDecimalValue(self.semantic, value); self._value = value
-                def incrementValueLive(self, context, delta): context.liveIncrementDecimalValue(self.semantic, delta); self._value += delta
+                    return context.integerValue(self) if context is not None else round(self._value)
+                def setValue(self, value, context=None):
+                    if context is None:
+                        calls.append(("set", value))
+                    else:
+                        context.setDecimalValue(self, value)
+                    self._value = value
+                def incrementValue(self, delta, context=None):
+                    if context is None:
+                        calls.append(("increment", delta))
+                    else:
+                        context.incrementDecimalValue(self, delta)
+                    self._value += delta
 
             def create(*args):
                 calls.append(("create", args))
@@ -49,8 +57,8 @@ class ManimNumberWrapperTests(unittest.TestCase):
             sys.modules["js"] = fake_js
 
             import _manim_numbers as numbers
+            import _manim_reactive as reactive
             import noon
-            numbers._live_text_context = lambda: None
             decimal = noon.DecimalNumber(1.25, num_decimal_places=2, include_sign=True, unit="m")
             assert calls[0][0] == "create"
             assert calls[0][1][:7] == (1.25, 2, True, True, False, "m", 48.0)
@@ -67,19 +75,20 @@ class ManimNumberWrapperTests(unittest.TestCase):
                     return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
 
                 def liveExecutionOwnership(self): return "returned"
-                def liveSetColor(self, *args): calls.append(("live-color", args))
-                def liveSetObjectOpacity(self, *args): calls.append(("live-opacity", args))
-                def liveSetDecimalValue(self, semantic, value):
+                def setColor(self, *args): calls.append(("live-color", args))
+                def setObjectOpacity(self, *args): calls.append(("live-opacity", args))
+                def setDecimalValue(self, semantic, value):
                     calls.append(("live-set", semantic, value))
-                def liveIncrementDecimalValue(self, semantic, value):
+                def incrementDecimalValue(self, semantic, value):
                     calls.append(("live-increment", semantic, value))
-                def queryMobjectDecimalValue(self, semantic):
+                def decimalValue(self, semantic):
                     calls.append(("live-value", semantic)); return 7.5
-                def queryMobjectIntegerValue(self, semantic):
+                def integerValue(self, semantic):
                     calls.append(("live-integer-value", semantic)); return 8
 
             context = Context()
-            numbers._live_text_context = lambda: context
+            scene = types.SimpleNamespace(_canonical_authoring_context=context)
+            reactive._current_authoring_scene = lambda: scene
             live = noon.Integer(2.5)
             assert live._canonical_live_target_context is context
             assert calls[-3][0] == "create"
@@ -99,16 +108,23 @@ class ManimNumberWrapperTests(unittest.TestCase):
                 "live-set", "live-increment",
             ]
 
-            class ColdContext:
+            class ColdContext(Context):
                 def requiresLiveMutationRouting(self):
                     return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
 
-                def liveExecutionOwnership(self): return "unstarted"
+                def liveExecutionOwnership(self): return "none"
 
             cold_context = ColdContext()
+            scene._canonical_authoring_context = cold_context
+            authored = noon.DecimalNumber(4)
+            assert authored._canonical_live_target_context is cold_context
+            assert [entry for entry in calls if entry[0] == "create"][-1][1][-1] is cold_context
             wrapped = numbers.DecimalNumber._from_numeric_handle(Number(4), cold_context)
             assert wrapped._canonical_live_target_context is cold_context
-            assert [entry for entry in calls if entry[0] == "font-size"][-1][1] is None
+            assert [entry for entry in calls if entry[0] == "font-size"][-1][1] is cold_context
+            authored.set_value(5).increment_value(2)
+            writes = [entry for entry in calls if entry[0] in {"live-set", "live-increment"}]
+            assert writes[-2:] == [("live-set", authored._numeric_handle, 5), ("live-increment", authored._numeric_handle, 2)]
             wrapped_live = numbers.DecimalNumber._from_numeric_handle(Number(4), context)
             assert [entry for entry in calls if entry[0] == "font-size"][-1][1] is context
             """

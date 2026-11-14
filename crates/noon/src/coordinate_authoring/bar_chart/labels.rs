@@ -254,26 +254,24 @@ impl Scene {
         let store = Rc::clone(self.integration_store());
         crate::MobjectTarget::from(chart.family())
             .require_store(&store)
-            .map_err(crate::LiveSessionError::from)
             .map_err(CoordinateAuthoringError::from)?;
         let Some(execution) = self.running_execution() else {
             return chart.get_bar_labels(backend, options);
         };
         let prepared = PreparedBarLabels::prepare(chart, backend, options, |object| {
             crate::effective_capture::capture_mobject_state(&store, execution, object)
-                .map_err(crate::LiveSessionError::from)
                 .map_err(Into::into)
         })?;
         let (_, node) = self.with_semantic_publication(|store, publish| {
-            Ok(prepared.publish_into(
+            prepared.publish_into(
                 store,
                 None,
                 SemanticMutationTransaction::new(),
                 |store, transaction| {
                     publish(store, transaction).map_err(TextAuthoringError::Semantic)
                 },
-            ))
-        })??;
+            )
+        })?;
         MobjectFamily::from_node(store, node).map_err(Into::into)
     }
 }

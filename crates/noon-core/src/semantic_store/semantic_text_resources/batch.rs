@@ -392,7 +392,8 @@ impl SemanticStore {
         result
     }
 
-    fn with_glyph_text_resources<T, E>(
+    /// Stage glyph resources around one caller-owned semantic publication.
+    pub fn with_glyph_text_resources<T, E>(
         &mut self,
         inputs: Vec<(TextResource, FontResourceArena)>,
         publish: impl FnOnce(&mut Self, &[TextResourceHandle]) -> Result<T, E>,
@@ -465,9 +466,6 @@ impl SemanticStore {
     }
 
     /// Publish glyph-only text resources and one cold semantic transaction.
-    ///
-    /// This is deliberately NOT a live-execution publication callback. Live
-    /// detached construction uses [`Self::publish_glyph_detached_text`].
     pub fn apply_glyph_text_transaction<E>(
         &mut self,
         inputs: Vec<(TextResource, FontResourceArena)>,

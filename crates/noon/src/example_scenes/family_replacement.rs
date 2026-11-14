@@ -31,19 +31,21 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     scene
         .add_many(&[(&family).into(), (&target).into()])
         .map_err(|e| e.to_string())?;
-    let mut session = scene.execution_session().map_err(|e| e.to_string())?;
+    let mut session = scene.into_execution().map_err(|e| e.to_string())?;
     {
-        let mut live = scene.live(&mut session);
-        live.replace_layout(&(&family).into(), &(&target).into(), Width, true)
+        session
+            .scene_mut()
+            .replace_layout(&(&family).into(), &(&target).into(), Width, true)
             .map_err(|e| e.to_string())?;
-        live.shift_family(&family, 0.0, 4.0)
+        session
+            .scene_mut()
+            .shift_family(&family, 0.0, 4.0)
             .map_err(|e| e.to_string())?;
+        let mut live = session.live();
         let wait = live.wait_segment(0.2).map_err(|e| e.to_string())?;
         live.advance_segment_to(wait, wait.end_time())
             .map_err(|e| e.to_string())?;
         live.complete_segment(wait).map_err(|e| e.to_string())?;
     }
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(session)
 }

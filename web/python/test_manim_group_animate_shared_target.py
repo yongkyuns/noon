@@ -193,18 +193,18 @@ class ManimGroupAnimateSharedTargetTests(unittest.TestCase):
                 def liveExecutionOwnership(self):
                     return "active"
 
-                def liveTargetEditor(self, handle):
+                def targetEditor(self, handle):
                     self.calls.append(("leaf", handle.identity()))
                     return handle.targetEditor()
 
                 def beginMembershipBatch(self, kind):
                     return _family_test.FakeMembershipBatch(kind)
 
-                def liveCopyFamily(self, family, references):
+                def copyFamily(self, family, references):
                     self.calls.append(("copy-family", family.identity()))
                     return family.copyFamily(references)
 
-                def liveShiftFamily(self, family, x, y):
+                def shiftFamily(self, family, x, y):
                     self.calls.append(("shift-family", family.identity(), float(x), float(y)))
 
             context = FakeCanonicalContext()

@@ -160,10 +160,6 @@ impl PlayerOwnership {
         Ok(())
     }
 
-    pub(super) fn returned_is_stale(&self, authored: SceneRevision) -> bool {
-        matches!(self, Self::Returned(player) if player.scene_revision() != authored)
-    }
-
     /// All fallible preparation must finish before ownership is moved.
     pub(super) fn transfer(&mut self) -> Result<SemanticExecutionPlayer, String> {
         let identity = match self {

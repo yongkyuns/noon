@@ -212,51 +212,35 @@ fn worker_inspection_during_real_indicate_preserves_restoration_and_authored_gua
     let mut scene = noon::Scene::new();
     let circle = scene.circle(1.0).unwrap();
     scene.add(&circle).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let original = scene.live(&mut session).effective(&circle).unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut execution = scene.into_execution().unwrap();
+    let original = execution.scene().effective(&circle).unwrap();
+    let segment = execution
+        .live()
         .declare_and_activate_indicate(
             &circle,
             noon::IndicateOptions::default(),
             noon::AnimationOptions::new().run_time(1.0),
         )
         .unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.5)
-        .unwrap();
-    let midpoint = scene.live(&mut session).effective(&circle).unwrap();
+    execution.live().advance_segment_to(segment, 0.5).unwrap();
+    let midpoint = execution.scene().effective(&circle).unwrap();
     assert!(midpoint.transform.scale.x > original.transform.scale.x);
-    let semantics = std::rc::Rc::clone(scene.integration_store());
-    let root = scene.root();
-    let mut p = SemanticExecutionPlayer::from_scene_execution(
-        scene.into_execution_with_session(session).unwrap(),
-        2.0,
-        7,
-    )
-    .unwrap();
+    let mut p = SemanticExecutionPlayer::from_scene_execution(execution, 2.0, 7).unwrap();
     p.pause();
     register(&mut p, 1);
     let r = receipt(&delta(&mut p), 1);
     assert!(acknowledge(&mut p, r));
     assert_eq!(scroll(&mut p, Some(r), zoom_in()), Ok(Some(true)));
     assert_eq!(p.source.session().frame().time, 0.5);
-    assert!(
-        noon::LiveSession::new(&semantics, root, p.source.session_mut())
-            .set_translation(&circle, 9.0, 0.0)
-            .is_err()
-    );
+    assert!(p
+        .source
+        .scene_mut()
+        .set_translation(&circle, 9.0, 0.0)
+        .is_err());
     let inspection = p.source.session().inspection_camera().unwrap();
-    noon::LiveSession::new(&semantics, root, p.source.session_mut())
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    noon::LiveSession::new(&semantics, root, p.source.session_mut())
-        .complete_segment(segment)
-        .unwrap();
-    let final_state = noon::LiveSession::new(&semantics, root, p.source.session_mut())
-        .effective(&circle)
-        .unwrap();
+    p.source.live().advance_segment_to(segment, 1.0).unwrap();
+    p.source.live().complete_segment(segment).unwrap();
+    let final_state = p.source.scene().effective(&circle).unwrap();
     assert_eq!(final_state.transform, original.transform);
     assert_eq!(final_state.style, original.style);
     assert_eq!(delta(&mut p).retained.camera, inspection);

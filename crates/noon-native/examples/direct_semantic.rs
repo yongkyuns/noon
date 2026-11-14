@@ -1,4 +1,4 @@
-use noon::Scene;
+use noon::integration::scene_execution;
 use noon_core::{SemanticObjectState, SemanticStore, StoredGeometry};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     store.add_semantic_family_member(root, circle)?;
 
     let scene =
-        Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)?;
+        scene_execution::adopt_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)?;
     let session = scene.into_execution()?;
     noon_native::run(session)?;
     Ok(())

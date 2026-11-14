@@ -52,7 +52,6 @@ class NumericLabelAdapterTests(unittest.TestCase):
         patch.object(labels._plot, '_coordinate_options', SimpleNamespace(numberLabels=self.make)).start()
         patch.object(labels._plot, '_to_js', side_effect=list).start()
         patch.object(labels._plot, '_outside_callback').start()
-        patch.object(labels._shared, '_live_constructor_context', return_value=None).start()
         patch.object(labels, 'engine_call', side_effect=lambda fn, *args: fn(*args)).start()
         self.wrapped = patch.object(labels, '_family', side_effect=lambda handle, *args: handle).start()
         patch.object(labels._shared, '_family_wrapper_key', side_effect=id).start()
@@ -662,11 +661,7 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual([entry[0] for entry in self.created], ["Fixture Sans", "Fixture Sans"])
 
-    def test_live_and_callback_guards_precede_allocation(self):
-        labels._shared._live_constructor_context.return_value = object()
-        with self.assertRaises(NotImplementedError):
-            self.invoke((1,))
-        labels._shared._live_constructor_context.return_value = None
+    def test_callback_guard_precedes_allocation(self):
         labels._plot._outside_callback.side_effect = NotImplementedError('callback')
         with self.assertRaises(NotImplementedError):
             self.invoke((1,))

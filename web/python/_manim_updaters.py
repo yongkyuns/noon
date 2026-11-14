@@ -486,7 +486,7 @@ def match_updaters(self: _base.Mobject, mobject: _base.Mobject) -> _base.Mobject
 def _suspension_target(mobject: _base.Mobject):
     import _manim_semantic_handles as semantic
 
-    target, context, suffix = semantic._style_target(mobject)
+    target, context, suffix = semantic._paint_authoring_target(mobject)
     if target is None:
         raise RuntimeError("updater suspension requires a current shared Rust handle")
     return target, context, suffix
@@ -504,7 +504,7 @@ def _set_updating_suspended(
     if context is None:
         engine_call(target.setUpdatingSuspended, suspended, recursive)
     else:
-        method = "liveSetFamilyUpdatingSuspended" if suffix == "Family" else "liveSetUpdatingSuspended"
+        method = "setFamilyUpdatingSuspended" if suffix == "Family" else "setUpdatingSuspended"
         engine_call(getattr(context, method), target, suspended, recursive)
     return mobject
 

@@ -65,7 +65,7 @@ fn supported_bootstrap_keeps_identity_and_clean_publications() {
 
 #[test]
 fn predeclared_motion_and_glow_complete_through_public_scene() {
-    let (scene, source) = fixture(true);
+    let (mut scene, source) = fixture(true);
     let old = definition(&source);
     let mut target = source.target_editor().unwrap();
     target.shift(2.0, 0.0).unwrap();
@@ -139,7 +139,10 @@ fn live_target_preserves_an_independent_attachment_then_activates() {
         .scene_mut()
         .set_glow(&target, EffectUpdate::default().intensity(1.5))
         .unwrap();
-    session.live().shift(&target, 2.0, 0.0).unwrap();
+    session
+        .scene_mut()
+        .shift_3d(&target, crate::SemanticVec3::new(2.0, 0.0, 0.0))
+        .unwrap();
     assert!(session
         .session_mut()
         .take_renderer_publication()
@@ -163,7 +166,7 @@ fn live_add_remove_and_stale_handle_preserve_source_and_spatial_state() {
         .session()
         .execution_object_id(source.node_id())
         .unwrap();
-    let layout = session.live().effective_layout(&source).unwrap();
+    let layout = session.scene().effective_layout(&source).unwrap();
     session.session_mut().take_renderer_publication();
     session.scene_mut().set_glow(&source, initial()).unwrap();
     let original = source.get_effect("glow").unwrap();
@@ -188,7 +191,7 @@ fn live_add_remove_and_stale_handle_preserve_source_and_spatial_state() {
         session.session().execution_object_id(source.node_id()),
         Some(object_id)
     );
-    let after_layout = session.live().effective_layout(&source).unwrap();
+    let after_layout = session.scene().effective_layout(&source).unwrap();
     assert_eq!(
         (after_layout.center, after_layout.width, after_layout.height),
         (layout.center, layout.width, layout.height)
@@ -215,7 +218,7 @@ fn public_glow_profile_rejects_invalid_live_edits_without_partial_commit() {
     }
     let before = session.session().publication_context();
     let original = row(session.session(), &source).clone();
-    assert!(session.live().set_scale(&source, 0.0, 1.0).is_err());
+    assert!(session.scene_mut().set_scale(&source, 0.0, 1.0).is_err());
     assert!(session
         .scene_mut()
         .add_effect(&source, noon_core::Glow::default(), "other")
@@ -227,7 +230,10 @@ fn public_glow_profile_rejects_invalid_live_edits_without_partial_commit() {
         SemanticVec3::new(9.0, 0.0, 0.0),
     );
     batch.create_effect(source.node_id(), "second", noon_core::Glow::default());
-    assert!(session.live().apply(batch).is_err());
+    assert!(session
+        .scene_mut()
+        .apply_semantic_transaction(batch)
+        .is_err());
     assert_eq!(session.session().publication_context(), before);
     assert_eq!(row(session.session(), &source), &original);
     assert!(source.get_effect("second").is_err());
@@ -243,17 +249,20 @@ fn detached_unsupported_target_is_inert_until_membership_admission() {
             .add_effect(noon_core::Glow::default(), &format!("extra{i}"))
             .unwrap();
     }
-    let mut session = scene.execution_session().unwrap();
-    assert!(row(&session, &source).effects.is_none());
-    let before = session.publication_context();
-    assert!(scene.live(&mut session).add(&target).is_err());
-    assert_eq!(session.publication_context(), before);
-    assert!(session.execution_object_id(target.node_id()).is_none());
+    let mut session = scene.into_execution().unwrap();
+    assert!(row(session.session(), &source).effects.is_none());
+    let before = session.session().publication_context();
+    assert!(session.scene_mut().add(&target).is_err());
+    assert_eq!(session.session().publication_context(), before);
+    assert!(session
+        .session()
+        .execution_object_id(target.node_id())
+        .is_none());
 }
 
 #[test]
 fn public_replay_restores_original_attachment_after_completed_motion_and_removal() {
-    let (scene, source) = fixture(true);
+    let (mut scene, source) = fixture(true);
     let original = definition(&source);
     let original_id = source.get_effect("glow").unwrap().node_id();
     let mut target = source.target_editor().unwrap();
@@ -301,7 +310,7 @@ fn returning_and_reversed_rates_reconcile_exact_public_endpoints() {
         (RateFunction::ThereAndBack, false),
         (RateFunction::Linear, true),
     ] {
-        let (scene, source) = fixture(true);
+        let (mut scene, source) = fixture(true);
         let original = definition(&source);
         let mut target = source.target_editor().unwrap();
         target
@@ -331,7 +340,7 @@ fn returning_and_reversed_rates_reconcile_exact_public_endpoints() {
 
 #[test]
 fn pending_segment_keeps_the_existing_publication_barrier() {
-    let (scene, source) = fixture(true);
+    let (mut scene, source) = fixture(true);
     let mut target = source.target_editor().unwrap();
     target
         .set_glow(EffectUpdate::default().intensity(1.4))
@@ -660,7 +669,7 @@ fn ordinary_composition_rejects_stacked_absent_glow_without_any_publication() {
 
 fn immutable_glow_execution(rate: RateFunction) -> (crate::SceneExecution, Mobject) {
     use noon_core::SemanticAnimationIntent;
-    let (scene, source) = fixture(true);
+    let (mut scene, source) = fixture(true);
     let mut target = source.target_editor().unwrap();
     target.shift(2.0, 0.0).unwrap();
     target
@@ -736,7 +745,7 @@ fn initial_glow_targets_admit_immutable_seek_with_exact_endpoints_and_authored_s
 fn initial_effect_targets_allow_disjoint_channels_and_reject_conflicts_without_mutation() {
     use noon_core::SemanticAnimationIntent;
     for conflicting in [false, true] {
-        let (scene, source) = fixture(true);
+        let (mut scene, source) = fixture(true);
         let mut first = source.target_editor().unwrap();
         first
             .set_glow(EffectUpdate::default().intensity(1.4))
@@ -799,7 +808,7 @@ fn initial_affine_target_rejects_overlapping_exact_tracks_in_either_child_order(
         SemanticObjectTrackValues, TrackTiming,
     };
     for (reversed, start) in [(false, 0.0), (true, 0.0), (false, 2.0), (true, 2.0)] {
-        let (scene, source) = fixture(true);
+        let (mut scene, source) = fixture(true);
         let mut target = source.target_editor().unwrap();
         target.shift(2.0, 0.0).unwrap();
         let affine = scene

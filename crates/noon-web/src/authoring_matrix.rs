@@ -55,7 +55,7 @@ impl WasmMatrixHandle {
 #[wasm_bindgen]
 impl WasmAuthoringFamilyHandle {
     /// Apply a matrix to the detached target family using the shared retained
-    /// path-replacement transaction. Running scenes use `liveApplyMatrixFamily`.
+    /// path-replacement transaction. Scene-owned families use the context’s `applyMatrixFamily`.
     #[wasm_bindgen(js_name = applyMatrix)]
     pub fn apply_matrix(
         &self,

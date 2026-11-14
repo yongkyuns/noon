@@ -172,7 +172,7 @@ fn rejected_live_attachment_preserves_both_scene_and_runtime() {
             .is_err());
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&dot)
                 .unwrap()
                 .transform
@@ -187,10 +187,10 @@ fn rejected_live_attachment_preserves_both_scene_and_runtime() {
         nodes_before
     );
     {
-        session.live().set_translation(&dot, 1.0, 0.0).unwrap();
+        session.scene_mut().set_translation(&dot, 1.0, 0.0).unwrap();
         assert_eq!(
             session
-                .live()
+                .scene()
                 .effective(&dot)
                 .unwrap()
                 .transform

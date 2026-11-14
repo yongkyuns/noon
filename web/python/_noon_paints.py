@@ -140,7 +140,7 @@ class RadialGradient:
 
 
 def set_fill(value, paint, opacity):
-    from _manim_semantic_handles import _handle_for, _is_shared_family, _live_mutation_context
+    from _manim_semantic_handles import _handle_for, _is_shared_family, _path_authoring_context
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("paint callback edits require shared staged paint publication")
@@ -150,31 +150,21 @@ def set_fill(value, paint, opacity):
     if handle is None:
         raise RuntimeError("paint fills require a shared Rust authoring handle")
     opacity = None if opacity is None else _number(opacity, "fill opacity")
-    context = _live_mutation_context(value)
     if isinstance(paint, ImagePaint):
-        if context is None:
-            engine_call(handle.setFillImage, paint._definition, opacity)
-        else:
-            engine_call(context.liveSetFillImage, handle, paint._definition, opacity)
+        method = "setFillImage"
     elif isinstance(paint, HatchPaint):
-        if context is None:
-            engine_call(handle.setFillHatch, paint._definition, opacity)
-        else:
-            engine_call(context.liveSetFillHatch, handle, paint._definition, opacity)
+        method = "setFillHatch"
     elif isinstance(paint, NoisePaint):
-        if context is None:
-            engine_call(handle.setFillNoise, paint._definition, opacity)
-        else:
-            engine_call(context.liveSetFillNoise, handle, paint._definition, opacity)
+        method = "setFillNoise"
     elif isinstance(paint, RadialGradient):
-        if context is None:
-            engine_call(handle.setFillRadialGradient, paint._definition, opacity)
-        else:
-            engine_call(context.liveSetFillRadialGradient, handle, paint._definition, opacity)
-    elif context is None:
-        engine_call(handle.setFillGradient, paint._definition, opacity)
+        method = "setFillRadialGradient"
     else:
-        engine_call(context.liveSetFillGradient, handle, paint._definition, opacity)
+        method = "setFillGradient"
+    context = _path_authoring_context(value)
+    if context is None:
+        engine_call(getattr(handle, method), paint._definition, opacity)
+    else:
+        engine_call(getattr(context, method), handle, paint._definition, opacity)
     return value
 
 
@@ -252,7 +242,7 @@ class ImagePaint:
 
 
 def set_image_mapping(value, mapping, opacity):
-    from _manim_semantic_handles import _handle_for, _is_shared_family, _live_mutation_context
+    from _manim_semantic_handles import _handle_for, _is_shared_family, _path_authoring_context
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if not isinstance(mapping, ImageMapping):
         raise TypeError("image mapping must be an ImageMapping")
@@ -262,9 +252,9 @@ def set_image_mapping(value, mapping, opacity):
     if handle is None:
         raise RuntimeError("image mapping edits require a shared Rust authoring handle")
     opacity = None if opacity is None else _number(opacity, "fill opacity")
-    context = _live_mutation_context(value)
+    context = _path_authoring_context(value)
     if context is None:
         engine_call(handle.setFillImageMapping, mapping._definition, opacity)
     else:
-        engine_call(context.liveSetFillImageMapping, handle, mapping._definition, opacity)
+        engine_call(context.setFillImageMapping, handle, mapping._definition, opacity)
     return value

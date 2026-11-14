@@ -136,13 +136,7 @@ class ManimSharedFamilyArrangeTests(unittest.TestCase):
                 def __init__(self):
                     self.calls = []
 
-                def requiresLiveMutationRouting(self):
-                    return self.liveExecutionOwnership() in {"active", "returned", "transferred"}
-
-                def liveExecutionOwnership(self):
-                    return "active"
-
-                def liveArrangeFamily(self, family, options):
+                def arrangeFamily(self, family, options):
                     direction_x, direction_y, buff, center = options[:4]
                     self.calls.append(
                         (family.identity, float(direction_x), float(direction_y), float(buff), bool(center))

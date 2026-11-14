@@ -51,20 +51,6 @@ _ARROW_CONSTRUCTOR_OPTIONS = frozenset(
     }
 )
 
-_FIELD_QUERY_METHODS = {
-    "startX": "vectorStartX",
-    "startY": "vectorStartY",
-    "endX": "vectorEndX",
-    "endY": "vectorEndY",
-    "vectorX": "vectorVectorX",
-    "vectorY": "vectorVectorY",
-    "length": "vectorLength",
-    "angle": "vectorAngle",
-    "unitVectorX": "vectorUnitVectorX",
-    "unitVectorY": "vectorUnitVectorY",
-}
-
-
 def _numeric_endpoint(name: str, value: object) -> _base.Vec2:
     if isinstance(value, (_base.Mobject, _compat.Group)):
         raise NotImplementedError(
@@ -213,14 +199,14 @@ def _create(
 ) -> None:
     if _create_arrow_handle is None:
         raise RuntimeError("Arrow construction requires the shared Rust authoring host")
-    context = _shared._live_constructor_context("Arrow")
+    context = _shared._path_authoring_context()
     _apply_constructor_options(options, kwargs)
     if color is not None:
         _shared._apply_constructor_color(options, _compat._as_color("color", color))
     if context is None:
         created = engine_call(_create_arrow_handle, options)
     else:
-        created = engine_call(context.liveCreateManimArrow, options)
+        created = engine_call(context.createManimArrow, options)
     _attach_arrow_family(self, created)
     if context is not None:
         self._canonical_live_target_context = context
@@ -228,16 +214,10 @@ def _create(
 
 def _arrow_scalar(self: "Arrow", method: str) -> float:
     handle = getattr(self, "_semantic_arrow_handle", None)
-    index = getattr(self, "_semantic_arrow_index", None)
-    if handle is None:
-        raise RuntimeError("Arrow observation requires the shared Rust authoring host")
-    operation_name = method if index is None else _FIELD_QUERY_METHODS[method]
-    operation = getattr(handle, operation_name, None)
+    operation = getattr(handle, method, None)
     if operation is None:
         raise RuntimeError("Arrow observation requires the shared Rust authoring host")
-    if index is None:
-        return float(engine_call(operation, operation=f"Arrow.{method}"))
-    return float(engine_call(operation, index, operation=f"Arrow.{method}"))
+    return float(engine_call(operation, operation=f"Arrow.{method}"))
 
 
 def _validate_straight_arrow_options(
@@ -320,32 +300,20 @@ class Arrow(_compat.Group):
             raise NotImplementedError(
                 f"Arrow.scale pivot option(s) are not yet shared Rust semantics: {unknown}"
             )
-        live_context = _shared._group_live_layout_context(self)
+        context = _shared._group_layout_context(self)
         handle = getattr(self, "_semantic_arrow_handle", None)
         if handle is None:
             raise RuntimeError("Arrow.scale requires the shared Rust authoring host")
         factor = _ir._finite_number("factor", factor)
-        if live_context is not None:
-            operation = getattr(live_context, "liveScaleArrow", None)
-            if operation is None:
-                raise RuntimeError("live Arrow.scale requires the shared Rust live host")
-            engine_call(
-                operation,
-                handle,
-                factor,
-                bool(scale_tips),
-                operation="Arrow.scale",
-            )
-            return self
-        operation = getattr(handle, "scale", None)
+        if context is None:
+            operation = getattr(handle, "scale", None)
+            arguments = ()
+        else:
+            operation = getattr(context, "scaleArrow", None)
+            arguments = (handle,)
         if operation is None:
             raise RuntimeError("Arrow.scale requires the shared Rust authoring host")
-        engine_call(
-            operation,
-            factor,
-            bool(scale_tips),
-            operation="Arrow.scale",
-        )
+        engine_call(operation, *arguments, factor, bool(scale_tips), operation="Arrow.scale")
         return self
 
     def get_start(self) -> _base.Vec2:
@@ -549,23 +517,6 @@ def _vector_field_colors(colors: object | None) -> tuple[_base.Color, ...]:
     return result
 
 
-def _attach_vector_field_member(created: object, index: int) -> Vector:
-    wrapper = object.__new__(Vector)
-    family = engine_call(created.vectorFamily, index)
-    shaft = _leaf(engine_call(created.vectorShaft, index), _compat.Line)
-    end_tip = _leaf(engine_call(created.vectorEndTip, index))
-    wrapper._semantic_arrow_handle = created
-    wrapper._semantic_arrow_index = index
-    wrapper._semantic_family_handle = family
-    wrapper._shaft = shaft
-    wrapper.tip = end_tip
-    wrapper.start_tip = None
-    wrapper._semantic_member_wrappers = {
-        _shared._family_wrapper_key(member): member for member in (shaft, end_tip)
-    }
-    return wrapper
-
-
 class ArrowVectorField(_compat.VGroup):
     """Static 2D ArrowVectorField prepared at Rust-owned Manim sample points."""
 
@@ -589,19 +540,16 @@ class ArrowVectorField(_compat.VGroup):
     ) -> None:
         if _arrow_options is None or _create_arrow_handle is None:
             raise RuntimeError("ArrowVectorField construction requires the shared Rust authoring host")
-        if _shared._live_constructor_context("ArrowVectorField") is not None:
-            raise NotImplementedError(
-                "live ArrowVectorField construction requires shared retained-family publication support"
-            )
+        context = _shared._path_authoring_context()
         if not callable(func):
             raise TypeError("ArrowVectorField func must be callable")
         if z_range is not None or three_dimensions:
-            raise NotImplementedError("3D ArrowVectorField requires the Phase B6/C 3D field contract")
+            raise NotImplementedError("ArrowVectorField supports 2D fields")
         opacity_value = _ir._finite_number("opacity", opacity)
         if opacity_value != 1.0:
-            raise NotImplementedError("ArrowVectorField opacity other than 1.0 is not part of this B5 slice")
+            raise NotImplementedError("ArrowVectorField requires opacity=1.0")
         if vector_config not in (None, {}):
-            raise NotImplementedError("ArrowVectorField vector_config is not part of this B5 slice")
+            raise NotImplementedError("ArrowVectorField supports an empty vector_config")
         if kwargs:
             raise TypeError(
                 "unsupported ArrowVectorField constructor option(s): "
@@ -677,8 +625,6 @@ class ArrowVectorField(_compat.VGroup):
                 custom_length,
             )
         assert x_nominal is not None and y_nominal is not None
-        x_public = _vector_field_public_range(x_nominal)
-        y_public = _vector_field_public_range(y_nominal)
 
         try:
             if field_color is not None:
@@ -726,7 +672,8 @@ class ArrowVectorField(_compat.VGroup):
                     )
                     engine_call(draft.setColorValue, index, color_value)
 
-            created = engine_call(_create_arrow_handle, draft)
+            publish = _create_arrow_handle if context is None else context.createManimArrow
+            created = engine_call(publish, draft)
         finally:
             release = getattr(draft, "free", None)
             if release is not None:
@@ -735,13 +682,16 @@ class ArrowVectorField(_compat.VGroup):
                 except Exception:
                     pass
 
-        self._semantic_arrow_handle = created
         self._semantic_family_handle = engine_call(created.family)
-        vector_count = int(created.vectorCount)
-        vectors = [
-            _attach_vector_field_member(created, index)
-            for index in range(vector_count)
-        ]
+        if context is not None:
+            self._canonical_live_target_context = context
+        vectors = []
+        for index in range(int(created.vectorCount)):
+            vector = object.__new__(Vector)
+            _attach_arrow_family(vector, engine_call(created.vectorAt, index))
+            if context is not None:
+                vector._canonical_live_target_context = context
+            vectors.append(vector)
         self._semantic_member_wrappers = {
             _shared._family_wrapper_key(member): member for member in vectors
         }

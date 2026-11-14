@@ -130,7 +130,7 @@ assert source_context.liveExecutionOwnership() == "active"
         await preparedPython.pyodide.runPythonAsync(`
 assert live.play(animation) == 2.0
 assert live.prepare() == 2.0
-assert abs(live.effective_center(target).x - 2.0) < 1e-6
+assert abs(scene.effective_translation(target).x - 2.0) < 1e-6
 assert abs(target.get_center().x - 2.0) < 1e-6
 assert source_context.liveExecutionOwnership() == "active"
 `);
@@ -151,7 +151,7 @@ assert source_context.liveExecutionOwnership() == "active"
       await page.evaluate(() => { preparedPython.renderer.seekDirect(0.5); preparedPython.renderer.render(); });
       assert.equal(changedPixels(baseline, await capture("rewound")), 0);
       await page.evaluate(async () => {
-        await preparedPython.pyodide.runPythonAsync(`live.set_translation(target, 3.0, 0.0)`);
+        await preparedPython.pyodide.runPythonAsync(`scene.set_translation(target, 3.0, 0.0)`);
         preparedPython.bridge.publishCompleted(preparedPython.source, preparedPython.renderer, true);
         await preparedPython.pyodide.runPythonAsync(`
 del live, animation, endpoint, target, scene, source_context

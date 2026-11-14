@@ -13,7 +13,7 @@ class ThreeDAxesAdapterTests(TestCase):
         self.options = Mock(name="three-d-options")
         self.real_coordinate_style = plotting._coordinate_style
         self.handle = Mock(name="three-d-family")
-        self.context = SimpleNamespace(liveCreateCoordinates=Mock(return_value=self.handle))
+        self.context = SimpleNamespace(createCoordinates=Mock(return_value=self.handle))
         self.factory = Mock(return_value=self.options)
         patch.object(plotting, "_coordinate_constructor_context", return_value=self.context).start()
         patch.object(plotting, "_coordinate_options", SimpleNamespace(threeDAxes=self.factory)).start()
@@ -69,7 +69,7 @@ class ThreeDAxesAdapterTests(TestCase):
         self.options.setNumAxisPieces.assert_called_once_with(20)
         self.options.setAxisLightDirection.assert_called_once_with(-7.0, -9.0, 10.0)
         self.options.setShadeIn3D.assert_called_once_with(True)
-        self.context.liveCreateCoordinates.assert_called_once_with(self.options)
+        self.context.createCoordinates.assert_called_once_with(self.options)
         self.assertIs(axes.x_axis, self.axes_members[0])
         self.assertIs(axes.y_axis, self.axes_members[1])
         self.assertIs(axes.z_axis, self.axes_members[2])
@@ -82,7 +82,7 @@ class ThreeDAxesAdapterTests(TestCase):
                 self.construct(unrecognized_option=5)
         self.factory.assert_not_called()
         self.options.free.assert_not_called()
-        self.context.liveCreateCoordinates.assert_not_called()
+        self.context.createCoordinates.assert_not_called()
 
     def test_cairo_axis_options_are_forwarded_and_validated_before_allocation(self):
         self.construct(num_axis_pieces=7, light_source=(1, 2, 3), shade_in_3d=False)

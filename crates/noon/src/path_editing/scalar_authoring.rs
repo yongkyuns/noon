@@ -131,9 +131,7 @@ impl Mobject {
 }
 impl crate::Scene {
     fn edit_scalar_path(&mut self, object: &Mobject, edit: Edit<'_>) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(store, root, execution, object, PathEdit::Scalar(edit))
-        })
+        self.edit_object_path(object, PathEdit::Scalar(edit))
     }
     /// Begin a world-space subpath without lowering its anchor to renderer precision.
     pub fn start_new_path_f64(

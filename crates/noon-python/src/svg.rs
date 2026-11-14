@@ -1,4 +1,4 @@
-//! Cold SVG host inputs. Shared Rust owns parsing, inheritance and publication.
+//! SVG host inputs. Shared Rust owns parsing, inheritance and publication.
 use crate::{context::Store, engine_error, family::FamilyHandle};
 use pyo3::prelude::*;
 use std::rc::Rc;
@@ -54,17 +54,7 @@ pub(crate) fn authored(
     height: Option<f64>,
     width_or_defaults: &Bound<'_, PyAny>,
 ) -> PyResult<FamilyHandle> {
-    let (width, style) = if let Ok(defaults) = width_or_defaults.extract::<PyRef<'_, SvgDefaults>>()
-    {
-        (defaults.width, Some(defaults.style))
-    } else {
-        (width_or_defaults.extract::<Option<f64>>()?, None)
-    };
-    let options = noon::SvgImportOptions {
-        should_center,
-        height,
-        width,
-    };
+    let (options, style) = request(should_center, height, width_or_defaults)?;
     let family = match style {
         Some(style) => noon::MobjectFamily::from_svg_str_with_options_and_svg_default(
             Rc::clone(&store.semantics),
@@ -80,4 +70,41 @@ pub(crate) fn authored(
     }
     .map_err(engine_error)?;
     Ok(FamilyHandle { family })
+}
+
+pub(crate) fn on_scene(
+    scene: &mut noon::Scene,
+    source: &str,
+    should_center: bool,
+    height: Option<f64>,
+    width_or_defaults: &Bound<'_, PyAny>,
+) -> PyResult<FamilyHandle> {
+    let (options, style) = request(should_center, height, width_or_defaults)?;
+    match style {
+        Some(style) => scene.svg_from_str_with_options_and_svg_default(source, options, style),
+        None => scene.svg_from_str_with_options(source, options),
+    }
+    .map(FamilyHandle::from_semantic_family)
+    .map_err(engine_error)
+}
+
+fn request(
+    should_center: bool,
+    height: Option<f64>,
+    width_or_defaults: &Bound<'_, PyAny>,
+) -> PyResult<(noon::SvgImportOptions, Option<noon::SvgDefaultStyle>)> {
+    let (width, style) = if let Ok(defaults) = width_or_defaults.extract::<PyRef<'_, SvgDefaults>>()
+    {
+        (defaults.width, Some(defaults.style))
+    } else {
+        (width_or_defaults.extract::<Option<f64>>()?, None)
+    };
+    Ok((
+        noon::SvgImportOptions {
+            should_center,
+            height,
+            width,
+        },
+        style,
+    ))
 }

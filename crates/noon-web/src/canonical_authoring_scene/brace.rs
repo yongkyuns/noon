@@ -1,128 +1,124 @@
-use super::{CanonicalAuthoringScene, PlayerOwnership};
-use crate::authoring_error::AuthoringFailure;
+//! Scene-owned Brace geometry and label publication.
+use super::wasm::CanonicalAuthoringSceneContext;
+use crate::{
+    authoring_brace::WasmBraceLabelHandle, authoring_error::js_error,
+    authoring_mobject::WasmLayoutAnchor, WasmManimGeometryOptions,
+};
+use wasm_bindgen::prelude::*;
 
-impl CanonicalAuthoringScene {
-    pub(crate) fn live_brace_geometry_options(
+#[wasm_bindgen]
+impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = braceGeometryOptions)]
+    pub fn brace_geometry_options(
         &mut self,
-        target: &noon::LayoutAnchor,
-        options: noon::BraceOptions,
-    ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_brace_geometry_options(target, options),
-            PlayerOwnership::Unstarted => self
-                .scene
-                .brace_geometry_options(target, options)
-                .map_err(|error| AuthoringFailure::unclassified("brace.prepare", &error)),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        target: &WasmLayoutAnchor,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        sharpness: f64,
+    ) -> Result<WasmManimGeometryOptions, JsValue> {
+        self.inner
+            .local_authoring_scene()
+            .map_err(js_error)?
+            .brace_geometry_options(
+                &target.anchor,
+                noon::BraceOptions {
+                    direction: (direction_x, direction_y),
+                    buff,
+                    sharpness,
+                    ..Default::default()
+                },
+            )
+            .map(WasmManimGeometryOptions::from_options)
+            .map_err(|error| {
+                js_error(crate::AuthoringFailure::unclassified(
+                    "brace.prepare",
+                    &error,
+                ))
+            })
     }
 
-    pub(crate) fn live_create_brace_label(
+    /// Create the retained Brace/label relationship through the owning Scene.
+    #[wasm_bindgen(js_name = createBraceLabel)]
+    pub fn create_brace_label(
         &mut self,
-        target: &noon::LayoutAnchor,
-        label: noon::LayoutAnchor,
-        options: noon::BraceOptions,
-    ) -> Result<noon::BraceLabel, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_create_brace_label(target, label, options),
-            PlayerOwnership::Unstarted => {
-                noon::BraceLabel::new(&mut self.scene, target, label, options)
-                    .map_err(|error| AuthoringFailure::unclassified("brace.create", &error))
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        target: &WasmLayoutAnchor,
+        label: &WasmLayoutAnchor,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        sharpness: f64,
+        label_buff: f64,
+    ) -> Result<WasmBraceLabelHandle, JsValue> {
+        noon::BraceLabel::new(
+            self.inner.local_authoring_scene().map_err(js_error)?,
+            &target.anchor,
+            label.anchor.clone(),
+            noon::BraceOptions {
+                direction: (direction_x, direction_y),
+                buff,
+                sharpness,
+                label_buff,
+            },
+        )
+        .map(|inner| WasmBraceLabelHandle { inner })
+        .map_err(|error| {
+            js_error(crate::AuthoringFailure::unclassified(
+                "brace.create",
+                &error,
+            ))
+        })
     }
-    pub(crate) fn live_shift_brace_label(
-        &mut self,
-        brace: &mut noon::BraceLabel,
-        target: &noon::LayoutAnchor,
-    ) -> Result<(), AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_shift_brace_label(brace, target),
-            PlayerOwnership::Unstarted => brace
-                .shift_brace(&mut self.scene, target)
-                .map_err(|error| AuthoringFailure::unclassified("brace.shift", &error)),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
-    }
-    pub(crate) fn live_change_brace_label(
-        &mut self,
-        brace: &mut noon::BraceLabel,
-        target: &noon::LayoutAnchor,
-        label: noon::LayoutAnchor,
-    ) -> Result<(), AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_change_brace_label(brace, target, label),
-            PlayerOwnership::Unstarted => brace
-                .change_brace_label(&mut self.scene, target, label)
-                .map_err(|error| AuthoringFailure::unclassified("brace.replace", &error)),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
-    }
-    pub(crate) fn live_replace_brace_label(
-        &mut self,
-        brace: &mut noon::BraceLabel,
-        label: noon::LayoutAnchor,
-    ) -> Result<(), AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_replace_brace_label(brace, label),
-            PlayerOwnership::Unstarted => brace
-                .change_label(&mut self.scene, label)
-                .map_err(|error| AuthoringFailure::unclassified("brace.label", &error)),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
-    }
-}
 
-impl super::wasm::CanonicalAuthoringSceneContext {
-    pub(crate) fn create_live_brace_label(
+    #[wasm_bindgen(js_name = shiftBraceLabel)]
+    pub fn shift_brace_label(
         &mut self,
-        target: &noon::LayoutAnchor,
-        label: noon::LayoutAnchor,
-        options: noon::BraceOptions,
-    ) -> Result<noon::BraceLabel, AuthoringFailure> {
-        self.inner.live_create_brace_label(target, label, options)
+        brace: &mut WasmBraceLabelHandle,
+        target: &WasmLayoutAnchor,
+    ) -> Result<(), JsValue> {
+        brace
+            .inner
+            .shift_brace(
+                self.inner.local_authoring_scene().map_err(js_error)?,
+                &target.anchor,
+            )
+            .map_err(|error| js_error(crate::AuthoringFailure::unclassified("brace.shift", &error)))
     }
-    pub(crate) fn shift_live_brace_label(
+
+    #[wasm_bindgen(js_name = replaceBraceLabel)]
+    pub fn replace_brace_label(
         &mut self,
-        brace: &mut noon::BraceLabel,
-        target: &noon::LayoutAnchor,
-    ) -> Result<(), AuthoringFailure> {
-        self.inner.live_shift_brace_label(brace, target)
+        brace: &mut WasmBraceLabelHandle,
+        label: &WasmLayoutAnchor,
+    ) -> Result<(), JsValue> {
+        brace
+            .inner
+            .change_label(
+                self.inner.local_authoring_scene().map_err(js_error)?,
+                label.anchor.clone(),
+            )
+            .map_err(|error| js_error(crate::AuthoringFailure::unclassified("brace.label", &error)))
     }
-    pub(crate) fn change_live_brace_label(
+
+    #[wasm_bindgen(js_name = changeBraceLabel)]
+    pub fn change_brace_label(
         &mut self,
-        brace: &mut noon::BraceLabel,
-        target: &noon::LayoutAnchor,
-        label: noon::LayoutAnchor,
-    ) -> Result<(), AuthoringFailure> {
-        self.inner.live_change_brace_label(brace, target, label)
-    }
-    pub(crate) fn replace_live_brace_label(
-        &mut self,
-        brace: &mut noon::BraceLabel,
-        label: noon::LayoutAnchor,
-    ) -> Result<(), AuthoringFailure> {
-        self.inner.live_replace_brace_label(brace, label)
+        brace: &mut WasmBraceLabelHandle,
+        target: &WasmLayoutAnchor,
+        label: &WasmLayoutAnchor,
+    ) -> Result<(), JsValue> {
+        let code = if self.inner.requires_live_mutation_routing() {
+            "brace.change"
+        } else {
+            "brace.replace"
+        };
+        brace
+            .inner
+            .change_brace_label(
+                self.inner.local_authoring_scene().map_err(js_error)?,
+                &target.anchor,
+                label.anchor.clone(),
+            )
+            .map_err(|error| js_error(crate::AuthoringFailure::unclassified(code, &error)))
     }
 }

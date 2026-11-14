@@ -136,14 +136,18 @@ class ManimBraceFacadeTests(unittest.TestCase):
 
             import _manim_brace as brace_module
             class Context:
-                def liveBraceGeometryOptions(self, anchor, *args):
+                def braceGeometryOptions(self, anchor, *args):
                     assert anchor is target
                     calls.append(("live_brace", *args))
                     return path_options("live_brace")
-                def liveCreateManimGeometry(self, candidate):
+                def createManimGeometry(self, candidate):
                     return FakeHandle(candidate.snapshot)
             context = Context()
-            brace_module._shared._live_constructor_context = lambda *args, **kwargs: context
+            brace_module._shared._path_authoring_context = lambda *args, **kwargs: context
+            import _manim_reactive
+            _manim_reactive._current_authoring_scene = lambda: type(
+                "Scene", (), {"_canonical_authoring_context": context}
+            )()
             brace_module._shared._layout_anchor = lambda value: value
             live_brace = Brace(target, buff=0.4)
             assert calls[-1] == ("live_brace", 0.0, -1.0, 0.4, 2.0)
@@ -240,20 +244,24 @@ class ManimBraceFacadeTests(unittest.TestCase):
                 def family(self): return object()
             class Context:
                 fail = None
-                def liveCreateBraceLabel(self, *args):
+                def createBraceLabel(self, *args):
                     publications.append(("create", args))
                     return CompositeHandle()
-                def liveShiftBraceLabel(self, *args):
+                def shiftBraceLabel(self, *args):
                     if self.fail: raise RuntimeError(self.fail)
                     publications.append(("shift", args))
-                def liveReplaceBraceLabel(self, *args):
+                def replaceBraceLabel(self, *args):
                     if self.fail: raise RuntimeError(self.fail)
                     publications.append(("replace_label", args))
-                def liveChangeBraceLabel(self, *args):
+                def changeBraceLabel(self, *args):
                     if self.fail: raise RuntimeError(self.fail)
                     publications.append(("replace_both", args))
             context = Context()
-            brace_module._shared._live_constructor_context = lambda *args, **kwargs: context
+            brace_module._shared._path_authoring_context = lambda *args, **kwargs: context
+            import _manim_reactive
+            _manim_reactive._current_authoring_scene = lambda: type(
+                "Scene", (), {"_canonical_authoring_context": context}
+            )()
             brace_module._shared._layout_anchor = lambda value: value
             brace_module._shared._family_wrapper_key = lambda value: str(id(value))
             brace_module.Brace = FakeBrace

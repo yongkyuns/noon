@@ -5,7 +5,7 @@
 //! preserves immutable tip resources when requested, and recaps shaft width from
 //! the constructor policy retained on the semantic shaft role.
 
-use crate::{AuthoringError, ManimArrow, Mobject};
+use crate::{AuthoringError, ManimArrow, Mobject, Scene};
 use noon_core::{
     SemanticArrowShaftRole, SemanticMutationTransaction, SemanticNodeId, SemanticObjectRole,
     SemanticObjectState, SemanticStore, StoredGeometry,
@@ -361,40 +361,25 @@ impl ManimArrow {
     }
 }
 
-impl crate::LiveSession<'_> {
-    /// Scale one retained Arrow dependency closure through the owning live session.
-    ///
-    /// Component identity and immutable tip resources are retained. The authored
-    /// store is never changed separately from the active execution publication.
+impl Scene {
+    /// Scale an Arrow's shaft and tips together, preserving component identity
+    /// and publishing the change to the current execution when running.
     pub fn scale_arrow(
         &mut self,
         arrow: &ManimArrow,
         factor: f64,
         scale_tips: bool,
-    ) -> Result<(), crate::LiveSessionError> {
-        // Validate ownership before deriving any dependent edit. The aggregate Arrow
-        // is constructed from one store, so checking its retained leaves also checks
-        // the family capability without inventing frontend ownership state.
-        self.authored(arrow.shaft())?;
-        self.authored(arrow.end_tip())?;
+    ) -> Result<(), ArrowScaleError> {
+        self.require_object(arrow.shaft())?;
+        self.require_object(arrow.end_tip())?;
         if let Some(start_tip) = arrow.start_tip() {
-            self.authored(start_tip)?;
+            self.require_object(start_tip)?;
         }
 
-        let Some(transaction) = arrow
-            .prepare_scale_transaction(factor, scale_tips)
-            .map_err(live_arrow_scale_error)?
-        else {
-            return Ok(());
-        };
-        self.apply(transaction).map(|_| ())
-    }
-}
-
-fn live_arrow_scale_error(error: ArrowScaleError) -> crate::LiveSessionError {
-    match error {
-        ArrowScaleError::Authoring(error) => crate::LiveSessionError::Authoring(error),
-        other => crate::LiveSessionError::Mobject(other.to_string()),
+        if let Some(transaction) = arrow.prepare_scale_transaction(factor, scale_tips)? {
+            self.apply_semantic_transaction(transaction)?;
+        }
+        Ok(())
     }
 }
 
@@ -660,12 +645,10 @@ mod tests {
         scene.add_many(&[arrow.family().into()]).unwrap();
         let tip_resource = resource_handle(&arrow.end_tip().state().unwrap());
         let before_revision = scene.integration_store().borrow().scene_revision();
-        let mut session = scene.execution_session().unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
 
-        scene
-            .live(&mut session)
-            .scale_arrow(&arrow, 0.5, false)
-            .unwrap();
+        scene.scale_arrow(&arrow, 0.5, false).unwrap();
 
         assert!((arrow.manim_length().unwrap() - 1.0).abs() < 1e-5);
         assert_eq!(
@@ -685,7 +668,8 @@ mod tests {
         options.set_buff(0.0).unwrap();
         let arrow = ManimArrow::create(Rc::clone(scene.integration_store()), options).unwrap();
         scene.add_many(&[arrow.family().into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
 
         // A direct authored mutation after lowering deliberately stales this runtime.
         arrow.scale(0.8, false).unwrap();
@@ -693,16 +677,13 @@ mod tests {
         let before_shaft = arrow.shaft().state().unwrap();
         let before_tip = arrow.end_tip().state().unwrap();
 
-        let error = scene
-            .live(&mut session)
-            .scale_arrow(&arrow, 0.5, false)
-            .unwrap_err();
+        let error = scene.scale_arrow(&arrow, 0.5, false).unwrap_err();
 
         assert!(matches!(
             error,
-            crate::LiveSessionError::Publication(
+            ArrowScaleError::Authoring(AuthoringError::ExecutionPublication(
                 crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
-            )
+            ))
         ));
         assert_eq!(
             scene.integration_store().borrow().scene_revision(),

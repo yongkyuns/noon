@@ -121,6 +121,7 @@ class SpatialMeshAdapterSmoke(ThreeDScene):
         # contract exercised through the low-level mesh factory below.
         pose_mesh = Mesh3D.cylinder(radius=0.25, height=0.7, segments=8,
                                     color=BLUE, show_ends=True)
+        assert tuple(pose_mesh.world_transform[:3]) == (0, 0, 0)
         for index, mesh in enumerate(meshes[1:-1], start=1):
             mesh.move_to((index * 0.8 - 2.4, 0, 0))
         for index, mesh in enumerate(meshes):
@@ -184,7 +185,11 @@ class SpatialMeshAdapterSmoke(ThreeDScene):
                       stroke_width=0, shade_in_3d=False)
         assert all(abs(actual - expected) < 1e-7
                    for actual, expected in zip(line.get_center(), (3, 3, 3)))
+        start_pose = line.world_transform[:3]
         line.move_to((1, 2, 0))
+        assert all(abs(actual - expected) < 1e-7
+                   for actual, expected in zip(line.world_transform[:3],
+                                               (start_pose[0] - 2, start_pose[1] - 1, start_pose[2] - 3)))
         assert all(abs(actual - expected) < 1e-7
                    for actual, expected in zip(line.get_center(), (1, 2, 0)))
 
@@ -446,7 +451,7 @@ class AnimateParity(Scene):
             raise AssertionError("cyclic live family batch must fail")
         assert pair.submobjects == before_members
         for member in pair:
-            self.live_execution().add(member)
+            self.add(member)
         self.play(pair.animate(run_time=1.2, lag_ratio=0.5).shift(UP))
 
         override = Circle(radius=0.2, color=PURPLE)
@@ -1032,6 +1037,7 @@ result = Scene()
   const times = [0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.65, 0.7, 0.75, 0.8,
     0.85, 0.9, 1.0, 1.05, 1.1, 1.2, 1.25, 1.3, 1.4];
   await ratePage.goto(`${baseUrl}/web/manim-raster-host.html`);
+  await ratePage.waitForFunction(() => typeof window.noonHostRaster?.ready === "function");
   const sharedRates = await ratePage.evaluate(async ({ source, times }) => {
     await window.noonHostRaster.ready();
     await window.noonHostRaster.load(source, 2);

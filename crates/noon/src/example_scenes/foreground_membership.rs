@@ -47,15 +47,16 @@ impl LiveContinuation for ForegroundMembership {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
-                live.add_foreground_many(&[Family(&self.family)])
+                scene
+                    .add_foreground_many(&[Family(&self.family)])
                     .map_err(|error| error.to_string())?;
                 self.assert_lists(&[self.family.node_id()], &[self.family.node_id()])?;
             }
             1 => {
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_fade(
                         &self.green,
                         noon_core::SemanticFadeDirection::In,
@@ -72,7 +73,8 @@ impl LiveContinuation for ForegroundMembership {
                 return Ok(ContinuationStep::Await(segment));
             }
             2 => {
-                live.remove_foreground_many(&[Leaf(&self.red)])
+                scene
+                    .remove_foreground_many(&[Leaf(&self.red)])
                     .map_err(|error| error.to_string())?;
                 self.assert_lists(
                     &[self.green.node_id(), self.family.node_id()],
@@ -80,7 +82,8 @@ impl LiveContinuation for ForegroundMembership {
                 )?;
             }
             3 => {
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_create(
                         &self.later,
                         AnimationOptions::new()
@@ -101,7 +104,8 @@ impl LiveContinuation for ForegroundMembership {
                 return Ok(ContinuationStep::Await(segment));
             }
             4 => {
-                live.remove_foreground_many(&[Leaf(&self.blue)])
+                scene
+                    .remove_foreground_many(&[Leaf(&self.blue)])
                     .map_err(|error| error.to_string())?;
                 self.assert_lists(
                     &[
@@ -117,7 +121,9 @@ impl LiveContinuation for ForegroundMembership {
             _ => return Err("foreground continuation resumed after completion".into()),
         }
         self.stage += 1;
-        live.wait_segment(0.35)
+        scene
+            .live()
+            .wait_segment(0.35)
             .map(ContinuationStep::Await)
             .map_err(|error| error.to_string())
     }

@@ -1,4 +1,4 @@
-use noon::ExecutionSession;
+use noon::integration::scene_execution::ExecutionSession;
 use noon_web::{verify_example_replay, verify_execution_replay, ReplayVerificationError};
 
 type SessionFactory = fn() -> Result<noon::SceneExecution, String>;

@@ -203,6 +203,88 @@ impl ManimGeometryOptions {
     }
 }
 
+impl crate::MobjectTarget<'_> {
+    /// Observe authored bounds for a detached shape matcher.
+    pub fn shape_matcher_bounds(self) -> Result<Bounds2D64, AuthoringError> {
+        match self {
+            Self::Object(object) => Ok(match object.layout_bounds()? {
+                Some(bounds) => bounds,
+                None => {
+                    let translation = object.state()?.transform.translation;
+                    Bounds2D64::point(translation.x, translation.y)
+                }
+            }),
+            Self::Family(family) => Ok(family
+                .layout()?
+                .bounds()
+                .unwrap_or_else(|| Bounds2D64::point(0.0, 0.0))),
+        }
+    }
+}
+
+fn observed_layout_bounds(layout: crate::EffectiveMobjectLayout) -> Bounds2D64 {
+    let ((x, y), width, height) = (layout.center, layout.width, layout.height);
+    Bounds2D64 {
+        min_x: x - width * 0.5,
+        max_x: x + width * 0.5,
+        min_y: y - height * 0.5,
+        max_y: y + height * 0.5,
+    }
+}
+
+impl crate::Scene {
+    /// Capture one bounds value for all parts of a shape matcher.
+    pub fn shape_matcher_bounds(
+        &self,
+        target: crate::MobjectTarget<'_>,
+    ) -> Result<Bounds2D64, AuthoringError> {
+        use crate::MobjectTarget;
+        target.require_store(self.integration_store())?;
+        target.validate()?;
+        self.require_effective_capture()?;
+        if let Some(execution) = self.running_execution() {
+            match target {
+                MobjectTarget::Object(object)
+                    if execution.semantic_object_is_reachable(object.node_id()) =>
+                {
+                    return self.effective_layout(object).map(observed_layout_bounds);
+                }
+                MobjectTarget::Family(family) => {
+                    return self
+                        .effective_family_layout(family)
+                        .map(observed_layout_bounds);
+                }
+                MobjectTarget::Object(_) => {}
+            }
+        }
+        target.shape_matcher_bounds()
+    }
+
+    /// Prepare an Underline from this object's current layout.
+    pub fn underline_options(
+        &self,
+        target: &Mobject,
+        buff: f64,
+    ) -> Result<ManimGeometryOptions, AuthoringError> {
+        self.require_object(target)?;
+        self.require_effective_capture()?;
+        if self
+            .running_execution()
+            .is_some_and(|execution| execution.semantic_object_is_reachable(target.node_id()))
+        {
+            // Retain the authored bounds requirement for empty targets.
+            target
+                .layout_bounds()?
+                .ok_or(AuthoringError::MissingLayoutBounds(target.node_id()))?;
+            return ManimGeometryOptions::underline(
+                observed_layout_bounds(self.effective_layout(target)?),
+                buff,
+            );
+        }
+        target.underline_options(buff)
+    }
+}
+
 impl Mobject {
     pub fn manim_dot(
         store: Rc<RefCell<SemanticStore>>,
@@ -330,14 +412,19 @@ impl Mobject {
     }
 
     pub fn manim_underline(target: &Self, buff: f64) -> Result<Self, AuthoringError> {
-        target.validate()?;
-        let bounds = target
-            .layout_bounds()?
-            .ok_or(AuthoringError::MissingLayoutBounds(target.node_id()))?;
         Self::from_manim_geometry(
             Rc::clone(target.integration_store()),
-            ManimGeometryOptions::underline(bounds, buff)?,
+            target.underline_options(buff)?,
         )
+    }
+
+    /// Prepare an Underline from detached authored layout.
+    pub fn underline_options(&self, buff: f64) -> Result<ManimGeometryOptions, AuthoringError> {
+        self.validate()?;
+        let bounds = self
+            .layout_bounds()?
+            .ok_or(AuthoringError::MissingLayoutBounds(self.node_id()))?;
+        ManimGeometryOptions::underline(bounds, buff)
     }
 }
 

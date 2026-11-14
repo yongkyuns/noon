@@ -31,8 +31,8 @@ class PointPromotionBridgeTests(unittest.TestCase):
 
     def test_copy_map_rebinding_and_reader_references_are_shared_for_all_typed_hosts(self):
         for family in (False, True):
-            for live in (False, True):
-                with self.subTest(family=family, live=live):
+            for with_scene in (False, True):
+                with self.subTest(family=family, with_scene=with_scene):
                     cls = compat.Group if family else noon.Mobject
                     source, clone = identity_only_wrapper(cls), identity_only_wrapper(cls)
                     child, copied_child = identity_only_wrapper(noon.Mobject), identity_only_wrapper(noon.Mobject)
@@ -52,13 +52,13 @@ class PointPromotionBridgeTests(unittest.TestCase):
                     copied = SimpleNamespace(mobjectFor=lookup, familyFor=lookup)
                     original.promoteOwnPoints = Mock(return_value=copied)
                     context = None
-                    if live:
+                    if with_scene:
                         context = SimpleNamespace(
-                            livePromoteFamilyOwnPoints=Mock(return_value=copied),
-                            livePromoteMobjectOwnPoints=Mock(return_value=copied))
+                            promoteFamilyOwnPoints=Mock(return_value=copied),
+                            promoteMobjectOwnPoints=Mock(return_value=copied))
                     references = object()
                     prepared = (clone, [(source, clone), (child, copied_child)], [(clone, [copied_child])])
-                    with patch.object(handles, '_group_target_context', return_value=context), \
+                    with patch.object(handles, '_group_target_context', return_value=context) as owner, \
                          patch.object(compat, 'prepare_family_wrapper_copy', return_value=prepared), \
                          patch.object(handles, '_family_membership_batch', return_value=references) as batch:
                         actual = handles._group_copy_operation(source, cyclic_replace=False, promote_own_points=True)
@@ -70,9 +70,10 @@ class PointPromotionBridgeTests(unittest.TestCase):
                     self.assertEqual(source._semantic_member_wrappers, {'2:0': child, '3:0': clone})
                     self.assertEqual(scope.wrappers, {'2:0': child})
                     self.assertIsNot(scope.wrappers, source._semantic_member_wrappers)
+                    owner.assert_called_once_with(source)
                     batch.assert_called_once_with(context, 'add', (source, child))
-                    if live:
-                        method = context.livePromoteFamilyOwnPoints if family else context.livePromoteMobjectOwnPoints
+                    if with_scene:
+                        method = context.promoteFamilyOwnPoints if family else context.promoteMobjectOwnPoints
                         method.assert_called_once_with(original, references)
                         original.promoteOwnPoints.assert_not_called()
                     else:

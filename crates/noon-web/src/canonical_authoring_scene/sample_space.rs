@@ -1,42 +1,62 @@
-//! Live SampleSpace operations dispatch through the currently retained player.
+//! Browser SampleSpace authoring uses the owning Scene.
 use super::*;
 
 impl CanonicalAuthoringScene {
-    pub(crate) fn live_create_sample_space(
+    pub(crate) fn create_sample_space(
         &mut self,
         options: &noon::SampleSpaceOptions,
     ) -> Result<noon::SampleSpace, AuthoringFailure> {
-        self.active_live_player()?.live_create_sample_space(options)
+        let running = self.requires_live_mutation_routing();
+        noon::SampleSpace::new_with_options(self.local_authoring_scene()?, options)
+            .map_err(|error| sample_space_failure(error, running))
     }
 
-    pub(crate) fn live_get_sample_space_division(
+    pub(crate) fn get_sample_space_division(
         &mut self,
         sample_space: &noon::SampleSpace,
         probabilities: &[f64],
         colors: &[noon::Color],
         vertical: bool,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        self.active_live_player()?.live_get_sample_space_division(
-            sample_space,
-            probabilities,
-            colors,
-            vertical,
-        )
+        let running = self.requires_live_mutation_routing();
+        let scene = self.local_authoring_scene()?;
+        let probabilities = probabilities.iter().copied();
+        if vertical {
+            sample_space.get_vertical_division_in_scene(scene, probabilities, colors)
+        } else {
+            sample_space.get_horizontal_division_in_scene(scene, probabilities, colors)
+        }
+        .map_err(|error| sample_space_failure(error, running))
     }
 
-    pub(crate) fn live_divide_sample_space(
+    pub(crate) fn divide_sample_space(
         &mut self,
         sample_space: &mut noon::SampleSpace,
         probabilities: &[f64],
         colors: &[noon::Color],
         vertical: bool,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        self.active_live_player()?.live_divide_sample_space(
-            sample_space,
-            probabilities,
-            colors,
-            vertical,
-        )
+        let running = self.requires_live_mutation_routing();
+        let scene = self.local_authoring_scene()?;
+        let probabilities = probabilities.iter().copied();
+        if vertical {
+            sample_space.divide_vertically(scene, probabilities, colors)
+        } else {
+            sample_space.divide_horizontally(scene, probabilities, colors)
+        }
+        .map_err(|error| sample_space_failure(error, running))
+    }
+}
+
+fn sample_space_failure(error: noon::SampleSpaceError, running: bool) -> AuthoringFailure {
+    if !running {
+        return AuthoringFailure::new("invalid_input", "sample_space.authoring", error);
+    }
+    match error {
+        noon::SampleSpaceError::Authoring(error) => {
+            AuthoringFailure::from_scene_mutation(error, true)
+        }
+        other => AuthoringFailure::unclassified("live.unclassified", &other),
     }
 }
 
@@ -50,11 +70,11 @@ mod tests {
         let options = noon::SampleSpaceOptions::default();
         let player = context.take_execution_player(1.0, 77).unwrap();
         let identity = player.ownership_identity();
-        assert!(context.live_create_sample_space(&options).is_err());
+        assert!(context.create_sample_space(&options).is_err());
         context.return_execution_player(player).unwrap();
 
         let before = context.scene.integration_store().borrow().scene_revision();
-        let mut space = context.live_create_sample_space(&options).unwrap();
+        let mut space = context.create_sample_space(&options).unwrap();
         let constructed = context.scene.integration_store().borrow().scene_revision();
         assert_ne!(constructed, before);
         assert_eq!(
@@ -65,7 +85,7 @@ mod tests {
         let rejected_revision = context.scene.integration_store().borrow().scene_revision();
         let rejected_len = context.scene.integration_store().borrow().len();
         assert!(context
-            .live_divide_sample_space(&mut space, &[0.7, 0.5], &[noon::BLUE], false)
+            .divide_sample_space(&mut space, &[0.7, 0.5], &[noon::BLUE], false)
             .is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
@@ -78,7 +98,7 @@ mod tests {
         assert!(space.horizontal_parts().unwrap().is_none());
 
         let parts = context
-            .live_divide_sample_space(&mut space, &[0.25, 0.5], &[noon::RED, noon::BLUE], false)
+            .divide_sample_space(&mut space, &[0.25, 0.5], &[noon::RED, noon::BLUE], false)
             .unwrap();
         assert_ne!(
             context.scene.integration_store().borrow().scene_revision(),
@@ -110,7 +130,7 @@ mod tests {
         let player = context.take_execution_player(1.0, 78).unwrap();
         context.return_execution_player(player).unwrap();
         let space = context
-            .live_create_sample_space(&noon::SampleSpaceOptions::default())
+            .create_sample_space(&noon::SampleSpaceOptions::default())
             .unwrap();
         let family = space.family().clone();
         let family_target = noon::MobjectTarget::Family(&family);
@@ -123,9 +143,10 @@ mod tests {
         context
             .active_live_player()
             .unwrap()
-            .live_move_to(
+            .scene_mut()
+            .move_to(
                 &rectangle,
-                noon::LiveLayoutTarget::Point(2.0, -1.0),
+                noon::LayoutTarget::Point(2.0, -1.0),
                 (0.0, 0.0),
                 (1.0, 1.0),
             )
@@ -139,7 +160,7 @@ mod tests {
         assert!((f64::from(effective.transform.translation.y) + 1.0).abs() < 1e-6);
         let revision = context.scene.integration_store().borrow().scene_revision();
         let parts = context
-            .live_get_sample_space_division(&space, &[0.5], &[noon::GREEN], true)
+            .get_sample_space_division(&space, &[0.5], &[noon::GREEN], true)
             .unwrap();
         assert_ne!(
             context.scene.integration_store().borrow().scene_revision(),

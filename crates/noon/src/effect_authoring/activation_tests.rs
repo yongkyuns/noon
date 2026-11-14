@@ -155,7 +155,7 @@ fn unrendered_family_effect_declaration_shares_published_and_prepared_lowering()
 
 #[test]
 fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
-    let (scene, source) = fixture();
+    let (mut scene, source) = fixture();
     let pulse = scene
         .declare_glow_pulse(&source, 2.0, AnimationOptions::new())
         .unwrap();
@@ -224,7 +224,7 @@ fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
 
 #[test]
 fn declaration_activates_motion_and_glow_from_exact_effective_values() {
-    let (scene, source) = fixture();
+    let (mut scene, source) = fixture();
     let original = source.get_effect("glow").unwrap().node_id();
     let mut target = source.target_editor().unwrap();
     target.shift(2.0, 0.0).unwrap();
@@ -277,7 +277,7 @@ fn declaration_activates_motion_and_glow_from_exact_effective_values() {
 
 #[test]
 fn disjoint_glow_targets_share_ordinary_composition_and_conflicting_parameters_reject() {
-    let (scene, source) = fixture();
+    let (mut scene, source) = fixture();
     let mut intensity = source.target_editor().unwrap();
     intensity
         .set_glow(EffectUpdate::default().intensity(1.4))
@@ -339,7 +339,7 @@ fn disjoint_glow_targets_share_ordinary_composition_and_conflicting_parameters_r
 #[test]
 fn stale_source_or_target_generation_never_rebinds_by_name() {
     for replace_target in [false, true] {
-        let (scene, source) = fixture();
+        let (mut scene, source) = fixture();
         let mut target = source.target_editor().unwrap();
         target
             .set_glow(EffectUpdate::default().intensity(1.4))
@@ -373,7 +373,7 @@ fn stale_source_or_target_generation_never_rebinds_by_name() {
 
 #[test]
 fn prepared_sequence_captures_prior_parameter_endpoint_and_can_return_to_original() {
-    let (scene, source) = fixture();
+    let (mut scene, source) = fixture();
     let mut first = source.target_editor().unwrap();
     first
         .set_glow(EffectUpdate::default().intensity(1.4))
@@ -441,7 +441,7 @@ fn returning_and_reversed_completion_persist_the_actual_f64_endpoint() {
         (RateFunction::Linear, true, 0.4000000000000123),
         (RateFunction::ThereAndBack, true, 0.4000000000000123),
     ] {
-        let (scene, source) = fixture();
+        let (mut scene, source) = fixture();
         let mut target = source.target_editor().unwrap();
         target
             .set_glow(EffectUpdate::default().intensity(1.4))
@@ -539,7 +539,7 @@ fn pending_effect_target_is_inert_and_prepared_identity_matches_its_commit() {
 #[test]
 fn unsupported_target_schema_rejects_while_prepared_membership_retains_glow() {
     for discrete in [0, 1, 2] {
-        let (scene, source) = fixture();
+        let (mut scene, source) = fixture();
         let mut target = source.target_editor().unwrap();
         match discrete {
             0 => target

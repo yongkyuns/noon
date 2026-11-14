@@ -67,38 +67,38 @@ mod tests {
             SemanticVec3::new(-3., 0., 1.125)
         );
         scene.add_many(&[(&family).into()]).unwrap();
-        let mut execution = scene.execution_session().unwrap();
-        let before = execution.publication_context();
+        let mut execution = scene.into_execution().unwrap();
+        let before = execution.session().publication_context();
         let expected = anchor.critical_point_3d(up).unwrap();
         assert_eq!(
-            scene
-                .live(&mut execution)
-                .layout_critical_point_3d(&anchor, up)
+            execution
+                .scene()
+                .effective_layout_critical_point_3d(&anchor, up)
                 .unwrap(),
             expected
         );
-        assert_eq!(execution.publication_context(), before);
-        scene
-            .live(&mut execution)
+        assert_eq!(execution.session().publication_context(), before);
+        execution
+            .scene_mut()
             .shift_3d(&image, SemanticVec3::new(1.5, 0., 2.))
             .unwrap();
-        let before = execution.publication_context();
-        let actual = scene
-            .live(&mut execution)
-            .layout_critical_point_3d(&anchor, up)
+        let before = execution.session().publication_context();
+        let actual = execution
+            .scene()
+            .effective_layout_critical_point_3d(&anchor, up)
             .unwrap();
         assert_eq!(actual.z, 3.125);
         assert_eq!(actual.xy(), anchor.layout().unwrap().center());
-        assert_eq!(execution.publication_context(), before);
+        assert_eq!(execution.session().publication_context(), before);
         let foreign = Scene::new().square(1.).unwrap();
-        assert!(scene
-            .live(&mut execution)
-            .layout_critical_point_3d(&LayoutAnchor::from(&foreign), up)
+        assert!(execution
+            .scene()
+            .effective_layout_critical_point_3d(&LayoutAnchor::from(&foreign), up)
             .is_err());
-        assert!(scene
-            .live(&mut execution)
-            .layout_critical_point_3d(&anchor, SemanticVec3::new(0., 0., f64::NAN))
+        assert!(execution
+            .scene()
+            .effective_layout_critical_point_3d(&anchor, SemanticVec3::new(0., 0., f64::NAN))
             .is_err());
-        assert_eq!(execution.publication_context(), before);
+        assert_eq!(execution.session().publication_context(), before);
     }
 }

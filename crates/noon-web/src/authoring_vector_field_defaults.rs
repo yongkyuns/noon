@@ -24,24 +24,9 @@ impl WasmManimArrowOptions {
         y_step: f64,
         custom_length: bool,
     ) -> Result<WasmManimArrowOptions, JsValue> {
-        let default_ranges = defaults();
-        let x = if default_x {
-            default_ranges.x
-        } else {
-            noon::VectorFieldAxisRange::new(x_start, x_end, x_step)
-        };
-        let y = if default_y {
-            default_ranges.y
-        } else {
-            noon::VectorFieldAxisRange::new(y_start, y_end, y_step)
-        };
-        WasmManimArrowOptions::vector_field(
-            x.start,
-            x.end,
-            x.step,
-            y.start,
-            y.end,
-            y.step,
+        Self::field_draft(
+            (!default_x).then(|| noon::VectorFieldAxisRange::new(x_start, x_end, x_step)),
+            (!default_y).then(|| noon::VectorFieldAxisRange::new(y_start, y_end, y_step)),
             custom_length,
         )
     }

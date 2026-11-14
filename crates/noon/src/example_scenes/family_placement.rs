@@ -146,14 +146,15 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     for object in [&first, &second, &anchor] {
         scene.add(object).map_err(|error| error.to_string())?;
     }
-    let mut execution = scene.execution_session().map_err(|e| e.to_string())?;
+    let mut execution = scene.into_execution().map_err(|e| e.to_string())?;
     {
-        let mut live = scene.live(&mut execution);
-        let center = live
+        let center = execution
+            .scene()
             .effective_family_layout(&family)
             .map_err(|e| e.to_string())?
             .center;
-        let layout = live
+        let layout = execution
+            .scene()
             .effective_family_layout(&family)
             .map_err(|e| e.to_string())?;
         for (point, edge, mask) in [
@@ -164,29 +165,75 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 (0.0, 1.0),
             ),
         ] {
-            live.move_family_to(
-                &family,
-                crate::LiveLayoutTarget::Point(point.0, point.1),
-                edge,
-                mask,
-            )
-            .map_err(|e| e.to_string())?;
+            execution
+                .scene_mut()
+                .move_family_to(
+                    &family,
+                    crate::LayoutTarget::Point(point.0, point.1),
+                    edge,
+                    mask,
+                )
+                .map_err(|e| e.to_string())?;
         }
-        live.align_family_on_frame(&family, (0.0, -1.0), 0.5)
+        execution
+            .scene_mut()
+            .align_family_on_frame(&family, (0.0, -1.0), 0.5)
             .map_err(|e| e.to_string())?;
-        let layout = live
+        let layout = execution
+            .scene()
             .effective_family_layout(&family)
             .map_err(|e| e.to_string())?;
         assert!((layout.center.1 - layout.height * 0.5 + 3.5).abs() < 1e-6);
-        live.move_family_to(
-            &family,
-            crate::LiveLayoutTarget::Point(center.0, center.1),
-            (0.0, 0.0),
-            (1.0, 1.0),
-        )
-        .map_err(|e| e.to_string())?;
+        execution
+            .scene_mut()
+            .move_family_to(
+                &family,
+                crate::LayoutTarget::Point(center.0, center.1),
+                (0.0, 0.0),
+                (1.0, 1.0),
+            )
+            .map_err(|e| e.to_string())?;
+        let before = execution
+            .scene()
+            .effective_layout(&first)
+            .map_err(|e| e.to_string())?
+            .center;
+        let target_center = execution
+            .scene()
+            .effective_family_layout(&target)
+            .map_err(|e| e.to_string())?
+            .center;
+        for (mask, expected_x) in [(0.0, before.0), (1.0, target_center.0)] {
+            execution
+                .scene_mut()
+                .move_to(
+                    &first,
+                    crate::LayoutTarget::Anchor(&target_anchor),
+                    (0.0, 0.0),
+                    (mask, 0.0),
+                )
+                .map_err(|e| e.to_string())?;
+            let after = execution
+                .scene()
+                .effective_layout(&first)
+                .map_err(|e| e.to_string())?
+                .center;
+            assert!((after.0 - expected_x).abs() < 1e-6);
+            assert!((after.1 - before.1).abs() < 1e-6);
+        }
+        execution
+            .scene_mut()
+            .align_mobject_on_frame(&first, (0.0, 1.0), 0.5)
+            .map_err(|e| e.to_string())?;
+        let layout = execution
+            .scene()
+            .effective_layout(&first)
+            .map_err(|e| e.to_string())?;
+        assert!((layout.center.1 + layout.height * 0.5 - 3.5).abs() < 1e-6);
+        execution
+            .scene_mut()
+            .move_to_point(&first, before.0, before.1)
+            .map_err(|e| e.to_string())?;
     }
-    scene
-        .into_execution_with_session(execution)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }

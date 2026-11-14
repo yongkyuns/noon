@@ -166,19 +166,12 @@ pub fn scene() -> Result<(Scene, crate::Mobject, DeclaredAnimation), String> {
 
 pub fn session() -> Result<crate::SceneExecution, String> {
     let (scene, _, movement) = scene()?;
-    let mut session = scene
-        .execution_session()
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
+        .play_animation(&movement)
         .map_err(|error| error.to_string())?;
-    session
-        .activate_animation_segment(
-            &mut scene.integration_store().borrow_mut(),
-            movement.node_id(),
-            AnimationOptions::new(),
-        )
-        .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 #[cfg(test)]
@@ -200,8 +193,10 @@ mod tests {
 
     #[test]
     fn camera_label_fixture_keeps_exact_family_center_and_moves_one_profile_track() {
-        let (scene, camera, _) = scene().unwrap();
-        let mut session = session().unwrap();
+        let (scene, camera, movement) = scene().unwrap();
+        assert!(scene.integration_store().borrow().text_resources().len() >= 5);
+        let mut session = scene.into_execution().unwrap();
+        session.live().play_animation(&movement).unwrap();
         for (time, expected) in [
             (0.0, from_profile()),
             (
@@ -212,11 +207,7 @@ mod tests {
         ] {
             session.session_mut().advance_to(time).unwrap();
             assert_eq!(
-                session
-                    .session()
-                    .effective_camera_profile(camera.node_id())
-                    .unwrap()
-                    .0,
+                session.scene().effective_camera_profile(&camera).unwrap().0,
                 expected
             );
         }
@@ -251,6 +242,5 @@ mod tests {
                 .count(),
             1
         );
-        assert!(scene.integration_store().borrow().text_resources().len() >= 5);
     }
 }

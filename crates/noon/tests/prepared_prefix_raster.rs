@@ -5,9 +5,8 @@
 
 mod raster_support;
 
-use noon::{
-    AnimationOptions, ExecutionSession, FadeEndpoint, FadeTranslation, RateFunction, Scene,
-};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{AnimationOptions, FadeEndpoint, FadeTranslation, RateFunction, Scene};
 use noon_core::{SemanticFadeDirection, SemanticVec3};
 use noon_runtime::ReplayLimits;
 use raster_support::Raster;
@@ -67,28 +66,36 @@ fn retained_and_fresh_renderers_preserve_completed_prefix_pixels() {
         target.shift(2.0, 0.0).unwrap();
         let later = scene.rectangle(2.5, 0.3).unwrap();
         scene.add(&shape).unwrap();
-        let mut producer = scene.execution_session().unwrap();
+        let mut producer = scene.into_execution().unwrap();
         producer
+            .session_mut()
             .begin_replay_retention(ReplayLimits::default())
             .unwrap();
-        let segment = scene
-            .live(&mut producer)
+        let segment = producer
+            .live()
             .declare_and_activate_transform_to(&shape, &target, options(1.0))
             .unwrap();
         let mut reference_renderer = Raster::new().await;
         let mut expected = Vec::new();
         for time in [0.25, 0.75] {
-            producer.advance_to(time).unwrap();
-            expected.push((time, capture(&mut producer, &mut reference_renderer)));
+            producer.session_mut().advance_to(time).unwrap();
+            expected.push((
+                time,
+                capture(producer.session_mut(), &mut reference_renderer),
+            ));
         }
         {
-            let mut live = scene.live(&mut producer);
-            live.advance_segment_to(segment, segment.end_time())
+            producer
+                .live()
+                .advance_segment_to(segment, segment.end_time())
                 .unwrap();
-            live.complete_segment(segment).unwrap();
+            producer.live().complete_segment(segment).unwrap();
         }
-        producer.advance_to(1.25).unwrap();
-        expected.push((1.25, capture(&mut producer, &mut reference_renderer)));
+        producer.session_mut().advance_to(1.25).unwrap();
+        expected.push((
+            1.25,
+            capture(producer.session_mut(), &mut reference_renderer),
+        ));
         assert_ne!(
             expected[0].1, expected[1].1,
             "the reference must actually animate"
@@ -97,23 +104,24 @@ fn retained_and_fresh_renderers_preserve_completed_prefix_pixels() {
         // Exactly one execution snapshot, only after explicit source completion.
         // The unit-level probe separately rejects pending/unsupported captures.
         // This is a control for sparse publication work, not a shippable copier.
-        let mut reader = producer.clone();
+        let mut reader = producer.session().clone();
         reader.seal_replay().unwrap();
         let mut retained_renderer = Raster::new().await;
         verify(&mut reader, &mut retained_renderer, &expected);
 
-        let segment = scene
-            .live(&mut producer)
+        let segment = producer
+            .live()
             .declare_and_activate_transform_to(&shape, &later, options(1.0))
             .unwrap();
         {
-            let mut live = scene.live(&mut producer);
-            live.advance_segment_to(segment, segment.end_time())
+            producer
+                .live()
+                .advance_segment_to(segment, segment.end_time())
                 .unwrap();
-            live.complete_segment(segment).unwrap();
+            producer.live().complete_segment(segment).unwrap();
         }
-        let segment = scene
-            .live(&mut producer)
+        let segment = producer
+            .live()
             .declare_and_activate_fade_with_endpoint(
                 &shape,
                 SemanticFadeDirection::Out,
@@ -125,22 +133,22 @@ fn retained_and_fresh_renderers_preserve_completed_prefix_pixels() {
             )
             .unwrap();
         {
-            let mut live = scene.live(&mut producer);
-            live.advance_segment_to(segment, segment.end_time())
+            producer
+                .live()
+                .advance_segment_to(segment, segment.end_time())
                 .unwrap();
-            live.complete_segment(segment).unwrap();
+            producer.live().complete_segment(segment).unwrap();
         }
-        assert!(!scene.live(&mut producer).contains(&shape).unwrap());
-        let frontier = producer.frame().time;
+        assert!(!producer.scene_mut().contains_direct(&shape).unwrap());
+        let frontier = producer.session().frame().time;
         verify(&mut reader, &mut retained_renderer, &expected);
-        assert_eq!(producer.frame().time, frontier);
+        assert_eq!(producer.session().frame().time, frontier);
 
-        producer.discard_replay_retention();
+        producer.session_mut().discard_replay_retention();
         drop(producer);
         drop(shape);
         drop(target);
         drop(later);
-        drop(scene);
         drop(reference_renderer);
         verify(&mut reader, &mut retained_renderer, &expected);
         drop(retained_renderer);

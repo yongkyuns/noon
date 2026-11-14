@@ -19,7 +19,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         scene.add_many(&[(&family).into()])?;
         let mut session = scene.into_execution()?;
         {
-            session.live().set_family_color_by_gradient(
+            session.scene_mut().set_family_color_by_gradient(
                 &family,
                 &[
                     Color::rgb(1.0, 0.0, 0.0),
@@ -47,7 +47,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 color.blue.into(),
                 1.0,
             )?;
-            assert!((session.live().effective(&boxes[0])?.fill_opacity() - 0.7).abs() < 1e-6);
+            assert!((session.scene().effective(&boxes[0])?.fill_opacity() - 0.7).abs() < 1e-6);
             assert!((session.scene().effective_stroke_width(&boxes[0])? - 0.02).abs() < 1e-6);
             let segment = session.live().wait_segment(0.2)?;
             session

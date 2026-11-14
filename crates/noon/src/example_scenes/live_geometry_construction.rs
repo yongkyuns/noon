@@ -99,12 +99,10 @@ impl LiveContinuation for LiveGeometryConstruction {
                     .map_err(|e| e.to_string())?;
                 let target = scene.target_editor(&rectangle).map_err(|e| e.to_string())?;
                 scene
-                    .live()
                     .set_translation(&target, 2.0, 1.0)
                     .map_err(|e| e.to_string())?;
                 let line_target = scene.target_editor(&line).map_err(|e| e.to_string())?;
                 scene
-                    .live()
                     .set_translation(&line_target, 0.0, -1.0)
                     .map_err(|e| e.to_string())?;
                 self.rectangle = Some(rectangle.clone());
@@ -137,7 +135,6 @@ impl LiveContinuation for LiveGeometryConstruction {
                 let line = self.line.as_ref().ok_or("missing live line")?;
                 assert_endpoints(
                     scene
-                        .live()
                         .effective_line_endpoints(line)
                         .map_err(|error| error.to_string())?,
                     (LINE_START.0, LINE_START.1 + 1.0),

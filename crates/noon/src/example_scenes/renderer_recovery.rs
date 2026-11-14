@@ -35,21 +35,21 @@ pub fn four_animated() -> Result<crate::SceneExecution, String> {
         .map_err(|error| error.to_string())?;
     let mut target = circle.target_editor().map_err(|error| error.to_string())?;
     target.shift(1.6, 0.0).map_err(|error| error.to_string())?;
-    let animation = scene.declare_transform_to(
-        &circle,
-        &target,
-        AnimationOptions::new()
-            .run_time(4.0)
-            .rate_func(RateFunction::Linear),
-    )?;
-    let mut session = scene.execution_session().map_err(|e| e.to_string())?;
-    scene
-        .live(&mut session)
+    let animation = scene
+        .declare_transform_to(
+            &circle,
+            &target,
+            AnimationOptions::new()
+                .run_time(4.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .map_err(|error| error.to_string())?;
+    let mut execution = scene.into_execution().map_err(|e| e.to_string())?;
+    execution
+        .live()
         .play_animation(&animation)
         .map_err(|e| e.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 pub fn camera_density() -> Result<crate::SceneExecution, String> {

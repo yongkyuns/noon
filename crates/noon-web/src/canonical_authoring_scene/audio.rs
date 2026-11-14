@@ -147,13 +147,14 @@ mod tests {
         context.bind_mobject(ObjectId::new(0), &dot).unwrap();
         let tracker = context.create_value_tracker(0.0).unwrap();
         let position = context
-            .tracker_position(
+            .scene
+            .position_from_tracker(
                 &tracker,
                 SemanticVec3::new(1.0, 0.0, 0.0),
                 SemanticVec3::new(-2.0, 0.0, 0.0),
             )
             .unwrap();
-        context.bind_tracker_position(&dot, &position).unwrap();
+        context.scene.bind_position(&dot, &position).unwrap();
         context
             .scene
             .next_section("Begin", SectionType::Normal)
@@ -286,13 +287,14 @@ mod tests {
                 .bind_mobject(ObjectId::new(index as u64), point)
                 .unwrap();
             let position = context
-                .tracker_position(
+                .scene
+                .position_from_tracker(
                     &tracker,
                     SemanticVec3::new(direction, 0.0, 0.0),
                     SemanticVec3::new(lesson::ORIGIN_X, y, 0.0),
                 )
                 .unwrap();
-            context.bind_tracker_position(point, &position).unwrap();
+            context.scene.bind_position(point, &position).unwrap();
         }
         for (name, target) in lesson::SECTIONS {
             context
@@ -307,7 +309,7 @@ mod tests {
         }
         context
             .audio(
-                &crate::authoring_audio::small_discovery().unwrap(),
+                &noon::integration::small_discovery_audio().unwrap(),
                 AudioClipOptions {
                     duration: Some(30.0),
                     gain: 0.5,
@@ -319,7 +321,7 @@ mod tests {
             .unwrap();
         assert_eq!(native.sections(), context.scene.sections());
         assert_eq!(native.time(), context.authored_duration());
-        let mut native = native.execution_session().unwrap();
+        let mut native = noon::integration::scene_execution::lower(&native).unwrap();
         let mut wrapped = context.lower_execution().unwrap();
         assert_eq!(native.finite_timeline_end_time(), Some(30.0));
         assert_eq!(wrapped.finite_timeline_end_time(), Some(30.0));

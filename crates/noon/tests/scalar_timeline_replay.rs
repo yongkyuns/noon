@@ -1,5 +1,6 @@
 //! Deterministic scalar history uses authored tracks, not sampled host results.
-use noon::{ExecutionSession, RateFunction, RustHostCallbackTable, Scene};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{RateFunction, RustHostCallbackTable, Scene};
 use noon_core::{
     HostCallbackId, ReactiveValue, SemanticMutationTransaction, SemanticNodeId,
     SemanticObjectState, SemanticStore, StoredGeometry, TrackTiming,
@@ -239,7 +240,7 @@ fn opaque_callbacks_are_not_misclassified_as_replayable_scalar_curves() {
             None,
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
     session
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();

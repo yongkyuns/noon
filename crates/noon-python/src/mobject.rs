@@ -2,6 +2,27 @@
 use crate::{context::MembershipBatch, engine_error};
 use pyo3::prelude::*;
 
+#[cfg(any(feature = "native-text", feature = "typst"))]
+type TextPart = (u32, u32, u32, u32, u32, u32, Option<String>);
+
+#[cfg(any(feature = "native-text", feature = "typst"))]
+fn project_text_parts(parts: Vec<noon::TextPart>) -> Vec<TextPart> {
+    parts
+        .into_iter()
+        .map(|part| {
+            (
+                part.source_span.start,
+                part.source_span.end,
+                part.first_cluster,
+                part.cluster_count,
+                part.first_vector,
+                part.vector_count,
+                part.semantic_key.as_deref().map(str::to_owned),
+            )
+        })
+        .collect()
+}
+
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct LineEndpoints {
     pub(crate) value: noon::ManimLineEndpoints,
@@ -39,6 +60,74 @@ impl MobjectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[pyo3(name = "shapeMatcherBounds")]
+    fn shape_matcher_bounds(&self) -> PyResult<[f64; 4]> {
+        noon::MobjectTarget::from(&self.handle)
+            .shape_matcher_bounds()
+            .map(crate::geometry::bounds_coordinates)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "beginUnderline")]
+    fn begin_underline(&self, buff: f64) -> PyResult<crate::geometry::GeometryOptions> {
+        self.handle
+            .underline_options(buff)
+            .map(crate::geometry::GeometryOptions::from_options)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "tangentLineOptions")]
+    fn tangent_line_options(
+        &self,
+        alpha: f64,
+        length: f64,
+        d_alpha: f64,
+    ) -> PyResult<crate::geometry::GeometryOptions> {
+        self.handle
+            .manim_tangent_line_options(alpha, length, d_alpha)
+            .map(crate::geometry::GeometryOptions::from_options)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "updatingSuspended")]
+    fn updating_suspended(&self) -> PyResult<bool> {
+        self.handle.updating_suspended().map_err(engine_error)
+    }
+
+    #[pyo3(name = "setUpdatingSuspended")]
+    fn set_updating_suspended(&self, suspended: bool, recursive: bool) -> PyResult<()> {
+        self.handle
+            .set_updating_suspended(suspended, recursive)
+            .map_err(engine_error)
+    }
+
+    #[cfg(any(feature = "native-text", feature = "typst"))]
+    #[pyo3(name = "textSource")]
+    fn text_source(&self) -> PyResult<String> {
+        self.handle
+            .text_source()
+            .map(|source| source.to_string())
+            .map_err(engine_error)
+    }
+
+    #[cfg(any(feature = "native-text", feature = "typst"))]
+    #[pyo3(name = "textParts")]
+    fn text_parts(&self) -> PyResult<Vec<TextPart>> {
+        self.handle
+            .text_parts()
+            .map(project_text_parts)
+            .map_err(engine_error)
+    }
+
+    #[cfg(any(feature = "native-text", feature = "typst"))]
+    #[pyo3(name = "textSourcePartsFor")]
+    fn text_source_parts_for(&self, needle: &str) -> PyResult<Vec<TextPart>> {
+        self.handle
+            .text_source_parts_for(needle)
+            .map(project_text_parts)
+            .map_err(engine_error)
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[pyo3(name="setStyle",signature=(fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
     pub fn set_style(
@@ -180,13 +269,136 @@ impl MobjectHandle {
         self.handle.set_emission(value).map_err(engine_error)
     }
 
+    #[pyo3(name = "memberKeys")]
+    fn member_keys(&self) -> PyResult<Vec<String>> {
+        let store = self.handle.integration_store().borrow();
+        let node = store
+            .semantic_authoring_node_checked(self.handle.node_id())
+            .map_err(engine_error)?;
+        Ok(node
+            .members_iter()
+            .map(|id| format!("{}:{}", id.slot(), id.generation()))
+            .collect())
+    }
+
+    #[pyo3(name = "extremumAlongDim")]
+    fn extremum_along_dim(&self, dim: usize, key: f64) -> PyResult<f64> {
+        noon::MobjectTarget::from(&self.handle)
+            .extremum_along_dim(dim, key)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "lengthOverDim")]
+    fn length_over_dim(&self, dim: usize) -> PyResult<f64> {
+        noon::MobjectTarget::from(&self.handle)
+            .length_over_dim(dim)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "centerOfMass")]
+    fn center_of_mass(&self) -> PyResult<(f64, f64)> {
+        noon::MobjectTarget::from(&self.handle)
+            .center_of_mass()
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "boundaryPoint")]
+    fn boundary_point(&self, direction_x: f64, direction_y: f64) -> PyResult<(f64, f64)> {
+        noon::MobjectTarget::from(&self.handle)
+            .boundary_point(direction_x, direction_y)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "pathBoundaryExtremumAlongDim")]
+    fn path_boundary_extremum_along_dim(&self, dim: usize, key: f64) -> PyResult<f64> {
+        noon::MobjectTarget::from(&self.handle)
+            .path_boundary_extremum_along_dim(dim, key)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "pathBoundaryPoint")]
+    fn path_boundary_point(&self, direction_x: f64, direction_y: f64) -> PyResult<(f64, f64)> {
+        noon::MobjectTarget::from(&self.handle)
+            .path_boundary_point(direction_x, direction_y)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "extremumFromPoints")]
+    fn extremum_from_points(
+        &self,
+        coordinates: Vec<f64>,
+        dimensions: usize,
+        dim: usize,
+        key: f64,
+    ) -> PyResult<f64> {
+        noon::reduce_point_extremum(&coordinates, dimensions, dim, key).map_err(engine_error)
+    }
+
+    #[pyo3(name = "boundaryPointFromPoints")]
+    fn boundary_point_from_points(
+        &self,
+        coordinates: Vec<f64>,
+        dimensions: usize,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> PyResult<Vec<f64>> {
+        noon::reduce_point_boundary(&coordinates, dimensions, direction_x, direction_y)
+            .map(|(x, y)| vec![x, y])
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "pathBoundaryPoints3D")]
+    fn path_boundary_points_3d(&self) -> PyResult<Vec<f64>> {
+        noon::MobjectTarget::from(&self.handle)
+            .path_boundary_points_3d()
+            .map(crate::path_input::flat_points_3d)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "editMembership")]
+    fn edit_membership(&self, batch: &MembershipBatch) -> PyResult<Vec<bool>> {
+        batch.edit_children((&self.handle).into())
+    }
+
     #[pyo3(name = "prependMembers")]
     fn prepend_members(&self, batch: &MembershipBatch) -> PyResult<()> {
-        if batch.kind != "add" {
-            return Err(engine_error("member prepend requires an add batch"));
-        }
         self.handle
-            .prepend_many(&batch.targets())
+            .prepend_many(&batch.add_targets()?)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "insertMember")]
+    fn insert_member(&self, index: usize, batch: &MembershipBatch) -> PyResult<()> {
+        self.handle
+            .insert_member(index, batch.single_member()?)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "replaceMembers")]
+    fn replace_members(&self, batch: &MembershipBatch) -> PyResult<()> {
+        self.handle
+            .replace_members(&batch.add_targets()?)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "promoteOwnPoints")]
+    fn promote_own_points(
+        &self,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        noon::MobjectTarget::from(&self.handle)
+            .promote_own_points_with_references(&references.add_targets()?)
+            .map(|copied| crate::family::FamilyCopy { copied })
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "copyFamily")]
+    fn copy_family(&self, references: &MembershipBatch) -> PyResult<crate::family::FamilyCopy> {
+        self.handle
+            .copy_with_references(&references.add_targets()?)
+            .map(|copied| crate::family::FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
             .map_err(engine_error)
     }
 
@@ -334,6 +546,17 @@ impl MobjectHandle {
             [right[0], right[1]],
             absolute_tolerance,
         ))
+    }
+
+    #[pyo3(name = "pointReductionTree")]
+    fn point_reduction_tree<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        let tree = noon::MobjectTarget::from(&self.handle)
+            .point_reduction_tree()
+            .map_err(engine_error)?;
+        crate::path_input::point_reduction_tree(py, tree)
     }
 
     #[pyo3(name = "pointArray")]
@@ -1048,6 +1271,73 @@ impl MobjectHandle {
     pub fn set_stroke_join(&mut self, join: &str) -> Result<(), PyErr> {
         self.handle.set_stroke_join(join).map_err(engine_error)
     }
+    #[pyo3(name = "sheenDirection")]
+    fn sheen_direction(&self) -> PyResult<Vec<f64>> {
+        self.handle
+            .sheen_direction()
+            .map(|direction| direction.components())
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setSheenDirection")]
+    fn set_sheen_direction(
+        &self,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimensions: u8,
+        family: bool,
+    ) -> PyResult<()> {
+        let direction =
+            noon::SemanticSheenDirection::new(noon::SemanticVec3::new(x, y, z), dimensions);
+        self.handle
+            .set_sheen_direction(direction, family)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "rotateSheenDirection")]
+    fn rotate_sheen_direction(
+        &self,
+        angle: f64,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        family: bool,
+    ) -> PyResult<()> {
+        self.handle
+            .rotate_sheen_direction(
+                angle,
+                noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                family,
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "beginBrace")]
+    fn begin_brace(
+        &self,
+        x: f64,
+        y: f64,
+        buff: f64,
+        sharpness: f64,
+    ) -> PyResult<crate::geometry::GeometryOptions> {
+        noon::ManimGeometryOptions::brace(
+            &noon::LayoutAnchor::from(&self.handle),
+            (x, y),
+            buff,
+            sharpness,
+        )
+        .map(crate::geometry::GeometryOptions::from_options)
+        .map_err(engine_error)
+    }
+
+    #[getter(strokeCap)]
+    fn stroke_cap(&self) -> PyResult<&'static str> {
+        self.handle
+            .stroke_cap()
+            .map(|cap| cap.as_str())
+            .map_err(engine_error)
+    }
     #[pyo3(name = "setStrokeCap")]
     pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), PyErr> {
         self.handle.set_stroke_cap(cap).map_err(engine_error)
@@ -1096,6 +1386,74 @@ impl MobjectHandle {
             .rotate_about_point(angle, point_x, point_y)
             .map_err(engine_error)
     }
+    #[pyo3(name = "interpolateManimStyle")]
+    fn interpolate_manim_style(&self, start: &Self, end: &Self, alpha: f64) -> PyResult<()> {
+        self.handle
+            .clone()
+            .interpolate_manim_style(&start.handle, &end.handle, alpha)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "interpolateManim")]
+    fn interpolate_manim(&self, start: &Self, end: &Self, alpha: f64) -> PyResult<()> {
+        self.handle
+            .clone()
+            .interpolate_manim(&start.handle, &end.handle, alpha)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "matchStyle")]
+    fn match_style(&self, target: &Self) -> PyResult<()> {
+        self.handle
+            .match_style(&target.handle)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "fadeTo")]
+    fn fade_to(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        amount: f64,
+    ) -> PyResult<()> {
+        self.handle
+            .fade_to(
+                noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
+                amount,
+            )
+            .map_err(engine_error)
+    }
+
+    fn fade(&mut self, darkness: f64) -> PyResult<()> {
+        self.handle.fade(darkness).map_err(engine_error)
+    }
+
+    #[pyo3(name = "setColorGradient")]
+    fn set_color_gradient(&mut self, values: Vec<f64>) -> PyResult<()> {
+        let colors = noon::integration::gradient_colors(&values).map_err(engine_error)?;
+        self.handle
+            .set_color_by_gradient(&colors)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setRadialColorGradient")]
+    fn set_radial_color_gradient(
+        &mut self,
+        center_x: f64,
+        center_y: f64,
+        center_z: f64,
+        radius: f64,
+        values: Vec<f64>,
+    ) -> PyResult<()> {
+        let (inner, outer) =
+            noon::integration::radial_gradient_colors(&values).map_err(engine_error)?;
+        self.handle
+            .set_color_by_radial_gradient((center_x, center_y, center_z), radius, inner, outer)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "setColor")]
     pub fn set_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> Result<(), PyErr> {
         self.handle
@@ -1178,6 +1536,12 @@ impl MobjectHandle {
             .transform
             .planar_rotation()
             .ok_or_else(|| engine_error("rotation getter is unsupported for spatial orientation"))
+    }
+    #[pyo3(name = "alignOnFrame")]
+    fn align_on_frame(&mut self, direction_x: f64, direction_y: f64, buff: f64) -> PyResult<()> {
+        self.handle
+            .align_on_frame(direction_x, direction_y, buff)
+            .map_err(engine_error)
     }
     #[pyo3(name = "layoutAnchor")]
     fn layout_anchor(&self, index: Option<isize>) -> LayoutAnchor {
@@ -1350,6 +1714,70 @@ impl LayoutAnchor {
         self.anchor
             .rescale_to_fit_with_pivot(
                 length,
+                dimension.try_into().map_err(engine_error)?,
+                stretch,
+                pivot_3d(x, y, z, point),
+            )
+            .map_err(engine_error)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn flip(
+        &self,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        x: f64,
+        y: f64,
+        point: bool,
+    ) -> PyResult<()> {
+        self.anchor
+            .flip(
+                noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                pivot(x, y, point),
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "replaceLayout")]
+    fn replace_layout(&self, target: &Self, dimension: u32, stretch: bool) -> PyResult<()> {
+        self.anchor
+            .replace_layout(
+                &target.anchor,
+                dimension.try_into().map_err(engine_error)?,
+                stretch,
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "surroundCircle")]
+    fn surround_circle(
+        &self,
+        target: &Self,
+        dimension: u32,
+        stretch: bool,
+        buffer_factor: f64,
+    ) -> PyResult<()> {
+        self.anchor
+            .surround_circle(&target.anchor, dimension, stretch, buffer_factor)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "matchDimSize")]
+    #[allow(clippy::too_many_arguments)]
+    fn match_dim_size(
+        &self,
+        target: &Self,
+        dimension: u32,
+        stretch: bool,
+        x: f64,
+        y: f64,
+        z: f64,
+        point: bool,
+    ) -> PyResult<()> {
+        self.anchor
+            .match_dim_size_with_pivot(
+                &target.anchor,
                 dimension.try_into().map_err(engine_error)?,
                 stretch,
                 pivot_3d(x, y, z, point),

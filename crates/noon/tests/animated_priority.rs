@@ -14,8 +14,7 @@ fn method_priority_is_discrete_exact_and_persists_with_returning_motion() {
     target.set_z_index(1.0000000000000002).unwrap();
     target.shift(2.0, 0.0).unwrap();
     let mut execution = scene.into_execution().unwrap();
-    let segment;
-    {
+    let segment = {
         let mut live = execution.live();
         let request = Request::TransformTo(
             TransformToRequest::new(
@@ -27,18 +26,29 @@ fn method_priority_is_discrete_exact_and_persists_with_returning_motion() {
             )
             .method_target(),
         );
-        segment = live
+        let segment = live
             .declare_and_activate_composition(&request, AnimationOptions::new())
             .unwrap();
         live.advance_segment_to(segment, 1.0).unwrap();
-        assert_eq!(live.effective(&source).unwrap().z_index, 0.0);
-        assert_eq!(
-            live.effective(&source).unwrap().transform.translation.x,
-            2.0
-        );
-        live.advance_segment_to(segment, 2.0).unwrap();
-        assert_eq!(live.effective(&source).unwrap().z_index, 1.0000000000000002);
-    }
+        segment
+    };
+    assert_eq!(execution.scene().effective(&source).unwrap().z_index, 0.0);
+    assert_eq!(
+        execution
+            .scene()
+            .effective(&source)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        2.0
+    );
+    execution.live().advance_segment_to(segment, 2.0).unwrap();
+    assert_eq!(
+        execution.scene().effective(&source).unwrap().z_index,
+        1.0000000000000002
+    );
+
     assert_eq!(
         execution
             .scene()
@@ -46,23 +56,24 @@ fn method_priority_is_discrete_exact_and_persists_with_returning_motion() {
             .unwrap(),
         1.0000000000000002
     );
-    {
-        let mut live = execution.live();
-        assert_eq!(
-            live.effective(&source).unwrap().transform.translation.x,
-            0.0
-        );
-        live.complete_segment(segment).unwrap();
-    }
+
+    assert_eq!(
+        execution
+            .scene()
+            .effective(&source)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        0.0
+    );
+    execution.live().complete_segment(segment).unwrap();
     assert_eq!(source.z_index().unwrap(), 1.0000000000000002);
     execution
         .scene_mut()
         .set_z_index(&(&source).into(), -2.0, true)
         .unwrap();
-    {
-        let live = execution.live();
-        assert_eq!(live.effective(&source).unwrap().z_index, -2.0);
-    }
+    assert_eq!(execution.scene().effective(&source).unwrap().z_index, -2.0);
     assert_eq!(execution.session().painter_order(), &[0, 1]);
     execution.seek(0.5).unwrap();
     assert_eq!(
@@ -81,8 +92,8 @@ fn ordinary_transform_ignores_target_priority() {
     scene.add(&source).unwrap();
     let target = source.target_editor().unwrap();
     target.set_z_index(9.0).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
+    let mut execution = scene.into_execution().unwrap();
+    let mut live = execution.live();
     let request = Request::TransformTo(TransformToRequest::new(
         &source,
         &target,
@@ -95,7 +106,7 @@ fn ordinary_transform_ignores_target_priority() {
         .unwrap();
     live.complete_segment(segment).unwrap();
     assert_eq!(source.z_index().unwrap(), 0.0);
-    assert_eq!(live.effective(&source).unwrap().z_index, 0.0);
+    assert_eq!(execution.scene().effective(&source).unwrap().z_index, 0.0);
 }
 
 #[test]
@@ -145,7 +156,7 @@ fn nested_sequence_captures_prior_priority_and_reconciles_only_final_authored_va
             .declare_and_activate_composition(&request, AnimationOptions::new())
             .unwrap();
         live.advance_segment_to(segment, 1.75).unwrap();
-        assert_eq!(live.effective(&source).unwrap().z_index, 2.0);
+        assert_eq!(execution.scene().effective(&source).unwrap().z_index, 2.0);
     }
     assert_eq!(source.z_index().unwrap(), 0.0);
     assert_eq!(

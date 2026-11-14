@@ -1,9 +1,8 @@
 #![cfg(feature = "prepared-prefix")]
 mod raster_support;
-use noon::{
-    ExecutionSession, ImageMobjectOptions, ImagePaintOptions, ManimBecomeOptions, PrefixReader,
-    Scene,
-};
+use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{ImageMobjectOptions, ImagePaintOptions, ManimBecomeOptions, PrefixReader, Scene};
 use noon_runtime::{PrefixError, ReplayLimits};
 
 fn fixture() -> (
@@ -16,7 +15,7 @@ fn fixture() -> (
     let mut scene = Scene::new();
     let anchor = scene.circle(0.15).unwrap();
     scene.add(&anchor).unwrap();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene_execution::lower(&scene).unwrap();
     source
         .begin_replay_retention(ReplayLimits {
             revisions: 256,
@@ -181,12 +180,12 @@ fn image_paint_resource_budget_failure_keeps_suffix_cursor_and_reader_unchanged(
 #[test]
 fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
     let (scene, _, source, mut publisher, mut reader) = fixture();
-    let mut execution = scene.into_execution_with_session(source).unwrap();
+    let mut execution = scene_execution::consume_with_session(scene, source).unwrap();
     let a = execution
         .scene_mut()
         .image(image([240, 20, 10, 255]))
         .unwrap();
-    execution.live().add(&a).unwrap();
+    execution.scene_mut().add(&a).unwrap();
     let first_handle = a.state().unwrap().content.image().unwrap().resource();
     let boundary = execution.session_mut().wait_segment(1.0).unwrap();
     execution.session_mut().advance_to(2.0).unwrap();
@@ -204,7 +203,7 @@ fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
     let second_handle = b.state().unwrap().content.image().unwrap().resource();
     assert_ne!(first_handle, second_handle);
     execution
-        .live()
+        .scene_mut()
         .become_mobject(&a, &b, ManimBecomeOptions::default())
         .unwrap();
     let boundary = execution.session_mut().wait_segment(1.0).unwrap();
@@ -215,7 +214,7 @@ fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
         .unwrap();
     assert_eq!(batch.stats().resource_payloads, 1);
     reader.append(batch).unwrap();
-    execution.live().remove(&a).unwrap();
+    execution.scene_mut().remove(&a).unwrap();
     let boundary = execution.session_mut().wait_segment(1.0).unwrap();
     execution.session_mut().advance_to(4.0).unwrap();
     reader
@@ -226,7 +225,7 @@ fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
                 .unwrap(),
         )
         .unwrap();
-    execution.live().add(&a).unwrap();
+    execution.scene_mut().add(&a).unwrap();
     let boundary = execution.session_mut().wait_segment(1.0).unwrap();
     execution.session_mut().advance_to(5.0).unwrap();
     let batch = execution
@@ -297,7 +296,7 @@ fn lifecycle_resource_pixels_match_source_after_appends_drop_and_renderer_recrea
             .scene_mut()
             .image(image([230, 35, 15, 255]))
             .unwrap();
-        execution.live().add(&a).unwrap();
+        execution.scene_mut().add(&a).unwrap();
         let b = execution
             .scene_mut()
             .image(image([20, 80, 240, 255]))
@@ -306,15 +305,15 @@ fn lifecycle_resource_pixels_match_source_after_appends_drop_and_renderer_recrea
             match step {
                 2 => {
                     execution
-                        .live()
+                        .scene_mut()
                         .become_mobject(&a, &b, ManimBecomeOptions::default())
                         .unwrap();
                 }
                 3 => {
-                    execution.live().remove(&a).unwrap();
+                    execution.scene_mut().remove(&a).unwrap();
                 }
                 4 => {
-                    execution.live().add(&a).unwrap();
+                    execution.scene_mut().add(&a).unwrap();
                 }
                 _ => {}
             }
@@ -399,7 +398,7 @@ fn terminal_endpoint_image_pixels_match_source_after_drop_and_renderer_recreatio
             .scene_mut()
             .image(image([230, 35, 15, 255]))
             .unwrap();
-        execution.live().add(&image).unwrap();
+        execution.scene_mut().add(&image).unwrap();
         execution.session_mut().seal_replay().unwrap();
         let mut oracle = raster_support::Raster::new().await;
         let endpoint = oracle.capture(&execution.session_mut().take_renderer_publication());
@@ -547,7 +546,7 @@ fn pointer_driven_prefix_effect_pixels_restore_after_terminal_delivery_and_sourc
                 AnimationOptions::new().run_time(0.5),
             )
             .unwrap();
-        let mut source = scene.execution_session().unwrap();
+        let mut source = scene_execution::lower(&scene).unwrap();
         source
             .begin_replay_retention(ReplayLimits {
                 revisions: 128,

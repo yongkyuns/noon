@@ -127,6 +127,7 @@ pub(crate) fn effective_point_array(
         .map_err(AuthoringError::from)?;
     let semantics = store.borrow();
     from_node(&semantics, target.node_id(), &mut |id| {
-        family_point_path_query(store, execution, id)
+        let object = Mobject::from_node(Rc::clone(store), id)?;
+        captured_path_query(store, Some(execution), &object)
     })
 }

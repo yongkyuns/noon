@@ -24,7 +24,6 @@ impl LiveContinuation for FamilyOpacity {
                 10 | 14 => {
                     let target = scene.copy_family(&self.group).map_err(message)?;
                     scene
-                        .live()
                         .set_family_object_opacity(
                             target.root(),
                             if self.stage == 10 { 0.25 } else { 0.0 },
@@ -47,11 +46,9 @@ impl LiveContinuation for FamilyOpacity {
                     let child = scene.copy_family(&self.group).map_err(message)?;
                     let parent = scene.copy_family(&self.parent).map_err(message)?;
                     scene
-                        .live()
                         .set_family_object_opacity(child.root(), 0.75)
                         .map_err(message)?;
                     scene
-                        .live()
                         .set_family_object_opacity(parent.root(), 0.5)
                         .map_err(message)?;
                     scene.live().declare_and_activate_animation_composition(
@@ -100,19 +97,16 @@ impl LiveContinuation for FamilyOpacity {
             0 => {}
             1 => {
                 scene
-                    .live()
                     .set_family_object_opacity(&self.group, 0.25)
                     .map_err(message)?;
             }
             2 => {
                 scene
-                    .live()
                     .set_family_object_opacity(&self.group, 0.0)
                     .map_err(message)?;
             }
             3 => {
                 scene
-                    .live()
                     .set_family_object_opacity(&self.group, 1.0)
                     .map_err(message)?;
             }
@@ -127,7 +121,6 @@ impl LiveContinuation for FamilyOpacity {
             }
             5 => {
                 scene
-                    .live()
                     .set_family_object_opacity(&self.group, 0.5)
                     .map_err(message)?;
             }
@@ -147,34 +140,28 @@ impl LiveContinuation for FamilyOpacity {
             }
             8 => {
                 scene
-                    .live()
                     .set_family_object_opacity(&self.parent, 1.0)
                     .map_err(message)?;
             }
             9 => {
                 scene
-                    .live()
                     .set_family_object_opacity(&self.group, 1.0)
                     .map_err(message)?;
             }
             11 | 13 | 15 | 19 | 21 => {}
             16 => {
                 scene
-                    .live()
                     .set_family_object_opacity(&self.group, 1.0)
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_family_object_opacity(&self.parent, 1.0)
                     .map_err(message)?;
             }
             17 => {
                 scene
-                    .live()
                     .set_family_object_opacity(&self.group, 0.5)
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_family_object_opacity(&self.parent, 0.6)
                     .map_err(message)?;
                 scene
@@ -195,11 +182,9 @@ impl LiveContinuation for FamilyOpacity {
             22 => {
                 scene.remove_effect(&self.parent, "halo").map_err(message)?;
                 scene
-                    .live()
                     .set_family_object_opacity(&self.group, 1.0)
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_family_object_opacity(&self.parent, 1.0)
                     .map_err(message)?;
             }

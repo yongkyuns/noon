@@ -12,18 +12,15 @@ import _manim_compat as _compat
 import _manim_semantic_handles as _shared
 import noon as _base
 from _noon_errors import engine_call
+from _noon_host import array_value as _to_js
 
 try:
     from _noon_host import noonAuthoringGraphOptions as _graph_options
-    from pyodide.ffi import to_js as _to_js
 except ImportError:  # pragma: no cover - native import smoke only
     _graph_options = None
-    _to_js = None
 
 
 def _array(values):
-    if _to_js is None:
-        raise RuntimeError("Graph requires the shared Rust authoring host")
     return _to_js(list(values))
 
 
@@ -132,7 +129,7 @@ class _GraphBase(_compat.Group):
         edge_ids = self._edge_ids(edges)
         center = _point(layout_center)
         scale = _shared._ir._finite_number("layout_scale", layout_scale)
-        context = _shared._live_constructor_context("Graph", allow_unstarted=True)
+        context = _shared._path_authoring_context()
         if context is None:
             raise RuntimeError("Graph construction requires a canonical Scene authoring context")
         options = _graph_style_options(vertex_config, edge_config)
@@ -140,12 +137,12 @@ class _GraphBase(_compat.Group):
         try:
             if circular:
                 self._graph_handle = engine_call(
-                    context.liveCreateCircularGraph, bool(self._directed), ids, _array(edge_ids),
+                    context.createCircularGraph, bool(self._directed), ids, _array(edge_ids),
                     scale, *center, options, operation="Graph.create",
                 )
             else:
                 self._graph_handle = engine_call(
-                    context.liveCreateGraph, bool(self._directed), ids, _array(positions),
+                    context.createGraph, bool(self._directed), ids, _array(positions),
                     _array(edge_ids), options, operation="Graph.create",
                 )
         except BaseException:
@@ -202,7 +199,7 @@ class _GraphBase(_compat.Group):
             ids.append(next_id)
             next_id += 1
             positions.extend((x, y))
-        engine_call(self._context().liveGraphAddVertices, self._graph_handle,
+        engine_call(self._context().graphAddVertices, self._graph_handle,
                     _array(ids), _array(positions), operation="Graph.add_vertices")
         self._graph_key_ids.update((key, vertex_id) for (key, _, _), vertex_id in zip(pending, ids))
         self._next_graph_id = next_id
@@ -215,7 +212,7 @@ class _GraphBase(_compat.Group):
         publication with default placement; it is deliberately unsupported
         here so Python never splits that operation into transactions.
         """
-        engine_call(self._context().liveGraphAddEdges, self._graph_handle,
+        engine_call(self._context().graphAddEdges, self._graph_handle,
                     _array(self._edge_ids(edges)), operation="Graph.add_edges")
         return self
 
@@ -225,14 +222,14 @@ class _GraphBase(_compat.Group):
             ids = [self._graph_key_ids[key] for key in keys]
         except KeyError as error:
             raise ValueError("unknown Graph vertex key") from error
-        engine_call(self._context().liveGraphRemoveVertices, self._graph_handle,
+        engine_call(self._context().graphRemoveVertices, self._graph_handle,
                     _array(ids), operation="Graph.remove_vertices")
         for key in keys:
             del self._graph_key_ids[key]
         return self
 
     def remove_edges(self, edges):
-        engine_call(self._context().liveGraphRemoveEdges, self._graph_handle,
+        engine_call(self._context().graphRemoveEdges, self._graph_handle,
                     _array(self._edge_ids(edges)), operation="Graph.remove_edges")
         return self
 
@@ -244,7 +241,7 @@ class _GraphBase(_compat.Group):
         clone._next_graph_id = self._next_graph_id
         clone._canonical_live_target_context = self._context()
         clone._graph_handle = engine_call(
-            clone._canonical_live_target_context.liveGraphCopy,
+            clone._canonical_live_target_context.graphCopy,
             self._graph_handle,
             operation="Graph.copy",
         )
@@ -255,7 +252,7 @@ class _GraphBase(_compat.Group):
         if isinstance(layout, Mapping):
             positions, layout = layout, "explicit"
         if layout == "circular":
-            engine_call(self._context().liveGraphCircularLayout, self._graph_handle,
+            engine_call(self._context().graphCircularLayout, self._graph_handle,
                         float(scale), *_point(center), operation="Graph.circular_layout")
         elif layout == "explicit":
             if not isinstance(positions, Mapping):
@@ -266,7 +263,7 @@ class _GraphBase(_compat.Group):
                 raise ValueError("explicit Graph layout must cover every current vertex") from error
             if len(positions) != len(ordered):
                 raise ValueError("explicit Graph layout must cover every current vertex exactly once")
-            engine_call(self._context().liveGraphExplicitLayout, self._graph_handle,
+            engine_call(self._context().graphExplicitLayout, self._graph_handle,
                         _array(value for point in ordered for value in point),
                         operation="Graph.explicit_layout")
         else:

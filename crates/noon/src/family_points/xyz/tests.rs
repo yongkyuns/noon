@@ -67,7 +67,7 @@ fn root_xyz_appends_preserve_children_identity_and_presentation_in_all_hosts() {
 
 #[test]
 fn replacing_xyz_root_points_updates_only_its_existing_payload() {
-    for mode in 0..3 {
+    for mode in 0..2 {
         let mut scene = Scene::new();
         let child = scene.square(0.5).unwrap();
         let family = scene.family(&[(&child).into()]).unwrap();
@@ -75,33 +75,15 @@ fn replacing_xyz_root_points_updates_only_its_existing_payload() {
         family.shift(1.25, -0.75).unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
         let before_child = child.state().unwrap();
-        let mut borrowed = None;
-        match mode {
-            0 => family.set_points_3d(&SUFFIX).unwrap(),
-            1 => {
-                let execution = scene.execution_session().unwrap();
-                scene.install_execution(execution);
-                scene.set_family_points_3d(&family, &SUFFIX).unwrap();
-            }
-            _ => {
-                let mut execution = scene.execution_session().unwrap();
-                publish_family_points_3d(
-                    scene.integration_store(),
-                    scene.root(),
-                    &mut execution,
-                    &family,
-                    &SUFFIX,
-                )
-                .unwrap();
-                borrowed = Some(execution);
-            }
-        }
-        let actual =
-            if let Some(execution) = borrowed.as_ref().or_else(|| scene.running_execution()) {
-                family.effective_own_path_query(execution).unwrap()
-            } else {
-                family.own_path_query().unwrap()
-            };
+        let actual = if mode == 0 {
+            scene.set_family_points_3d(&family, &SUFFIX).unwrap();
+            family.own_path_query().unwrap()
+        } else {
+            let execution = scene.execution_session().unwrap();
+            scene.install_execution(execution);
+            scene.set_family_points_3d(&family, &SUFFIX).unwrap();
+            scene.effective_family_own_path_query(&family).unwrap()
+        };
         assert_eq!(actual.points_3d().unwrap(), SUFFIX);
         assert_eq!(child.state().unwrap(), before_child);
     }
@@ -111,43 +93,23 @@ fn replacing_xyz_root_points_updates_only_its_existing_payload() {
 fn invalid_xyz_and_stale_or_foreign_roots_cannot_publish_or_materialize() {
     let mut scene = Scene::new();
     let family = scene.family(&[]).unwrap();
-    let mut execution = scene.execution_session().unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
     let revision = scene.revision();
-    let publication = execution.publication_context();
+    let publication = scene.owned_execution().publication_context();
     let resources = scene
         .integration_store()
         .borrow()
         .geometry_resources()
         .len();
     let invalid = [SemanticVec3::new(1.0, 2.0, f64::NAN)];
-    assert!(publish_family_points_3d(
-        scene.integration_store(),
-        scene.root(),
-        &mut execution,
-        &family,
-        &invalid
-    )
-    .is_err());
-    assert!(publish_append_family_points_3d(
-        scene.integration_store(),
-        scene.root(),
-        &mut execution,
-        &family,
-        &invalid
-    )
-    .is_err());
+    assert!(scene.set_family_points_3d(&family, &invalid).is_err());
+    assert!(scene.append_family_points_3d(&family, &invalid).is_err());
     let foreign = Scene::new().family(&[]).unwrap();
-    assert!(publish_append_family_points_3d(
-        scene.integration_store(),
-        scene.root(),
-        &mut execution,
-        &foreign,
-        &[]
-    )
-    .is_err());
+    assert!(scene.append_family_points_3d(&foreign, &[]).is_err());
     assert!(family.own_object().unwrap().is_none());
     assert_eq!(scene.revision(), revision);
-    assert_eq!(execution.publication_context(), publication);
+    assert_eq!(scene.owned_execution().publication_context(), publication);
     assert_eq!(
         scene
             .integration_store()
@@ -156,16 +118,9 @@ fn invalid_xyz_and_stale_or_foreign_roots_cannot_publish_or_materialize() {
             .len(),
         resources
     );
-    let stale = scene.family(&[]).unwrap();
+    let stale = MobjectFamily::create(Rc::clone(scene.integration_store()), &[]).unwrap();
     for points in [&SUFFIX[..], &[][..]] {
-        assert!(publish_append_family_points_3d(
-            scene.integration_store(),
-            scene.root(),
-            &mut execution,
-            &stale,
-            points
-        )
-        .is_err());
+        assert!(scene.append_family_points_3d(&stale, points).is_err());
     }
     assert!(stale.own_object().unwrap().is_none());
     assert_eq!(

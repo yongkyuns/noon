@@ -94,7 +94,7 @@ def _reserve_typed_binding(
 
     # A completed canonical FadeOut removes shared root membership but retains
     # the semantic handle and this wrapper's derived ObjectId. Re-adding that
-    # exact handle must use liveAdd, not allocate a second export identity.
+    # exact handle reuses its original wrapper identity on re-entry.
     prior = getattr(mobject, "_object", None)
     if prior is not None and prior.id in scene._binding_handles:
         prior_key = scene._object_keys.get(prior.id)
@@ -142,15 +142,7 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
         raise NotImplementedError("shared Scene binding requires a typed semantic Mobject")
     reservation = _reserve_typed_binding(self, scene, handle, key)
     context = _context(scene)
-    if reservation.reuse_existing_identity:
-        engine_call(context.liveAdd, str(reservation.object.id), handle, operation="Scene.add")
-    elif context.requiresLiveMutationRouting():
-        # A resumed source continuation may introduce an object after a
-        # play/wait barrier. Rust atomically publishes both root membership and execution-slot
-        # enrollment before Python records its derived wrapper identity.
-        engine_call(context.liveAdd, str(reservation.object.id), handle, operation="Scene.add")
-    else:
-        engine_call(context.bindMobject, str(reservation.object.id), handle, operation="Scene.bind")
+    engine_call(context.bindMobject, str(reservation.object.id), handle, operation="Scene.add")
     return _commit_typed_binding(self, scene, reservation, handle)
 
 
@@ -1801,7 +1793,7 @@ def _reconcile_fade_membership(
     if direction != "out":
         return
     context = _context(scene)
-    if bool(engine_call(context.liveContainsMobject, getattr(target, "_semantic_handle"), operation="Scene.membership")):
+    if bool(engine_call(context.containsDirectMobject, getattr(target, "_semantic_handle"), operation="Scene.membership")):
         raise RuntimeError("completed FadeOut still belongs to the canonical Scene")
     if target._scene is not scene:
         raise RuntimeError("FadeOut wrapper binding changed before completion")
@@ -2000,7 +1992,7 @@ def _on_click(self: _base.Scene, target: object, animation: object) -> _base.Sce
         raise NotImplementedError("Scene.on_click requires a shared semantic handle")
     if animation is None:
         engine_call(
-            _context(self).liveClearClickAction,
+            _context(self).clearClickAction,
             target._semantic_handle,
             operation="Scene.on_click",
         )
@@ -2008,13 +2000,13 @@ def _on_click(self: _base.Scene, target: object, animation: object) -> _base.Sce
     if isinstance(animation, GlowPulse):
         if _canonical_glow_pulse_animation(self, animation) is not target:
             raise ValueError("Scene.on_click requires GlowPulse on the same single target")
-        method = _context(self).liveBindClickGlowPulse
+        method = _context(self).bindClickGlowPulse
         parameters = _glow_pulse_parameters(animation, {})
     elif isinstance(animation, _animate.Indicate):
         animated, family = _canonical_indicate_animation(self, animation)
         if family or animated is not target:
             raise ValueError("Scene.on_click requires Indicate on the same single target")
-        method = _context(self).liveBindClickIndicate
+        method = _context(self).bindClickIndicate
         parameters = _indicate_parameters(animation, {})
     else:
         raise NotImplementedError("Scene.on_click supports Indicate(target), GlowPulse(target), or None")
@@ -2302,7 +2294,7 @@ def _apply_matrix_target(target: object, animation: object) -> None:
     context = (
         _semantic_handles._group_target_context(target)
         if is_family
-        else getattr(target, "_canonical_live_target_context", None)
+        else _semantic_handles._path_authoring_context(target)
     )
     if context is None:
         engine_call(
@@ -2316,7 +2308,7 @@ def _apply_matrix_target(target: object, animation: object) -> None:
         )
     else:
         engine_call(
-            context.liveApplyMatrixFamily if is_family else context.liveApplyMatrix,
+            context.applyMatrixFamily if is_family else context.applyMatrix,
             handle,
             values,
             len(rows),
@@ -3516,14 +3508,47 @@ def execution_context(scene):
     return context
 
 
-class LiveExecution:
-    """Explicit live property/query facade over one Rust/WASM execution session.
+def _scene_object_handle(scene, mobject, *, allow_detached=True):
+    if not isinstance(mobject, _base.Mobject):
+        raise ValueError("expected a typed Scene Mobject")
+    if mobject._scene is not scene and not (allow_detached and mobject._scene is None):
+        raise ValueError("Mobject must belong to this Scene")
+    handle = getattr(mobject, "_semantic_handle", None)
+    if handle is None:
+        raise ValueError("Scene operation requires a typed semantic Mobject handle")
+    return handle
 
-    The wrapper retains only Python object ergonomics. The canonical context
-    owns the semantic store and its one runtime session until normal execution
-    leases that same session to the renderer; no Python snapshot is consulted
-    for a live read or write.
-    """
+
+def _edit_scene_transform(scene, mobject, method, operation, *values):
+    context = _context(scene)
+    handle = _scene_object_handle(scene, mobject)
+    engine_call(getattr(context, method), handle, *map(float, values), operation=operation)
+    return scene
+
+
+def _replace_scene_content(scene, target, source):
+    engine_call(
+        _context(scene).replaceContent,
+        _scene_object_handle(scene, target),
+        _scene_object_handle(scene, source),
+        operation="Scene.replace_content",
+    )
+    return scene
+
+
+def _effective_scene_translation(scene, mobject):
+    context = _context(scene)
+    owned = getattr(mobject, "_canonical_live_target_context", None) is context
+    translation = engine_call(
+        context.queryEffectiveTranslation,
+        _scene_object_handle(scene, mobject, allow_detached=owned),
+        operation="Scene.effective_translation",
+    )
+    return _base.Vec2(float(translation[0]), float(translation[1]))
+
+
+class LiveExecution:
+    """Drive explicit animation segments on the owning Scene."""
 
     def __init__(self, scene: _base.Scene, duration: float | None = None) -> None:
         context = execution_context(scene)
@@ -3536,75 +3561,8 @@ class LiveExecution:
         context.beginLiveExecution(float(duration))
         self._context = context
 
-    def _handle(self, mobject: _base.Mobject, *, allow_detached: bool = False) -> object:
-        if not isinstance(mobject, _base.Mobject):
-            raise ValueError("live Mobject must belong to this Scene")
-        if mobject._scene is not self._scene and not (
-            allow_detached and mobject._scene is None
-        ):
-            raise ValueError("live Mobject must belong to this Scene")
-        handle = getattr(mobject, "_semantic_handle", None)
-        if handle is None:
-            raise ValueError("live execution requires a typed semantic Mobject handle")
-        return handle
-
-    def add(self, mobject: _base.Mobject) -> None:
-        handle = self._handle(mobject, allow_detached=True)
-        if mobject._scene is self._scene:
-            engine_call(self._context.liveAdd, str(mobject.id), handle, operation="LiveExecution.add")
-            return
-        reservation = _reserve_typed_binding(mobject, self._scene, handle, None)
-        engine_call(self._context.liveAdd, str(reservation.object.id), handle, operation="LiveExecution.add")
-        _commit_typed_binding(mobject, self._scene, reservation, handle)
-
-    def remove(self, mobject: _base.Mobject) -> None:
-        engine_call(self._context.liveRemove, self._handle(mobject), operation="LiveExecution.remove")
-
-    def replace_content(self, target: _base.Mobject, source: _base.Mobject) -> None:
-        """Use preauthored source content while preserving target identity and state."""
-        engine_call(
-            self._context.liveReplaceContent,
-            self._handle(target),
-            self._handle(source, allow_detached=True),
-            operation="LiveExecution.replace_content",
-        )
-
-    def set_translation(self, mobject: _base.Mobject, x: float, y: float) -> None:
-        engine_call(
-            self._context.liveSetTranslation, self._handle(mobject), float(x), float(y),
-            operation="LiveExecution.set_translation",
-        )
-
-    def shift(self, mobject: _base.Mobject, x: float, y: float) -> None:
-        engine_call(
-            self._context.liveShift, self._handle(mobject), float(x), float(y),
-            operation="LiveExecution.shift",
-        )
-
-    def set_scale(self, mobject: _base.Mobject, x: float, y: float) -> None:
-        engine_call(
-            self._context.liveSetScale, self._handle(mobject), float(x), float(y),
-            operation="LiveExecution.set_scale",
-        )
-
-    def set_rotation(self, mobject: _base.Mobject, angle: float) -> None:
-        engine_call(
-            self._context.liveSetRotation, self._handle(mobject), float(angle),
-            operation="LiveExecution.set_rotation",
-        )
-
-    def effective_center(self, mobject: _base.Mobject) -> _base.Vec2:
-        observed = engine_call(
-            self._context.liveEffectiveMobject, self._handle(mobject),
-            operation="LiveExecution.effective_center",
-        )
-        return _base.Vec2(
-            float(observed.translationX),
-            float(observed.translationY),
-        )
-
     def play(self, animation: "LiveAnimation") -> float:
-        """Activate one declaration that was authored before this session began."""
+        """Activate an animation declaration on this Scene."""
         if not isinstance(animation, LiveAnimation) or animation._scene is not self._scene:
             raise ValueError("live animation must belong to this Scene")
         return float(self._context.livePlayAnimation(animation._handle))
@@ -3664,14 +3622,14 @@ def _declare_live_transform_to(
     run_time: float = 1.0,
     rate_func: object = "smooth",
 ) -> LiveAnimation:
-    """Declare a replayable affine TransformTo before lowering a live session.
+    """Publish a replayable affine TransformTo on this Scene.
 
     ``target`` is an ordinary detached Mobject handle in the same Rust store,
     usually built with ``source.copy()`` and transformed before this call. This
     wrapper declares no scheduler and does not create animation meaning during
     ``LiveExecution.play``.
     """
-    context = execution_context(self)
+    context = _context(self)
     if not isinstance(source, _base.Mobject) or source._scene is not self:
         raise ValueError("live animation source must belong to this Scene")
     if not isinstance(target, _base.Mobject) or target._scene is not None:
@@ -3682,11 +3640,13 @@ def _declare_live_transform_to(
         raise ValueError("live animation requires typed semantic Mobject handles")
     return LiveAnimation(
         self,
-        context.declareLiveTransformTo(
+        engine_call(
+            context.declareLiveTransformTo,
             source_handle,
             target_handle,
             float(run_time),
             _live_rate_function_id(rate_func),
+            operation="Scene.declare_live_transform_to",
         ),
     )
 

@@ -206,13 +206,11 @@ impl crate::Scene {
         admission: A,
     ) -> Result<crate::Mobject, TextAuthoringError> {
         let store_rc = std::rc::Rc::clone(self.integration_store());
-        let result = self
-            .with_semantic_publication(|store, publish| {
-                Ok(admission.publish(store, |store, transaction| {
-                    publish(store, transaction).map_err(TextAuthoringError::Semantic)
-                }))
+        let result = self.with_semantic_publication(|store, publish| {
+            admission.publish(store, |store, transaction| {
+                publish(store, transaction).map_err(TextAuthoringError::Semantic)
             })
-            .map_err(TextAuthoringError::Semantic)??;
+        })?;
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("one text admission creates one detached semantic node")
         };
@@ -385,14 +383,20 @@ mod tests {
         label.shift(1.0, 0.0).unwrap();
         scene.add(&circle).unwrap();
         scene.add(&label).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        assert_eq!(session.frame().objects.len(), 2);
-        assert!(session.frame().objects[0].geometry().is_some());
-        assert!(session.frame().objects[1].text().is_some());
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        assert_eq!(session.session().frame().objects.len(), 2);
+        assert!(session.session().frame().objects[0].geometry().is_some());
+        assert!(session.session().frame().objects[1].text().is_some());
         let resource = label.state().unwrap().content.text().unwrap();
-        let before = scene.integration_store().borrow().text_resources().stats();
-        assert!(scene
+        let before = session
+            .scene()
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .stats();
+        assert!(session
+            .scene()
             .integration_store()
             .borrow()
             .text_resources()
@@ -401,25 +405,37 @@ mod tests {
             .runs
             .iter()
             .all(|run| run.fill.is_none()));
-        let mut live = scene.live(&mut session);
-        live.set_translation(&label, 3.0, -1.0).unwrap();
+        session
+            .scene_mut()
+            .set_translation(&label, 3.0, -1.0)
+            .unwrap();
         assert_eq!(
-            live.effective(&label).unwrap().transform.translation,
+            session
+                .scene()
+                .effective(&label)
+                .unwrap()
+                .transform
+                .translation,
             noon_core::Vec2::new(3.0, -1.0)
         );
         assert_eq!(
-            live.authored(&label).unwrap().content.text(),
+            session.scene().authored(&label).unwrap().content.text(),
             Some(resource)
         );
-        let mut style = live.authored(&label).unwrap().style;
+        let mut style = session.scene().authored(&label).unwrap().style;
         style.fill = Some(noon_core::SemanticPaint::Solid(noon_core::RED));
-        live.replace_style(&label, style).unwrap();
+        session.scene_mut().replace_style(&label, style).unwrap();
         assert_eq!(
-            live.effective(&label).unwrap().style.fill,
+            session.scene().effective(&label).unwrap().style.fill,
             Some(noon_core::RED)
         );
         assert_eq!(
-            scene.integration_store().borrow().text_resources().stats(),
+            session
+                .scene()
+                .integration_store()
+                .borrow()
+                .text_resources()
+                .stats(),
             before
         );
     }
@@ -628,9 +644,9 @@ mod tests {
         );
 
         let fade = {
-            let mut live = execution.live();
-            assert!(!live.contains(&label).unwrap());
-            let fade = live
+            assert!(!execution.scene().contains_direct(&label).unwrap());
+            let fade = execution
+                .live()
                 .declare_and_activate_fade(
                     &label,
                     SemanticFadeDirection::In,
@@ -640,8 +656,8 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(fade.start_time(), 1.0);
-            assert!(live.contains(&label).unwrap());
-            assert_eq!(live.effective(&label).unwrap().appearance, 0.0);
+            assert!(execution.scene().contains_direct(&label).unwrap());
+            assert_eq!(execution.scene().effective(&label).unwrap().appearance, 0.0);
             fade
         };
         assert_eq!(execution.session().frame().objects.len(), 1);
@@ -654,8 +670,8 @@ mod tests {
         let mut live = execution.live();
         live.advance_segment_to(fade, fade.end_time()).unwrap();
         live.complete_segment(fade).unwrap();
-        assert!(live.contains(&label).unwrap());
-        assert_eq!(live.effective(&label).unwrap().appearance, 1.0);
+        assert!(execution.scene().contains_direct(&label).unwrap());
+        assert_eq!(execution.scene().effective(&label).unwrap().appearance, 1.0);
     }
 
     #[test]
@@ -891,11 +907,8 @@ mod tests {
             execution.session().publication_context().scene_revision()
         );
 
-        {
-            let mut live = execution.live();
-            live.add(&label).unwrap();
-            live.add(&equation).unwrap();
-        }
+        execution.scene_mut().add(&label).unwrap();
+        execution.scene_mut().add(&equation).unwrap();
         assert_eq!(execution.session().frame().objects.len(), 2);
         assert_eq!(
             execution
@@ -987,42 +1000,78 @@ mod tests {
         let unused_handle = unused_text.state().unwrap().content.text().unwrap();
         scene.add(&target).unwrap();
         scene.add(&untouched).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let target_slot = session.execution_slot_for_frame_index(0).unwrap();
-        let untouched_before = session.frame().objects[1].clone();
-        assert!(session.text_resources().get(text_handle).is_none());
-        assert!(session.text_resources().get(unused_handle).is_none());
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        let target_slot = session.session().execution_slot_for_frame_index(0).unwrap();
+        let untouched_before = session.session().frame().objects[1].clone();
+        assert!(session
+            .session()
+            .text_resources()
+            .get(text_handle)
+            .is_none());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(unused_handle)
+            .is_none());
 
         {
-            let mut live = scene.live(&mut session);
-            live.set_translation(&target, 3.0, -2.0).unwrap();
-            live.replace_content(&target, &replacement_text).unwrap();
+            session
+                .scene_mut()
+                .set_translation(&target, 3.0, -2.0)
+                .unwrap();
+            session
+                .scene_mut()
+                .replace_content(&target, &replacement_text)
+                .unwrap();
             assert_eq!(
-                live.authored(&target).unwrap().content.text(),
+                session.scene().authored(&target).unwrap().content.text(),
                 Some(text_handle)
             );
             assert_eq!(
-                live.effective(&target).unwrap().transform.translation.x,
+                session
+                    .scene()
+                    .effective(&target)
+                    .unwrap()
+                    .transform
+                    .translation
+                    .x,
                 3.0
             );
         }
-        assert_eq!(session.execution_slot_for_frame_index(0), Some(target_slot));
-        assert_eq!(session.frame().objects[1], untouched_before);
-        assert_eq!(session.frame().objects[0].text(), Some(text_handle));
-        assert!(session.frame().objects[0].text_bounds.is_some());
-        assert!(session.text_resources().get(text_handle).is_some());
-        assert!(session.text_resources().get(unused_handle).is_none());
-        assert_eq!(session.last_patch_stats().objects_recomputed, 0);
-        assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(
+            session.session().execution_slot_for_frame_index(0),
+            Some(target_slot)
+        );
+        assert_eq!(session.session().frame().objects[1], untouched_before);
+        assert_eq!(
+            session.session().frame().objects[0].text(),
+            Some(text_handle)
+        );
+        assert!(session.session().frame().objects[0].text_bounds.is_some());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(text_handle)
+            .is_some());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(unused_handle)
+            .is_none());
+        assert_eq!(session.session().last_patch_stats().objects_recomputed, 0);
+        assert_eq!(
+            session.session_mut().take_frame_changes().object_indices(),
+            &[0]
+        );
 
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .replace_content(&target, &replacement_geometry)
             .unwrap();
-        assert!(session.frame().objects[0].geometry().is_some());
-        assert!(session.frame().objects[0].text_bounds.is_none());
-        assert_eq!(session.frame().objects[1], untouched_before);
+        assert!(session.session().frame().objects[0].geometry().is_some());
+        assert!(session.session().frame().objects[0].text_bounds.is_none());
+        assert_eq!(session.session().frame().objects[1], untouched_before);
     }
 
     #[test]
@@ -1034,14 +1083,22 @@ mod tests {
         let unrelated_resource = unrelated.state().unwrap().content.text().unwrap();
         let semantic_id = label.node_id();
         let authored = label.state().unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene.into_execution().unwrap();
 
-        assert!(session.text_resources().get(label_resource).is_none());
-        assert!(session.text_resources().get(unrelated_resource).is_none());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(label_resource)
+            .is_none());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(unrelated_resource)
+            .is_none());
 
         let segment = {
-            let mut live = scene.live(&mut session);
-            let segment = live
+            let segment = session
+                .live()
                 .declare_and_activate_affine_lifecycle(
                     &label,
                     crate::AffineLifecycleDirection::RemoveTo,
@@ -1050,22 +1107,34 @@ mod tests {
                 )
                 .unwrap();
 
-            assert!(live.contains(&label).unwrap());
+            assert!(session.scene_mut().contains_direct(&label).unwrap());
             assert_eq!(label.node_id(), semantic_id);
-            assert_eq!(live.authored(&label).unwrap(), authored);
+            assert_eq!(session.scene().authored(&label).unwrap(), authored);
             segment
         };
-        assert_eq!(session.frame().objects.len(), 1);
-        assert_eq!(session.frame().objects[0].text(), Some(label_resource));
-        assert!(session.frame().objects[0].text_bounds.is_some());
-        assert!(session.text_resources().get(label_resource).is_some());
-        assert!(session.text_resources().get(unrelated_resource).is_none());
+        assert_eq!(session.session().frame().objects.len(), 1);
+        assert_eq!(
+            session.session().frame().objects[0].text(),
+            Some(label_resource)
+        );
+        assert!(session.session().frame().objects[0].text_bounds.is_some());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(label_resource)
+            .is_some());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(unrelated_resource)
+            .is_none());
 
-        let mut live = scene.live(&mut session);
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
-        assert!(!live.contains(&label).unwrap());
+        session.live().complete_segment(segment).unwrap();
+        assert!(!session.scene_mut().contains_direct(&label).unwrap());
         assert_eq!(label.node_id(), semantic_id);
         assert_eq!(label.state().unwrap(), authored);
     }
@@ -1136,8 +1205,13 @@ mod tests {
             )
             .replace_content(target.node_id(), foreign.state().unwrap().content);
         assert!(matches!(
-            scene.live(&mut session).apply(transaction),
-            Err(crate::LiveSessionError::Publication(_))
+            crate::integration::scene_execution::publish_at_root(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                transaction
+            ),
+            Err(crate::ExecutionSessionPublicationError::Semantic(_))
         ));
         assert_eq!(target.state().unwrap(), authored_before);
         assert_eq!(session.frame(), &frame_before);

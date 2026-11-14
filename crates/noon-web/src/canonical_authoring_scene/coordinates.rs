@@ -3,110 +3,120 @@
 use super::*;
 
 impl CanonicalAuthoringScene {
+    pub(crate) fn coordinate_scene(&self) -> Result<&noon::Scene, AuthoringFailure> {
+        Ok(self.effective_observation_scene()?.unwrap_or(&self.scene))
+    }
+
     pub(crate) fn number_line_frame(
-        &mut self,
+        &self,
         line: &noon::ManimNumberLine,
     ) -> Result<noon::NumberLineFrame, AuthoringFailure> {
-        let shaft = line
-            .shaft()
-            .map_err(crate::plot_error::coordinate_failure)?;
-        self.mobject_observation(
-            &shaft,
-            |_| {
-                line.authored_frame()
-                    .map_err(crate::plot_error::coordinate_failure)
-            },
-            |player, _| {
-                player
-                    .scene_mut()
-                    .effective_number_line_frame(line)
-                    .map_err(crate::plot_error::coordinate_failure)
-            },
-        )
+        self.coordinate_scene()?
+            .number_line_frame(line)
+            .map_err(crate::plot_error::coordinate_failure)
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(super) fn live_create_path_family(
+    pub(crate) fn prepare_riemann_plan(
         &mut self,
-        paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
-    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        self.active_live_player()?
-            .scene_mut()
-            .path_family(paths)
-            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
+        axes: &noon::ManimAxes,
+        graph: &noon::Mobject,
+        options: noon::RiemannRectangleOptions,
+    ) -> Result<noon::RiemannRectanglePlan, AuthoringFailure> {
+        self.local_authoring_scene()?
+            .riemann_plan(axes, graph, options)
+            .map_err(crate::plot_error::coordinate_failure)
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_bar_chart(
+    pub(crate) fn publish_riemann_plan(
+        &mut self,
+        plan: &noon::RiemannRectanglePlan,
+        top: Option<&[f64]>,
+        baseline: Option<&[f64]>,
+    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .publish_riemann_plan(plan, top, baseline)
+            .map_err(|error| match error {
+                noon::CoordinateAuthoringError::Authoring(error) => {
+                    AuthoringFailure::from_scene_mutation(error, running)
+                }
+                error => crate::plot_error::coordinate_failure(error),
+            })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn create_bar_chart(
         &mut self,
         options: &noon::ManimBarChartOptions,
     ) -> Result<noon::ManimBarChart, AuthoringFailure> {
-        if self.player_ownership.is_unstarted() {
-            return self
-                .scene
-                .bar_chart(options)
-                .map_err(crate::plot_error::coordinate_failure);
-        }
-        self.active_live_player()?
-            .scene_mut()
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
             .bar_chart(options)
-            .map_err(noon::integration::live_coordinate_publication_failure)
+            .map_err(|error| {
+                if running {
+                    noon::integration::live_coordinate_publication_failure(error)
+                } else {
+                    crate::plot_error::coordinate_failure(error)
+                }
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_change_bar_values(
+    pub(crate) fn change_bar_values(
         &mut self,
         chart: &mut noon::ManimBarChart,
         values: &[f64],
         update_colors: bool,
     ) -> Result<(), AuthoringFailure> {
+        let running = self.requires_live_mutation_routing();
         chart
-            .change_bar_values(
-                self.active_live_player()?.scene_mut(),
-                values,
-                update_colors,
-            )
-            .map_err(crate::plot_error::coordinate_failure)
+            .change_bar_values(self.local_authoring_scene()?, values, update_colors)
+            .map_err(|error| {
+                if running {
+                    noon::integration::live_coordinate_publication_failure(error)
+                } else {
+                    crate::plot_error::coordinate_failure(error)
+                }
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_labeled_bar_chart(
+    pub(crate) fn create_labeled_bar_chart(
         &mut self,
         options: &noon::ManimBarChartOptions,
         labels: &noon::plot_presentation::NumberLabelOptions,
         compiler: &mut impl noon::LatexBackend,
     ) -> Result<noon::ManimBarChart, AuthoringFailure> {
-        if self.player_ownership.is_unstarted() {
-            return self
-                .scene
-                .bar_chart_with_axis_labels(options, labels, compiler)
-                .map_err(|error| AuthoringFailure::unclassified("bar_chart.create", &error));
-        }
-        self.active_live_player()?
-            .scene_mut()
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
             .bar_chart_with_axis_labels(options, labels, compiler)
             .map_err(|error| {
-                AuthoringFailure::new("invalid_input", "plot.bar_chart", error.to_string())
+                if running {
+                    AuthoringFailure::new("invalid_input", "plot.bar_chart", error.to_string())
+                } else {
+                    AuthoringFailure::unclassified("bar_chart.create", &error)
+                }
             })
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_bar_labels(
+    pub(crate) fn bar_labels(
         &mut self,
         chart: &noon::ManimBarChart,
         compiler: &mut impl noon::LatexBackend,
         options: &noon::BarLabelOptions,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        if self.player_ownership.is_unstarted() {
-            return chart
-                .get_bar_labels(compiler, options)
-                .map_err(|error| AuthoringFailure::unclassified("bar_chart.labels", &error));
-        }
-        self.active_live_player()?
-            .scene_mut()
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
             .bar_labels(chart, compiler, options)
             .map_err(|error| {
-                AuthoringFailure::new("invalid_input", "plot.bar_labels", error.to_string())
+                if running {
+                    AuthoringFailure::new("invalid_input", "plot.bar_labels", error.to_string())
+                } else {
+                    AuthoringFailure::unclassified("bar_chart.labels", &error)
+                }
             })
     }
 }
@@ -143,7 +153,8 @@ mod tests {
                 };
                 let line = context.scene.number_line(&options).unwrap();
                 let shaft = line.shaft().unwrap();
-                assert!(context.number_line_frame(&line).is_err(), "unbound shaft");
+                let detached = context.number_line_frame(&line).unwrap();
+                near(detached.number_to_point(first).unwrap(), [-1.0, 0.0]);
                 context.bind_mobject(ObjectId::new(0), &shaft).unwrap();
                 context.scene.add_many(&[line.family().into()]).unwrap();
                 let frame = context.number_line_frame(&line).unwrap();
@@ -162,7 +173,8 @@ mod tests {
                 context
                     .active_live_player()
                     .unwrap()
-                    .live_shift_family(line.family(), 2.0, -1.0, 0.0)
+                    .scene_mut()
+                    .shift_family_3d(line.family(), noon::SemanticVec3::new(2.0, -1.0, 0.0))
                     .unwrap();
                 let frame = context.number_line_frame(&line).unwrap();
                 near(frame.number_to_point(first).unwrap(), [1.0, -1.0]);
@@ -173,7 +185,7 @@ mod tests {
                     scale.map(0.0).unwrap()
                 );
 
-                let mut foreign = CanonicalAuthoringScene::default();
+                let foreign = CanonicalAuthoringScene::default();
                 assert!(foreign.number_line_frame(&line).is_err(), "foreign store");
             }
         }

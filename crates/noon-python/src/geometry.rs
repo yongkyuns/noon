@@ -11,8 +11,62 @@ impl GeometryOptions {
         Self { options }
     }
 }
+#[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
+pub(crate) struct BooleanOperands(pub(crate) Vec<noon::Mobject>);
+
+#[pymethods]
+impl BooleanOperands {
+    fn push(&mut self, object: &crate::mobject::MobjectHandle) {
+        self.0.push(object.handle.clone());
+    }
+
+    fn free(&mut self) {
+        self.0.clear();
+    }
+}
+
+pub(crate) fn boolean_operation(name: &str) -> PyResult<noon::BooleanOperation> {
+    use noon::BooleanOperation;
+    match name {
+        "Union" => Ok(BooleanOperation::Union),
+        "Intersection" => Ok(BooleanOperation::Intersection),
+        "Difference" => Ok(BooleanOperation::Difference),
+        "Exclusion" => Ok(BooleanOperation::Exclusion),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            "unknown boolean operation",
+        )),
+    }
+}
+
+fn parse_bounds([min_x, min_y, max_x, max_y]: [f64; 4]) -> noon_core::Bounds2D64 {
+    noon_core::Bounds2D64 {
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+    }
+}
+
+pub(crate) fn bounds_coordinates(bounds: noon_core::Bounds2D64) -> [f64; 4] {
+    [bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y]
+}
+
 #[pymethods]
 impl GeometryOptions {
+    #[staticmethod]
+    #[pyo3(name = "booleanOperands")]
+    fn boolean_operands() -> BooleanOperands {
+        BooleanOperands(Vec::new())
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "booleanGeometry")]
+    fn boolean_geometry(name: &str, operands: &BooleanOperands) -> PyResult<Self> {
+        noon::ManimGeometryOptions::boolean_geometry(boolean_operation(name)?, &operands.0)
+            .map(Self::from_options)
+            .map_err(engine_error)
+    }
+
     #[staticmethod]
     #[pyo3(name="polygram", signature=(coordinates,lengths))]
     #[allow(clippy::too_many_arguments)]
@@ -94,17 +148,51 @@ impl GeometryOptions {
             .map_err(engine_error)
     }
     #[staticmethod]
-    #[pyo3(name="crossLine", signature=(index,scale_factor))]
-    #[allow(clippy::too_many_arguments)]
-    pub fn cross_line(index: u32, scale_factor: f64) -> Result<Self, PyErr> {
-        let [first, second] =
-            noon::ManimGeometryOptions::cross_lines(None, scale_factor).map_err(engine_error)?;
-        match index {
-            0 => Ok(Self::from_options(first)),
-            1 => Ok(Self::from_options(second)),
-            _ => Err(engine_error("Cross line index must be 0 or 1")),
-        }
+    #[pyo3(name = "surroundingRectangle")]
+    fn surrounding_rectangle(
+        bounds: [f64; 4],
+        buff_x: f64,
+        buff_y: f64,
+        radius: f64,
+    ) -> PyResult<Self> {
+        noon::ManimGeometryOptions::surrounding_rectangle(
+            parse_bounds(bounds),
+            buff_x,
+            buff_y,
+            radius,
+        )
+        .map(Self::from_options)
+        .map_err(engine_error)
     }
+
+    #[staticmethod]
+    #[pyo3(name = "backgroundRectangle")]
+    fn background_rectangle(
+        bounds: [f64; 4],
+        buff_x: f64,
+        buff_y: f64,
+        radius: f64,
+        opacity: f64,
+    ) -> PyResult<Self> {
+        noon::ManimGeometryOptions::background_rectangle(
+            parse_bounds(bounds),
+            buff_x,
+            buff_y,
+            radius,
+            opacity,
+        )
+        .map(Self::from_options)
+        .map_err(engine_error)
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "crossLines", signature=(bounds, scale))]
+    fn cross_lines(bounds: Option<[f64; 4]>, scale: f64) -> PyResult<Vec<Self>> {
+        noon::ManimGeometryOptions::cross_lines(bounds.map(parse_bounds), scale)
+            .map(|lines| lines.into_iter().map(Self::from_options).collect())
+            .map_err(engine_error)
+    }
+
     #[staticmethod]
     #[pyo3(name="elbow", signature=(width,angle))]
     #[allow(clippy::too_many_arguments)]
@@ -316,6 +404,37 @@ impl GeometryOptions {
             stroke_width,
         )
     }
+    #[staticmethod]
+    #[pyo3(name = "braceBetweenPoints")]
+    #[allow(clippy::too_many_arguments)]
+    fn brace_between_points(
+        first_x: f64,
+        first_y: f64,
+        second_x: f64,
+        second_y: f64,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+        sharpness: f64,
+    ) -> PyResult<Self> {
+        noon::ManimGeometryOptions::brace_between_points(
+            (first_x, first_y),
+            (second_x, second_y),
+            (direction_x, direction_y),
+            buff,
+            sharpness,
+        )
+        .map(Self::from_options)
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setSheenDirection")]
+    fn set_sheen_direction(&mut self, x: f64, y: f64, z: f64, dimensions: u8) -> PyResult<()> {
+        self.options
+            .set_sheen_direction(x, y, z, dimensions)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "setZIndex")]
     pub fn set_z_index(&mut self, value: f64) -> Result<(), PyErr> {
         self.options.set_z_index(value).map_err(engine_error)

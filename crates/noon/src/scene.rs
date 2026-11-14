@@ -3,6 +3,7 @@ mod audio;
 mod execution;
 mod family;
 mod image;
+mod layout;
 pub(crate) mod object_edits;
 mod sections;
 use crate::{
@@ -10,13 +11,57 @@ use crate::{
     SceneMembershipRequest, ValueTracker,
 };
 pub use execution::{host_execution, SceneExecution, SceneExecutionError};
+pub(crate) use family::contains_direct;
 use noon_core::{
-    AnimationOptions, RateFunction, SemanticClickIndicate, SemanticMutationImpact,
-    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
-    SemanticNodeId, SemanticStore, SemanticStyle, VectorPath,
+    AnimationOptions, PublicationContext, RateFunction, SemanticClickIndicate,
+    SemanticMutationImpact, SemanticMutationTransaction, SemanticMutationTransactionResult,
+    SemanticNodeCreation, SemanticNodeId, SemanticStore, SemanticStyle, Style, Transform2D,
+    VectorPath,
 };
 pub use sections::{SceneSectionNavigation, SectionNavigation};
 use std::{cell::RefCell, rc::Rc};
+
+/// An owned observation of one effective runtime object at one publication.
+///
+/// The clone makes the observation safe to retain after the next live mutation;
+/// it is an observation, not another runtime authority.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EffectiveMobjectState {
+    /// Continuous fill definition, when present. `style.fill` then carries only
+    /// the independent fill-opacity multiplier in its alpha component.
+    pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
+    pub z_index: f64,
+    pub transform: Transform2D,
+    pub style: Style,
+    pub appearance: f32,
+    pub publication: PublicationContext,
+}
+
+impl EffectiveMobjectState {
+    /// Current fill alpha, excluding the separate object-composite multiplier.
+    pub fn fill_opacity(&self) -> f64 {
+        self.style.fill.map_or(0.0, |color| f64::from(color.alpha))
+    }
+
+    /// Current stroke alpha, excluding the separate object-composite multiplier.
+    pub fn stroke_opacity(&self) -> f64 {
+        self.style
+            .stroke
+            .map_or(0.0, |color| f64::from(color.alpha))
+    }
+}
+
+/// One object's exact layout observation at a coherent runtime publication.
+///
+/// These bounds retain authored layout semantics and therefore exclude the
+/// renderer's conservative stroke expansion used for visibility indexing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectiveMobjectLayout {
+    pub center: (f64, f64),
+    pub width: f64,
+    pub height: f64,
+    pub publication: PublicationContext,
+}
 
 /// Presentation/export intent attached to one authored section boundary.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -167,27 +212,11 @@ impl Scene {
         &mut self,
         options: crate::ManimArrowOptions,
     ) -> Result<crate::ManimArrow, crate::AuthoringError> {
-        let Some(execution) = self.execution.as_mut() else {
-            return crate::ManimArrow::create(Rc::clone(&self.store), options);
-        };
-        let store_rc = Rc::clone(&self.store);
-        let root = self.root;
-        {
-            let store = store_rc.borrow();
-            execution
-                .require_resource_creation_at_root(&store, root)
-                .map_err(AuthoringError::from)?;
-        }
-        let committed = crate::arrow_authoring::publish_arrow_options(
-            options,
-            &mut store_rc.borrow_mut(),
-            |store, transaction| {
-                execution
-                    .apply_semantic_transaction_at_root(store, root, transaction)
-                    .map_err(AuthoringError::from)
-            },
-        )?;
-        crate::ManimArrow::from_committed(store_rc, committed)
+        self.require_resource_admission()?;
+        let committed = self.with_semantic_publication(|store, publish| {
+            crate::arrow_authoring::publish_arrow_options(options, store, publish)
+        })?;
+        crate::ManimArrow::from_committed(Rc::clone(&self.store), committed)
     }
 
     pub fn root(&self) -> SemanticNodeId {
@@ -351,25 +380,20 @@ impl Scene {
                 &mut SemanticStore,
                 SemanticMutationTransaction,
             ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
-        ) -> Result<T, AuthoringError>,
-    ) -> Result<T, AuthoringError> {
+        ) -> T,
+    ) -> T {
         let root = self.root;
-        let store_rc = Rc::clone(&self.store);
-        if let Some(execution) = self.execution.as_mut() {
-            let mut store = store_rc.borrow_mut();
-            let mut publish =
-                |store: &mut SemanticStore, transaction: SemanticMutationTransaction| {
-                    execution
-                        .apply_semantic_transaction_at_root(store, root, transaction)
-                        .map_err(AuthoringError::from)
-                };
-            return operation(&mut store, &mut publish);
-        }
-
-        let mut store = store_rc.borrow_mut();
-        let mut publish = |store: &mut SemanticStore, transaction: SemanticMutationTransaction| {
-            transaction.apply(store).map_err(AuthoringError::from)
-        };
+        let mut store = self.store.borrow_mut();
+        let mut publish =
+            |store: &mut SemanticStore, transaction: SemanticMutationTransaction| match self
+                .execution
+                .as_mut()
+            {
+                Some(execution) => execution
+                    .apply_semantic_transaction_at_root(store, root, transaction)
+                    .map_err(AuthoringError::from),
+                None => transaction.apply(store).map_err(AuthoringError::from),
+            };
         operation(&mut store, &mut publish)
     }
 
@@ -433,13 +457,7 @@ impl Scene {
         members: &[MobjectTarget<'_>],
         z_index: f64,
     ) -> Result<MobjectFamily, crate::AuthoringError> {
-        let (transaction, family) =
-            crate::family_authoring::family_creation_transaction(&self.store, members, z_index)?;
-        let result = self.apply_semantic_transaction(transaction)?;
-        let node = result
-            .resolve(family)
-            .expect("committed family token resolves to one semantic identity");
-        MobjectFamily::from_node(Rc::clone(&self.store), node)
+        self.family_with_presentation(members, z_index, crate::Color::WHITE, true)
     }
     /// Construct complete root presentation through this Scene's mutation route.
     pub fn family_with_presentation(
@@ -472,12 +490,15 @@ impl Scene {
     /// this Scene's owned execution component.
     pub fn value_tracker(&mut self, initial: f64) -> Result<ValueTracker, AuthoringError> {
         if let Some(execution) = self.execution.as_mut() {
-            return crate::integration::publish_value_tracker_creation(
-                &self.store,
+            let node = execution.create_scoped_value_tracker(
+                &mut self.store.borrow_mut(),
                 self.root,
-                execution,
                 initial,
-            );
+            )?;
+            return Ok(ValueTracker::from_semantic_node(
+                Rc::clone(&self.store),
+                node,
+            ));
         }
         let creation = SemanticNodeCreation::input_signal(initial).map_err(AuthoringError::from)?;
         let mut transaction = SemanticMutationTransaction::new();
@@ -503,12 +524,12 @@ impl Scene {
     ) -> Result<(), AuthoringError> {
         tracker.require_store(&self.store)?;
         if let Some(execution) = self.execution.as_mut() {
-            return crate::integration::publish_value_tracker_association(
-                &self.store,
+            execution.associate_value_tracker(
+                &mut self.store.borrow_mut(),
                 self.root,
-                execution,
-                tracker,
-            );
+                tracker.node_id(),
+            )?;
+            return Ok(());
         }
         let mut transaction = SemanticMutationTransaction::new();
         transaction.scope_signal(self.root, tracker.node_id());
@@ -531,9 +552,7 @@ impl Scene {
         &self,
         object: &Mobject,
     ) -> Result<crate::PathQuery, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_path_query(&self.store, execution, object)
     }
 
@@ -543,10 +562,95 @@ impl Scene {
         &self,
         target: MobjectTarget<'_>,
     ) -> Result<Vec<(f64, f64)>, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_all_points(&self.store, execution, target)
+    }
+
+    fn execution_for_observation(&self) -> Result<&ExecutionSession, AuthoringError> {
+        self.running_execution().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))
+    }
+
+    /// Capture full-coordinate points, retaining recursive child occurrences.
+    pub fn effective_all_points_3d(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_all_points_3d(&self.store, execution, target)
+    }
+
+    /// Capture full-coordinate vector anchors in unique family order.
+    pub fn effective_vector_boundary_points_3d(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_vector_boundary_points_3d(&self.store, execution, target)
+    }
+
+    /// Capture the planar projection of the effective vector anchors.
+    pub fn effective_vector_boundary_points(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_vector_boundary_points(&self.store, execution, target)
+    }
+
+    /// Capture owned points and ordered child occurrences for one target.
+    pub fn effective_point_reduction_tree(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<crate::PointReductionTree, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_point_reduction_tree(&self.store, execution, target)
+    }
+
+    /// Select retained-content layout when the effective target has opaque content.
+    pub fn effective_requires_content_boundary(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<bool, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_requires_content_boundary(&self.store, execution, target)
+    }
+
+    /// Read the effective boundary coordinate along one direction.
+    pub fn effective_critical_point_3d(
+        &self,
+        target: MobjectTarget<'_>,
+        direction: noon_core::SemanticVec3,
+        vector_boundary: bool,
+    ) -> Result<noon_core::SemanticVec3, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_critical_point_3d(
+            &self.store,
+            execution,
+            target,
+            direction,
+            vector_boundary,
+        )
+    }
+
+    /// Read one analytic Line's world endpoints at the current publication.
+    pub fn effective_line_endpoints(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<crate::ManimLineEndpoints, AuthoringError> {
+        self.require_object(mobject)?;
+        let execution = self.execution_for_observation()?;
+        let store = self.store.borrow();
+        let observed = execution.effective_semantic_object(&store, mobject.node_id())?;
+        if !observed.authored_content_layout_applicable() {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveLineRenderOverride,
+            ));
+        }
+        let transform = observed.object.transform;
+        drop(store);
+        mobject.manim_line_endpoints_at(transform)
     }
 
     /// Query the effective min, midpoint, or max boundary coordinate for a
@@ -557,9 +661,7 @@ impl Scene {
         dim: usize,
         key: f64,
     ) -> Result<f64, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_extremum_along_dim(&self.store, execution, target, dim, key)
     }
 
@@ -568,9 +670,7 @@ impl Scene {
         &self,
         target: MobjectTarget<'_>,
     ) -> Result<(f64, f64), AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_center_of_mass(&self.store, execution, target)
     }
 
@@ -581,9 +681,7 @@ impl Scene {
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(f64, f64), AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_boundary_point(
             &self.store,
             execution,
@@ -599,9 +697,7 @@ impl Scene {
         target: MobjectTarget<'_>,
         dim: usize,
     ) -> Result<f64, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_length_over_dim(&self.store, execution, target, dim)
     }
 
@@ -611,10 +707,17 @@ impl Scene {
         &self,
         target: MobjectTarget<'_>,
     ) -> Result<Vec<(f64, f64)>, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_path_boundary_points(&self.store, execution, target)
+    }
+
+    /// Capture the full-coordinate path boundary at the current execution publication.
+    pub fn effective_path_boundary_points_3d(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::path_queries::effective_path_boundary_points_3d(&self.store, execution, target)
     }
 
     /// Query a vector-path boundary anchor extremum from the current publication.
@@ -624,9 +727,7 @@ impl Scene {
         dim: usize,
         key: f64,
     ) -> Result<f64, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_path_boundary_extremum_along_dim(
             &self.store,
             execution,
@@ -643,9 +744,7 @@ impl Scene {
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(f64, f64), AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::path_queries::effective_path_boundary_point(
             &self.store,
             execution,
@@ -676,9 +775,7 @@ impl Scene {
         object: &Mobject,
     ) -> Result<crate::EffectiveMobjectState, AuthoringError> {
         self.require_object(object)?;
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         Self::observe_effective(&self.store, execution, object).map_err(AuthoringError::from)
     }
 
@@ -708,16 +805,18 @@ impl Scene {
         source: &Mobject,
         target: &Mobject,
     ) -> Result<(), AuthoringError> {
-        let root = self.root;
-        let store = &self.store;
-        if let Some(execution) = self.execution.as_mut() {
-            return crate::point_matching::publish_match_points(
-                store, root, execution, source, target,
-            );
+        if !Rc::ptr_eq(&self.store, source.integration_store())
+            || !Rc::ptr_eq(&self.store, target.integration_store())
+        {
+            return Err(AuthoringError::ForeignStore);
         }
-        self.require_object(source)?;
-        self.require_object(target)?;
-        let transaction = crate::point_matching::prepare_match_points(source, target.state()?)?;
+        source.validate()?;
+        target.validate()?;
+        if self.running_execution().is_some() {
+            self.capture_mobject_state(source)?;
+        }
+        let target_state = self.capture_mobject_state(target)?;
+        let transaction = crate::point_matching::prepare_match_points(source, target_state)?;
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
@@ -731,21 +830,21 @@ impl Scene {
         )
     }
 
-    /// Create one detached subcurve from the current coherent effective source state.
-    ///
-    /// Running execution is required because authored-only subcurve creation remains
-    /// available directly on Mobject::subcurve. Resource admission, effective
-    /// capture, immutable geometry installation, and semantic node publication stay
-    /// behind the Scene-owned running publication boundary.
+    /// Create a detached subcurve from authored state during setup or effective
+    /// state during execution. Geometry and object identity publish atomically.
     pub fn subcurve(
         &mut self,
         source: &Mobject,
         a: f64,
         b: f64,
     ) -> Result<Mobject, AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            crate::path_editing::publish_running_subcurve(store, root, execution, source, a, b)
-        })
+        self.require_object(source)?;
+        self.require_resource_admission()?;
+        let state = self.capture_mobject_state(source)?;
+        let node = self.with_semantic_publication(|store, publish| {
+            crate::path_editing::publish_subcurve(store, state, a, b, publish)
+        })?;
+        Mobject::from_node(Rc::clone(&self.store), node)
     }
 
     /// Observe one family's effective Runtime layout without creating a borrowed
@@ -755,256 +854,81 @@ impl Scene {
         &self,
         family: &MobjectFamily,
     ) -> Result<crate::EffectiveMobjectLayout, AuthoringError> {
-        let execution = self.execution.as_ref().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         crate::family_layout::effective_family_layout(&self.store, execution, family)
     }
 
-    /// Shift a family through one persistent transaction before or after bootstrap.
-    /// Each aliased leaf is translated once; running publication remains local.
-    pub fn shift_family(
+    /// Read a fitting extent from the current effective layout publication.
+    pub fn effective_dimension_length(
+        &self,
+        anchor: &crate::LayoutAnchor,
+        dimension: crate::LayoutDimension,
+    ) -> Result<f64, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::family_layout::effective_dimension_length(&self.store, execution, anchor, dimension)
+    }
+
+    /// Observe retained-content critical coordinates from one effective layout.
+    pub fn effective_layout_critical_point_3d(
+        &self,
+        anchor: &crate::LayoutAnchor,
+        direction: crate::SemanticVec3,
+    ) -> Result<crate::SemanticVec3, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        crate::family_layout::effective_layout_critical_point_3d(
+            &self.store,
+            execution,
+            anchor,
+            direction,
+        )
+    }
+
+    /// Observe the current retained-content boundary before or during execution.
+    pub fn layout_critical_point_3d(
+        &self,
+        anchor: &crate::LayoutAnchor,
+        direction: crate::SemanticVec3,
+    ) -> Result<crate::SemanticVec3, AuthoringError> {
+        self.require_layout_anchor(anchor)?;
+        if self.running_execution().is_some() {
+            return self.effective_layout_critical_point_3d(anchor, direction);
+        }
+        anchor.critical_point_3d(direction)
+    }
+
+    /// Observe LaTeX font size from its retained family height.
+    #[cfg(feature = "latex")]
+    pub fn effective_latex_font_size(
+        &self,
+        parts: &crate::LatexParts,
+    ) -> Result<f64, AuthoringError> {
+        let layout = self.effective_family_layout(parts.family())?;
+        parts.font_size_for_height(layout.height)
+    }
+
+    /// Observe the retained LaTeX size through this Scene during setup or playback.
+    #[cfg(feature = "latex")]
+    pub fn latex_font_size(&self, parts: &crate::LatexParts) -> Result<f64, AuthoringError> {
+        crate::MobjectTarget::from(parts.family()).require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            return self.effective_latex_font_size(parts);
+        }
+        parts.current_font_size()
+    }
+
+    /// Move an object's layout center to a point.
+    pub fn move_to_point(
         &mut self,
-        family: &MobjectFamily,
+        object: &Mobject,
         x: f64,
         y: f64,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        self.shift_family_3d(family, noon_core::SemanticVec3::new(x, y, 0.0))
-    }
-
-    pub fn shift_family_3d(
-        &mut self,
-        family: &MobjectFamily,
-        delta: noon_core::SemanticVec3,
-    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        if let Some(execution) = self.execution.as_mut() {
-            return crate::family_layout::publish_shift_family(
-                &self.store,
-                self.root,
-                execution,
-                family,
-                delta,
-            );
-        }
-        MobjectTarget::Family(family).require_store(&self.store)?;
-        let transaction = crate::family_authoring::FamilyTranslation::begin_3d(
-            &self.store.borrow(),
-            family.node_id(),
-            delta,
-        )?
-        .transaction(&self.store.borrow())?;
-        self.apply_semantic_transaction(transaction)
-    }
-
-    /// Arrange a family atomically before or after bootstrap. Cold placement
-    /// measures authored bounds; running placement observes coherent effective
-    /// bounds and rejects unresolved affine drivers rather than overwriting them.
-    pub fn arrange_family_with_options(
-        &mut self,
-        family: &MobjectFamily,
-        options: &crate::FamilyArrangeOptions,
-    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        if let Some(execution) = self.execution.as_mut() {
-            return crate::family_layout::publish_arrange_family(
-                &self.store,
-                self.root,
-                execution,
-                family,
-                options,
-            );
-        }
-        MobjectTarget::Family(family).require_store(&self.store)?;
-        let transaction = crate::family_arrangement::FamilyArrangePlan::begin(family, options)?
-            .authored_transaction(&self.store)?;
-        self.apply_semantic_transaction(transaction)
-    }
-
-    /// Arrange a family grid through the same durable route before and after
-    /// bootstrap, with the observation policy of [`Self::arrange_family_with_options`].
-    pub fn arrange_family_in_grid_with_options(
-        &mut self,
-        family: &MobjectFamily,
-        options: &crate::FamilyGridOptions,
-    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        if let Some(execution) = self.execution.as_mut() {
-            return crate::family_layout::publish_arrange_family_in_grid(
-                &self.store,
-                self.root,
-                execution,
-                family,
-                options,
-            );
-        }
-        MobjectTarget::Family(family).require_store(&self.store)?;
-        let transaction = crate::family_arrangement::FamilyArrangePlan::grid(family, options)?
-            .authored_transaction(&self.store)?;
-        self.apply_semantic_transaction(transaction)
-    }
-
-    /// Move one object using authored layout while cold or coherent effective layout while running.
-    pub fn move_to(
-        &mut self,
-        object: &Mobject,
-        target: crate::LiveLayoutTarget<'_>,
-        edge: (f64, f64),
-        mask: (f64, f64),
-    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        if self.execution.is_none() {
-            let transaction =
-                crate::family_layout::prepare_move_to(&self.store, object, target, edge, mask)?;
-            return self.apply_semantic_transaction(transaction);
-        }
-        self.with_running_execution(|store, root, execution| {
-            crate::family_layout::publish_move_to(
-                store, root, execution, object, target, edge, mask,
-            )
-        })
-    }
-
-    /// Align one object to the default frame using authored or effective bounds.
-    pub fn align_mobject_on_frame(
-        &mut self,
-        object: &Mobject,
-        direction: (f64, f64),
-        buff: f64,
-    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        let target = crate::family_layout::frame_alignment_target(direction, buff)?;
-        let mask = (
-            if direction.0 == 0.0 { 0.0 } else { 1.0 },
-            if direction.1 == 0.0 { 0.0 } else { 1.0 },
-        );
-        if self.execution.is_none() {
-            let transaction = crate::family_layout::prepare_move_to(
-                &self.store,
-                object,
-                crate::LiveLayoutTarget::Point(target.0, target.1),
-                direction,
-                mask,
-            )?;
-            return self.apply_semantic_transaction(transaction);
-        }
-        self.with_running_execution(|store, root, execution| {
-            crate::family_layout::publish_move_to(
-                store,
-                root,
-                execution,
-                object,
-                crate::LiveLayoutTarget::Point(target.0, target.1),
-                direction,
-                mask,
-            )
-        })
-    }
-
-    /// Move a family using authored layout while cold or coherent effective layout while running.
-    pub fn move_family_to(
-        &mut self,
-        family: &MobjectFamily,
-        target: crate::LiveLayoutTarget<'_>,
-        edge: (f64, f64),
-        mask: (f64, f64),
-    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        if self.execution.is_none() {
-            let transaction = crate::family_layout::prepare_move_family_to(
-                &self.store,
-                family,
-                target,
-                edge,
-                mask,
-            )?;
-            return self.apply_semantic_transaction(transaction);
-        }
-        self.with_running_execution(|store, root, execution| {
-            crate::family_layout::publish_move_family_to(
-                store, root, execution, family, target, edge, mask,
-            )
-        })
-    }
-
-    /// Place a family next to an authored target while cold or effective target while running.
-    pub fn next_family_to(
-        &mut self,
-        family: &MobjectFamily,
-        target: crate::LiveLayoutTarget<'_>,
-        args: crate::ManimNextToArgs,
-    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        if self.execution.is_none() {
-            let transaction =
-                crate::family_layout::prepare_next_family_to(&self.store, family, target, args)?;
-            return self.apply_semantic_transaction(transaction);
-        }
-        self.with_running_execution(|store, root, execution| {
-            crate::family_layout::publish_next_family_to(
-                store, root, execution, family, target, args,
-            )
-        })
-    }
-
-    /// Align a family to the default frame using authored or coherent effective bounds.
-    pub fn align_family_on_frame(
-        &mut self,
-        family: &MobjectFamily,
-        direction: (f64, f64),
-        buff: f64,
-    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        if self.execution.is_none() {
-            let transaction = crate::family_layout::prepare_align_family_on_frame(
-                &self.store,
-                family,
-                direction,
-                buff,
-            )?;
-            return self.apply_semantic_transaction(transaction);
-        }
-        self.with_running_execution(|store, root, execution| {
-            crate::family_layout::publish_align_family_on_frame(
-                store, root, execution, family, direction, buff,
-            )
-        })
-    }
-
-    /// Align a family to an authored target while cold or effective target while running.
-    pub fn align_family_to(
-        &mut self,
-        family: &MobjectFamily,
-        target: crate::LiveLayoutTarget<'_>,
-        axis: (f64, f64),
-    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        if self.execution.is_none() {
-            let transaction =
-                crate::family_layout::prepare_align_family_to(&self.store, family, target, axis)?;
-            return self.apply_semantic_transaction(transaction);
-        }
-        self.with_running_execution(|store, root, execution| {
-            crate::family_layout::publish_align_family_to(
-                store, root, execution, family, target, axis,
-            )
-        })
-    }
-
-    /// Place one selected layout using authored observation cold or effective observation running.
-    pub fn next_layout_to_aligned(
-        &mut self,
-        source: &crate::LayoutAnchor,
-        target: crate::LiveLayoutTarget<'_>,
-        aligner: &crate::LayoutAnchor,
-        args: crate::ManimNextToArgs,
-    ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        if self.execution.is_none() {
-            let transaction = crate::family_layout::prepare_next_layout_to_aligned(
-                &self.store,
-                source,
-                target,
-                aligner,
-                args,
-            )?;
-            return self.apply_semantic_transaction(transaction);
-        }
-        self.with_running_execution(|store, root, execution| {
-            crate::family_layout::publish_next_layout_to_aligned(
-                store, root, execution, source, target, aligner, args,
-            )
-        })
+        self.move_to(
+            object,
+            crate::LayoutTarget::Point(x, y),
+            (0.0, 0.0),
+            (1.0, 1.0),
+        )
     }
 
     pub(crate) fn require_object(&self, object: &Mobject) -> Result<(), crate::AuthoringError> {
@@ -1085,18 +1009,15 @@ impl Scene {
         }
         Ok(true)
     }
-    pub fn execution_session(
+
+    pub(crate) fn execution_session(
         &self,
     ) -> Result<ExecutionSession, noon_compile::SemanticExecutionLoweringError> {
         ExecutionSession::from_semantic_root(&self.store.borrow(), self.root)
     }
 
-    /// Lower this scene and one explicit authored animation root into the shared runtime.
-    ///
-    /// The root must belong to this scene's store. Exact property tracks keep their
-    /// authored timing; neutral family compositions start at zero. Declarations
-    /// outside this root are not scheduled.
-    pub fn execution_session_with_animation_root(
+    #[cfg(test)]
+    pub(crate) fn execution_session_with_animation_root(
         &self,
         animation_root: &crate::DeclaredAnimation,
     ) -> Result<ExecutionSession, String> {
@@ -1105,7 +1026,7 @@ impl Scene {
 
     /// Start initial family compositions at an explicit origin, including before time zero.
     /// Exact property tracks retain their own absolute timing.
-    pub fn execution_session_with_animation_root_at(
+    fn execution_session_with_animation_root_at(
         &self,
         animation_root: &crate::DeclaredAnimation,
         origin: f64,
@@ -1122,9 +1043,8 @@ impl Scene {
 
     /// Install the execution component lowered from this exact Scene.
     ///
-    /// This is private migration plumbing for the Scene-owned live path. External
-    /// integration entry points may still construct standalone sessions until the
-    /// broader control-surface migration removes that compatibility shape.
+    /// Callers lower the runtime here or validate an existing host-owned runtime
+    /// before installation.
     pub(crate) fn install_execution(&mut self, execution: ExecutionSession) {
         assert!(
             self.execution.is_none(),
@@ -1180,10 +1100,7 @@ impl Scene {
         LiveSession::new(store, root, execution)
     }
 
-    /// Borrow an explicitly supplied execution session for compatibility during
-    /// the control-surface migration. Scene-owned persistent operations do not
-    /// require this pairing once execution is installed in the Scene itself.
-    pub fn live<'a>(&'a self, session: &'a mut ExecutionSession) -> LiveSession<'a> {
+    pub(crate) fn live<'a>(&'a self, session: &'a mut ExecutionSession) -> LiveSession<'a> {
         LiveSession::new(&self.store, self.root, session)
     }
 }
@@ -1268,13 +1185,12 @@ impl Scene {
         use crate::TextAuthoringError;
         self.require_resource_admission()
             .map_err(TextAuthoringError::Semantic)?;
-        let (result, family, members, source, parts, _) = self
-            .with_semantic_publication(|store, publish| {
-                Ok(admission.publish_parts(store, |store, transaction| {
+        let (result, family, members, source, parts, _) =
+            self.with_semantic_publication(|store, publish| {
+                admission.publish_parts(store, |store, transaction| {
                     publish(store, transaction).map_err(TextAuthoringError::Semantic)
-                }))
-            })
-            .map_err(TextAuthoringError::Semantic)??;
+                })
+            })?;
         crate::latex_authoring::finish_latex_parts(
             Rc::clone(&self.store),
             &result,
@@ -1292,13 +1208,11 @@ impl Scene {
         use crate::TextAuthoringError;
         self.require_resource_admission()
             .map_err(TextAuthoringError::Semantic)?;
-        let result = self
-            .with_semantic_publication(|store, publish| {
-                Ok(admission.publish(store, |store, transaction| {
-                    publish(store, transaction).map_err(TextAuthoringError::Semantic)
-                }))
+        let result = self.with_semantic_publication(|store, publish| {
+            admission.publish(store, |store, transaction| {
+                publish(store, transaction).map_err(TextAuthoringError::Semantic)
             })
-            .map_err(TextAuthoringError::Semantic)??;
+        })?;
         let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("one LaTeX admission creates one detached semantic node")
         };

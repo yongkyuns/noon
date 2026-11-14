@@ -1,17 +1,17 @@
 //! Ordinary persistent object edits through the Scene-owned publication route.
 
 use crate::{
-    family_authoring::FamilyTranslation,
     semantic_mobject::{
-        edit_color, edit_disable_fill, edit_disable_stroke, edit_fade, edit_fill, edit_fill_color,
-        edit_fill_opacity, edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color,
-        edit_stroke_opacity, edit_stroke_width, prepare_fill_paint_value,
+        authoring_render_f64, edit_color, edit_disable_fill, edit_disable_stroke, edit_fade,
+        edit_fill, edit_fill_color, edit_fill_opacity, edit_manim_opacity, edit_object_opacity,
+        edit_stroke, edit_stroke_color, edit_stroke_opacity, edit_stroke_width,
+        prepare_fill_paint_value,
     },
     AuthoringError, EffectiveMobjectState, Mobject, Scene,
 };
 use noon_core::{
     Color, HatchPaint, LinearGradient, NoisePaint, RadialGradient, SemanticMutationTransaction,
-    SemanticPaint, SemanticStyle, SemanticVec3, Vec2,
+    SemanticObjectProperty, SemanticPaint, SemanticSignalValue, SemanticStyle, SemanticVec3, Vec2,
 };
 use std::sync::Arc;
 
@@ -262,6 +262,42 @@ impl Scene {
         Ok(f64::from(self.effective(mobject)?.style.stroke_width))
     }
 
+    /// Observe the background stroke RGB at the current publication.
+    pub fn effective_background_stroke_color(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<Color>, AuthoringError> {
+        mobject.background_stroke_color()?;
+        Ok(self
+            .effective(mobject)?
+            .style
+            .background_stroke
+            .map(crate::semantic_mobject::opaque_paint_color))
+    }
+
+    /// Observe the background stroke width in scene units.
+    pub fn effective_background_stroke_width(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<f64, AuthoringError> {
+        Ok(f64::from(
+            self.effective(mobject)?.style.background_stroke_width,
+        ))
+    }
+
+    /// Observe the background stroke alpha, using the Manim default when absent.
+    pub fn effective_background_stroke_opacity(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<f64, AuthoringError> {
+        mobject.background_stroke_opacity()?;
+        Ok(self
+            .effective(mobject)?
+            .style
+            .background_stroke
+            .map_or(1.0, |color| f64::from(color.alpha)))
+    }
+
     pub fn effective_stroke_cap(
         &self,
         mobject: &Mobject,
@@ -327,23 +363,117 @@ impl Scene {
         self.publish_object_style(object, state.style)
     }
 
+    /// Set the planar authored translation while preserving depth.
+    pub fn set_translation(
+        &mut self,
+        object: &Mobject,
+        x: f64,
+        y: f64,
+    ) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        if self.running_execution().is_none() {
+            return object.clone().set_translation(x, y);
+        }
+        let z = object.state()?.transform.translation.z;
+        self.set_object_property(
+            object,
+            SemanticObjectProperty::Translation,
+            SemanticVec3::new(x, y, z),
+        )
+    }
+
+    /// Set the planar authored scale while preserving depth scale.
+    pub fn set_scale(&mut self, object: &Mobject, x: f64, y: f64) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        if self.running_execution().is_none() {
+            return object.clone().set_scale(x, y);
+        }
+        let z = object.state()?.transform.scale.z;
+        self.set_object_property(
+            object,
+            SemanticObjectProperty::Scale,
+            SemanticVec3::new(x, y, z),
+        )
+    }
+
+    /// Multiply the object's authored scale in the plane.
+    pub fn scale(&mut self, object: &Mobject, x: f64, y: f64) -> Result<(), AuthoringError> {
+        let x = authoring_render_f64("scale.x", x)?;
+        let y = authoring_render_f64("scale.y", y)?;
+        self.require_object(object)?;
+        let mut scale = object.state()?.transform.scale;
+        scale.x *= x;
+        scale.y *= y;
+        scale.lower_xy_f32()?;
+        self.set_object_property(object, SemanticObjectProperty::Scale, scale)
+    }
+
+    /// Set the object's authored planar rotation.
+    pub fn set_rotation(&mut self, object: &Mobject, angle: f64) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        if self.running_execution().is_none() {
+            return object.clone().set_rotation(angle);
+        }
+        self.set_object_property(object, SemanticObjectProperty::RotationZ, angle)
+    }
+
+    /// Set the nominal value of an Angle, leaving its drawn geometry intact.
+    pub fn set_angle_value(
+        &mut self,
+        object: &Mobject,
+        radians: f64,
+    ) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        if self.running_execution().is_none() {
+            return object.clone().set_angle_value(radians);
+        }
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_angle_value(object.node_id(), radians);
+        self.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
+    fn set_object_property(
+        &mut self,
+        object: &Mobject,
+        property: SemanticObjectProperty,
+        value: impl Into<SemanticSignalValue>,
+    ) -> Result<(), AuthoringError> {
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_property(object.node_id(), property, value);
+        self.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
     /// Translate an object's own content and unique descendants in one publication.
     ///
     /// The delta is applied to authored positions. Runtime publication barriers
     /// reject the whole edit before any addressed leaf changes. Repeated aliases
     /// are translated once by the shared semantic traversal.
     pub fn shift(&mut self, object: &Mobject, delta: Vec2) -> Result<(), AuthoringError> {
+        self.shift_3d(
+            object,
+            SemanticVec3::new(f64::from(delta.x), f64::from(delta.y), 0.0),
+        )
+    }
+
+    /// Translate an object's own content and unique descendants in three dimensions.
+    pub fn shift_3d(
+        &mut self,
+        object: &Mobject,
+        delta: SemanticVec3,
+    ) -> Result<(), AuthoringError> {
         self.require_object(object)?;
-        let transaction = {
-            let store = self.integration_store().borrow();
-            FamilyTranslation::begin_3d(
-                &store,
-                object.node_id(),
-                SemanticVec3::new(f64::from(delta.x), f64::from(delta.y), 0.0),
-            )?
-            .transaction(&store)?
-        };
-        self.apply_semantic_transaction(transaction).map(|_| ())
+        if self.running_execution().is_some() && !delta.is_finite() {
+            let mut translation = object.state()?.transform.translation;
+            translation.x += delta.x;
+            translation.y += delta.y;
+            translation.z += delta.z;
+            return self.set_object_property(
+                object,
+                SemanticObjectProperty::Translation,
+                translation,
+            );
+        }
+        self.shift_layout_root(object.node_id(), delta).map(|_| ())
     }
 
     fn edit_object_style(

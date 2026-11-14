@@ -15,8 +15,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
             group = identity_only_wrapper(compat.VGroup, submobjects=[])
             family = group._semantic_family_handle = Mock()
             context = Mock() if live else None
-            with patch.object(handles, "_live_mutation_context", return_value=context), \
-                 patch.object(handles, "_live_constructor_context", return_value=None):
+            with patch.object(handles, "_path_authoring_context", return_value=context):
                 self.assertIs(group.set_object_opacity(0.25), group)
                 calls = list(family.method_calls)
                 context_calls = list(context.method_calls) if live else []
@@ -25,7 +24,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                         group.set_object_opacity(invalid)
                 self.assertEqual(family.method_calls, calls)
                 if live:
-                    context.liveSetFamilyObjectOpacity.assert_called_once_with(family, 0.25)
+                    context.setFamilyObjectOpacity.assert_called_once_with(family, 0.25)
                     self.assertEqual(context.method_calls, context_calls)
                     family.setObjectOpacity.assert_not_called()
                 else:
@@ -41,10 +40,11 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 context = Mock() if live else None
                 with patch.object(handles, "_create_family_handle") as create, \
                      patch.object(handles, "_new_membership_batch", return_value=Mock()), \
-                     patch.object(handles, "_live_constructor_context", return_value=context):
+                     patch.object(handles, "_path_authoring_context", return_value=context):
                     family = cls()
-                operation = context.liveCreateFamily if live else create
-                self.assertEqual(operation.call_args.args[1:], (0.0, draws))
+                operation = context.createFamily if live else create
+                rgba = (1.0, 1.0, 1.0, 1.0) if live else ()
+                self.assertEqual(operation.call_args.args[1:], (0.0, draws, *rgba))
                 if live:
                     self.assertIs(family._canonical_live_target_context, context)
 
@@ -71,7 +71,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
         for context in (None, Mock()):
             with patch.object(handles, "_create_family_handle", return_value=handle) as create, \
                  patch.object(handles, "_new_membership_batch", return_value=Mock()), \
-                 patch.object(handles, "_live_constructor_context", return_value=context):
+                 patch.object(handles, "_path_authoring_context", return_value=context):
                 group = compat.Group(color=compat._base.GREEN)
             expected = (compat._base.GREEN.red, compat._base.GREEN.green,
                         compat._base.GREEN.blue, compat._base.GREEN.alpha)
@@ -79,13 +79,12 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 self.assertEqual(create.call_args.args[1:], (0.0, False, *expected))
                 handle.setOwnColor.assert_not_called()
             else:
-                context.liveCreateFamily.assert_not_called()
-                self.assertEqual(context.liveCreateFamilyWithColor.call_args.args[1:], (0.0, *expected, False))
+                self.assertEqual(context.createFamily.call_args.args[1:], (0.0, False, *expected))
 
     def test_omitted_constructor_color_is_white_but_explicit_none_is_black(self):
         with patch.object(handles, "_create_family_handle") as create, \
              patch.object(handles, "_new_membership_batch", return_value=Mock()), \
-             patch.object(handles, "_live_constructor_context", return_value=None):
+             patch.object(handles, "_path_authoring_context", return_value=None):
             compat.Group()
             self.assertEqual(create.call_args.args[1:], (0.0, False))
             compat.Group(color=None)
@@ -155,17 +154,19 @@ class SharedFamilyPaintTests(unittest.TestCase):
                     self.assertIs(family.set_stroke(stroke_color, 4, 0.45, family=False), family)
                     self.assertIs(family.set_opacity(0.6, family=False), family)
                 owner = context if live else family._semantic_family_handle
-                fill = owner.liveSetFamilyOwnFill if live else owner.setOwnFill
-                stroke = owner.liveSetFamilyOwnStroke if live else owner.setOwnStroke
-                opacity = owner.liveSetFamilyOwnOpacity if live else owner.setOwnOpacity
+                style = owner.setFamilyOwnStyle if live else owner.setOwnStyle
+                opacity = owner.setFamilyOwnOpacity if live else owner.setOwnOpacity
                 prefix = (family._semantic_family_handle,) if live else ()
-                fill.assert_called_once_with(
-                    *prefix, True, color.red, color.green, color.blue, color.alpha, 0.35
-                )
-                stroke.assert_called_once_with(
-                    *prefix, True, stroke_color.red, stroke_color.green,
-                    stroke_color.blue, stroke_color.alpha, 0.04, 0.45
-                )
+                disabled = (False, 0, 0, 0, 1)
+                self.assertEqual(style.call_args_list[0].args, (
+                    *prefix, True, color.red, color.green, color.blue, color.alpha, 0.35,
+                    *disabled, None, None,
+                ))
+                self.assertEqual(style.call_args_list[1].args, (
+                    *prefix, *disabled, None, True, stroke_color.red, stroke_color.green,
+                    stroke_color.blue, stroke_color.alpha, 0.04, 0.45,
+                ))
+                self.assertEqual(style.call_count, 2)
                 opacity.assert_called_once_with(*prefix, 0.6)
 
     def test_root_only_set_style_publishes_one_authored_or_live_transaction(self):
@@ -178,7 +179,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 context = Mock() if live else None
                 with patch.object(
                     handles,
-                    "_style_target",
+                    "_paint_authoring_target",
                     return_value=(family._semantic_family_handle, context, "Family"),
                 ):
                     self.assertIs(
@@ -193,7 +194,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                         family,
                     )
                 owner = context if live else family._semantic_family_handle
-                method = owner.liveSetFamilyOwnStyle if live else owner.setOwnStyle
+                method = owner.setFamilyOwnStyle if live else owner.setOwnStyle
                 prefix = (family._semantic_family_handle,) if live else ()
                 method.assert_called_once_with(
                     *prefix,
@@ -223,7 +224,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                     context = Mock() if live else None
                     with patch.object(
                         handles,
-                        "_style_target",
+                        "_paint_authoring_target",
                         return_value=(family._semantic_family_handle, context, "Family"),
                     ):
                         self.assertIs(
@@ -242,7 +243,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                         )
                     owner = context if live else family._semantic_family_handle
                     method = (
-                        owner.liveSetFamilyOwnStyleWithBackgroundStroke
+                        owner.setFamilyOwnStyleWithBackgroundStroke
                         if live
                         else owner.setOwnStyleWithBackgroundStroke
                     )
@@ -271,7 +272,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                         background_opacity,
                     )
                     if live:
-                        context.liveSetFamilyOwnStyle.assert_not_called()
+                        context.setFamilyOwnStyle.assert_not_called()
                         family._semantic_family_handle.setOwnStyle.assert_not_called()
                     else:
                         family._semantic_family_handle.setOwnStyle.assert_not_called()
@@ -322,12 +323,12 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 context = Mock() if live else None
                 with patch.object(
                     handles,
-                    "_style_target",
+                    "_paint_authoring_target",
                     return_value=(family._semantic_family_handle, context, "Family"),
                 ):
                     self.assertIs(handles._fade(family, 0.25, family=False), family)
                 if live:
-                    context.liveFadeFamilyOwn.assert_called_once_with(
+                    context.fadeFamilyOwn.assert_called_once_with(
                         family._semantic_family_handle, 0.25
                     )
                     family._semantic_family_handle.fadeOwn.assert_not_called()
@@ -380,7 +381,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
         context = Mock()
         with patch.object(handles, "_group_target_context", return_value=context):
             self.assertIs(family.set_background_stroke(opacity=0.5, family=False), family)
-        context.liveSetFamilyOwnStyleWithBackgroundStroke.assert_called_once_with(
+        context.setFamilyOwnStyleWithBackgroundStroke.assert_called_once_with(
             family._semantic_family_handle,
             False, 0.0, 0.0, 0.0, 1.0, None,
             False, 0.0, 0.0, 0.0, 1.0, None, None,
@@ -431,10 +432,10 @@ class SharedFamilyPaintTests(unittest.TestCase):
             handle = Mock()
             context = Mock() if live else None
             with patch.object(handles, "_handle_for", return_value=handle), \
-                 patch.object(handles, "_live_mutation_context", return_value=context):
+                 patch.object(handles, "_path_authoring_context", return_value=context):
                 self.assertIs(leaf.fade(family=False), leaf)
             if live:
-                context.liveFade.assert_called_once_with(handle, 0.5)
+                context.fade.assert_called_once_with(handle, 0.5)
                 handle.fade.assert_not_called()
             else:
                 handle.fade.assert_called_once_with(0.5)
@@ -454,7 +455,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
         plain_group._semantic_family_handle.assert_not_called()
         with patch.object(
             handles,
-            "_style_target",
+            "_paint_authoring_target",
             return_value=(group._semantic_family_handle, None, "Family"),
         ):
             self.assertIs(group.fade(0.25, family=False), group)
@@ -480,10 +481,10 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 handle = Mock()
                 context = Mock() if live else None
                 with patch.object(handles, "_handle_for", return_value=handle), \
-                     patch.object(handles, "_live_mutation_context", return_value=context):
+                     patch.object(handles, "_path_authoring_context", return_value=context):
                     self.assertIs(leaf.fade_to(color, alpha=1.25), leaf)
                 if live:
-                    context.liveFadeTo.assert_called_once_with(
+                    context.fadeTo.assert_called_once_with(
                         handle, color.red, color.green, color.blue, color.alpha, 1.25
                     )
                     handle.fadeTo.assert_not_called()
@@ -511,7 +512,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
             with patch.object(handles, "_group_target_context", return_value=context):
                 self.assertIs(family.fade_to(target, 0.75), family)
             owner = context if live else family._semantic_family_handle
-            method = owner.liveSetFamilyFadeTo if live else owner.fadeTo
+            method = owner.fadeToFamily if live else owner.fadeTo
             expected = ((family._semantic_family_handle,) if live else ()) + (
                 target.red, target.green, target.blue, target.alpha, 0.75
             )
@@ -603,7 +604,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
         phase.paint_family.assert_called_once_with(family._semantic_family_handle, "Fade", (0.25,))
         family._semantic_family_handle.fade.assert_not_called()
 
-    def test_authored_and_live_calls_forward_one_family_handle(self):
+    def test_detached_and_scene_owned_edits_forward_one_family_handle(self):
         for live in (False, True):
             with self.subTest(live=live):
                 family = identity_only_wrapper(compat.VGroup, submobjects=[])
@@ -618,7 +619,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 owner = context if live else family._semantic_family_handle
                 prefix = (family._semantic_family_handle,) if live else ()
                 def method(name):
-                    return getattr(owner, f"liveSetFamily{name}" if live else f"set{name}")
+                    return getattr(owner, f"setFamily{name}" if live else f"set{name}")
                 color = compat._base.RED
                 method("Color").assert_called_once_with(*prefix, color.red, color.green, color.blue, color.alpha)
                 color = compat._base.BLUE
@@ -627,7 +628,7 @@ class SharedFamilyPaintTests(unittest.TestCase):
                 method("Stroke").assert_called_once_with(*prefix, True, color.red, color.green, color.blue, color.alpha, compat._manim_stroke_width(2), 0.25)
                 method("Opacity").assert_called_once_with(*prefix, 0.5)
                 if live:
-                    context.liveSetFamilyFade.assert_called_once_with(
+                    context.fadeFamily.assert_called_once_with(
                         family._semantic_family_handle, 0.25
                     )
                     family._semantic_family_handle.fade.assert_not_called()

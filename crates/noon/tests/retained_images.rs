@@ -1,5 +1,7 @@
 //! Qualification of the ordinary retained image lane, not a second renderer.
-use noon::{ExecutionSession, ImageMobjectOptions, RasterImageSampling, Scene};
+use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{ImageMobjectOptions, RasterImageSampling, Scene};
 use noon_core::{
     FontResourceArena, GeometryResourceArena, RasterImageResourceArena, TextResourceArena,
 };
@@ -65,7 +67,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     let baseline = preparer.incremental_stats();
     for tick in 1..=128 {
         execution
-            .live()
+            .scene_mut()
             .set_translation(&a, tick as f64 * 0.01, 0.0)
             .unwrap();
         let changed = upload(
@@ -128,7 +130,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     );
     assert_eq!(idle.images, Default::default());
     assert_eq!(idle.bytes_uploaded(), 0);
-    execution.live().remove(&a).unwrap();
+    execution.scene_mut().remove(&a).unwrap();
     let removal = upload(
         execution.session_mut(),
         &mut preparer,
@@ -139,7 +141,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     );
     assert_eq!(removal.images.textures_retired, 0);
     assert_eq!(renderer.image_residency_stats().textures, 1);
-    execution.live().remove(&b).unwrap();
+    execution.scene_mut().remove(&b).unwrap();
     let removal = upload(
         execution.session_mut(),
         &mut preparer,
@@ -158,7 +160,7 @@ fn removing_one_image_preserves_surviving_draws_through_readd() {
     let a = scene.image(options()).unwrap();
     let b = scene.image(options()).unwrap();
     scene.add_many(&[(&a).into(), (&b).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
@@ -180,20 +182,20 @@ fn removing_one_image_preserves_surviving_draws_through_readd() {
     for (step, expected_draws) in [2, 1, 2, 1, 0].into_iter().enumerate() {
         match step {
             1 => {
-                scene.live(&mut session).remove(&a).unwrap();
+                session.scene_mut().remove(&a).unwrap();
             }
             2 => {
-                scene.live(&mut session).add(&a).unwrap();
+                session.scene_mut().add(&a).unwrap();
             }
             3 => {
-                scene.live(&mut session).remove(&b).unwrap();
+                session.scene_mut().remove(&b).unwrap();
             }
             4 => {
-                scene.live(&mut session).remove(&a).unwrap();
+                session.scene_mut().remove(&a).unwrap();
             }
             _ => {}
         }
-        let publication = session.take_renderer_publication();
+        let publication = session.session_mut().take_renderer_publication();
         let prepared = preparer
             .prepare_publication(
                 &device,
@@ -242,7 +244,7 @@ fn failed_image_preparation_cannot_be_reused_by_an_empty_delta() {
     let mut scene = Scene::new();
     let object = scene.image(options()).unwrap();
     scene.add(&object).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut preparer = RetainedFramePreparer::new();
     let texts = TextResourceArena::new();
@@ -288,36 +290,30 @@ fn skipped_image_generation_reconciles_without_reuploading_pixels() {
     let a = scene.image(options()).unwrap();
     let b = scene.image(options()).unwrap();
     scene.add_many(&[(&a).into(), (&b).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
     let mut preparer = RetainedFramePreparer::new();
     upload(
-        &mut session,
+        session.session_mut(),
         &mut preparer,
         &mut renderer,
         &device,
         &queue,
         &mut text,
     );
-    scene
-        .live(&mut session)
-        .set_translation(&a, 0.2, 0.0)
-        .unwrap();
+    session.scene_mut().set_translation(&a, 0.2, 0.0).unwrap();
     preparer
         .prepare_publication(
             &device,
-            &session.take_renderer_publication(),
+            &session.session_mut().take_renderer_publication(),
             TextDeviceMetrics::uniform(32.0).unwrap(),
         )
         .unwrap();
-    scene
-        .live(&mut session)
-        .set_translation(&b, 0.5, 0.0)
-        .unwrap();
+    session.scene_mut().set_translation(&b, 0.5, 0.0).unwrap();
     let caught_up = upload(
-        &mut session,
+        session.session_mut(),
         &mut preparer,
         &mut renderer,
         &device,
@@ -361,7 +357,7 @@ fn native_image_pixels_preserve_orientation_alpha_and_painter_order() {
         foreground.set_fill(1.0, 1.0, 0.0, 1.0).unwrap();
         foreground.disable_stroke().unwrap();
         scene.add(&foreground).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
         renderer.set_viewport(&device, &queue, 64, 64);
         let mut text = renderer.create_retained_text_state(&device, &queue);
@@ -474,27 +470,27 @@ fn stable_slot_cross_kind_replacement_keeps_unrelated_image_resident() {
     scene
         .add_many(&[(&target).into(), (&sibling).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let mut text = renderer.create_retained_text_state(&device, &queue);
     let mut preparer = RetainedFramePreparer::new();
     upload(
-        &mut session,
+        session.session_mut(),
         &mut preparer,
         &mut renderer,
         &device,
         &queue,
         &mut text,
     );
-    let slot = session.execution_slot_for_frame_index(0).unwrap();
-    let sibling_before = session.frame().objects[1].clone();
+    let slot = session.session().execution_slot_for_frame_index(0).unwrap();
+    let sibling_before = session.session().frame().objects[1].clone();
     for replacement in [&image, &geometry] {
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .replace_content(&target, replacement)
             .unwrap();
-        let publication = session.take_renderer_publication();
+        let publication = session.session_mut().take_renderer_publication();
         assert_eq!(publication.changes().object_indices(), &[0]);
         let prepared = preparer
             .prepare_publication(
@@ -504,10 +500,13 @@ fn stable_slot_cross_kind_replacement_keeps_unrelated_image_resident() {
             )
             .unwrap();
         let stats = renderer.upload_retained(&device, &queue, &prepared, &mut text);
-        assert_eq!(session.execution_slot_for_frame_index(0), Some(slot));
-        assert_eq!(session.frame().objects[1], sibling_before);
+        assert_eq!(
+            session.session().execution_slot_for_frame_index(0),
+            Some(slot)
+        );
+        assert_eq!(session.session().frame().objects[1], sibling_before);
         assert!(stats.bytes_uploaded() > 0);
     }
-    assert!(session.frame().objects[0].geometry().is_some());
+    assert!(session.session().frame().objects[0].geometry().is_some());
     assert_eq!(renderer.image_residency_stats().objects, 1);
 }

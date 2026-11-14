@@ -194,11 +194,9 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             .chain(captured.anchors()?)
             .collect::<Vec<_>>();
         assert_eq!(
-            crate::integration::effective_vector_boundary_points(
-                running.scene().integration_store(),
-                running.session(),
-                (&vector_family).into(),
-            )?,
+            running
+                .scene()
+                .effective_vector_boundary_points((&vector_family).into())?,
             expected_boundary
         );
         let midpoint = captured.start()?;
@@ -217,7 +215,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             running.scene().effective_path_query(&rectangle)?.start()?,
             before
         );
-        running.live().remove(&ellipse)?;
+        running.scene_mut().remove(&ellipse)?;
         let reveal = running.live().declare_and_activate_create(
             &ellipse,
             crate::AnimationOptions::new()

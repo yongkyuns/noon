@@ -17,7 +17,7 @@ const POINTER: NativePointerId = NativePointerId {
 
 #[test]
 fn prepared_prefix_admits_world_spatial_transform_history() {
-    let (scene, surface, _light, light_movement) = spatial_surface::lighting_scene().unwrap();
+    let (mut scene, surface, _light, light_movement) = spatial_surface::lighting_scene().unwrap();
     let surface_target = SemanticWorldTransform3D::new(
         SemanticVec3::new(0.2, -0.1, 0.0),
         SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 1.0, 0.0), 0.25).unwrap(),

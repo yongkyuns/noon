@@ -21,24 +21,27 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         })?;
         family.match_style(&palette)?;
         scene.add_many(&[(&family).into(), (&c).into()])?;
-        let mut session = scene.execution_session()?;
+        let mut session = scene.into_execution()?;
         {
-            let mut live = scene.live(&mut session);
-            live.match_style(&c, &a)?;
-            live.set_family_style(
+            session.scene_mut().match_style(&c, &a)?;
+            session.scene_mut().set_family_style(
                 &family,
                 StyleUpdate {
                     fill_color: Some(Color::rgba(1.0, 128.0 / 255.0, 0.0, 1.0)),
                     ..Default::default()
                 },
             )?;
-            live.set_family_fill(&family, None, None)?;
-            live.set_family_stroke(&family, None, None, None)?;
-            let segment = live.wait_segment(0.2)?;
-            live.advance_segment_to(segment, segment.end_time())?;
-            live.complete_segment(segment)?;
+            session.scene_mut().set_family_fill(&family, None, None)?;
+            session
+                .scene_mut()
+                .set_family_stroke(&family, None, None, None)?;
+            let segment = session.live().wait_segment(0.2)?;
+            session
+                .live()
+                .advance_segment_to(segment, segment.end_time())?;
+            session.live().complete_segment(segment)?;
         }
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(session)
     };
     build().map_err(|error| error.to_string())
 }

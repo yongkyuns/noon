@@ -36,25 +36,22 @@ pub(super) fn matrix_shape<T>(rows: &[Vec<T>]) -> Result<MatrixShape, MatrixAuth
     })
 }
 
-pub(super) enum MatrixPublisher<'a, 'session> {
+pub(super) enum MatrixPublisher<'a> {
     Store(Rc<RefCell<noon_core::SemanticStore>>),
     Scene(&'a mut Scene),
-    Live(&'a mut crate::LiveSession<'session>),
 }
 
-impl MatrixPublisher<'_, '_> {
+impl MatrixPublisher<'_> {
     fn store(&self) -> Rc<RefCell<noon_core::SemanticStore>> {
         match self {
             Self::Store(store) => Rc::clone(store),
             Self::Scene(scene) => Rc::clone(scene.integration_store()),
-            Self::Live(live) => Rc::clone(live.integration_store()),
         }
     }
     fn entry_state(&self, object: &Mobject) -> Result<SemanticObjectState, AuthoringError> {
         match self {
             Self::Store(_) => object.state(),
             Self::Scene(scene) => scene.composite_entry_state(object),
-            Self::Live(live) => live.composite_entry_state(object),
         }
     }
     fn composite_entries(
@@ -89,12 +86,7 @@ impl MatrixPublisher<'_, '_> {
                 operation(&mut store, &mut publish).map_err(Into::into)
             }
             Self::Scene(scene) => scene
-                .with_semantic_publication(|store, publish| Ok(operation(store, publish)))
-                .map_err(MatrixAuthoringError::Semantic)?
-                .map_err(MatrixAuthoringError::Text),
-            Self::Live(live) => live
-                .with_semantic_publication(|store, publish| Ok(operation(store, publish)))
-                .map_err(MatrixAuthoringError::LiveSession)?
+                .with_semantic_publication(operation)
                 .map_err(MatrixAuthoringError::Text),
         }
     }
@@ -277,7 +269,7 @@ fn stage_matrix(
 }
 
 pub(super) fn publish_text_matrix(
-    publisher: MatrixPublisher<'_, '_>,
+    publisher: MatrixPublisher<'_>,
     backend: &mut impl LatexBackend,
     values: Vec<String>,
     shape: MatrixShape,
@@ -302,7 +294,6 @@ pub(super) fn publish_text_matrix(
     let store = match &publisher {
         MatrixPublisher::Store(store) => Rc::clone(store),
         MatrixPublisher::Scene(scene) => Rc::clone(scene.integration_store()),
-        MatrixPublisher::Live(live) => Rc::clone(live.integration_store()),
     };
     let count = entries.len();
     let publication = publisher.with_publication(move |semantic, publish| {
@@ -364,7 +355,7 @@ pub(super) fn publish_text_matrix(
 }
 
 pub(super) fn publish_numeric_matrix(
-    publisher: MatrixPublisher<'_, '_>,
+    publisher: MatrixPublisher<'_>,
     backend: &mut impl LatexBackend,
     values: Vec<f64>,
     shape: MatrixShape,
@@ -395,7 +386,6 @@ pub(super) fn publish_numeric_matrix(
     let store = match &publisher {
         MatrixPublisher::Store(store) => Rc::clone(store),
         MatrixPublisher::Scene(scene) => Rc::clone(scene.integration_store()),
-        MatrixPublisher::Live(live) => Rc::clone(live.integration_store()),
     };
     let count = entries.len();
     let publication = publisher.with_publication(move |semantic, publish| {
@@ -482,7 +472,7 @@ pub(super) fn publish_numeric_matrix(
 }
 
 pub(super) fn publish_existing_mobject_matrix(
-    publisher: MatrixPublisher<'_, '_>,
+    publisher: MatrixPublisher<'_>,
     backend: &mut impl LatexBackend,
     entries: Vec<Mobject>,
     shape: MatrixShape,
@@ -493,7 +483,7 @@ pub(super) fn publish_existing_mobject_matrix(
 }
 
 pub(super) fn publish_target_mobject_matrix(
-    publisher: MatrixPublisher<'_, '_>,
+    publisher: MatrixPublisher<'_>,
     backend: &mut impl LatexBackend,
     entries: Vec<MobjectTarget<'_>>,
     shape: MatrixShape,
@@ -562,7 +552,6 @@ pub(super) fn publish_target_mobject_matrix(
     let store = match &publisher {
         MatrixPublisher::Store(store) => Rc::clone(store),
         MatrixPublisher::Scene(scene) => Rc::clone(scene.integration_store()),
-        MatrixPublisher::Live(live) => Rc::clone(live.integration_store()),
     };
     let dependencies = bracket.iter().map(|item| item.dependency.clone()).collect();
     let publication = publisher.with_publication(move |semantic, publish| {

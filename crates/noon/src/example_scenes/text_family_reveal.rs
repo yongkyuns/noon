@@ -22,10 +22,9 @@ impl LiveContinuation for TextFamilyReveal {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
-                let rejected = live.declare_and_activate_animation_composition(
+                let rejected = scene.live().declare_and_activate_animation_composition(
                     SemanticAnimationCompositionKind::Parallel,
                     &[
                         AnimationCompositionRequest::FamilyReveal {
@@ -58,7 +57,8 @@ impl LiveContinuation for TextFamilyReveal {
                     return Err("overlapping family Create admitted a partial family root".into());
                 }
 
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_animation_composition(
                         SemanticAnimationCompositionKind::Parallel,
                         &[
@@ -94,13 +94,13 @@ impl LiveContinuation for TextFamilyReveal {
                 Ok(ContinuationStep::Await(segment))
             }
             1 => {
-                if !live
-                    .contains(&self.moving)
+                if !scene
+                    .contains_direct(&self.moving)
                     .map_err(|error| error.to_string())?
-                    || !live
-                        .contains(&self.solo)
+                    || !scene
+                        .contains_direct(&self.solo)
                         .map_err(|error| error.to_string())?
-                    || (live
+                    || (scene
                         .effective(&self.moving)
                         .map_err(|error| error.to_string())?
                         .transform
@@ -130,37 +130,39 @@ impl LiveContinuation for TextFamilyReveal {
                 }
                 drop(store);
                 self.stage = 2;
-                live.declare_and_activate_animation_composition(
-                    SemanticAnimationCompositionKind::Parallel,
-                    &[
-                        AnimationCompositionRequest::FamilyReveal {
-                            target: &self.family,
-                            reverse: true,
-                            options: AnimationOptions::new()
-                                .run_time(1.0)
-                                .rate_func(RateFunction::Linear)
-                                .lag_ratio(0.25)
-                                .introducer(false)
-                                .remover(true)
-                                .reverse_rate_function(true),
-                        },
-                        AnimationCompositionRequest::TextReveal {
-                            target: &self.solo,
-                            reverse: true,
-                            options: AnimationOptions::new()
-                                .run_time(1.0)
-                                .rate_func(RateFunction::Linear)
-                                .lag_ratio(0.25)
-                                .introducer(false)
-                                .remover(true)
-                                .reverse_rate_function(true),
-                        },
-                    ],
-                    AnimationOptions::new().rate_func(RateFunction::Linear),
-                    AnimationOptions::new(),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_animation_composition(
+                        SemanticAnimationCompositionKind::Parallel,
+                        &[
+                            AnimationCompositionRequest::FamilyReveal {
+                                target: &self.family,
+                                reverse: true,
+                                options: AnimationOptions::new()
+                                    .run_time(1.0)
+                                    .rate_func(RateFunction::Linear)
+                                    .lag_ratio(0.25)
+                                    .introducer(false)
+                                    .remover(true)
+                                    .reverse_rate_function(true),
+                            },
+                            AnimationCompositionRequest::TextReveal {
+                                target: &self.solo,
+                                reverse: true,
+                                options: AnimationOptions::new()
+                                    .run_time(1.0)
+                                    .rate_func(RateFunction::Linear)
+                                    .lag_ratio(0.25)
+                                    .introducer(false)
+                                    .remover(true)
+                                    .reverse_rate_function(true),
+                            },
+                        ],
+                        AnimationOptions::new().rate_func(RateFunction::Linear),
+                        AnimationOptions::new(),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             2 => {
                 let store = self.family.integration_store().borrow();
@@ -179,18 +181,20 @@ impl LiveContinuation for TextFamilyReveal {
                 if !family.parents().is_empty()
                     || left_reachable
                     || right_reachable
-                    || live
-                        .contains(&self.solo)
+                    || scene
+                        .contains_direct(&self.solo)
                         .map_err(|error| error.to_string())?
-                    || !live
-                        .contains(&self.moving)
+                    || !scene
+                        .contains_direct(&self.moving)
                         .map_err(|error| error.to_string())?
                 {
                     return Err("Uncreate did not remove only its Text roots".into());
                 }
                 drop(store);
                 self.stage = 3;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }

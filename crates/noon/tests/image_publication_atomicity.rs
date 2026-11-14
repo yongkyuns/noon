@@ -1,4 +1,5 @@
 //! Complementary R2 acceptance probes; no alternate scene or rollback state.
+use noon::integration::scene_execution;
 use noon::integration::{CallbackAdvance, HostCallbackId, SemanticMutationTransaction};
 use noon::{
     AnimationOptions, ExecutionSessionPublicationError, ImageMobjectOptions, RateFunction, Scene,
@@ -82,7 +83,10 @@ fn pending_callback_image_creation_is_resource_atomic_and_recovers() -> TestResu
         .session()
         .execution_object_id(recovered.node_id())
         .is_none());
-    eprintln!("CALLBACK before={before_resources:?} rejected={after_rejection_resources:?} recovered={:?}; typed rejection, frame/token/revision preservation and recovery reached", resources(execution.scene()));
+    eprintln!(
+        "CALLBACK before={before_resources:?} rejected={after_rejection_resources:?} recovered={:?}; typed rejection, frame/token/revision preservation and recovery reached",
+        resources(execution.scene())
+    );
     assert_eq!(
         after_rejection_resources, before_resources,
         "rejected callback-pending creation must not retain a image resource"
@@ -155,7 +159,10 @@ fn active_segment_image_creation_is_resource_atomic_and_recovers() -> TestResult
         .session()
         .execution_object_id(recovered.node_id())
         .is_none());
-    eprintln!("SEGMENT before={before_resources:?} rejected={after_rejection_resources:?} recovered={:?}; typed rejection, frame/revision preservation and recovery reached", resources(execution.scene()));
+    eprintln!(
+        "SEGMENT before={before_resources:?} rejected={after_rejection_resources:?} recovered={:?}; typed rejection, frame/revision preservation and recovery reached",
+        resources(execution.scene())
+    );
     assert_eq!(
         after_rejection_resources, before_resources,
         "rejected segment-pending creation must not retain a image resource"
@@ -174,15 +181,15 @@ fn invalid_publication_context_rejects_before_resource_import() -> TestResult {
     let other = scene.family(&[(&object).into()])?;
     let store = scene.integration_store().clone();
     for invalid_root in [object.node_id(), SemanticNodeId::new(u32::MAX, 1)] {
-        assert!(Scene::with_integration_root(store.clone(), invalid_root).is_err());
+        assert!(scene_execution::adopt_root(store.clone(), invalid_root).is_err());
     }
     for mut wrong in [
         Scene::new(),
-        Scene::with_integration_root(store.clone(), other.node_id())?,
+        scene_execution::adopt_root(store.clone(), other.node_id())?,
     ] {
         let before = (resources(&wrong), wrong.revision());
         assert!(matches!(
-            noon::integration::scene_execution::attach(&mut wrong, scene.execution_session()?),
+            scene_execution::attach(&mut wrong, scene_execution::lower(&scene)?),
             Err(SceneExecutionError::Publication(_))
         ));
         assert_eq!((resources(&wrong), wrong.revision()), before);
@@ -230,6 +237,6 @@ fn ordinary_wait_allows_resource_construction_without_frame_work() -> TestResult
     let mut live = execution.live();
     live.advance_segment_to(segment, segment.end_time())?;
     live.complete_segment(segment)?;
-    live.add(&object)?;
+    execution.scene_mut().add(&object)?;
     Ok(())
 }

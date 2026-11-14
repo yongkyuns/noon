@@ -1,8 +1,9 @@
 //! Actual authored composed/mixed captures in the linear working profile.
 use super::{decode, read, reference as bloom_reference, srgb_decode};
+use noon::integration::scene_execution::ExecutionSession;
 use noon::{
     effects::{Blur, EffectUpdate, Pixels},
-    ExecutionSession, Scene,
+    Scene,
 };
 use noon_core::{SemanticMutationTransaction, Vec2, ViewColorProfile};
 use noon_render_wgpu::{
@@ -255,7 +256,7 @@ fn authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions() 
         let mut session = scene.into_execution().unwrap();
         let mut tx = SemanticMutationTransaction::new();
         tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
-        session.live().apply(tx).unwrap();
+        noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
         let mut surface = Surface::new(&device, &queue);
         let mut bloom = HdrBloomFilter::new(&adapter, &device);
         let mut bloom_scope = HdrBloomScope::default();
@@ -286,7 +287,7 @@ fn authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions() 
                     )
                     .unwrap();
                 session
-                    .live()
+                    .scene_mut()
                     .set_family_object_opacity(&group, opacity)
                     .unwrap();
             }

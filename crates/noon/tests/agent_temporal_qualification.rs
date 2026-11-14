@@ -2,7 +2,9 @@
 //! Exercise typed authoring, shared execution, and production retained rendering;
 //! this is not a native clone of the browser preview service.
 
-use noon::{AnimationOptions, Color, ExecutionSession, RateFunction, Scene};
+use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{AnimationOptions, Color, RateFunction, Scene};
 
 mod raster_support;
 use raster_support::{Raster, SIZE, WORLD_SIZE};
@@ -19,9 +21,8 @@ fn sample_translation(y: f64, mut observe: impl FnMut(&mut ExecutionSession, f64
     scene.add(&marker).unwrap();
     let mut target = marker.target_editor().unwrap();
     target.set_translation(3.0, y).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene_execution::lower(&scene).unwrap();
+    let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
         .declare_and_activate_transform_to(
             &marker,
             &target,
@@ -40,7 +41,9 @@ fn sample_translation(y: f64, mut observe: impl FnMut(&mut ExecutionSession, f64
         assert_eq!(position.y, y as f32);
         observe(&mut session, time, expected_x);
     }
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    scene_execution::borrow_uninstalled(&scene, &mut session)
+        .complete_segment(segment)
+        .unwrap();
     assert_eq!(marker.center().unwrap(), (3.0, y));
     assert_eq!(session.frame().time, 3.0);
 }
@@ -153,14 +156,13 @@ fn qualify_export_sampling_pixels() {
             &mut self,
             scene: &mut noon::ContinuationScene,
         ) -> Result<ContinuationStep, Self::Error> {
-            let live = &mut scene.live();
             let stage = self.stage;
             self.stage += 1;
             match stage {
-                0 => Ok(ContinuationStep::Await(live.wait_segment(0.105)?)),
-                1 => Ok(ContinuationStep::Await(live.wait_segment(0.207)?)),
+                0 => Ok(ContinuationStep::Await(scene.live().wait_segment(0.105)?)),
+                1 => Ok(ContinuationStep::Await(scene.live().wait_segment(0.207)?)),
                 _ => {
-                    live.set_translation(&self.object, 2.0, -1.0)?;
+                    scene.set_translation(&self.object, 2.0, -1.0)?;
                     Ok(ContinuationStep::Finished)
                 }
             }

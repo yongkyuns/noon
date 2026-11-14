@@ -341,6 +341,8 @@ Rust authoring is first-class, not a wrapper around Python, JavaScript, WASM, JS
 
 The idiomatic Rust API calls shared semantic operations directly and must support normal `Scene`, `Mobject`, animation, signal/reactive, query, mutation, lowering, execution, and rendering workflows entirely inside the Rust environment.
 
+`Scene` owns ordinary construction, persistent edits, and effective queries before and after execution starts. For example, a Rust continuation edits the current `Scene` directly and borrows `LiveSession` to schedule or drive a segment. `SceneExecution` retains the same owner for native and browser hosts. The execution boundary handles scheduling, callback phases, input, and renderer publication receipts. Native input routes, derived signal expressions, and property bindings are declared before bootstrap. The running Scene can still update values on enrolled trackers.
+
 A native Rust application must be able to build and render a Noon scene without initializing any language host or serialization subsystem.
 
 A Rust application compiled to WASM must be able to build and render the same Noon scene semantics to a browser canvas without serializing between in-process engine layers. Browser bootstrap code is platform integration, not an authoring or engine dependency.
@@ -1106,7 +1108,7 @@ Ordered runtime evaluation may produce two different classes of staged output an
 
 [D2 source](diagrams/live-publication.d2).
 
-This is the publication contract for supported operations, not a claim that every mutation kind in the roadmap is implemented. Today `noon::ExecutionSession` coordinates preparation and commit; `noon-compile` owns local lowering and root-relative membership/painter-order preparation, and `noon-runtime` owns effective execution. A failed preparation leaves the previous coherent publication live.
+`ExecutionSession` coordinates preparation and commit. `noon-compile` owns local lowering and root-relative membership and painter-order preparation, and `noon-runtime` owns effective execution. A failed preparation leaves the previous coherent publication live. Rust hosts that need the raw session import it from `noon::integration::scene_execution`.
 
 Both classes participate in the same semantic updater order, transactional overlay and coherent `FrameEpoch` publication barrier, but they have different ownership and invalidation costs.
 
@@ -1463,7 +1465,7 @@ Ordinary planar sources admit an ordered stack of at most eight effect bindings.
 
 Compiler/runtime admission for composed scopes uses one non-drawable execution row for an effect-bearing unrendered family. Its immutable source plan names existing drawable execution identities in actual painter order and the nearest containing effect scope. The family retains its semantic identity; Rust's ordinary object-or-family target accepts the same named effect controls. Parameters use the ordinary exact-attachment channels and publication barrier. Initial admission rejects empty, aliased and externally interleaved sources before changing the execution index. Ordinary unrendered families allocate no execution row. Renderer publications borrow the publisher's existing object index to resolve source inputs locally.
 
-Shared execution reachability includes these controller rows. First attachment admits a prepared row, last removal retires it, and family detach/re-add preserves semantic identity while retiring/restoring the complete execution subtree. The held semantic transaction exposes checked final parent adjacency alongside final member order. Local membership, order and attachment-boundary edits relower affected scope inputs and nearest parents; compatible parameter edits do not traverse members. Conservative Runtime preflight includes actual candidate entries, source-plan edits and painter changes before semantic commit. Native public Scene/LiveSession pixel tests qualify mixed images and geometry through nested attachment, neutral/removal, member addition/removal, detach/re-add and clean reuse. Python family controls invoke those same Rust operations through checked family handles and the canonical live player without frontend member traversal. Live family copying borrows the published attachment column and allocates independent semantic attachment generations. Equal-topology family transforms and method targets stage ordinary geometry leaves alongside effect-only semantic leaves for unrendered scope owners. Those leaves use the existing allocator, scheduler, exact attachment channels, activation captures and completion barrier; they do not fabricate geometry for controllers. Scope parameters share the family root clock while member lag remains within the geometry expansion. Explicit parameter writes reserve their precise attachment generation, and sequential prepared targets consume completed parameter endpoints. Matching effect-bearing families, unequal effect-bearing topology, attachment enrollment/removal and unit transitions remain outside this animation profile. The explicit reverse-rate flag on the internal family composition remains unsupported. Broader lifecycle/seek/host cohorts remain separate gates.
+Shared execution reachability includes these controller rows. First attachment admits a prepared row, last removal retires it, and family detach/re-add preserves semantic identity while retiring/restoring the complete execution subtree. The held semantic transaction exposes checked final parent adjacency alongside final member order. Local membership, order and attachment-boundary edits relower affected scope inputs and nearest parents; compatible parameter edits do not traverse members. Conservative Runtime preflight includes actual candidate entries, source-plan edits and painter changes before semantic commit. Native Scene execution pixel tests qualify mixed images and geometry through nested attachment, neutral/removal, member addition/removal, detach/re-add and clean reuse. Python family controls invoke those same Rust operations through checked family handles and the canonical live player without frontend member traversal. Live family copying borrows the published attachment column and allocates independent semantic attachment generations. Equal-topology family transforms and method targets stage ordinary geometry leaves alongside effect-only semantic leaves for unrendered scope owners. Those leaves use the existing allocator, scheduler, exact attachment channels, activation captures and completion barrier; they do not fabricate geometry for controllers. Scope parameters share the family root clock while member lag remains within the geometry expansion. Explicit parameter writes reserve their precise attachment generation, and sequential prepared targets consume completed parameter endpoints. Matching effect-bearing families, unequal effect-bearing topology, attachment enrollment/removal and unit transitions remain outside this animation profile. The explicit reverse-rate flag on the internal family composition remains unsupported. Broader lifecycle/seek/host cohorts remain separate gates.
 
 The compiled plan indexes only derived input and parent dependencies by full existing identity. Initial materialization and authored execution transactions validate live drawable references, contiguous input order and acyclic nearest-parent containment before publication. Transaction preflight borrows unchanged rows and stages only changed metadata and displaced painter positions, so a source plan and its input/order edits can commit together without cloning scene payloads. Compatible parameter edits do not walk source members. Replay exchanges and retired-row compaction preserve the same identity-based dependencies. Non-drawable controller rows stay after the drawable painter domain during native evaluation and seek; they cannot split a capture interval.
 
@@ -1532,8 +1534,8 @@ Settled responsibilities are:
 
 ```text
 noon
-  public Rust authoring facade and shared high-level operations
-  ExecutionSession / LiveSession orchestration and explicit integration surfaces
+  Scene authoring, persistent publication, and effective queries
+  execution segments, callbacks, input, and host publication handoffs
 
 noon-core
   SemanticStore, semantic identity and authored declarations / transactions
@@ -1796,7 +1798,9 @@ Surface cell families use the shared family affine pivots; aggregate world-pose
 and world-center observations are not part of the qualified profile.
 
 `ThreeDScene` and `SpatialScene` use one effective camera and the shared frame
-publication/runtime. Camera profile tracks update the effective pose and
+publication/runtime. Scene initializes the camera before execution. Point lights
+use ordinary Scene creation and membership during setup or playback. Camera
+profile tracks update the effective pose and
 projection together; ambient and 3D-illusion camera motion are authored camera
 state, while ordinary object animation remains on the common timeline.
 Illusion motion evaluates the pinned sine/cosine orientation analytically

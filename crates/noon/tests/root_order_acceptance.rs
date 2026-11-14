@@ -1,11 +1,12 @@
 //! Root-order acceptance coverage for #1292 / the compiler extraction in #1305.
 //! Raw fixture construction stays at the explicit integration boundary. Every
-//! live edit uses the existing typed LiveSession and atomic publication path.
+//! live edit uses the root-aware integration publication path.
 
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{SemanticMutationTransaction, SemanticNodeKind, SemanticStore};
-use noon::{ExecutionSession, ExecutionSessionPublicationError, LiveSession, LiveSessionError};
+use noon::ExecutionSessionPublicationError;
 use noon_compile::{
     semantic_execution_object_id, SemanticLoweringError, SemanticPublicationLoweringError,
 };
@@ -91,9 +92,7 @@ fn edit(
     request: SemanticSceneMembershipRequest<'_>,
 ) {
     let transaction = plan_semantic_scene_membership(&owner.borrow(), root, request).unwrap();
-    LiveSession::new(owner, root, session)
-        .apply(transaction)
-        .unwrap();
+    noon::integration::scene_execution::publish_at_root(owner, root, session, transaction).unwrap();
     assert_reference(owner, session, root);
 }
 
@@ -121,9 +120,13 @@ fn all_single_root_reorders_match_reference_with_empty_and_nested_families() {
             let before = members.get(anchor).copied();
             let mut transaction = SemanticMutationTransaction::new();
             transaction.reorder_member(root, members[moved], before);
-            LiveSession::new(&owner, root, &mut live)
-                .apply(transaction)
-                .unwrap();
+            noon::integration::scene_execution::publish_at_root(
+                &owner,
+                root,
+                &mut live,
+                transaction,
+            )
+            .unwrap();
             let mut expected = members.to_vec();
             if before != Some(members[moved]) {
                 expected.remove(moved);
@@ -223,8 +226,7 @@ fn empty_only_reorder_is_authored_only_and_exact_noop_publishes_nothing() {
     let before = live.publication_context();
     let mut transaction = SemanticMutationTransaction::new();
     transaction.reorder_member(root, empty, None);
-    LiveSession::new(&owner, root, &mut live)
-        .apply(transaction)
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut live, transaction)
         .unwrap();
     let after = live.publication_context();
     assert_eq!(
@@ -239,9 +241,7 @@ fn empty_only_reorder_is_authored_only_and_exact_noop_publishes_nothing() {
     assert!(live.take_frame_changes().is_empty());
     let mut noop = SemanticMutationTransaction::new();
     noop.reorder_member(root, empty, None);
-    LiveSession::new(&owner, root, &mut live)
-        .apply(noop)
-        .unwrap();
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut live, noop).unwrap();
     assert_eq!(live.publication_context(), after);
     assert!(live.take_frame_changes().is_empty());
 }
@@ -264,18 +264,22 @@ fn invalid_explicit_root_rejects_before_publication_and_valid_root_recovers() {
         let slot = live.execution_slot_for_frame_index(0);
         let mut transaction = SemanticMutationTransaction::new();
         transaction.reorder_member(root, b, Some(a));
-        let error = LiveSession::new(&owner, invalid, &mut live)
-            .apply(transaction)
-            .unwrap_err();
+        let error = noon::integration::scene_execution::publish_at_root(
+            &owner,
+            invalid,
+            &mut live,
+            transaction,
+        )
+        .unwrap_err();
         let expected = if wrong_kind {
             SemanticStoreError::NotFamily(invalid)
         } else {
             SemanticStoreError::UnknownNode(invalid)
         };
         assert!(matches!(error,
-            LiveSessionError::Publication(ExecutionSessionPublicationError::Lowering(
+            ExecutionSessionPublicationError::Lowering(
                 SemanticPublicationLoweringError::Value(SemanticLoweringError::Store(error))
-            )) if error == expected));
+            ) if error == expected));
         assert_eq!(live.publication_context(), before);
         assert_eq!(owner.borrow().scene_revision(), before.scene_revision());
         assert_eq!(owner.borrow().node(root).unwrap().members(), &[a, b]);
@@ -284,8 +288,7 @@ fn invalid_explicit_root_rejects_before_publication_and_valid_root_recovers() {
         assert!(live.take_frame_changes().is_empty());
         let mut valid = SemanticMutationTransaction::new();
         valid.reorder_member(root, b, Some(a));
-        LiveSession::new(&owner, root, &mut live)
-            .apply(valid)
+        noon::integration::scene_execution::publish_at_root(&owner, root, &mut live, valid)
             .unwrap();
         assert_reference(&owner, &live, root);
     }
@@ -307,8 +310,7 @@ fn explicit_point_owning_root_preserves_its_draw_during_child_reorder_and_seek()
     );
     let mut transaction = SemanticMutationTransaction::new();
     transaction.reorder_member(root, b, Some(a));
-    LiveSession::new(&owner, root, &mut live)
-        .apply(transaction)
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut live, transaction)
         .unwrap();
     assert_eq!(
         painter_order(&live),
@@ -342,19 +344,15 @@ fn failed_mixed_order_and_value_preparation_preserves_existing_dirty_state() {
         SemanticObjectProperty::Translation,
         SemanticVec3::new(2.0, 0.0, 0.0),
     );
-    LiveSession::new(&owner, root, &mut live)
-        .apply(first)
-        .unwrap();
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut live, first).unwrap();
     let before = live.publication_context();
     let frame = live.frame().clone();
     let mut invalid = SemanticMutationTransaction::new();
     invalid.reorder_member(root, b, Some(a));
     invalid.set_property(b, SemanticObjectProperty::RotationZ, f64::MAX);
     assert!(matches!(
-        LiveSession::new(&owner, root, &mut live).apply(invalid),
-        Err(LiveSessionError::Publication(
-            ExecutionSessionPublicationError::Lowering(_)
-        ))
+        noon::integration::scene_execution::publish_at_root(&owner, root, &mut live, invalid),
+        Err(ExecutionSessionPublicationError::Lowering(_))
     ));
     assert_eq!(live.publication_context(), before);
     assert_eq!(owner.borrow().scene_revision(), before.scene_revision());
@@ -365,9 +363,7 @@ fn failed_mixed_order_and_value_preparation_preserves_existing_dirty_state() {
     assert_eq!(changes.painter_order_range(), None);
     let mut valid = SemanticMutationTransaction::new();
     valid.reorder_member(root, b, Some(a));
-    LiveSession::new(&owner, root, &mut live)
-        .apply(valid)
-        .unwrap();
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut live, valid).unwrap();
     assert_reference(&owner, &live, root);
 }
 
@@ -419,8 +415,7 @@ fn ordered_publication_advances_revisions_once_and_survives_forward_and_backward
     let before = live.publication_context();
     let mut transaction = SemanticMutationTransaction::new();
     transaction.reorder_member(root, c, Some(a));
-    LiveSession::new(&owner, root, &mut live)
-        .apply(transaction)
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut live, transaction)
         .unwrap();
     let after = live.publication_context();
     assert_eq!(
@@ -453,8 +448,6 @@ fn ordered_publication_advances_revisions_once_and_survives_forward_and_backward
     let context = live.publication_context();
     let mut noop = SemanticMutationTransaction::new();
     noop.reorder_member(root, c, Some(a));
-    LiveSession::new(&owner, root, &mut live)
-        .apply(noop)
-        .unwrap();
+    noon::integration::scene_execution::publish_at_root(&owner, root, &mut live, noop).unwrap();
     assert_eq!(live.publication_context(), context);
 }

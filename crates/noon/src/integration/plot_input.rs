@@ -1,6 +1,9 @@
 //! Disposable plot input shared by optional language projections.
 use super::{coordinate_math_failure, plot_failure, sampling_failure, AuthoringFailure};
-use crate::{AxesFrame, ManimGeometryOptions, PlotSamplingOptions, PlotSamplingPlan};
+use crate::{
+    AxesFrame, ManimGeometryOptions, Mobject, PlotSamplingOptions, PlotSamplingPlan,
+    RiemannRectangleOptions, RiemannSample,
+};
 /// Disposable preparation input. It retains no callable, semantic identity or
 /// execution owner. A coordinate snapshot, when supplied, is fixed for the whole
 /// evaluation, including host functions that perform other authoring work.
@@ -154,4 +157,111 @@ pub fn data_points(values: &[f64]) -> Result<Vec<[f64; 2]>, AuthoringFailure> {
         .map_err(|_| sampling_failure(crate::PlotPreparationError::AllocationFailed))?;
     points.extend_from_slice(values.as_chunks::<2>().0);
     Ok(points)
+}
+
+pub struct RiemannInput {
+    options: RiemannRectangleOptions,
+}
+
+impl RiemannInput {
+    pub fn into_options(
+        mut self,
+        graph: &Mobject,
+        bounded_graph: Option<&Mobject>,
+    ) -> Result<RiemannRectangleOptions, AuthoringFailure> {
+        if let Some(bound) = bounded_graph {
+            graph.require_same_store(bound)?;
+            self.options.bounded_graph = Some(bound.node_id());
+        }
+        Ok(self.options)
+    }
+    pub fn new(
+        range: &[f64],
+        dx: f64,
+        sample: u32,
+        width_scale_factor: f64,
+    ) -> Result<Self, AuthoringFailure> {
+        let x_range = optional_range(range, "riemann.range", "Riemann")?;
+        let sample = match sample {
+            0 => RiemannSample::Left,
+            1 => RiemannSample::Right,
+            2 => RiemannSample::Center,
+            _ => {
+                return Err(AuthoringFailure::new(
+                    "invalid_input",
+                    "riemann.sample",
+                    "sample must be left, right, or center",
+                ));
+            }
+        };
+        Ok(Self {
+            options: RiemannRectangleOptions {
+                x_range,
+                dx,
+                sample,
+                width_scale_factor,
+                ..Default::default()
+            },
+        })
+    }
+
+    pub fn set_paint(
+        &mut self,
+        colors: &[f64],
+        stroke_color: &[f64],
+        stroke_width: f64,
+        fill_opacity: f64,
+        show_signed_area: bool,
+        blend: bool,
+    ) -> Result<(), AuthoringFailure> {
+        let colors = super::gradient_colors(colors)?;
+        let stroke_colors = super::gradient_colors(stroke_color)?;
+        let [stroke_color] = stroke_colors.as_slice() else {
+            return Err(AuthoringFailure::new(
+                "invalid_input",
+                "riemann.stroke",
+                "one stroke color is required",
+            ));
+        };
+        self.options.colors = colors;
+        self.options.stroke_color = *stroke_color;
+        self.options.stroke_width = stroke_width;
+        self.options.fill_opacity = fill_opacity;
+        self.options.show_signed_area = show_signed_area;
+        self.options.blend = blend;
+        Ok(())
+    }
+}
+
+/// Decode a host range with an empty value for an omitted interval.
+pub fn optional_range(
+    range: &[f64],
+    code: &'static str,
+    operation: &str,
+) -> Result<Option<[f64; 2]>, AuthoringFailure> {
+    match range {
+        [] => Ok(None),
+        [start, end] if start.is_finite() && end.is_finite() => Ok(Some([*start, *end])),
+        _ => Err(AuthoringFailure::new(
+            "invalid_input",
+            code,
+            format!("{operation} range requires two finite values"),
+        )),
+    }
+}
+
+/// Decode the three borrowed family arguments used by the language bindings.
+pub fn three_d_axis_label_targets(
+    families: [&crate::MobjectFamily; 3],
+    selected_axes: u32,
+) -> Result<Vec<(usize, crate::MobjectTarget<'_>)>, AuthoringFailure> {
+    if selected_axes == 0 || selected_axes & !7 != 0 {
+        return Err("axis labels require a nonempty three-axis mask".into());
+    }
+    Ok(families
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| selected_axes & (1 << index) != 0)
+        .map(|(index, family)| (index, crate::MobjectTarget::Family(family)))
+        .collect())
 }

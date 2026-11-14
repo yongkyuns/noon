@@ -19,7 +19,6 @@ impl LiveContinuation for MixedScalarComposition {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 let options = AnimationOptions::new()
@@ -48,35 +47,41 @@ impl LiveContinuation for MixedScalarComposition {
                         },
                     ],
                 };
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_composition(&request, AnimationOptions::new())
                     .map_err(|error| error.to_string())?;
                 self.stage = 1;
                 Ok(ContinuationStep::Await(segment))
             }
             1 => {
-                let circle = live.effective(&self.circle).map_err(|e| e.to_string())?;
-                let square = live.effective(&self.square).map_err(|e| e.to_string())?;
+                let circle = scene.effective(&self.circle).map_err(|e| e.to_string())?;
+                let square = scene.effective(&self.square).map_err(|e| e.to_string())?;
                 if (circle.transform.translation.x - 2.0).abs() > 1e-6
                     || (square.transform.rotation - PI as f32).abs() > 1e-6
                 {
                     return Err("mixed completion did not publish both endpoints".into());
                 }
                 self.stage = 2;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|e| e.to_string())
             }
             2 => {
-                live.set_value(&self.tracker, 3.0)
+                scene
+                    .set_value(&self.tracker, 3.0)
                     .map_err(|e| e.to_string())?;
                 self.stage = 3;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|e| e.to_string())
             }
             3 => {
-                let circle = live.effective(&self.circle).map_err(|e| e.to_string())?;
+                let circle = scene.effective(&self.circle).map_err(|e| e.to_string())?;
                 if (circle.transform.translation.x - 1.0).abs() > 1e-6 {
                     return Err("mixed completion did not release the scalar driver".into());
                 }

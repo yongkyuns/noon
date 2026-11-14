@@ -12,17 +12,15 @@ type TextDependency = (
     noon_core::GeometryResourceArena,
 );
 
-pub(super) enum Publisher<'a, 'session> {
+pub(super) enum Publisher<'a> {
     Store(Rc<RefCell<SemanticStore>>),
     Scene(&'a mut Scene),
-    Live(&'a mut LiveSession<'session>),
 }
-impl Publisher<'_, '_> {
+impl Publisher<'_> {
     fn store(&self) -> Rc<RefCell<SemanticStore>> {
         match self {
             Self::Store(store) => Rc::clone(store),
             Self::Scene(scene) => Rc::clone(scene.integration_store()),
-            Self::Live(live) => Rc::clone(live.integration_store()),
         }
     }
 
@@ -37,18 +35,14 @@ impl Publisher<'_, '_> {
                 })
                 .map_err(Into::into),
             Self::Scene(scene) => scene
-                .with_semantic_publication(|store, publish| Ok(prepared.publish(store, publish)))?
-                .map_err(Into::into),
-            Self::Live(live) => live
-                .with_semantic_publication(|store, publish| Ok(prepared.publish(store, publish)))
-                .map_err(CodeAuthoringError::LiveSession)?
+                .with_semantic_publication(|store, publish| prepared.publish(store, publish))
                 .map_err(Into::into),
         }
     }
 }
 
 pub(super) fn publish(
-    publisher: Publisher<'_, '_>,
+    publisher: Publisher<'_>,
     source: &str,
     options: CodeOptions,
 ) -> Result<Code, CodeAuthoringError> {

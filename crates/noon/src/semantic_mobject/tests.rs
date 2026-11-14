@@ -277,11 +277,10 @@ fn empty_path_layout_authored_and_live_queries_agree_after_seek() {
         .unwrap();
     object.shift(4.0, 5.0).unwrap();
     scene.add(&object).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut execution = scene.into_execution().unwrap();
     for time in [0.0, 0.25, 0.0] {
-        session.seek(time).unwrap();
-        let live = scene.live(&mut session);
-        let observed = live.effective_layout(&object).unwrap();
+        execution.seek(time).unwrap();
+        let observed = execution.scene().effective_layout(&object).unwrap();
         assert_eq!(observed.center, (0.0, 0.0));
         assert_eq!(observed.width, 0.0);
         assert_eq!(observed.height, 0.0);
@@ -506,15 +505,12 @@ fn ellipse_layout_is_shared_by_queries_live_admission_and_become() {
     );
 
     scene.add(&ellipse).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    {
-        let live = scene.live(&mut session);
-        let layout = live.effective_layout(&ellipse).unwrap();
-        assert!((layout.width - expected_width).abs() < 1.0e-6);
-        assert!((layout.height - expected_height).abs() < 1.0e-6);
-    }
+    let execution = scene.into_execution().unwrap();
+    let layout = execution.scene().effective_layout(&ellipse).unwrap();
+    assert!((layout.width - expected_width).abs() < 1.0e-6);
+    assert!((layout.height - expected_height).abs() < 1.0e-6);
     assert!(matches!(
-        session.frame().objects[0].geometry(),
+        execution.session().frame().objects[0].geometry(),
         Some(GeometryRef::Circle { radius: 1.0 })
     ));
 }
@@ -1010,7 +1006,7 @@ fn specialized_options_admit_through_one_live_geometry_path_after_wait() {
     let mut admitted = Vec::new();
     for options in options {
         let object = execution.scene_mut().geometry(options).unwrap();
-        assert!(!execution.live().contains(&object).unwrap());
+        assert!(!execution.scene_mut().contains_direct(&object).unwrap());
         execution.scene_mut().add(&object).unwrap();
         admitted.push(object);
     }

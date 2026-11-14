@@ -2,6 +2,7 @@
 //! The no-op device checks upload and draw command construction, not physical GPU execution.
 
 use super::*;
+use noon::integration::scene_execution;
 use noon::integration::PointerFillOutcome;
 use noon::{AnimationOptions, RateFunction, Scene};
 use noon_core::{
@@ -54,9 +55,9 @@ fn expansion_source(with_second: bool) -> (StaticExecutionSource, noon::Executio
         .add_many(&[(&source).into(), (&visible).into(), (&unrelated).into()])
         .unwrap();
 
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let segment = {
-        let mut live = scene.live(&mut session);
+        let mut live = scene_execution::borrow_uninstalled(&scene, &mut session);
         live.declare_and_activate_family_transform_to(
             &source,
             &target,
@@ -68,7 +69,7 @@ fn expansion_source(with_second: bool) -> (StaticExecutionSource, noon::Executio
     };
     (
         StaticExecutionSource::new(
-            scene.into_execution_with_session(session).unwrap(),
+            scene_execution::consume_with_session(scene, session).unwrap(),
             RustHostCallbackTable::new(),
         ),
         segment,

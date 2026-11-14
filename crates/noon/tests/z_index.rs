@@ -1,4 +1,5 @@
-use noon::{ExecutionSession, LayoutAnchor, Scene};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{LayoutAnchor, Scene};
 use noon_compile::semantic_execution_object_id;
 use noon_core::SemanticMutationTransaction;
 
@@ -31,7 +32,8 @@ fn authored_live_and_family_reorders_match_a_stable_reference() {
         if step % 3 == 0 {
             let mut transaction = SemanticMutationTransaction::new();
             transaction.reorder_member(family.node_id(), objects[changed].node_id(), None);
-            execution.live().apply(transaction).unwrap();
+            noon::integration::scene_execution::publish(execution.scene_mut(), transaction)
+                .unwrap();
             family_order.retain(|&index| index != changed);
             family_order.push(changed);
         } else {

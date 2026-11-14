@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 
 from _noon_errors import engine_call
+from _noon_host import array_value as _to_js
 
 import noon as _base
 import _manim_compat as _compat
@@ -15,9 +16,8 @@ try:
         noonAuthoringSampleSpaceOptions as _sample_space_options,
         noonCreateAuthoringSampleSpaceHandle as _create_sample_space,
     )
-    from pyodide.ffi import to_js as _to_js
 except ImportError:
-    _sample_space_options = _create_sample_space = _to_js = None
+    _sample_space_options = _create_sample_space = None
 
 
 _DEFAULT_FILL = _base.color_from_hex("#525252")
@@ -27,8 +27,6 @@ _DEFAULT_VERTICAL_COLORS = (_base.color_from_hex("#EC92AB"), _base.YELLOW)
 
 
 def _array(values):
-    if _to_js is None:
-        raise RuntimeError("SampleSpace requires the shared Rust authoring host")
     return _to_js([float(value) for value in values])
 
 
@@ -66,12 +64,11 @@ def _family_group(handle, wrapper=None, context=None):
 def _constructor_context():
     if _sample_space_options is None or _create_sample_space is None:
         raise RuntimeError("SampleSpace requires the shared Rust authoring host")
-    return _shared._live_constructor_context("SampleSpace")
+    return _shared._path_authoring_context()
 
 
 def _partition_context(sample_space):
-    context = _shared._live_mutation_context(sample_space)
-    return context if context is not None else _shared._live_constructor_context("SampleSpace partition")
+    return _shared._path_authoring_context(sample_space)
 
 
 class SampleSpace(_compat.Group):
@@ -112,7 +109,7 @@ class SampleSpace(_compat.Group):
                     operation="SampleSpace")
         engine_call(options.setStrokeWidth, float(stroke_width), operation="SampleSpace")
         handle = engine_call(
-            context.liveCreateSampleSpace if context is not None else _create_sample_space,
+            context.createSampleSpace if context is not None else _create_sample_space,
             options,
             operation="SampleSpace",
         )
@@ -138,48 +135,20 @@ class SampleSpace(_compat.Group):
             operation="SampleSpace.complete_p_list",
         )]
 
-    def _parts(self, kind: str, p_list, colors):
-        context = _partition_context(self)
-        probabilities = _probabilities(p_list)
-        color_values = _colors(colors)
-        if context is not None:
-            live_kind = "liveGetVerticalDivision" if kind == "getVerticalDivision" else "liveGetHorizontalDivision"
-            family = engine_call(
-                getattr(context, live_kind),
-                self._sample_space_handle,
-                _array(probabilities),
-                _array(color_values),
-                operation=f"SampleSpace.{kind}",
-            )
-            return _family_group(family, context=context)
-        family = engine_call(
-            getattr(self._sample_space_handle, kind),
-            _array(probabilities),
-            _array(color_values),
-            operation=f"SampleSpace.{kind}",
-        )
-        return _family_group(family)
+    def _partition(self, kind, p_list, colors, context):
+        handle = self._sample_space_handle
+        args = (_array(_probabilities(p_list)), _array(_colors(colors)))
+        if context is None:
+            return engine_call(getattr(handle, kind), *args, operation=f"SampleSpace.{kind}")
+        return engine_call(getattr(context, kind), handle, *args, operation=f"SampleSpace.{kind}")
 
-    def _divide(self, kind: str, p_list, colors):
+    def _parts(self, kind, p_list, colors):
         context = _partition_context(self)
-        probabilities = _probabilities(p_list)
-        color_values = _colors(colors)
-        if context is not None:
-            live_kind = "liveDivideVertically" if kind == "divideVertically" else "liveDivideHorizontally"
-            family = engine_call(
-                getattr(context, live_kind),
-                self._sample_space_handle,
-                _array(probabilities),
-                _array(color_values),
-                operation=f"SampleSpace.{kind}",
-            )
-        else:
-            family = engine_call(
-                getattr(self._sample_space_handle, kind),
-                _array(probabilities),
-                _array(color_values),
-                operation=f"SampleSpace.{kind}",
-            )
+        return _family_group(self._partition(kind, p_list, colors, context), context=context)
+
+    def _divide(self, kind, p_list, colors):
+        context = _partition_context(self)
+        family = self._partition(kind, p_list, colors, context)
         key = _family_key(family)
         wrapper = self._semantic_member_wrappers.get(key)
         wrapper = _family_group(family, wrapper, context)

@@ -1,3 +1,4 @@
+use noon::integration::scene_execution;
 use noon::{
     AnimationOptions, ImageMobjectOptions, LayoutAnchor, LayoutDimension, RasterImageSampling,
     RateFunction, Scene,
@@ -46,32 +47,39 @@ fn image_sizing_layout_copy_and_compilation_share_pixels() -> TestResult {
         1
     );
     scene.add_many(&[(&a).into(), (&b).into()])?;
-    let mut session = scene.execution_session()?;
-    assert_eq!(session.frame().objects.len(), 2);
+    let mut session = scene.into_execution()?;
+    assert_eq!(session.session().frame().objects.len(), 2);
     assert_eq!(
-        session.frame().objects[0]
+        session.session().frame().objects[0]
             .content
             .image()
             .unwrap()
             .resource(),
         handle
     );
-    let store = scene.integration_store().borrow();
+    let store = session.scene().integration_store().borrow();
     let authored = store.raster_image_resources().get(handle).unwrap();
-    let compiled = session.raster_image_resources().get(handle).unwrap();
+    let compiled = session
+        .session()
+        .raster_image_resources()
+        .get(handle)
+        .unwrap();
     assert_eq!(authored.rgba8().as_ptr(), compiled.rgba8().as_ptr());
     drop(store);
-    assert_eq!(scene.live(&mut session).effective_layout(&b)?.width, 4.0);
-    let revision = scene.revision();
+    assert_eq!(session.scene().effective_layout(&b)?.width, 4.0);
+    let revision = session.scene().revision();
     {
-        let mut live = scene.live(&mut session);
         assert_eq!(
-            live.dimension_length(&anchor, LayoutDimension::Width)?,
-            live.effective_layout(&a)?.width
+            session
+                .scene()
+                .effective_dimension_length(&anchor, LayoutDimension::Width)?,
+            session.scene().effective_layout(&a)?.width
         );
-        live.rescale_to_fit(&anchor, f64::NAN, LayoutDimension::Depth, false)?;
+        session
+            .scene_mut()
+            .rescale_to_fit(&anchor, f64::NAN, LayoutDimension::Depth, false)?;
     }
-    assert_eq!(scene.revision(), revision);
+    assert_eq!(session.scene().revision(), revision);
     Ok(())
 }
 
@@ -131,7 +139,7 @@ fn image_fades_transform_and_detached_live_creation() -> TestResult {
     execution.live().complete_segment(segment)?;
     let resource = object.state()?.content.image().unwrap().resource();
     let target = execution.scene_mut().target_editor(&object)?;
-    execution.live().set_translation(&target, 4.0, 2.0)?;
+    execution.scene_mut().set_translation(&target, 4.0, 2.0)?;
     execution.scene_mut().set_opacity(&target, 0.4)?;
     let segment = execution.live().declare_and_activate_transform_to(
         &object,
@@ -227,10 +235,9 @@ fn unsupported_image_styles_and_create_are_rejected_before_publication() -> Test
         Err(noon_core::SemanticAnimationError::UnsupportedImageAnimation)
     ));
     assert_eq!(scene.revision(), before.0);
-    let mut session = scene.execution_session()?;
+    let mut session = scene_execution::lower(&scene)?;
     let frame = session.frame().clone();
-    assert!(scene
-        .live(&mut session)
+    assert!(scene_execution::borrow_uninstalled(&scene, &mut session)
         .declare_and_activate_create(&image, AnimationOptions::new())
         .is_err());
     assert_eq!(scene.revision(), before.0);

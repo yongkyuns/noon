@@ -23,22 +23,34 @@ fn assert_shared_resource_path(mut scene: Scene, label: noon::Mobject) {
     scene.add(&label).unwrap();
     let resource = label.state().unwrap().content.text().unwrap();
     let stats = scene.integration_store().borrow().text_resources().stats();
-    let mut session = scene.execution_session().unwrap();
-    assert!(session.frame().objects[0].geometry().is_some());
-    assert_eq!(session.frame().objects[1].text(), Some(resource));
+    let mut session = scene.into_execution().unwrap();
+    assert!(session.session().frame().objects[0].geometry().is_some());
+    assert_eq!(session.session().frame().objects[1].text(), Some(resource));
     assert_ne!(circle.node_id(), label.node_id());
-    let mut live = scene.live(&mut session);
-    live.set_translation(&label, 2.0, 1.0).unwrap();
+    session
+        .scene_mut()
+        .set_translation(&label, 2.0, 1.0)
+        .unwrap();
     assert_eq!(
-        live.effective(&label).unwrap().transform.translation,
+        session
+            .scene()
+            .effective(&label)
+            .unwrap()
+            .transform
+            .translation,
         Vec2::new(2.0, 1.0)
     );
     assert_eq!(
-        live.authored(&label).unwrap().content.text(),
+        session.scene().authored(&label).unwrap().content.text(),
         Some(resource)
     );
     assert_eq!(
-        scene.integration_store().borrow().text_resources().stats(),
+        session
+            .scene()
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .stats(),
         stats
     );
 }
@@ -106,7 +118,10 @@ fn missing_native_fonts_do_not_mutate_resources_or_identity() {
         .scene_mut()
         .text(noon::Text::new("No font"))
         .is_err());
-    running.live().set_translation(&circle, 3.0, 0.0).unwrap();
+    running
+        .scene_mut()
+        .set_translation(&circle, 3.0, 0.0)
+        .unwrap();
     assert_eq!(
         running
             .scene()
@@ -206,7 +221,10 @@ fn unavailable_typst_fonts_leave_the_live_session_usable() {
         .scene_mut()
         .math_typst(noon::MathTypst::new("x"))
         .is_err());
-    running.live().set_translation(&circle, 3.0, 0.0).unwrap();
+    running
+        .scene_mut()
+        .set_translation(&circle, 3.0, 0.0)
+        .unwrap();
     assert_eq!(
         running
             .scene()

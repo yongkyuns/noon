@@ -104,7 +104,8 @@ fn geometry_publication_scope_rolls_back_a_real_late_lowering_failure() {
     // Retry through the public constructor. A released generation must not
     // revive, and admission must reuse the successful import rather than create
     // another copy or replace the runtime's unrelated object identity.
-    let mut execution = scene.into_execution_with_session(session).unwrap();
+    let mut execution =
+        crate::integration::scene_execution::consume_with_session(scene, session).unwrap();
     let curve = execution.scene_mut().geometry(path_options()).unwrap();
     let retry_resource = resource(&curve);
     assert_ne!(retry_resource, rejected);
@@ -187,7 +188,8 @@ fn geometry_publication_scope_preserves_injected_runtime_errors_and_existing_pat
 #[test]
 fn live_geometry_preflight_still_rejects_stale_owners_without_import() {
     let (scene, retained, sentinel, session) = fixture();
-    let mut execution = scene.into_execution_with_session(session).unwrap();
+    let mut execution =
+        crate::integration::scene_execution::consume_with_session(scene, session).unwrap();
     let store_rc = Rc::clone(execution.scene().integration_store());
     let before_stats = store_rc.borrow().geometry_resources().stats();
     // An explicit out-of-band edit must not be repaired by the constructor.

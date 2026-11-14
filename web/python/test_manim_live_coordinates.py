@@ -11,8 +11,8 @@ class LiveCoordinateAdapterTests(TestCase):
         self.options=Mock()
         self.cold=Mock(return_value=Mock())
         self.live=Mock(return_value=Mock())
-        self.context=SimpleNamespace(liveCreateCoordinates=self.live)
-        self.resolve=patch.object(plotting._shared,"_live_constructor_context",return_value=self.context).start()
+        self.context=SimpleNamespace(createCoordinates=self.live)
+        self.resolve=patch.object(plotting._shared,"_path_authoring_context",return_value=self.context).start()
         self.guard=patch.object(plotting,"_outside_callback").start()
         patch.object(plotting,"_to_js",side_effect=lambda x:x).start()
         patch.object(plotting,"_create_coordinates",self.cold).start()
@@ -33,7 +33,7 @@ class LiveCoordinateAdapterTests(TestCase):
 
     def test_live_number_line_captures_owner_once_and_consumes_options(self):
         self.construct()
-        self.resolve.assert_called_once_with("coordinates")
+        self.resolve.assert_called_once_with()
         self.live.assert_called_once_with(self.options)
         self.assertEqual(self.attach_number_line.call_args.kwargs, {
             "tick_size": 0.1,
@@ -45,7 +45,7 @@ class LiveCoordinateAdapterTests(TestCase):
 
     def test_live_axes_use_the_same_dispatch_without_a_cold_fallback(self):
         self.construct(True)
-        self.resolve.assert_called_once_with("coordinates")
+        self.resolve.assert_called_once_with()
         self.live.assert_called_once_with(self.options)
         self.assertEqual(
             [call.kwargs for call in self.attach_number_line.call_args_list],
@@ -109,18 +109,13 @@ class LiveCoordinateAdapterTests(TestCase):
         line = plotting.NumberLine((0, 2, 1), numbers_to_exclude=(0, 2))
         self.assertEqual(line.numbers_to_exclude, [0, 2])
 
-    def test_late_queries_require_binding_but_never_choose_authored_fallback(self):
-        shaft=object()
-        with patch.object(plotting._shared, "_live_mutation_context", return_value=None), \
-             patch.object(plotting._shared, "_is_bound", return_value=False) as bound:
-            with self.assertRaisesRegex(NotImplementedError, "add live coordinates"):
-                plotting._coordinate_context([shaft])
-            bound.return_value=True
-            self.assertIs(plotting._coordinate_context([shaft]), self.context)
-            self.resolve.return_value=None
-            bound.return_value=False
-            self.assertIsNone(plotting._coordinate_context([shaft]))
-
+    def test_late_detached_queries_use_the_owning_scene(self):
+        coordinates, shaft = object(), object()
+        with patch.object(plotting._shared, "_object_authoring_context", return_value=None):
+            self.assertIs(plotting._coordinate_context(coordinates, shaft), self.context)
+            self.resolve.assert_called_once_with()
+            self.resolve.return_value = None
+            self.assertIsNone(plotting._coordinate_context(coordinates, shaft))
 
     def _plotted_graph(self, axes, callback):
         frame = Mock()

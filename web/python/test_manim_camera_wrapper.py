@@ -13,15 +13,13 @@ class MovingCameraWrapperTests(unittest.TestCase):
         from _typed_geometry_test_support import identity_only_wrapper
         frame = identity_only_wrapper(camera._CameraFrame)
         handle = Mock()
-        for live in (False, True):
-            context = Mock() if live else None
-            with patch.object(camera._semantic_handles, "_handle_for", return_value=handle), \
-                 patch.object(camera._semantic_handles, "_live_mutation_context", return_value=context):
-                self.assertIs(frame.set_view_color_profile("linear_hdr"), frame)
-            if live:
-                context.setViewColorProfile.assert_called_once_with(handle, "linear_hdr")
-            else:
-                handle.setViewColorProfile.assert_called_once_with("linear_hdr")
+        context = Mock()
+        frame._canonical_live_target_context = context
+        with patch.object(camera._semantic_handles, "_handle_for", return_value=handle):
+            self.assertIs(frame.set_view_color_profile("linear_hdr"), frame)
+        context.setViewColorProfile.assert_called_once_with(handle, "linear_hdr")
+        context.requiresLiveMutationRouting.assert_not_called()
+        handle.setViewColorProfile.assert_not_called()
         self.assertNotIn("color_profile", frame.__dict__)
         with self.assertRaises(TypeError):
             frame.set_view_color_profile(True)
@@ -121,38 +119,38 @@ class MovingCameraWrapperTests(unittest.TestCase):
                 def liveExecutionOwnership(self):
                     return self.ownership
 
-                def liveTargetEditor(self, handle):
+                def targetEditor(self, handle):
                     self._require_coherent()
                     self.semantic_revision += 1
                     self.execution_revision = self.semantic_revision
-                    self.calls.append("liveTargetEditor")
+                    self.calls.append("targetEditor")
                     return handle.targetEditor()
 
-                def liveScaleLayout3d(self, anchor, x, y, z, px, py, pz, about_point):
+                def scaleLayout3d(self, anchor, x, y, z, px, py, pz, about_point):
                     assert (px, py, pz, about_point) == (0.0, 0.0, 0.0, False)
                     assert z == x == y
-                    self.liveScale(anchor, x, y)
+                    self.scale(anchor, x, y)
 
-                def liveScale(self, handle, x, y):
+                def scale(self, handle, x, y):
                     self._require_coherent()
                     handle.scale(x, y)
                     self.semantic_revision += 1
                     self.execution_revision = self.semantic_revision
-                    self.calls.append("liveScale")
+                    self.calls.append("scale")
 
-                def liveMoveToPoint(self, handle, x, y, *args):
+                def moveToPoint(self, handle, x, y, *args):
                     self._require_coherent()
                     handle.state["center"] = [x, y]
                     self.semantic_revision += 1
                     self.execution_revision = self.semantic_revision
-                    self.calls.append("liveMoveToPoint")
+                    self.calls.append("moveToPoint")
 
-                def liveBecomeMobject(self, handle, target, *flags):
+                def becomeMobject(self, handle, target, *flags):
                     self._require_coherent()
                     handle.state = copy.deepcopy(target.state)
                     self.semantic_revision += 1
                     self.execution_revision = self.semantic_revision
-                    self.calls.append("liveBecomeMobject")
+                    self.calls.append("becomeMobject")
 
                 def _require_coherent(self):
                     if self.semantic_revision != self.execution_revision:
@@ -204,17 +202,17 @@ class MovingCameraWrapperTests(unittest.TestCase):
             assert target.camera.frame is not frame
             assert target.camera.frame._canonical_live_target_context is context
             assert context.semantic_revision == context.execution_revision
-            assert context.calls.count("liveTargetEditor") >= 5, context.calls
-            assert context.calls[-2:] == ["liveScale", "liveMoveToPoint"], context.calls
+            assert context.calls.count("targetEditor") >= 5, context.calls
+            assert context.calls[-2:] == ["scale", "moveToPoint"], context.calls
 
-            context.liveScale(frame._semantic_handle, 2.0, 2.0)
+            context.scale(frame._semantic_handle, 2.0, 2.0)
             frame.restore()
             assert frame._semantic_handle.state["scale"] == [1.0, 1.0]
-            assert context.calls[-1] == "liveBecomeMobject"
-            context.liveScale(display._semantic_handle, 2.0, 2.0)
+            assert context.calls[-1] == "becomeMobject"
+            context.scale(display._semantic_handle, 2.0, 2.0)
             display.restore()
             assert display._semantic_handle.state["scale"] == [1.0, 1.0]
-            assert context.calls[-1] == "liveBecomeMobject"
+            assert context.calls[-1] == "becomeMobject"
             assert context.semantic_revision == context.execution_revision
             """
         )

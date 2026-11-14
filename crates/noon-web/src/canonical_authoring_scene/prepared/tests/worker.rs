@@ -44,7 +44,8 @@ fn interpreter_worker_completion_is_separate_from_quiet_historical_adoption() {
     context
         .active_live_player()
         .unwrap()
-        .live_set_translation(&target, 2.0, 0.0)
+        .scene_mut()
+        .set_translation(&target, 2.0, 0.0)
         .unwrap();
     context.begin_ordinary_wait(1.0).unwrap();
     player.prepare_interpreter_segment(&mut context).unwrap();
@@ -102,9 +103,9 @@ fn interpreter_worker_source_lease_rejection_preserves_the_rightful_binding() {
 fn interpreter_worker_capacity_failure_keeps_one_batch_without_repeating_source() {
     let (mut context, _, mut player) = start();
     let extra = context
-        .live_create_manim_geometry(noon::ManimGeometryOptions::circle(0.25).unwrap())
+        .create_manim_geometry(noon::ManimGeometryOptions::circle(0.25).unwrap())
         .unwrap();
-    context.live_add_mobject(ObjectId::new(1), &extra).unwrap();
+    context.bind_mobject(ObjectId::new(1), &extra).unwrap();
     context.begin_ordinary_wait(0.5).unwrap();
     player.prepare_interpreter_segment(&mut context).unwrap();
     let prepared = context.active_live_player().unwrap().debug_frame_json();
@@ -134,9 +135,9 @@ fn interpreter_worker_capacity_failure_keeps_one_batch_without_repeating_source(
 fn interpreter_worker_terminal_capacity_failure_is_not_false_completion() {
     let (mut context, _, mut player) = start();
     let extra = context
-        .live_create_manim_geometry(noon::ManimGeometryOptions::circle(0.25).unwrap())
+        .create_manim_geometry(noon::ManimGeometryOptions::circle(0.25).unwrap())
         .unwrap();
-    context.live_add_mobject(ObjectId::new(1), &extra).unwrap();
+    context.bind_mobject(ObjectId::new(1), &extra).unwrap();
     player.finish_interpreter_source(&mut context).unwrap();
     drop(context);
     drop(extra);
@@ -159,7 +160,8 @@ fn interpreter_worker_zero_duration_completion_defers_same_time_edits() {
     context
         .active_live_player()
         .unwrap()
-        .live_set_translation(&target, 3.0, 0.0)
+        .scene_mut()
+        .set_translation(&target, 3.0, 0.0)
         .unwrap();
     context.begin_ordinary_wait(0.0).unwrap();
     player.prepare_interpreter_segment(&mut context).unwrap();

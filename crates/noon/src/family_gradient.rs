@@ -185,6 +185,25 @@ impl MobjectFamily {
     ) -> Result<SemanticMutationTransaction, AuthoringError> {
         validate_radial_gradient_inputs(center, radius, inner, outer)?;
         self.validate()?;
+        self.radial_gradient_with(center, radius, inner, outer, |object| {
+            let bounds = object
+                .content_layout_bounds()?
+                .ok_or(AuthoringError::NonFiniteObjectState)?;
+            Ok((bounds_center(bounds), object.state()?.style))
+        })
+    }
+
+    fn radial_gradient_with(
+        &self,
+        center: (f64, f64, f64),
+        radius: f64,
+        inner: Color,
+        outer: Color,
+        mut capture: impl FnMut(
+            &Mobject,
+        )
+            -> Result<((f64, f64), noon_core::SemanticStyle), AuthoringError>,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
         let leaves = self
             .integration_store()
             .borrow()
@@ -196,16 +215,9 @@ impl MobjectFamily {
             if !object.has_fade_to_points()? {
                 continue;
             }
-            let bounds = object
-                .content_layout_bounds()?
-                .ok_or(AuthoringError::NonFiniteObjectState)?;
-            let color = radial_gradient_color(
-                radial_distance(bounds_center(bounds), center),
-                radius,
-                inner,
-                outer,
-            );
-            let mut style = object.state()?.style;
+            let (member_center, mut style) = capture(&object)?;
+            let color =
+                radial_gradient_color(radial_distance(member_center, center), radius, inner, outer);
             edit_color(
                 &mut style,
                 color.red.into(),
@@ -230,6 +242,70 @@ impl MobjectFamily {
             .apply(&mut self.integration_store().borrow_mut())
             .map(|_| ())
             .map_err(AuthoringError::from)
+    }
+}
+
+impl crate::Scene {
+    pub fn set_color_by_gradient(
+        &mut self,
+        object: &Mobject,
+        colors: &[Color],
+    ) -> Result<(), AuthoringError> {
+        validate_colors(colors)?;
+        self.set_color(object, colors[0])
+    }
+
+    pub fn set_color_by_radial_gradient(
+        &mut self,
+        object: &Mobject,
+        center: (f64, f64, f64),
+        radius: f64,
+        inner: Color,
+        outer: Color,
+    ) -> Result<(), AuthoringError> {
+        validate_radial_gradient_inputs(center, radius, inner, outer)?;
+        self.require_object(object)?;
+        self.require_style_publication()?;
+        if !object.has_fade_to_points()? {
+            self.apply_semantic_transaction(SemanticMutationTransaction::new())?;
+            return Ok(());
+        }
+        let member_center = if self.running_execution().is_some() {
+            self.effective_layout(object)?.center
+        } else {
+            bounds_center(
+                object
+                    .layout_bounds()?
+                    .ok_or(AuthoringError::NonFiniteObjectState)?,
+            )
+        };
+        self.set_color(
+            object,
+            radial_gradient_color(radial_distance(member_center, center), radius, inner, outer),
+        )
+    }
+
+    pub fn set_family_color_by_radial_gradient(
+        &mut self,
+        family: &MobjectFamily,
+        center: (f64, f64, f64),
+        radius: f64,
+        inner: Color,
+        outer: Color,
+    ) -> Result<(), AuthoringError> {
+        validate_radial_gradient_inputs(center, radius, inner, outer)?;
+        self.require_family_style_target(family)?;
+        self.require_style_publication()?;
+        let transaction = if self.running_execution().is_some() {
+            family.radial_gradient_with(center, radius, inner, outer, |object| {
+                let position = self.effective_layout(object)?.center;
+                let style = self.capture_mobject_state(object)?.style;
+                Ok((position, style))
+            })?
+        } else {
+            family.radial_gradient_transaction(center, radius, inner, outer)?
+        };
+        self.apply_semantic_transaction(transaction).map(|_| ())
     }
 }
 
@@ -380,17 +456,21 @@ mod tests {
         for member in [&near, &center, &far] {
             scene.add(member).unwrap();
         }
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        live.shift(&center, 1.0, 0.0).unwrap();
-        live.set_family_color_by_radial_gradient(
-            &family,
-            (0.0, 0.0, 0.0),
-            2.0,
-            Color::rgb(1.0, 0.0, 0.0),
-            Color::rgb(0.0, 0.0, 1.0),
-        )
-        .unwrap();
+        let mut session = scene.into_execution().unwrap();
+        session
+            .scene_mut()
+            .shift_3d(&center, crate::SemanticVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+        session
+            .scene_mut()
+            .set_family_color_by_radial_gradient(
+                &family,
+                (0.0, 0.0, 0.0),
+                2.0,
+                Color::rgb(1.0, 0.0, 0.0),
+                Color::rgb(0.0, 0.0, 1.0),
+            )
+            .unwrap();
         assert_rgb(fill_color(&center), 0.5, 0.0, 0.5);
     }
 }

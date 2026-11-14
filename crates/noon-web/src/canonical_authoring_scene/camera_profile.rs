@@ -50,13 +50,9 @@ impl CanonicalAuthoringScene {
             object,
             "effective camera profile is owned by the transferred execution session",
         )?;
-        scene.effective_camera_profile(object).map_err(|error| {
-            if running {
-                noon::LiveSessionError::from(error).into()
-            } else {
-                error.into()
-            }
-        })
+        scene
+            .effective_camera_profile(object)
+            .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, running))
     }
 
     pub(crate) fn set_camera_profile(
@@ -137,13 +133,12 @@ impl CanonicalAuthoringScene {
         near: f64,
         far: f64,
     ) -> Result<noon::Mobject, crate::authoring_error::AuthoringFailure> {
-        if !self.player_ownership.is_unstarted() {
-            return Err("3D camera must be declared before execution starts".into());
-        }
         if self.bindings.contains_key(&id) {
             return Err(format!("canonical object {} is already bound", id.get()).into());
         }
-        let object = self.scene.camera_3d_profile(profile, near, far)?;
+        let object = self
+            .local_authoring_scene()?
+            .camera_3d_profile(profile, near, far)?;
         let node = object.node_id();
         self.bindings.insert(id, node);
         self.identities.insert(node, id);
@@ -168,19 +163,18 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn declare_camera_profile_move(
-        &self,
+        &mut self,
         object: &noon::Mobject,
         profile: noon_core::ManimCamera3DProfile,
         options: noon_core::AnimationOptions,
-    ) -> Result<noon::DeclaredAnimation, String> {
-        if !self.player_ownership.is_unstarted() {
-            return Err(
-                "declare camera profile tracks before execution starts; use a live composition"
-                    .into(),
-            );
-        }
-        self.scene
+    ) -> Result<noon::DeclaredAnimation, crate::AuthoringFailure> {
+        let (scene, running) = self.camera_scene_mut(
+            object,
+            "live execution session is running in the semantic engine",
+        )?;
+        scene
             .declare_camera_profile_move(object, profile, options)
+            .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

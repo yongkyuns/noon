@@ -7,7 +7,7 @@ class OrdinaryCanonicalCurveLayout(Scene):
             for coordinate in (value.get_x, value.get_y):
                 try:
                     coordinate()
-                except ValueError:
+                except (IndexError, ValueError):
                     continue
                 raise AssertionError("an empty Mobject has no coordinate extrema")
 

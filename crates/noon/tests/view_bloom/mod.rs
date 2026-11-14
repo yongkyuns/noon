@@ -144,7 +144,7 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
     let mut tx = noon_core::SemanticMutationTransaction::new();
     tx.set_view_color_profile(camera.node_id(), ViewColorProfile::Compatibility);
     tx.remove_node(binding.node_id());
-    execution.live().apply(tx).unwrap();
+    noon::integration::scene_execution::publish(execution.scene_mut(), tx).unwrap();
     let publication = execution.session_mut().take_renderer_publication();
     assert_eq!(publication.color_profile(), ViewColorProfile::Compatibility);
     assert!(publication.view_effects().is_none());
@@ -157,7 +157,7 @@ fn authored_camera_bloom_animation_seek_removal_matches_independent_pixels() {
     assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
     eprintln!("authored camera Bloom adapter: {:?}", adapter.get_info());
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
-    let (scene, mut camera, _) = super::scene(false, false, false);
+    let (mut scene, mut camera, _) = super::scene(false, false, false);
     camera
         .set_view_color_profile(ViewColorProfile::LinearHdr)
         .unwrap();

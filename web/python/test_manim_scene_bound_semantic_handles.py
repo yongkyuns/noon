@@ -7,52 +7,6 @@ from pathlib import Path
 
 
 class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
-    def test_live_edit_routing_reads_the_current_typed_decision(self) -> None:
-        source = textwrap.dedent(
-            '''
-            import sys
-            from types import ModuleType, SimpleNamespace
-
-            bridge = ModuleType("js")
-            bridge.noonResolveAnimationOptions = object()
-            sys.modules["js"] = bridge
-            import _manim_semantic_handles as handles
-
-            class Context:
-                routing = False
-                calls = 0
-
-                def requiresLiveMutationRouting(self):
-                    self.calls += 1
-                    return self.routing
-
-                def liveExecutionOwnership(self):
-                    raise AssertionError("ordinary edits must not request the ownership string")
-
-            context = Context()
-            for wrapper in (
-                SimpleNamespace(_canonical_live_target_context=context),
-                SimpleNamespace(_scene=SimpleNamespace(_canonical_authoring_context=context)),
-            ):
-                for state, routing in (("none", False), ("active", True),
-                                       ("transferred", True), ("returned", True),
-                                       ("none", False)):
-                    context.routing = routing
-                    before = context.calls
-                    actual = handles._live_mutation_context(wrapper)
-                    assert actual is (context if routing else None), state
-                    assert context.calls == before + 1, "routing must not be cached"
-            assert handles._live_mutation_context(SimpleNamespace()) is None
-            '''
-        )
-        python_dir = Path(__file__).resolve().parent
-        result = subprocess.run(
-            [sys.executable, "-c", source], cwd=python_dir,
-            env={**os.environ, "PYTHONPATH": str(python_dir)},
-            capture_output=True, text=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
     def test_bound_deterministic_state_stays_in_shared_handle(self) -> None:
         python_dir = Path(__file__).resolve().parent
         env = os.environ.copy()
@@ -317,10 +271,10 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
                 def liveExecutionOwnership(self):
                     return "transferred" if self.transferred else "returned"
 
-                def liveShift(self, source, x, y):
+                def shift(self, source, x, y):
                     self.live_calls.append(("shift", source, x, y))
 
-                def liveBecomeMobject(self, source, target, *flags):
+                def becomeMobject(self, source, target, *flags):
                     if self.transferred:
                         raise RuntimeError("live execution session is running in the semantic engine")
                     self.live_calls.append(("become", source, target, *flags))
@@ -380,8 +334,8 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             # its handle behind the runtime's publication revision.
             context.transferred = False
             live_calls = []
-            context.liveShift = lambda target, x, y: live_calls.append((target, x, y))
-            context.liveTargetEditor = lambda target: FakeHandle(json.dumps(target.snapshot))
+            context.shift = lambda target, x, y: live_calls.append((target, x, y))
+            context.targetEditor = lambda target: FakeHandle(json.dumps(target.snapshot))
             square.shift(RIGHT)
             target = square.copy()
             target.shift(RIGHT)
@@ -416,12 +370,13 @@ class ManimSceneBoundSemanticHandleTests(unittest.TestCase):
             detached_peer = Square()
             detached_before_handle = detached_before_wait._semantic_handle
             detached_before_handle.calls.clear()
-            original_live_constructor_context = handles._live_constructor_context
-            handles._live_constructor_context = lambda kind="primitive": context
+            import _manim_reactive as reactive
+            original_current_scene = reactive._current_authoring_scene
+            reactive._current_authoring_scene = lambda: scene
             try:
                 detached_before_wait.become(detached_peer)
             finally:
-                handles._live_constructor_context = original_live_constructor_context
+                reactive._current_authoring_scene = original_current_scene
             assert context.live_calls[-1] == (
                 "become", detached_before_handle, detached_peer._semantic_handle,
                 False, False, False, False,

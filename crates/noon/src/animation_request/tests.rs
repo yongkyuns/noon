@@ -93,11 +93,10 @@ fn group_and_independent_object_share_timing_admission_and_completion() {
     let (mut scene, family, left, right) = group_scene();
     let marker = scene.circle(0.25).unwrap(); // Admitted with the complete play.
     let alias = scene.family(&[(&left).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let left_id = session.execution_object_id(left.node_id());
-    let mut live = scene.live(&mut session);
+    let mut session = scene.into_execution().unwrap();
+    let left_id = session.session().execution_object_id(left.node_id());
     let segment = activate(
-        &mut live,
+        &mut session.live(),
         (
             marker
                 .animate()
@@ -113,16 +112,40 @@ fn group_and_independent_object_share_timing_admission_and_completion() {
         linear().run_time(2.0),
     )
     .unwrap();
-    assert!(live.contains(&marker).unwrap());
+    assert!(session.scene_mut().contains_direct(&marker).unwrap());
     assert_eq!(segment.end_time() - segment.start_time(), 2.0);
-    live.advance_segment_to(segment, 0.5).unwrap();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
     assert_eq!(
-        live.effective(&marker).unwrap().transform.translation.x,
+        session
+            .scene()
+            .effective(&marker)
+            .unwrap()
+            .transform
+            .translation
+            .x,
         0.5
     );
-    assert_eq!(live.effective(&left).unwrap().transform.translation.y, 0.5);
-    assert_eq!(live.effective(&right).unwrap().transform.translation.y, 0.0);
-    finish(&mut live, segment);
+    assert_eq!(
+        session
+            .scene()
+            .effective(&left)
+            .unwrap()
+            .transform
+            .translation
+            .y,
+        0.5
+    );
+    assert_eq!(
+        session
+            .scene()
+            .effective(&right)
+            .unwrap()
+            .transform
+            .translation
+            .y,
+        0.0
+    );
+    finish(&mut session.live(), segment);
     assert_eq!(marker.state().unwrap().transform.translation.x, 2.0);
     assert_eq!(right.state().unwrap().transform.translation.y, 1.0);
     assert_eq!(
@@ -131,30 +154,33 @@ fn group_and_independent_object_share_timing_admission_and_completion() {
     );
 
     let segment = activate(
-        &mut live,
+        &mut session.live(),
         (family.animate().shift(UP), FadeOut::new(&marker)).into_animation_request(),
         linear(),
     )
     .unwrap();
-    finish(&mut live, segment);
-    assert!(!live.contains(&marker).unwrap());
+    finish(&mut session.live(), segment);
+    assert!(!session.scene_mut().contains_direct(&marker).unwrap());
     assert_eq!(right.state().unwrap().transform.translation.y, 2.0);
     assert_eq!(
         alias.member_at(0).unwrap().unwrap().node_id(),
         left.node_id()
     );
-    assert_eq!(session.execution_object_id(left.node_id()), left_id);
+    assert_eq!(
+        session.session().execution_object_id(left.node_id()),
+        left_id
+    );
 }
 
 #[test]
 fn group_late_child_and_member_driver_failures_publish_nothing() {
     let (mut scene, family, left, right) = group_scene();
     let marker = scene.circle(0.25).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    session.take_frame_changes();
-    let context = session.publication_context();
-    let frame = session.frame().clone();
-    let nodes = scene.integration_store().borrow().len();
+    let mut session = scene.into_execution().unwrap();
+    session.session_mut().take_frame_changes();
+    let context = session.session().publication_context();
+    let frame = session.session().frame().clone();
+    let nodes = session.scene().integration_store().borrow().len();
     let states = (left.state().unwrap(), right.state().unwrap());
     let invalids: [AnimationRequest; 6] = [
         marker
@@ -178,17 +204,17 @@ fn group_late_child_and_member_driver_failures_publish_nothing() {
                 children.reverse();
             }
             let error = activate(
-                &mut scene.live(&mut session),
+                &mut session.live(),
                 children.into_animation_request(),
                 AnimationOptions::new(),
             );
             assert!(error.is_err(), "unexpected admission: {error:?}");
-            assert_eq!(scene.integration_store().borrow().len(), nodes);
-            assert_eq!(session.publication_context(), context);
-            assert_eq!(session.frame(), &frame);
-            assert!(session.take_frame_changes().is_empty());
+            assert_eq!(session.scene().integration_store().borrow().len(), nodes);
+            assert_eq!(session.session().publication_context(), context);
+            assert_eq!(session.session().frame(), &frame);
+            assert!(session.session_mut().take_frame_changes().is_empty());
             assert_eq!((left.state().unwrap(), right.state().unwrap()), states);
-            assert!(!scene.live(&mut session).contains(&marker).unwrap());
+            assert!(!session.scene_mut().contains_direct(&marker).unwrap());
         }
     }
 }
@@ -334,10 +360,9 @@ fn heterogeneous_tuple_and_array_use_canonical_admission_and_fade_completion() {
     let circle = scene.circle(0.5).unwrap();
     let square_id = square.node_id();
     let circle_id = circle.node_id();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
+    let mut session = scene.into_execution().unwrap();
     let entering = activate(
-        &mut live,
+        &mut session.live(),
         (
             Create::new(&square),
             circle.animate().shift(RIGHT).set_fill(Color::BLUE),
@@ -346,18 +371,23 @@ fn heterogeneous_tuple_and_array_use_canonical_admission_and_fade_completion() {
         linear(),
     )
     .unwrap();
-    assert!(live.contains(&square).unwrap());
-    assert!(live.contains(&circle).unwrap());
-    finish(&mut live, entering);
+    assert!(session.scene_mut().contains_direct(&square).unwrap());
+    assert!(session.scene_mut().contains_direct(&circle).unwrap());
+    finish(&mut session.live(), entering);
     assert_eq!(square.node_id(), square_id);
     assert_eq!(circle.node_id(), circle_id);
     assert_eq!(
-        live.effective(&circle).unwrap().transform.translation,
+        session
+            .scene()
+            .effective(&circle)
+            .unwrap()
+            .transform
+            .translation,
         RIGHT
     );
 
     let leaving = activate(
-        &mut live,
+        &mut session.live(),
         parallel([
             AnimationRequest::from(FadeOut::new(&square)),
             circle.animate().scale(2.0).shift(UP).into(),
@@ -365,14 +395,16 @@ fn heterogeneous_tuple_and_array_use_canonical_admission_and_fade_completion() {
         linear(),
     )
     .unwrap();
-    live.advance_segment_to(leaving, leaving.start_time() + 0.5)
+    session
+        .live()
+        .advance_segment_to(leaving, leaving.start_time() + 0.5)
         .unwrap();
-    assert!(live.contains(&square).unwrap());
-    assert!((live.effective(&square).unwrap().appearance - 0.5).abs() < 1e-6);
-    finish(&mut live, leaving);
-    assert!(!live.contains(&square).unwrap());
-    assert!(live.contains(&circle).unwrap());
-    let final_circle = live.effective(&circle).unwrap();
+    assert!(session.scene_mut().contains_direct(&square).unwrap());
+    assert!((session.scene().effective(&square).unwrap().appearance - 0.5).abs() < 1e-6);
+    finish(&mut session.live(), leaving);
+    assert!(!session.scene_mut().contains_direct(&square).unwrap());
+    assert!(session.scene_mut().contains_direct(&circle).unwrap());
+    let final_circle = session.scene().effective(&circle).unwrap();
     assert_eq!(final_circle.transform.scale, Vec2::new(2.0, 2.0));
     assert_eq!(final_circle.transform.translation, RIGHT + UP);
 }

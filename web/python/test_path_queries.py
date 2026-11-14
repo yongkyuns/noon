@@ -660,7 +660,7 @@ class PathQueryTests(unittest.TestCase):
         context.queryFamilyPointArray.return_value = coordinates
         with patch.object(
             semantic_handles,
-            "_group_live_layout_context",
+            "_group_layout_context",
             return_value=context,
         ):
             self.assertIs(semantic_handles._point_array_observation(value), coordinates)
@@ -670,7 +670,7 @@ class PathQueryTests(unittest.TestCase):
         family.pointArray.return_value = coordinates
         with patch.object(
             semantic_handles,
-            "_group_live_layout_context",
+            "_group_layout_context",
             return_value=None,
         ):
             self.assertIs(semantic_handles._point_array_observation(value), coordinates)
@@ -698,7 +698,7 @@ class PathQueryTests(unittest.TestCase):
         context.queryFamilyExtremumAlongDim.return_value = 4.0
         with patch.object(
             semantic_handles,
-            "_group_live_layout_context",
+            "_group_layout_context",
             return_value=context,
         ):
             self.assertEqual(semantic_handles._extremum_along_dim_observation(value, 1, 1.0), 4.0)
@@ -708,7 +708,7 @@ class PathQueryTests(unittest.TestCase):
         family.extremumAlongDim.return_value = 2.0
         with patch.object(
             semantic_handles,
-            "_group_live_layout_context",
+            "_group_layout_context",
             return_value=None,
         ):
             self.assertEqual(semantic_handles._extremum_along_dim_observation(value, 0, -1.0), 2.0)
@@ -724,7 +724,7 @@ class PathQueryTests(unittest.TestCase):
         context.queryFamilyLengthOverDim.return_value = 5.0
         with patch.object(
             semantic_handles,
-            "_group_live_layout_context",
+            "_group_layout_context",
             return_value=context,
         ):
             self.assertEqual(
@@ -2240,13 +2240,13 @@ class SubpathQueryTests(unittest.TestCase):
         value.label = {'kind': ['source']}
         source = Mock()
         for context in (None, Mock()):
-            with patch.object(handles, '_handle_for', return_value=source), patch.object(handles, '_live_mutation_context', return_value=context):
+            with patch.object(handles, '_handle_for', return_value=source), patch.object(handles, '_path_authoring_context', return_value=context):
                 result = value.get_subcurve(0.8, 0.2)
-            expected = source.subcurve.return_value if context is None else context.liveSubcurve.return_value
+            expected = source.subcurve.return_value if context is None else context.subcurve.return_value
             self.assertIs(result._semantic_handle, expected)
             self.assertIsInstance(result, type(value))
             self.assertEqual(result.label, value.label)
             self.assertIsNot(result.label, value.label)
             if context is None: source.subcurve.assert_called_once_with(0.8, 0.2)
-            else: context.liveSubcurve.assert_called_once_with(source, 0.8, 0.2)
+            else: context.subcurve.assert_called_once_with(source, 0.8, 0.2)
         source.cloneHandle.assert_not_called()

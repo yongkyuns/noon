@@ -172,23 +172,22 @@ fn generic_click_indicate_reuses_existing_binding_and_live_actions_clear_and_rep
             1.2, YELLOW, 0.4
         )))
     );
-    let mut session = scene.execution_session().unwrap();
-    {
-        let mut live = scene.live(&mut session);
-        live.on_click(&target, Some(&pulse)).unwrap();
-        assert!(matches!(
-            action(&target),
-            Some(SemanticClickAction::GlowPulse(_))
-        ));
-        live.on_click(&target, None).unwrap();
-        assert_eq!(action(&target), None);
-        live.on_click_glow_pulse(
+    let session = scene.execution_session().unwrap();
+    scene.install_execution(session);
+    scene.on_click(&target, Some(&pulse)).unwrap();
+    assert!(matches!(
+        action(&target),
+        Some(SemanticClickAction::GlowPulse(_))
+    ));
+    scene.on_click(&target, None).unwrap();
+    assert_eq!(action(&target), None);
+    scene
+        .on_click_glow_pulse(
             &target,
             1.5,
             AnimationOptions::new().rate_func(RateFunction::Linear),
         )
         .unwrap();
-    }
     assert_eq!(
         action(&target),
         Some(SemanticClickAction::GlowPulse(SemanticClickGlowPulse::new(
@@ -199,5 +198,5 @@ fn generic_click_indicate_reuses_existing_binding_and_live_actions_clear_and_rep
         )))
     );
     assert!(!scene.integration_store().borrow().has_effect_attachments());
-    assert!(!session.has_replay_timeline_work());
+    assert!(!scene.owned_execution().has_replay_timeline_work());
 }

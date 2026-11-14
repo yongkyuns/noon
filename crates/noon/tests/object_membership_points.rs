@@ -146,7 +146,6 @@ fn effective_root_queries_preserve_aliases_and_replay_at_each_coherent_child_pos
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let semantics = std::rc::Rc::clone(scene.integration_store());
     let mut running = scene.into_execution().unwrap();
     let segment = running.live().play_animation(&animation).unwrap();
     running.live().advance_segment_to(segment, 1.0).unwrap();
@@ -181,22 +180,18 @@ fn effective_root_queries_preserve_aliases_and_replay_at_each_coherent_child_pos
             .unwrap();
         assert_eq!(points, expected);
         assert_eq!(
-            noon::integration::effective_point_reduction_tree(
-                &semantics,
-                running.session(),
-                (&root).into()
-            )
-            .unwrap()
-            .flattened_points(),
+            running
+                .scene()
+                .effective_point_reduction_tree((&root).into())
+                .unwrap()
+                .flattened_points(),
             expected
         );
         assert_eq!(
-            noon::integration::effective_vector_boundary_points(
-                &semantics,
-                running.session(),
-                (&root).into()
-            )
-            .unwrap(),
+            running
+                .scene()
+                .effective_vector_boundary_points((&root).into())
+                .unwrap(),
             boundary
         );
         assert_eq!(
@@ -229,7 +224,7 @@ fn inactive_family_aliases_do_not_prevent_removed_leaf_create() {
         .declare_and_activate_create(&circle, AnimationOptions::new())
         .is_err());
     assert_eq!(running.session().publication_context(), before);
-    running.live().remove(&circle).unwrap();
+    running.scene_mut().remove(&circle).unwrap();
     assert!(running.session().painter_order().is_empty());
     let reveal = running
         .live()
@@ -245,12 +240,10 @@ fn inactive_family_aliases_do_not_prevent_removed_leaf_create() {
     assert_eq!(current.point_count(), 12);
     assert_eq!(running.session().painter_order().len(), 1);
     assert_eq!(
-        noon::integration::effective_vector_boundary_points(
-            &semantics,
-            running.session(),
-            (&aliases).into(),
-        )
-        .unwrap(),
+        running
+            .scene()
+            .effective_vector_boundary_points((&aliases).into())
+            .unwrap(),
         current.anchors().unwrap()
     );
     let store = semantics.borrow();
@@ -299,27 +292,23 @@ fn xyz_reduction_snapshots_keep_tails_aliases_and_live_depth_without_publication
     assert_eq!(snapshot.points, root_points);
     assert_eq!(snapshot.flattened_points_3d(), expected);
     scene.add(&root).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let before = execution.publication_context();
-    let current = noon::integration::effective_point_reduction_tree(
-        scene.integration_store(),
-        &execution,
-        (&root).into(),
-    )
-    .unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let before = execution.session().publication_context();
+    let current = execution
+        .scene()
+        .effective_point_reduction_tree((&root).into())
+        .unwrap();
     assert_eq!(current, snapshot);
-    assert_eq!(execution.publication_context(), before);
-    scene
-        .live(&mut execution)
+    assert_eq!(execution.session().publication_context(), before);
+    execution
+        .scene_mut()
         .shift_3d(&child, SemanticVec3::new(0., 0., 1.25))
         .unwrap();
-    let after_edit = execution.publication_context();
-    let current = noon::integration::effective_point_reduction_tree(
-        scene.integration_store(),
-        &execution,
-        (&root).into(),
-    )
-    .unwrap();
+    let after_edit = execution.session().publication_context();
+    let current = execution
+        .scene()
+        .effective_point_reduction_tree((&root).into())
+        .unwrap();
     let mut shifted = expected.clone();
     for point in &mut shifted[root_points.len()..] {
         point.z += 1.25;
@@ -327,7 +316,7 @@ fn xyz_reduction_snapshots_keep_tails_aliases_and_live_depth_without_publication
     assert_eq!(current.flattened_points_3d(), shifted);
     assert_eq!(current.points, root_points);
     assert_eq!(snapshot.flattened_points_3d(), expected);
-    assert_eq!(execution.publication_context(), after_edit);
+    assert_eq!(execution.session().publication_context(), after_edit);
 }
 
 #[test]
@@ -386,50 +375,47 @@ fn xyz_boundaries_include_family_owned_points_and_keep_anchor_admission_exact() 
         child_points[0]
     );
     scene.add_many(&[(&root).into()]).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let publication = execution.publication_context();
+    let mut execution = scene.into_execution().unwrap();
+    let publication = execution.session().publication_context();
     assert_eq!(
-        noon::integration::effective_vector_boundary_points_3d(
-            scene.integration_store(),
-            &execution,
-            (&root).into()
-        )
-        .unwrap(),
+        execution
+            .scene()
+            .effective_vector_boundary_points_3d((&root).into())
+            .unwrap(),
         expected
     );
-    assert_eq!(execution.publication_context(), publication);
-    scene
-        .live(&mut execution)
+    assert_eq!(execution.session().publication_context(), publication);
+    execution
+        .scene_mut()
         .shift_3d(&child, SemanticVec3::new(0., 0., 1.25))
         .unwrap();
-    let publication = execution.publication_context();
+    let publication = execution.session().publication_context();
     let mut shifted = expected;
     shifted[2].z += 1.25;
     assert_eq!(
-        noon::integration::effective_vector_boundary_points_3d(
-            scene.integration_store(),
-            &execution,
-            (&root).into()
-        )
-        .unwrap(),
+        execution
+            .scene()
+            .effective_vector_boundary_points_3d((&root).into())
+            .unwrap(),
         shifted
     );
-    assert_eq!(execution.publication_context(), publication);
+    assert_eq!(execution.session().publication_context(), publication);
 
     // A fifth row has an unmatched start anchor. Z support must not relax the
     // existing exact CE zip admission or modify this authored source on read.
     let mut unfinished = points.to_vec();
     unfinished.push(SemanticVec3::new(9., 8., 7.));
-    let tail = scene
+    let tail = execution
+        .scene_mut()
         .path(
             VectorPath::from_manim_points_3d(unfinished.clone()),
             Default::default(),
         )
         .unwrap();
-    let revision = scene.revision();
+    let revision = execution.scene().revision();
     assert!(MobjectTarget::from(&tail)
         .path_boundary_points_3d()
         .is_err());
     assert_eq!(tail.path_query().unwrap().points_3d().unwrap(), unfinished);
-    assert_eq!(scene.revision(), revision);
+    assert_eq!(execution.scene().revision(), revision);
 }

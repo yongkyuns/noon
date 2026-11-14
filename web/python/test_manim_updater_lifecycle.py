@@ -364,7 +364,7 @@ class UpdaterLifecycleTests(unittest.TestCase):
 
         with patch.object(
             semantic,
-            "_style_target",
+            "_paint_authoring_target",
             side_effect=lambda member: (member._handle, None, ""),
         ):
             self.assertFalse(root.updating_suspended)
@@ -410,7 +410,7 @@ class UpdaterLifecycleTests(unittest.TestCase):
         root = Mobject([child])
         with patch.object(
             semantic,
-            "_style_target",
+            "_paint_authoring_target",
             side_effect=lambda member: (member._handle, None, ""),
         ):
             with self.assertRaisesRegex(NotImplementedError, "Scene-bound"):

@@ -126,12 +126,10 @@ are added, Noon may take a different direction. Its own runtime, rendering,
 interaction, and performance constraints also differ from Manim's.
 
 Noon remains experimental. APIs are changing, and feature coverage differs
-between native Python, browser Python, and Rust. Some callback-driven and
-interactive scenes have replay or seeking restrictions. Native Python does not
-yet cover the complete browser gallery, including its audio bindings. Consult the
-[implementation reference](REFERENCE.md) and runnable examples before relying on
-a particular feature. Performance is a design concern, not a blanket claim that
-Noon is faster than another engine.
+between native Python, browser Python, and Rust. In native Python, arbitrary
+callbacks use sampled execution, drag scenes open at their authored endpoint,
+and device audio is available in audio-enabled builds. See the
+[implementation reference](REFERENCE.md) for feature setup and playback support.
 
 ## Project background
 

@@ -29,6 +29,13 @@ impl From<noon::Color> for ColorObservation {
     }
 }
 
+fn solid_color(paint: noon_core::SemanticPaint) -> Option<ColorObservation> {
+    match paint {
+        noon_core::SemanticPaint::Solid(color) => Some(color.into()),
+        _ => None,
+    }
+}
+
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 #[derive(Clone)]
 pub struct FamilyHandle {
@@ -41,6 +48,393 @@ impl FamilyHandle {
 }
 #[pymethods]
 impl FamilyHandle {
+    #[pyo3(name = "riemannSamplePlan")]
+    fn riemann_sample_plan(
+        &self,
+        graph: &MobjectHandle,
+        mut options: PyRefMut<'_, crate::riemann::RiemannOptions>,
+        bounded: &MobjectHandle,
+        has_bounded: bool,
+    ) -> PyResult<crate::riemann::RiemannPlan> {
+        let axes = crate::riemann::axes(self)?;
+        let options = options.take(graph, has_bounded.then_some(bounded))?;
+        axes.riemann_plan(&graph.handle, options)
+            .map(crate::riemann::RiemannPlan)
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[cfg(feature = "latex")]
+    #[pyo3(name = "barChart")]
+    fn bar_chart(&self) -> PyResult<crate::bar_chart::BarChartHandle> {
+        noon::ManimBarChart::from_family(self.family.clone())
+            .map(crate::bar_chart::BarChartHandle)
+            .map_err(coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "beginBrace")]
+    fn begin_brace(
+        &self,
+        x: f64,
+        y: f64,
+        buff: f64,
+        sharpness: f64,
+    ) -> PyResult<crate::geometry::GeometryOptions> {
+        noon::ManimGeometryOptions::brace(
+            &noon::LayoutAnchor::from(&self.family),
+            (x, y),
+            buff,
+            sharpness,
+        )
+        .map(crate::geometry::GeometryOptions::from_options)
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "asBraceLabel")]
+    fn as_brace_label(
+        &self,
+        x: f64,
+        y: f64,
+        buff: f64,
+        sharpness: f64,
+        label_buff: f64,
+    ) -> PyResult<crate::brace::BraceLabelHandle> {
+        noon::BraceLabel::from_family(
+            self.family.clone(),
+            crate::brace::options(x, y, buff, sharpness, label_buff),
+        )
+        .map(crate::brace::BraceLabelHandle)
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "asSampleSpace")]
+    fn as_sample_space(&self) -> PyResult<crate::sample_space::SampleSpaceHandle> {
+        noon::SampleSpace::from_family(self.family.clone())
+            .map(crate::sample_space::SampleSpaceHandle)
+            .map_err(crate::sample_space::failure)
+    }
+
+    #[pyo3(name = "updatingSuspended")]
+    fn updating_suspended(&self) -> PyResult<bool> {
+        self.family.updating_suspended().map_err(engine_error)
+    }
+
+    #[pyo3(name = "setUpdatingSuspended")]
+    fn set_updating_suspended(&self, suspended: bool, recursive: bool) -> PyResult<()> {
+        self.family
+            .set_updating_suspended(suspended, recursive)
+            .map_err(engine_error)
+    }
+
+    fn fade(&self, darkness: f64) -> PyResult<()> {
+        self.family.fade(darkness).map_err(engine_error)
+    }
+
+    #[pyo3(name = "applyMatrix")]
+    fn apply_matrix(
+        &self,
+        values: Vec<f64>,
+        rows: usize,
+        columns: usize,
+        x: f64,
+        y: f64,
+    ) -> PyResult<()> {
+        self.family
+            .apply_matrix(&values, rows, columns, x, y)
+            .map(|_| ())
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "interpolateManimStyle")]
+    fn interpolate_manim_style(&self, start: &Self, end: &Self, alpha: f64) -> PyResult<()> {
+        self.family
+            .interpolate_manim_style(&start.family, &end.family, alpha)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "matchStyle")]
+    fn match_style(&self, target: &Self) -> PyResult<()> {
+        self.family
+            .match_style(&target.family)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "fadeTo")]
+    fn fade_to(&self, red: f64, green: f64, blue: f64, alpha: f64, amount: f64) -> PyResult<()> {
+        self.family
+            .fade_to(
+                noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
+                amount,
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setColorGradient")]
+    fn set_color_gradient(&self, values: Vec<f64>) -> PyResult<()> {
+        let colors = noon::integration::gradient_colors(&values).map_err(engine_error)?;
+        self.family
+            .set_color_by_gradient(&colors)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setRadialColorGradient")]
+    fn set_radial_color_gradient(
+        &self,
+        center_x: f64,
+        center_y: f64,
+        center_z: f64,
+        radius: f64,
+        values: Vec<f64>,
+    ) -> PyResult<()> {
+        let (inner, outer) =
+            noon::integration::radial_gradient_colors(&values).map_err(engine_error)?;
+        self.family
+            .set_color_by_radial_gradient((center_x, center_y, center_z), radius, inner, outer)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setOwnStyle", signature = (fill_enabled, fill_red, fill_green, fill_blue, fill_alpha, fill_opacity, stroke_enabled, stroke_red, stroke_green, stroke_blue, stroke_alpha, stroke_width, stroke_opacity))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_own_style(
+        &self,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        let update = noon::integration::style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.family.set_own_style(update).map_err(engine_error)
+    }
+
+    #[pyo3(name = "setOwnStyleWithBackgroundStroke", signature = (fill_enabled, fill_red, fill_green, fill_blue, fill_alpha, fill_opacity, stroke_enabled, stroke_red, stroke_green, stroke_blue, stroke_alpha, stroke_width, stroke_opacity, background_stroke_color_enabled, background_stroke_red, background_stroke_green, background_stroke_blue, background_stroke_alpha, background_stroke_width, background_stroke_opacity))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_own_style_with_background_stroke(
+        &self,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+        background_stroke_color_enabled: bool,
+        background_stroke_red: f64,
+        background_stroke_green: f64,
+        background_stroke_blue: f64,
+        background_stroke_alpha: f64,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        let update = noon::integration::style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        let background_stroke_color = noon::integration::family_color(
+            background_stroke_color_enabled,
+            background_stroke_red,
+            background_stroke_green,
+            background_stroke_blue,
+            background_stroke_alpha,
+        )
+        .map_err(engine_error)?;
+        self.family
+            .set_own_style_with_background_stroke(
+                update,
+                background_stroke_color,
+                background_stroke_width,
+                background_stroke_opacity,
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setOwnOpacity")]
+    fn set_own_opacity(&self, opacity: f64) -> PyResult<()> {
+        self.family.set_own_opacity(opacity).map_err(engine_error)
+    }
+
+    #[pyo3(name = "fadeOwn")]
+    fn fade_own(&self, darkness: f64) -> PyResult<()> {
+        self.family.fade_own(darkness).map_err(engine_error)
+    }
+
+    #[pyo3(name = "setStrokeCap")]
+    fn set_stroke_cap(&self, cap: &str) -> PyResult<()> {
+        self.family.set_own_stroke_cap(cap).map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownFillColor")]
+    fn own_fill_color(&self) -> PyResult<Option<ColorObservation>> {
+        let style = self.family.own_style().map_err(engine_error)?;
+        Ok(style.fill.and_then(solid_color))
+    }
+
+    #[pyo3(name = "ownStrokeColor")]
+    fn own_stroke_color(&self) -> PyResult<Option<ColorObservation>> {
+        let style = self.family.own_style().map_err(engine_error)?;
+        Ok(style.stroke.and_then(solid_color))
+    }
+
+    #[pyo3(name = "ownFillOpacity")]
+    fn own_fill_opacity(&self) -> PyResult<f64> {
+        self.family
+            .own_style()
+            .map(|style| style.fill_opacity)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownStrokeOpacity")]
+    fn own_stroke_opacity(&self) -> PyResult<f64> {
+        self.family
+            .own_style()
+            .map(|style| style.stroke_opacity)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownStrokeWidth")]
+    fn own_stroke_width(&self) -> PyResult<f64> {
+        self.family
+            .own_style()
+            .map(|style| style.stroke_width)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownBackgroundStrokeColor")]
+    fn own_background_stroke_color(&self) -> PyResult<ColorObservation> {
+        self.family
+            .own_background_stroke_color()
+            .map(Into::into)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownBackgroundStrokeOpacity")]
+    fn own_background_stroke_opacity(&self) -> PyResult<f64> {
+        self.family
+            .own_background_stroke_opacity()
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownBackgroundStrokeWidth")]
+    fn own_background_stroke_width(&self) -> PyResult<f64> {
+        self.family
+            .own_background_stroke_width()
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownSheenDirection")]
+    fn sheen_direction(&self) -> PyResult<Vec<f64>> {
+        self.family
+            .own_sheen_direction()
+            .map(|direction| direction.components())
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setSheenDirection")]
+    fn set_sheen_direction(
+        &self,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimensions: u8,
+        family: bool,
+    ) -> PyResult<()> {
+        let direction =
+            noon::SemanticSheenDirection::new(noon::SemanticVec3::new(x, y, z), dimensions);
+        noon::MobjectTarget::from(&self.family)
+            .set_sheen_direction(direction, family)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "rotateSheenDirection")]
+    fn rotate_sheen_direction(
+        &self,
+        angle: f64,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        family: bool,
+    ) -> PyResult<()> {
+        noon::MobjectTarget::from(&self.family)
+            .rotate_sheen_direction(
+                angle,
+                noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                family,
+            )
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "ownStrokeCap")]
+    fn own_stroke_cap(&self) -> PyResult<&'static str> {
+        self.family
+            .own_stroke_cap()
+            .map(|cap| cap.as_str())
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "becomeFamily")]
+    fn become_family(
+        &self,
+        other: &Self,
+        match_height: bool,
+        match_width: bool,
+        match_center: bool,
+        stretch: bool,
+    ) -> PyResult<()> {
+        self.family
+            .become_family(
+                &other.family,
+                noon::ManimBecomeOptions {
+                    match_height,
+                    match_width,
+                    match_center,
+                    stretch,
+                },
+            )
+            .map_err(engine_error)
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[pyo3(name="setStyle",signature=(fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
     pub fn set_style(
@@ -214,19 +608,10 @@ impl FamilyHandle {
         options: &crate::coordinates::NumberLabelOptions,
         attach: bool,
     ) -> PyResult<Self> {
-        use crate::coordinates::label_failure;
-        if automatic && !values.is_empty() {
-            return Err(label_failure(
-                "automatic labels cannot supply explicit values",
-            ));
-        }
+        use crate::coordinates::{label_failure, label_numbers};
         let line =
             noon::ManimNumberLine::from_family(self.family.clone()).map_err(label_failure)?;
-        let values = if automatic {
-            None
-        } else {
-            Some(values.as_slice())
-        };
+        let values = label_numbers(&values, automatic)?;
         let family = if attach {
             line.add_numbers(values, &options.options)
         } else {
@@ -236,6 +621,22 @@ impl FamilyHandle {
             .map(Self::from_semantic_family)
             .map_err(label_failure)
     }
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "numberLineCustomLabelFamily")]
+    fn number_line_custom_label_family(
+        &self,
+        values: Vec<f64>,
+        texts: Vec<String>,
+        options: &crate::coordinates::NumberLabelOptions,
+    ) -> PyResult<Self> {
+        use crate::coordinates::{custom_label_values, label_failure};
+        let line =
+            noon::ManimNumberLine::from_family(self.family.clone()).map_err(label_failure)?;
+        line.add_labels(&custom_label_values(values, texts)?, &options.options)
+            .map(Self::from_semantic_family)
+            .map_err(label_failure)
+    }
+
     #[cfg(feature = "native-text")]
     #[pyo3(name = "numberLabelMembers")]
     fn number_label_members(&self) -> PyResult<Vec<(MobjectHandle, String)>> {
@@ -414,27 +815,14 @@ impl FamilyHandle {
         buff: f64,
         fixed_orientation: bool,
     ) -> Result<FamilyHandle, PyErr> {
-        // wasm-bindgen cannot represent optional borrowed exported handles.
-        // Inactive arguments alias an active handle; this mask preserves one
-        // typed, atomic call without consuming any caller-owned wrappers.
-        if selected_axes == 0 || selected_axes & !7 != 0 {
-            return Err(engine_error(
-                "axis labels require a nonempty three-axis mask",
-            ));
-        }
         let axes = ManimThreeDAxes::from_family(self.family.clone())
             .map_err(coordinate_failure)
             .map_err(engine_error)?;
-        let mut families = Vec::new();
-        for (index, handle) in [(0, x), (1, y), (2, z)] {
-            if selected_axes & (1 << index) != 0 {
-                families.push((index, handle.family.clone()));
-            }
-        }
-        let labels = families
-            .iter()
-            .map(|(index, family)| (*index, noon::MobjectTarget::Family(family)))
-            .collect::<Vec<_>>();
+        let labels = noon::integration::three_d_axis_label_targets(
+            [&x.family, &y.family, &z.family],
+            selected_axes,
+        )
+        .map_err(engine_error)?;
         axes.create_axis_label_targets(&labels, buff, fixed_orientation)
             .map(Self::from_semantic_family)
             .map_err(coordinate_failure)
@@ -586,6 +974,22 @@ impl FamilyHandle {
             .get_num_points()
             .map_err(engine_error)
     }
+    #[pyo3(name = "prepareSubsetDisplay")]
+    fn prepare_subset_display(&self) -> PyResult<()> {
+        self.family.prepare_subset_display().map_err(engine_error)
+    }
+
+    #[pyo3(name = "pointReductionTree")]
+    fn point_reduction_tree<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        let tree = noon::MobjectTarget::from(&self.family)
+            .point_reduction_tree()
+            .map_err(engine_error)?;
+        crate::path_input::point_reduction_tree(py, tree)
+    }
+
     #[pyo3(name = "pointArray")]
     fn point_array(&self) -> PyResult<(Vec<f64>, Vec<usize>)> {
         noon::MobjectTarget::from(&self.family)
@@ -773,6 +1177,14 @@ impl FamilyHandle {
             .map(MobjectHandle::from_semantic_mobject)
             .map_err(engine_error)
     }
+    #[pyo3(name = "shapeMatcherBounds")]
+    fn shape_matcher_bounds(&self) -> PyResult<[f64; 4]> {
+        noon::MobjectTarget::from(&self.family)
+            .shape_matcher_bounds()
+            .map(crate::geometry::bounds_coordinates)
+            .map_err(engine_error)
+    }
+
     fn layout(&self) -> PyResult<FamilyLayoutObservation> {
         self.family
             .layout()
@@ -864,16 +1276,95 @@ impl FamilyHandle {
             .set_own_color(red, green, blue, alpha)
             .map_err(engine_error)
     }
+    #[pyo3(name = "extremumAlongDim")]
+    fn extremum_along_dim(&self, dim: usize, key: f64) -> PyResult<f64> {
+        noon::MobjectTarget::from(&self.family)
+            .extremum_along_dim(dim, key)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "lengthOverDim")]
+    fn length_over_dim(&self, dim: usize) -> PyResult<f64> {
+        noon::MobjectTarget::from(&self.family)
+            .length_over_dim(dim)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "centerOfMass")]
+    fn center_of_mass(&self) -> PyResult<(f64, f64)> {
+        noon::MobjectTarget::from(&self.family)
+            .center_of_mass()
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "boundaryPoint")]
+    fn boundary_point(&self, direction_x: f64, direction_y: f64) -> PyResult<(f64, f64)> {
+        noon::MobjectTarget::from(&self.family)
+            .boundary_point(direction_x, direction_y)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "extremumFromPoints")]
+    fn extremum_from_points(
+        &self,
+        coordinates: Vec<f64>,
+        dimensions: usize,
+        dim: usize,
+        key: f64,
+    ) -> PyResult<f64> {
+        noon::reduce_point_extremum(&coordinates, dimensions, dim, key).map_err(engine_error)
+    }
+
+    #[pyo3(name = "pathBoundaryPoints3D")]
+    fn path_boundary_points_3d(&self) -> PyResult<Vec<f64>> {
+        noon::MobjectTarget::from(&self.family)
+            .path_boundary_points_3d()
+            .map(crate::path_input::flat_points_3d)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "editMembership")]
     fn edit_membership(&self, batch: &MembershipBatch) -> PyResult<Vec<bool>> {
-        let members = batch.targets();
-        match batch.kind.as_str() {
-            "add" => self.family.add_many(&members),
-            "remove" => self.family.remove_many(&members),
-            _ => return Err(engine_error("unsupported family membership operation")),
-        }
-        .map_err(engine_error)
+        batch.edit_children((&self.family).into())
     }
+
+    #[pyo3(name = "insertMember")]
+    fn insert_member(&self, index: usize, batch: &MembershipBatch) -> PyResult<()> {
+        self.family
+            .insert_member(index, batch.single_member()?)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "replaceMembers")]
+    fn replace_members(&self, batch: &MembershipBatch) -> PyResult<()> {
+        self.family
+            .replace_members(&batch.add_targets()?)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "invertMembers")]
+    fn invert_members(&self, recursive: bool) -> PyResult<()> {
+        self.family.invert(recursive).map_err(engine_error)
+    }
+
+    #[pyo3(name = "promoteOwnPoints")]
+    fn promote_own_points(&self, references: &MembershipBatch) -> PyResult<FamilyCopy> {
+        noon::MobjectTarget::from(&self.family)
+            .promote_own_points_with_references(&references.add_targets()?)
+            .map(|copied| FamilyCopy { copied })
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "cyclicReplaceTarget")]
+    fn cyclic_replace_target(&self, references: &MembershipBatch) -> PyResult<FamilyCopy> {
+        self.family
+            .cyclic_replace_target_with_references(&references.add_targets()?)
+            .map(|copied| FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "copyFamily")]
     fn copy_family(&self, references: &MembershipBatch) -> PyResult<FamilyCopy> {
         if references.kind != "add" {
@@ -881,7 +1372,9 @@ impl FamilyHandle {
         }
         self.family
             .copy_with_references(&references.targets())
-            .map(|copied| FamilyCopy { copied })
+            .map(|copied| FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
             .map_err(engine_error)
     }
 }
@@ -1045,10 +1538,17 @@ impl FamilyLayoutObservation {
 
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct FamilyCopy {
-    pub(crate) copied: noon::FamilyCopy,
+    pub(crate) copied: noon::SemanticCopy<noon::CompositeEntryHandle>,
 }
 #[pymethods]
 impl FamilyCopy {
+    #[pyo3(name = "arrowFor")]
+    fn arrow_for(&self, source: &crate::arrow::ArrowHandle) -> PyResult<crate::arrow::ArrowHandle> {
+        self.copied
+            .rebind_manim_arrow(&source.0)
+            .map(crate::arrow::ArrowHandle)
+            .map_err(engine_error)
+    }
     #[pyo3(name = "familyFor")]
     fn family_for(&self, source: &FamilyHandle) -> PyResult<FamilyHandle> {
         self.copied
@@ -1129,6 +1629,18 @@ impl FamilySlicePlan {
         self.plan.take();
     }
 }
+#[cfg(feature = "latex")]
+pub(crate) fn read_entry(value: &Bound<'_, PyAny>) -> PyResult<noon::CompositeEntryHandle> {
+    if let Ok(value) = value.cast::<MobjectHandle>() {
+        return Ok(noon::CompositeEntryHandle::Mobject(
+            value.borrow().handle.clone(),
+        ));
+    }
+    Ok(noon::CompositeEntryHandle::Family(
+        value.cast::<FamilyHandle>()?.borrow().family.clone(),
+    ))
+}
+
 pub(crate) fn entry_handle(
     py: Python<'_>,
     entry: Option<noon::CompositeEntryHandle>,

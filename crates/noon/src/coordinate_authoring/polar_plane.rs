@@ -99,13 +99,6 @@ impl ManimPolarPlane {
     pub fn authored_polar_frame(&self) -> Result<PolarFrame, CoordinateAuthoringError> {
         Ok(PolarFrame::new(self.authored_frame()?))
     }
-
-    pub fn effective_polar_frame(
-        &self,
-        execution: &ExecutionSession,
-    ) -> Result<PolarFrame, CoordinateAuthoringError> {
-        Ok(PolarFrame::new(self.effective_frame(execution)?))
-    }
 }
 
 impl Scene {
@@ -120,6 +113,19 @@ impl Scene {
             &result,
             root,
         )?)
+    }
+
+    /// Observe this coordinate family through the Scene in setup or playback.
+    pub fn polar_plane_frame(
+        &self,
+        coordinates: &ManimPolarPlane,
+    ) -> Result<PolarFrame, CoordinateAuthoringError> {
+        crate::MobjectTarget::from(coordinates.family()).require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            self.effective_polar_plane_frame(coordinates)
+        } else {
+            coordinates.authored_polar_frame()
+        }
     }
 
     pub fn effective_polar_plane_frame(

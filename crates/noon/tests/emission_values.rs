@@ -1,4 +1,5 @@
 //! Ordinary typed authoring and sparse publication, without a language host.
+use noon::integration::scene_execution;
 use noon::{Emission, Scene};
 use noon_core::SemanticMutationTransaction;
 
@@ -37,7 +38,7 @@ fn live_style_material_publication_is_sparse_and_keeps_unrelated_state() {
     let other = scene.rectangle(1.0, 1.0).unwrap();
     scene.add(&source).unwrap();
     scene.add(&other).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let id = session.execution_object_id(source.node_id()).unwrap();
     let index = session
         .frame()
@@ -58,7 +59,8 @@ fn live_style_material_publication_is_sparse_and_keeps_unrelated_state() {
     style.emission = Emission::new(3.000000000000001).unwrap();
     let mut tx = SemanticMutationTransaction::new();
     tx.replace_style(source.node_id(), style.clone());
-    scene.live(&mut session).apply(tx).unwrap();
+    scene_execution::publish_at_root(scene.integration_store(), scene.root(), &mut session, tx)
+        .unwrap();
     assert_eq!(
         session.frame().objects[index].style.emission,
         style.emission
@@ -70,7 +72,8 @@ fn live_style_material_publication_is_sparse_and_keeps_unrelated_state() {
     drop(published);
     let mut tx = SemanticMutationTransaction::new();
     tx.replace_style(source.node_id(), style);
-    scene.live(&mut session).apply(tx).unwrap();
+    scene_execution::publish_at_root(scene.integration_store(), scene.root(), &mut session, tx)
+        .unwrap();
     assert!(session
         .take_renderer_publication()
         .changes()
@@ -83,7 +86,13 @@ fn live_style_material_publication_is_sparse_and_keeps_unrelated_state() {
         noon_core::SemanticObjectProperty::Emission,
         7.000000000000001,
     );
-    scene.live(&mut session).apply(property).unwrap();
+    scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut session,
+        property,
+    )
+    .unwrap();
     assert_eq!(
         session.frame().objects[index].style.emission.strength(),
         7.000000000000001
@@ -104,7 +113,13 @@ fn live_style_material_publication_is_sparse_and_keeps_unrelated_state() {
             noon_core::SemanticObjectProperty::Emission,
             invalid,
         );
-        assert!(scene.live(&mut session).apply(tx).is_err());
+        assert!(scene_execution::publish_at_root(
+            scene.integration_store(),
+            scene.root(),
+            &mut session,
+            tx
+        )
+        .is_err());
         assert_eq!(session.frame(), &before);
         assert_eq!(source.state().unwrap(), authored);
         assert_eq!(other.state().unwrap(), other_authored);
@@ -117,17 +132,17 @@ fn removed_emissive_rows_do_not_block_a_compatibility_view() {
     let mut source = scene.circle(0.5).unwrap();
     source.set_emission(7.0).unwrap();
     scene.add(&source).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     assert!(noon_render_wgpu::validate_color_profile(
-        session.frame(),
+        session.session().frame(),
         &noon_runtime::FrameChanges::all(),
         noon_core::ViewColorProfile::Compatibility,
         true
     )
     .is_err());
-    scene.live(&mut session).remove(&source).unwrap();
+    session.scene_mut().remove(&source).unwrap();
     assert!(noon_render_wgpu::validate_color_profile(
-        session.frame(),
+        session.session().frame(),
         &noon_runtime::FrameChanges::all(),
         noon_core::ViewColorProfile::Compatibility,
         true
@@ -314,7 +329,7 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
         drop(session.session_mut().take_renderer_publication());
         let end = 7.000000000000001;
         session
-            .live()
+            .scene_mut()
             .set_family_style(
                 &family,
                 StyleUpdate {
@@ -344,7 +359,7 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
             assert_eq!(nested.own_style().unwrap().emission.strength(), end);
         }
         assert!(session
-            .live()
+            .scene_mut()
             .set_family_style(
                 &family,
                 StyleUpdate {
@@ -359,7 +374,7 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
         assert_eq!(family.own_style().unwrap().emission.strength(), end);
         let target = session.scene_mut().copy_family(&family).unwrap();
         session
-            .live()
+            .scene_mut()
             .set_family_style(
                 target.root(),
                 StyleUpdate {
@@ -465,7 +480,7 @@ fn neutral_hdr_styles_reject_nonunit_paint_and_opacity() {
     let mut scene = Scene::new();
     let source = scene.circle(0.5).unwrap();
     scene.add(&source).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let original = session.frame();
     for value in [f32::NAN, f32::INFINITY, -0.01, 1.0000001] {
         for field in 0..5 {

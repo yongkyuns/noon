@@ -146,27 +146,31 @@ fn live_replacement_uses_completed_effective_bounds_and_preserves_other_objects(
                 .rate_func(noon::RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let segment = live.play_animation(&animation).unwrap();
-    live.advance_segment_to(segment, 1.0).unwrap();
-    let before = live.effective(&target).unwrap();
-    assert!(live
+    let mut session = scene.into_execution().unwrap();
+    let segment = session.live().play_animation(&animation).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    let before = session.scene().effective(&target).unwrap();
+    assert!(session
+        .scene_mut()
         .replace_layout(&(&target).into(), &(&family).into(), Width, false)
         .is_err());
-    assert_eq!(live.effective(&target).unwrap(), before);
-    live.advance_segment_to(segment, segment.end_time())
+    assert_eq!(session.scene().effective(&target).unwrap(), before);
+    session
+        .live()
+        .advance_segment_to(segment, segment.end_time())
         .unwrap();
-    live.complete_segment(segment).unwrap();
-    let before_unrelated = live.effective(&unrelated).unwrap();
-    live.replace_layout(&(&family).into(), &(&target).into(), Width, true)
+    session.live().complete_segment(segment).unwrap();
+    let before_unrelated = session.scene().effective(&unrelated).unwrap();
+    session
+        .scene_mut()
+        .replace_layout(&(&family).into(), &(&target).into(), Width, true)
         .unwrap();
-    let source_bounds = live.effective_family_layout(&family).unwrap();
-    let target_bounds = live.effective_layout(&target).unwrap();
+    let source_bounds = session.scene().effective_family_layout(&family).unwrap();
+    let target_bounds = session.scene().effective_layout(&target).unwrap();
     close(source_bounds.width, target_bounds.width);
     close(source_bounds.height, target_bounds.height);
     assert_eq!(source_bounds.center, target_bounds.center);
-    let after = live.effective(&unrelated).unwrap();
+    let after = session.scene().effective(&unrelated).unwrap();
     assert_eq!(after.transform, before_unrelated.transform);
     assert_eq!(after.style, before_unrelated.style);
     assert_eq!(after.appearance, before_unrelated.appearance);

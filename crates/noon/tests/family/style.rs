@@ -61,9 +61,9 @@ fn invalid_combined_edit_changes_nothing_and_empty_families_still_validate() {
 fn live_paint_batches_unique_roots_and_leaves_and_rejects_invalid_edits_atomically() {
     let (mut scene, family, [a, b], _) = family();
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let result = live
+    let mut session = scene.into_execution().unwrap();
+    let result = session
+        .scene_mut()
         .set_family_fill(&family, Some(Color::rgba(1.0, 0.0, 0.0, 1.0)), Some(0.5))
         .unwrap();
     assert_eq!(result.impacts().len(), 4);
@@ -79,17 +79,23 @@ fn live_paint_batches_unique_roots_and_leaves_and_rejects_invalid_edits_atomical
         2
     );
     assert_eq!(family.own_style().unwrap().fill_opacity, 0.5);
-    assert_eq!(live.effective(&a).unwrap().fill_opacity(), 0.5);
-    assert_eq!(live.effective(&b).unwrap().fill_opacity(), 0.5);
-    live.set_family_stroke(
-        &family,
-        Some(Color::rgba(0.0, 0.0, 1.0, 1.0)),
-        Some(0.1),
-        Some(0.25),
-    )
-    .unwrap();
-    let before = [live.effective(&a).unwrap(), live.effective(&b).unwrap()];
-    assert!(live
+    assert_eq!(session.scene().effective(&a).unwrap().fill_opacity(), 0.5);
+    assert_eq!(session.scene().effective(&b).unwrap().fill_opacity(), 0.5);
+    session
+        .scene_mut()
+        .set_family_stroke(
+            &family,
+            Some(Color::rgba(0.0, 0.0, 1.0, 1.0)),
+            Some(0.1),
+            Some(0.25),
+        )
+        .unwrap();
+    let before = [
+        session.scene().effective(&a).unwrap(),
+        session.scene().effective(&b).unwrap(),
+    ];
+    assert!(session
+        .scene_mut()
         .set_family_stroke(
             &family,
             Some(Color::rgba(1.0, 0.0, 0.0, 1.0)),
@@ -99,15 +105,27 @@ fn live_paint_batches_unique_roots_and_leaves_and_rejects_invalid_edits_atomical
         .is_err());
     let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.family(&[]).unwrap();
-    assert!(live.set_family_opacity(&foreign, 0.2).is_err());
+    assert!(session
+        .scene_mut()
+        .set_family_opacity(&foreign, 0.2)
+        .is_err());
     assert_eq!(
-        [live.effective(&a).unwrap(), live.effective(&b).unwrap()],
+        [
+            session.scene().effective(&a).unwrap(),
+            session.scene().effective(&b).unwrap()
+        ],
         before
     );
-    live.set_family_fill(&family, None, None).unwrap();
-    live.set_family_opacity(&family, 0.5).unwrap();
-    assert_eq!(live.effective(&a).unwrap().fill_opacity(), 0.5);
-    assert_eq!(live.effective(&a).unwrap().stroke_opacity(), 0.5);
+    session
+        .scene_mut()
+        .set_family_fill(&family, None, None)
+        .unwrap();
+    session
+        .scene_mut()
+        .set_family_opacity(&family, 0.5)
+        .unwrap();
+    assert_eq!(session.scene().effective(&a).unwrap().fill_opacity(), 0.5);
+    assert_eq!(session.scene().effective(&a).unwrap().stroke_opacity(), 0.5);
 }
 
 #[test]
@@ -121,16 +139,18 @@ fn live_recursive_alias_fade_publishes_one_atomic_style_only_update() {
     let a_content = a.state().unwrap().content;
     let b_content = b.state().unwrap().content;
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let before_revision = scene.revision();
-    let result = live.fade_family(&family, 0.25).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let before_revision = session.scene().revision();
+    let result = session.scene_mut().fade_family(&family, 0.25).unwrap();
     assert_eq!(result.impacts().len(), 4);
     assert_eq!(family.own_style().unwrap().stroke_opacity, 0.75);
     assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.75);
-    assert_eq!(scene.revision(), before_revision.checked_next().unwrap());
-    let faded_a = live.effective(&a).unwrap();
-    let faded_b = live.effective(&b).unwrap();
+    assert_eq!(
+        session.scene().revision(),
+        before_revision.checked_next().unwrap()
+    );
+    let faded_a = session.scene().effective(&a).unwrap();
+    let faded_b = session.scene().effective(&b).unwrap();
     // Pinned Manim recursively visits a through both nested and direct paths:
     // its paint is multiplied by 0.75 twice, while b is visited once.
     assert!((faded_a.fill_opacity() - 0.45).abs() < 1e-7);
@@ -141,11 +161,14 @@ fn live_recursive_alias_fade_publishes_one_atomic_style_only_update() {
     assert_eq!(b.state().unwrap().content, b_content);
 
     let before_invalid = [faded_a, faded_b];
-    let revision = scene.revision();
-    assert!(live.fade_family(&family, 1.1).is_err());
-    assert_eq!(scene.revision(), revision);
+    let revision = session.scene().revision();
+    assert!(session.scene_mut().fade_family(&family, 1.1).is_err());
+    assert_eq!(session.scene().revision(), revision);
     assert_eq!(
-        [live.effective(&a).unwrap(), live.effective(&b).unwrap()],
+        [
+            session.scene().effective(&a).unwrap(),
+            session.scene().effective(&b).unwrap()
+        ],
         before_invalid
     );
 }
@@ -382,17 +405,19 @@ fn live_empty_family_style_matching_updates_receiver_subtree_atomically() {
         })
         .unwrap();
     scene.add_many(&[(&receiver).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let revision = scene.revision();
+    let mut session = scene.into_execution().unwrap();
+    let revision = session.scene().revision();
 
-    let matched = live.match_family_style(&receiver, &donor).unwrap();
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    let matched = session
+        .scene_mut()
+        .match_family_style(&receiver, &donor)
+        .unwrap();
+    assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
     assert_eq!(matched.impacts().len(), 4);
     assert_eq!(receiver.own_style().unwrap(), donor.own_style().unwrap());
     assert_eq!(nested.own_style().unwrap(), donor.own_style().unwrap());
     for member in [&a, &b] {
-        let effective = live.effective(member).unwrap();
+        let effective = session.scene().effective(member).unwrap();
         assert_eq!(
             effective.style.fill,
             Some(Color::rgba(
@@ -448,7 +473,10 @@ fn cross_alias_matching_observes_staged_styles_and_live_updates_are_atomic() {
         .unwrap();
     scene.add_many(&[(&source).into()]).unwrap();
     let mut running = scene.into_execution().unwrap();
-    let matched = running.live().match_family_style(&source, &target).unwrap();
+    let matched = running
+        .scene_mut()
+        .match_family_style(&source, &target)
+        .unwrap();
     assert_eq!(matched.impacts().len(), 2);
     assert_eq!(source.own_style().unwrap(), target.own_style().unwrap());
     assert_eq!(running.scene().effective(&a).unwrap().fill_opacity(), 0.25);
@@ -461,7 +489,10 @@ fn cross_alias_matching_observes_staged_styles_and_live_updates_are_atomic() {
         stroke_width: Some(0.05),
         ..Default::default()
     };
-    let updated = running.live().set_family_style(&source, update).unwrap();
+    let updated = running
+        .scene_mut()
+        .set_family_style(&source, update)
+        .unwrap();
     assert_eq!(updated.impacts().len(), 3);
     assert!(updated.impacts().iter().any(|impact| matches!(impact,
         noon_core::SemanticMutationImpact::FamilyStyle { node } if *node == source.node_id())));
@@ -531,20 +562,20 @@ fn live_root_only_color_preserves_leaf_paint_and_publishes_coherently() {
     leaf.set_color(1.0, 0.0, 0.0, 1.0).unwrap();
     let root = scene.family(&[(&leaf).into()]).unwrap();
     scene.add_many(&[(&root).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    session
+        .scene_mut()
         .set_family_own_color(&root, 0.0, 0.0, 1.0, 1.0)
         .unwrap();
     assert_eq!(root.own_color().unwrap(), Color::rgb(0.0, 0.0, 1.0));
     assert_eq!(leaf.manim_color().unwrap(), Color::rgb(1.0, 0.0, 0.0));
-    let before = scene.revision();
-    assert!(scene
-        .live(&mut session)
+    let before = session.scene().revision();
+    assert!(session
+        .scene_mut()
         .set_family_own_color(&root, f64::NAN, 0.0, 0.0, 1.0)
         .is_err());
-    assert_eq!(scene.revision(), before);
-    session.advance_to(0.1).unwrap();
+    assert_eq!(session.scene().revision(), before);
+    session.session_mut().advance_to(0.1).unwrap();
 }
 
 #[test]
@@ -614,22 +645,17 @@ fn initial_family_color_and_membership_publish_atomically_without_leaf_recolor()
     assert_eq!(scene.revision(), revision);
     assert_eq!(leaf.state().unwrap(), before);
     scene.add(&leaf).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let revision = scene.revision();
-    let live_family = noon::integration::publish_family_creation_with_color(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        &[(&leaf).into()],
-        4.0,
-        Color::BLUE,
-    )
-    .unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let revision = session.scene().revision();
+    let live_family = session
+        .scene_mut()
+        .family_with_presentation(&[(&leaf).into()], 4.0, Color::BLUE, true)
+        .unwrap();
     assert_eq!(live_family.own_color().unwrap(), Color::BLUE);
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
     assert_eq!(
-        session.publication_context().scene_revision(),
-        scene.revision()
+        session.session().publication_context().scene_revision(),
+        session.scene().revision()
     );
     assert_eq!(leaf.state().unwrap(), before);
 }

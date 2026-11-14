@@ -4,9 +4,10 @@
 //! available to mutation-bearing input and retirement on native and WASM hosts.
 
 use super::Scene;
+use crate::execution_session::ExecutionSession;
 use crate::{
     integration::{NativePointerInputPublication, NativePointerInputToken},
-    ExecutionSession, ExecutionSessionInputError, ExecutionSessionPublicationError, LiveSession,
+    ExecutionSessionInputError, ExecutionSessionPublicationError, LiveSession,
 };
 use noon_core::{NativePointerInput, SemanticNodeId, SemanticStore};
 use std::{cell::RefCell, rc::Rc};
@@ -52,19 +53,8 @@ impl Scene {
         Ok(SceneExecution { scene: self })
     }
 
-    /// Consume this scene with its already-activated matching execution.
-    ///
-    /// The handoff validates arena identity, publication revision, and scene root;
-    /// it never relowers or discards the supplied runtime's current state.
-    pub fn into_execution_with_session(
-        mut self,
-        session: ExecutionSession,
-    ) -> Result<SceneExecution, SceneExecutionError> {
-        host_execution::attach(&mut self, session)?;
-        Ok(SceneExecution { scene: self })
-    }
-
     /// Consume this scene with one explicitly selected authored animation graph.
+    /// Exact tracks keep their authored timing, and the chosen graph begins at zero.
     pub fn into_execution_with_animation_root(
         self,
         animation_root: &crate::DeclaredAnimation,
@@ -72,26 +62,32 @@ impl Scene {
         self.into_execution_with_animation_root_at(animation_root, 0.0)
     }
 
+    /// Start the chosen authored animation graph at an explicit origin.
     pub fn into_execution_with_animation_root_at(
         self,
         animation_root: &crate::DeclaredAnimation,
         origin: f64,
     ) -> Result<SceneExecution, String> {
         let session = self.execution_session_with_animation_root_at(animation_root, origin)?;
-        self.into_execution_with_session(session)
-            .map_err(|error| error.to_string())
+        host_execution::consume_with_session(self, session).map_err(|error| error.to_string())
     }
+}
+
+/// Execution services for hosts that retain an authoring Scene across bootstrap.
+pub mod host_execution {
+    use super::*;
+    pub use crate::execution_session::ExecutionSession;
 
     /// Adopt an existing semantic family as an integration scene's canonical root.
     ///
     /// The same arena and family are retained. This performs no copy, membership
     /// mutation, or execution bootstrap; detached declarations remain detached.
-    pub fn with_integration_root(
+    pub fn adopt_root(
         store: Rc<RefCell<SemanticStore>>,
         root: SemanticNodeId,
-    ) -> Result<Self, noon_core::SemanticSceneOperationError> {
+    ) -> Result<Scene, noon_core::SemanticSceneOperationError> {
         store.borrow().semantic_family_checked(root)?;
-        Ok(Self {
+        Ok(Scene {
             store,
             root,
             cursor: 0.0,
@@ -100,11 +96,34 @@ impl Scene {
             source_generation: None,
         })
     }
-}
 
-/// Execution services for hosts that retain an authoring Scene across bootstrap.
-pub mod host_execution {
-    use super::*;
+    /// Lower a standalone runtime for a host-managed bootstrap or handoff.
+    /// Use [`Scene::into_execution`] for the ordinary owned execution path.
+    pub fn lower(
+        scene: &Scene,
+    ) -> Result<ExecutionSession, noon_compile::SemanticExecutionLoweringError> {
+        scene.execution_session()
+    }
+
+    /// Borrow execution controls before the host installs a prepared runtime.
+    pub fn borrow_uninstalled<'a>(
+        scene: &'a Scene,
+        session: &'a mut ExecutionSession,
+    ) -> LiveSession<'a> {
+        scene.live(session)
+    }
+
+    /// Transfer a host-prepared runtime and its exact Scene into one owner.
+    ///
+    /// The handoff validates arena identity, publication revision, and scene root;
+    /// it never relowers or discards the supplied runtime's current state.
+    pub fn consume_with_session(
+        mut scene: Scene,
+        session: ExecutionSession,
+    ) -> Result<SceneExecution, SceneExecutionError> {
+        attach(&mut scene, session)?;
+        Ok(SceneExecution { scene })
+    }
 
     /// Install a prepared session only if it belongs to this exact Scene.
     pub fn attach(scene: &mut Scene, session: ExecutionSession) -> Result<(), SceneExecutionError> {
@@ -120,6 +139,80 @@ pub mod host_execution {
 
     pub fn session(scene: &Scene) -> Option<&ExecutionSession> {
         scene.running_execution()
+    }
+
+    /// Borrow execution controls from the Scene's installed runtime.
+    pub fn live(scene: &mut Scene) -> Option<LiveSession<'_>> {
+        scene.running_execution()?;
+        Some(scene.owned_live())
+    }
+
+    /// Register a host callable at its authored time and occurrence position.
+    pub fn add_updater(
+        scene: &mut Scene,
+        target: &crate::Mobject,
+        callback: noon_core::HostCallbackId,
+        active_from: f64,
+        position: Option<usize>,
+    ) -> Result<(), crate::AuthoringError> {
+        edit_updaters(scene, target, |transaction| {
+            transaction.add_updater(target.node_id(), callback, active_from, position);
+        })
+    }
+
+    /// Close the first open occurrence of a host callable at an exclusive time.
+    pub fn remove_updater(
+        scene: &mut Scene,
+        target: &crate::Mobject,
+        callback: noon_core::HostCallbackId,
+        inactive_from: f64,
+    ) -> Result<(), crate::AuthoringError> {
+        edit_updaters(scene, target, |transaction| {
+            transaction.remove_updater(target.node_id(), callback, inactive_from);
+        })
+    }
+
+    /// Close all open occurrences on this object at an exclusive time.
+    pub fn clear_updaters(
+        scene: &mut Scene,
+        target: &crate::Mobject,
+        inactive_from: f64,
+    ) -> Result<(), crate::AuthoringError> {
+        edit_updaters(scene, target, |transaction| {
+            transaction.clear_updaters(target.node_id(), inactive_from);
+        })
+    }
+
+    fn edit_updaters(
+        scene: &mut Scene,
+        target: &crate::Mobject,
+        declare: impl FnOnce(&mut noon_core::SemanticMutationTransaction),
+    ) -> Result<(), crate::AuthoringError> {
+        if !Rc::ptr_eq(&scene.store, target.integration_store()) {
+            return Err(crate::AuthoringError::ForeignStore);
+        }
+        let mut transaction = noon_core::SemanticMutationTransaction::new();
+        declare(&mut transaction);
+        scene.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
+    /// Publish a typed host semantic transaction through its owning Scene.
+    pub fn publish(
+        scene: &mut Scene,
+        transaction: noon_core::SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, crate::AuthoringError> {
+        scene.apply_semantic_transaction(transaction)
+    }
+
+    /// Publish for a host that explicitly retains a raw store, root, and runtime.
+    pub fn publish_at_root(
+        store: &Rc<RefCell<SemanticStore>>,
+        root: SemanticNodeId,
+        execution: &mut ExecutionSession,
+        transaction: noon_core::SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, ExecutionSessionPublicationError>
+    {
+        Scene::publish_running_transaction(store, root, execution, transaction)
     }
 
     /// Borrow the original store and root alongside the installed execution.
@@ -359,7 +452,7 @@ mod tests {
         session.advance_to(0.5).unwrap();
         let before = session.frame().clone();
         let publication = session.publication_context();
-        let mut execution = scene.into_execution_with_session(session).unwrap();
+        let mut execution = host_execution::consume_with_session(scene, session).unwrap();
         assert!(Rc::ptr_eq(&arena, execution.scene.integration_store()));
         assert_eq!(execution.session().frame(), &before);
         assert_eq!(execution.session().publication_context(), publication);
@@ -377,7 +470,7 @@ mod tests {
         let right = Scene::new();
         let session = left.execution_session().unwrap();
         assert!(matches!(
-            right.into_execution_with_session(session),
+            host_execution::consume_with_session(right, session),
             Err(SceneExecutionError::Publication(
                 ExecutionSessionPublicationError::ForeignSemanticStore
             )),
@@ -388,7 +481,7 @@ mod tests {
         let session = left.execution_session().unwrap();
         let root = right.root();
         assert!(matches!(
-            right.into_execution_with_session(session),
+            host_execution::consume_with_session(right, session),
             Err(SceneExecutionError::Publication(ExecutionSessionPublicationError::UnknownObject(found))) if found == root,
         ));
     }
@@ -399,7 +492,7 @@ mod tests {
         let session = scene.execution_session().unwrap();
         scene.circle(0.5).unwrap();
         assert!(matches!(
-            scene.into_execution_with_session(session),
+            host_execution::consume_with_session(scene, session),
             Err(SceneExecutionError::Publication(
                 ExecutionSessionPublicationError::StaleSceneRevision { .. }
             )),

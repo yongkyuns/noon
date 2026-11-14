@@ -306,9 +306,14 @@ impl Scene {
 }
 
 impl<C: LiveContinuation> LiveProgram<C> {
-    /// Borrow the authoritative runtime for frame, wake, camera, and query observations.
+    /// Borrow the owning Scene for authoring observations during execution.
+    pub const fn scene(&self) -> &Scene {
+        self.scene.get()
+    }
+
+    /// Borrow the runtime for host frame delivery and diagnostics.
     pub const fn session(&self) -> &ExecutionSession {
-        self.scene.get().owned_execution()
+        self.scene().owned_execution()
     }
 
     /// Derive host cadence from the runtime and this program's one continuation barrier.
@@ -802,7 +807,7 @@ mod tests {
             if self.1 {
                 // Ordinary controls and detached animation targets must still work.
                 let target = scene.target_editor(&self.0[0])?;
-                scene.live().set_translation(&target, 1.0, 0.0)?;
+                scene.set_translation(&target, 1.0, 0.0)?;
                 let definition = target.get_effect("stripes")?.authored_definition()?;
                 let detached = scene
                     .live()
@@ -944,12 +949,11 @@ mod tests {
             &mut self,
             scene: &mut ContinuationScene,
         ) -> Result<ContinuationStep, Self::Error> {
-            let live = &mut scene.live();
             *self.resumes.borrow_mut() += 1;
             match self.stage {
                 0 => {
                     self.stage = 1;
-                    let segment = live.declare_and_activate_transform_to(
+                    let segment = scene.live().declare_and_activate_transform_to(
                         &self.source,
                         &self.target,
                         AnimationOptions::new()
@@ -960,9 +964,9 @@ mod tests {
                 }
                 1 => {
                     self.stage = 2;
-                    live.set_translation(&self.source, 3.0, -1.0)?;
+                    scene.set_translation(&self.source, 3.0, -1.0)?;
                     assert_eq!(
-                        live.effective(&self.source)?.transform.translation,
+                        scene.effective(&self.source)?.transform.translation,
                         Vec2::new(3.0, -1.0)
                     );
                     Ok(ContinuationStep::Finished)

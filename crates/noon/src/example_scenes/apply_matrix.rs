@@ -18,7 +18,6 @@ impl LiveContinuation for ApplyMatrix {
                     .target_editor(&self.square)
                     .map_err(|e| e.to_string())?;
                 scene
-                    .live()
                     .set_translation(&target, 1.0, 1.0)
                     .map_err(|e| e.to_string())?;
                 self.stage = 1;
@@ -56,7 +55,6 @@ impl LiveContinuation for ApplyMatrix {
             }
             2 => {
                 let layout = scene
-                    .live()
                     .effective_layout(&self.square)
                     .map_err(|e| e.to_string())?;
                 if (layout.center.0 - 2.0).abs() > 1.0e-5
