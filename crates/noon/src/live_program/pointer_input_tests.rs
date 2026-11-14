@@ -74,6 +74,13 @@ fn finished_program_routes_typed_drag_input_without_frontend_target_selection() 
     scene.add(&circle).unwrap();
     let mut program = scene.into_live_program(Finish).unwrap();
     program.set_translation_drag_targets([&circle]).unwrap();
+    let foreign = Scene::new().circle(0.5).unwrap();
+    assert!(matches!(
+        program.set_translation_drag_targets([&circle, &foreign]),
+        Err(LiveProgramError::TranslationDrag(
+            TranslationDragError::ForeignStore
+        ))
+    ));
     program.resume().unwrap();
 
     let token = program.configure_native_pointer_input(POINTER, 0).unwrap();

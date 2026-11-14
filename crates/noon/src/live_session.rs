@@ -500,10 +500,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<(), LiveSessionError> {
         let mut nodes = Vec::new();
         for target in targets {
-            if !Rc::ptr_eq(self.store, target.integration_store()) {
-                return Err(LiveSessionError::ForeignMobjectStore);
-            }
-            target.validate().map_err(LiveSessionError::from)?;
+            self.require_mobject(target)?;
             nodes.push(target.node_id());
         }
         self.session

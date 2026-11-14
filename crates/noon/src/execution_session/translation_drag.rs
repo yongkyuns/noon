@@ -153,7 +153,7 @@ pub struct TranslationDragReceipt {
 impl ExecutionSession {
     /// Configure the complete native target policy. Frontends supply only typed
     /// pointer occurrences; they never choose an object identity per event.
-    pub fn set_translation_drag_targets(
+    pub(crate) fn set_translation_drag_targets(
         &mut self,
         targets: impl IntoIterator<Item = SemanticNodeId>,
     ) -> Result<(), TranslationDragError> {

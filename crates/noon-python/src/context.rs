@@ -246,7 +246,7 @@ pub struct Context {
     // Host binding provenance only; membership and object state stay in Rust Scene.
     bound_ids: HashSet<noon_core::SemanticNodeId>,
     // Pointer policy declared before the first segment installs the session.
-    drag_targets: Vec<noon_core::SemanticNodeId>,
+    drag_targets: Vec<Mobject>,
     pub(crate) segment: Option<ExecutionSegment>,
     pub(crate) terminal: bool,
     pub(crate) sample_hz: f64,
@@ -309,9 +309,9 @@ impl Context {
         session.require_effect_resource_preparation();
         // Predeclared audio uses the immutable timeline for preview and export.
         if !self.drag_targets.is_empty() {
-            session
-                .set_translation_drag_targets(self.drag_targets.iter().copied())
-                .map_err(|error| engine_error(noon::LiveSessionError::TranslationDrag(error)))?;
+            scene_execution::borrow_uninstalled(&self.scene, &mut session)
+                .set_translation_drag_targets(&self.drag_targets)
+                .map_err(engine_error)?;
         } else if self.retain_history && !session.has_audio() {
             session
                 .begin_replay_retention(Default::default())
@@ -3306,7 +3306,7 @@ impl Context {
     #[pyo3(name = "setTranslationDragTargets")]
     fn set_translation_drag_targets(&mut self, batch: &MembershipBatch) -> PyResult<()> {
         self.available()?;
-        let mut nodes = Vec::new();
+        let mut targets = Vec::new();
         let mut seen = HashSet::new();
         for target in batch.add_targets()? {
             let MobjectTarget::Object(object) = target else {
@@ -3325,14 +3325,13 @@ impl Context {
             if !seen.insert(node) {
                 return Err(engine_error("translation drag targets must be unique"));
             }
-            nodes.push(node);
+            targets.push(object);
         }
-        if let Some(session) = scene_execution::session_mut(&mut self.scene) {
-            session
-                .set_translation_drag_targets(nodes)
-                .map_err(|error| engine_error(noon::LiveSessionError::TranslationDrag(error)))?;
+        if let Some(mut live) = scene_execution::live(&mut self.scene) {
+            live.set_translation_drag_targets(targets)
+                .map_err(engine_error)?;
         } else {
-            self.drag_targets = nodes;
+            self.drag_targets = targets.into_iter().cloned().collect();
         }
         Ok(())
     }
