@@ -1787,7 +1787,7 @@ impl ExecutionSession {
     /// runtime publication all complete before semantic identity is committed. The final
     /// semantic/runtime commit is one synchronous publication, so every returned error leaves
     /// the store revision, runtime frame, activation counters, and segment state unchanged.
-    pub fn declare_and_activate_transform_to(
+    pub(crate) fn declare_and_activate_transform_to(
         &mut self,
         store: &mut SemanticStore,
         source: SemanticNodeId,
@@ -1810,7 +1810,7 @@ impl ExecutionSession {
     }
 
     /// Atomically declare and activate one path-motion timeline leaf.
-    pub fn declare_and_activate_move_along_path(
+    pub(crate) fn declare_and_activate_move_along_path(
         &mut self,
         store: &mut SemanticStore,
         target: SemanticNodeId,
@@ -3269,7 +3269,8 @@ impl ExecutionSession {
     /// FadeIn admits one detached existing object and its appearance-zero track in one
     /// publication. FadeOut keeps membership until exact segment completion removes it with the
     /// appearance driver. No lifecycle state is retained outside the semantic store/session.
-    pub fn declare_and_activate_fade(
+    #[cfg(test)]
+    fn declare_and_activate_fade(
         &mut self,
         store: &mut SemanticStore,
         root: SemanticNodeId,
@@ -3288,7 +3289,7 @@ impl ExecutionSession {
     }
 
     /// Atomically declare and activate a Fade with an activation-relative affine endpoint.
-    pub fn declare_and_activate_fade_with_endpoint(
+    pub(crate) fn declare_and_activate_fade_with_endpoint(
         &mut self,
         store: &mut SemanticStore,
         root: SemanticNodeId,
@@ -3321,7 +3322,7 @@ impl ExecutionSession {
     ///
     /// Introduction admits a detached object in the declaration transaction. Removal keeps the
     /// live object present through the endpoint and removes membership during segment completion.
-    pub fn declare_and_activate_affine_lifecycle(
+    pub(crate) fn declare_and_activate_affine_lifecycle(
         &mut self,
         store: &mut SemanticStore,
         root: SemanticNodeId,
@@ -3359,7 +3360,7 @@ impl ExecutionSession {
     }
 
     /// Atomically introduce one detached leaf and activate its geometry reveal.
-    pub fn declare_and_activate_create(
+    pub(crate) fn declare_and_activate_create(
         &mut self,
         store: &mut SemanticStore,
         root: SemanticNodeId,
@@ -3387,7 +3388,7 @@ impl ExecutionSession {
     /// execution root keeps that membership through its endpoint. Omitted options reverse the
     /// rate and remove the target; explicit `reverse_rate_function` and `remover` values are
     /// honored independently. Both forms share one transaction and one runtime activation.
-    pub fn declare_and_activate_uncreate(
+    pub(crate) fn declare_and_activate_uncreate(
         &mut self,
         store: &mut SemanticStore,
         root: SemanticNodeId,
@@ -3407,7 +3408,7 @@ impl ExecutionSession {
     /// Membership admission, all leaf declarations, the Parallel root, reveal tracks, and
     /// runtime publication are prepared together. Every target remains detached when checked;
     /// no target or wrapper-facing identity is committed if any leaf is invalid.
-    pub fn declare_and_activate_create_parallel(
+    pub(crate) fn declare_and_activate_create_parallel(
         &mut self,
         store: &mut SemanticStore,
         root: SemanticNodeId,
