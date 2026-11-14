@@ -44,10 +44,11 @@ mod wait_bootstrap_tests;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon::integration::CallbackPhaseToken;
 use noon_core::ObjectId;
+#[cfg(target_arch = "wasm32")]
+use noon_core::SemanticVec3;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{
     HostCallbackId, SemanticFadeDirection, SemanticSceneMembershipRequest, SemanticStore,
-    SemanticVec3,
 };
 
 #[derive(Clone)]
@@ -1665,12 +1666,9 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn require_pre_execution_signal_authoring(&self) -> Result<(), String> {
+    fn require_authored_cursor(&self) -> Result<(), String> {
         if !self.player_ownership.is_unstarted() {
-            return Err(
-                "signal declarations and bindings must be authored before canonical execution begins"
-                    .into(),
-            );
+            return Err("authored cursor operations require a Scene before execution".into());
         }
         Ok(())
     }
@@ -1755,150 +1753,6 @@ impl CanonicalAuthoringScene {
                 .associate_value_tracker(tracker)
                 .map_err(AuthoringFailure::from),
         }
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn pointer_position_signal(&self) -> Result<noon::NativeVectorSignal, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .pointer_position_signal()
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn viewport_size_signal(&self) -> Result<noon::NativeVectorSignal, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .viewport_size_signal()
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn wheel_delta_signal(&self) -> Result<noon::NativeVectorSignal, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .wheel_delta_signal()
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn key_state_signal(
-        &self,
-        code: String,
-        initial: bool,
-    ) -> Result<noon::NativeBoolSignal, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .key_state_signal(code, initial)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn control_signal(
-        &self,
-        name: String,
-        initial: f64,
-    ) -> Result<noon::ValueTracker, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .control_signal(name, initial)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn pointer_down_events(&self, button: u8) -> Result<noon::ValueTracker, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .pointer_down_events(button)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn wheel_events(&self) -> Result<noon::ValueTracker, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene.wheel_events().map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn control_commit_events(&self, name: String) -> Result<noon::ValueTracker, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .control_commit_events(name)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn bind_native_translation(
-        &self,
-        object: &noon::Mobject,
-        signal: &noon::NativeVectorSignal,
-    ) -> Result<(), AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .bind_native_translation(object, signal)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn bind_rotation(
-        &self,
-        object: &noon::Mobject,
-        signal: &noon::ValueTracker,
-    ) -> Result<(), AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .bind_rotation(object, signal)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn bind_opacity(
-        &self,
-        object: &noon::Mobject,
-        signal: &noon::ValueTracker,
-    ) -> Result<(), AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .bind_opacity(object, signal)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn bind_presence(
-        &self,
-        object: &noon::Mobject,
-        signal: &noon::NativeBoolSignal,
-    ) -> Result<(), AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .bind_presence(object, signal)
-            .map_err(AuthoringFailure::from)
-    }
-
-    /// Build only the common `offset + tracker * direction` semantic expression.
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn tracker_position(
-        &self,
-        tracker: &noon::ValueTracker,
-        direction: SemanticVec3,
-        offset: SemanticVec3,
-    ) -> Result<noon::TrackerPosition, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .position_from_tracker(tracker, direction, offset)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn bind_tracker_position(
-        &self,
-        object: &noon::Mobject,
-        position: &noon::TrackerPosition,
-    ) -> Result<(), AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .bind_position(object, position)
-            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1997,7 +1851,7 @@ impl CanonicalAuthoringScene {
     /// Advance the shared Rust authoring cursor without declaring legacy timing.
     #[cfg(any(target_arch = "wasm32", test))]
     fn authored_wait(&mut self, duration: f64) -> Result<f64, String> {
-        self.require_pre_execution_signal_authoring()?;
+        self.require_authored_cursor()?;
         self.scene.wait(duration)?;
         Ok(self.scene.time())
     }
@@ -2012,7 +1866,7 @@ impl CanonicalAuthoringScene {
         run_time: f64,
         rate_function: noon_core::RateFunction,
     ) -> Result<(), AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
+        self.require_authored_cursor()?;
         self.scene
             .play_value(tracker, target)
             .rate_func(rate_function)
@@ -7365,6 +7219,8 @@ mod wasm {
         pub fn pointer_position_signal(&mut self) -> Result<WasmNativeVectorSignalHandle, JsValue> {
             let signal = self
                 .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .pointer_position_signal()
                 .map_err(typed_js_error)?;
             Ok(WasmNativeVectorSignalHandle {
@@ -7375,7 +7231,12 @@ mod wasm {
 
         #[wasm_bindgen(js_name = viewportSizeSignal)]
         pub fn viewport_size_signal(&mut self) -> Result<WasmNativeVectorSignalHandle, JsValue> {
-            let signal = self.inner.viewport_size_signal().map_err(typed_js_error)?;
+            let signal = self
+                .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .viewport_size_signal()
+                .map_err(typed_js_error)?;
             Ok(WasmNativeVectorSignalHandle {
                 signal,
                 store: std::rc::Rc::clone(self.inner.scene.integration_store()),
@@ -7384,7 +7245,12 @@ mod wasm {
 
         #[wasm_bindgen(js_name = wheelDeltaSignal)]
         pub fn wheel_delta_signal(&mut self) -> Result<WasmNativeVectorSignalHandle, JsValue> {
-            let signal = self.inner.wheel_delta_signal().map_err(typed_js_error)?;
+            let signal = self
+                .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .wheel_delta_signal()
+                .map_err(typed_js_error)?;
             Ok(WasmNativeVectorSignalHandle {
                 signal,
                 store: std::rc::Rc::clone(self.inner.scene.integration_store()),
@@ -7399,6 +7265,8 @@ mod wasm {
         ) -> Result<WasmNativeBoolSignalHandle, JsValue> {
             let signal = self
                 .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .key_state_signal(code, initial)
                 .map_err(typed_js_error)?;
             Ok(WasmNativeBoolSignalHandle {
@@ -7415,6 +7283,8 @@ mod wasm {
         ) -> Result<WasmValueTrackerHandle, JsValue> {
             let tracker = self
                 .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .control_signal(name, initial)
                 .map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle {
@@ -7430,6 +7300,8 @@ mod wasm {
         ) -> Result<WasmValueTrackerHandle, JsValue> {
             let tracker = self
                 .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .pointer_down_events(parse_button(button)?)
                 .map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle {
@@ -7440,7 +7312,12 @@ mod wasm {
 
         #[wasm_bindgen(js_name = wheelEvents)]
         pub fn wheel_events(&mut self) -> Result<WasmValueTrackerHandle, JsValue> {
-            let tracker = self.inner.wheel_events().map_err(typed_js_error)?;
+            let tracker = self
+                .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .wheel_events()
+                .map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle {
                 tracker,
                 store: std::rc::Rc::clone(self.inner.scene.integration_store()),
@@ -7454,6 +7331,8 @@ mod wasm {
         ) -> Result<WasmValueTrackerHandle, JsValue> {
             let tracker = self
                 .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .control_commit_events(name)
                 .map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle {
@@ -7474,6 +7353,8 @@ mod wasm {
             )?;
             let signal = signal.signal_in(self.inner.scene.integration_store())?;
             self.inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .bind_native_translation(object.semantic_mobject(), signal)
                 .map_err(typed_js_error)
         }
@@ -7487,6 +7368,8 @@ mod wasm {
             object.id_in_store(self.inner.scene.integration_store(), "rotation binding")?;
             let signal = signal.tracker_in(self.inner.scene.integration_store())?;
             self.inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .bind_rotation(object.semantic_mobject(), signal)
                 .map_err(typed_js_error)
         }
@@ -7500,6 +7383,8 @@ mod wasm {
             object.id_in_store(self.inner.scene.integration_store(), "opacity binding")?;
             let signal = signal.tracker_in(self.inner.scene.integration_store())?;
             self.inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .bind_opacity(object.semantic_mobject(), signal)
                 .map_err(typed_js_error)
         }
@@ -7513,6 +7398,8 @@ mod wasm {
             object.id_in_store(self.inner.scene.integration_store(), "presence binding")?;
             let signal = signal.signal_in(self.inner.scene.integration_store())?;
             self.inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .bind_presence(object.semantic_mobject(), signal)
                 .map_err(typed_js_error)
         }
@@ -7529,7 +7416,9 @@ mod wasm {
             let tracker = tracker.tracker_in(self.inner.scene.integration_store())?;
             let position = self
                 .inner
-                .tracker_position(
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .position_from_tracker(
                     tracker,
                     SemanticVec3::new(direction_x, direction_y, 0.0),
                     SemanticVec3::new(offset_x, offset_y, 0.0),
@@ -7553,7 +7442,9 @@ mod wasm {
             )?;
             let position = position.position_in(self.inner.scene.integration_store())?;
             self.inner
-                .bind_tracker_position(object.semantic_mobject(), position)
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .bind_position(object.semantic_mobject(), position)
                 .map_err(typed_js_error)
         }
 
@@ -16511,13 +16402,19 @@ mod tests {
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
         let tracker = context.create_value_tracker(0.0).unwrap();
         let position = context
-            .tracker_position(
+            .local_authoring_scene()
+            .unwrap()
+            .position_from_tracker(
                 &tracker,
                 SemanticVec3::new(1.0, 0.0, 0.0),
                 SemanticVec3::new(-2.0, 0.0, 0.0),
             )
             .unwrap();
-        context.bind_tracker_position(&circle, &position).unwrap();
+        context
+            .local_authoring_scene()
+            .unwrap()
+            .bind_position(&circle, &position)
+            .unwrap();
         assert_eq!(
             context
                 .scene
@@ -16677,13 +16574,19 @@ mod tests {
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
         let tracker = context.create_value_tracker(0.0).unwrap();
         let position = context
-            .tracker_position(
+            .local_authoring_scene()
+            .unwrap()
+            .position_from_tracker(
                 &tracker,
                 SemanticVec3::new(1.0, 0.0, 0.0),
                 SemanticVec3::new(-2.0, 0.0, 0.0),
             )
             .unwrap();
-        context.bind_tracker_position(&circle, &position).unwrap();
+        context
+            .local_authoring_scene()
+            .unwrap()
+            .bind_position(&circle, &position)
+            .unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
 
         assert!(begin_request(
@@ -17201,30 +17104,24 @@ mod tests {
     }
 
     #[test]
-    fn native_signal_declarations_bind_through_the_canonical_scene() {
+    fn local_authoring_scene_routes_signal_edits_to_the_execution_owner() {
         let mut context = CanonicalAuthoringScene::default();
-        let square = context.scene.square(0.9).unwrap();
-        context.bind_mobject(ObjectId::new(0), &square).unwrap();
-
-        let pointer = context.pointer_position_signal().unwrap();
-        context.bind_native_translation(&square, &pointer).unwrap();
-        let opacity = context.control_signal("opacity".into(), 1.0).unwrap();
-        context.bind_opacity(&square, &opacity).unwrap();
-        let clicks = context.pointer_down_events(0).unwrap();
-        context.bind_rotation(&square, &clicks).unwrap();
-        let visible = context.key_state_signal("Space".into(), false).unwrap();
-        context.bind_presence(&square, &visible).unwrap();
-        context.viewport_size_signal().unwrap();
-        context.wheel_delta_signal().unwrap();
-        context.wheel_events().unwrap();
-        context.control_commit_events("opacity".into()).unwrap();
-
-        let foreign = CanonicalAuthoringScene::default();
-        assert!(foreign.bind_native_translation(&square, &pointer).is_err());
+        context
+            .local_authoring_scene()
+            .unwrap()
+            .pointer_position_signal()
+            .unwrap();
 
         context.live_player(1.0).unwrap();
-        assert!(context.pointer_position_signal().is_err());
-        assert!(context.bind_opacity(&square, &opacity).is_err());
+        assert!(matches!(
+            context
+                .local_authoring_scene()
+                .unwrap()
+                .pointer_position_signal(),
+            Err(noon::AuthoringError::Unsupported(
+                noon::UnsupportedAuthoringOperation::SignalAuthoringRequiresSetup
+            ))
+        ));
     }
 
     #[test]

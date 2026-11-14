@@ -1236,7 +1236,7 @@ impl Context {
     }
     #[pyo3(name = "trackerPosition")]
     fn tracker_position(
-        &self,
+        &mut self,
         tracker: &crate::signals::ValueTrackerHandle,
         dx: f64,
         dy: f64,
@@ -1244,11 +1244,6 @@ impl Context {
         y: f64,
     ) -> PyResult<crate::signals::TrackerPositionHandle> {
         self.available()?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "native signal bindings must be authored before execution",
-            ));
-        }
         self.scene
             .position_from_tracker(
                 &tracker.value,
@@ -1260,51 +1255,36 @@ impl Context {
     }
     #[pyo3(name = "bindTrackerPosition")]
     fn bind_tracker_position(
-        &self,
+        &mut self,
         target: &MobjectHandle,
         position: &crate::signals::TrackerPositionHandle,
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "native signal bindings must be authored before execution",
-            ));
-        }
         self.scene
             .bind_position(&target.handle, &position.value)
             .map_err(engine_error)
     }
     #[pyo3(name = "bindRotation")]
     fn bind_tracker_rotation(
-        &self,
+        &mut self,
         target: &MobjectHandle,
         tracker: &crate::signals::ValueTrackerHandle,
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "native signal bindings must be authored before execution",
-            ));
-        }
         self.scene
             .bind_rotation(&target.handle, &tracker.value)
             .map_err(engine_error)
     }
     #[pyo3(name = "bindOpacity")]
     fn bind_tracker_opacity(
-        &self,
+        &mut self,
         target: &MobjectHandle,
         tracker: &crate::signals::ValueTrackerHandle,
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "native signal bindings must be authored before execution",
-            ));
-        }
         self.scene
             .bind_opacity(&target.handle, &tracker.value)
             .map_err(engine_error)

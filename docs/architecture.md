@@ -341,7 +341,7 @@ Rust authoring is first-class, not a wrapper around Python, JavaScript, WASM, JS
 
 The idiomatic Rust API calls shared semantic operations directly and must support normal `Scene`, `Mobject`, animation, signal/reactive, query, mutation, lowering, execution, and rendering workflows entirely inside the Rust environment.
 
-`Scene` owns ordinary construction, persistent edits, and effective queries before and after execution starts. For example, a Rust continuation edits the current `Scene` directly and borrows `LiveSession` to schedule or drive a segment. `SceneExecution` retains the same owner for native and browser hosts. The execution boundary handles scheduling, callback phases, input, and renderer publication receipts.
+`Scene` owns ordinary construction, persistent edits, and effective queries before and after execution starts. For example, a Rust continuation edits the current `Scene` directly and borrows `LiveSession` to schedule or drive a segment. `SceneExecution` retains the same owner for native and browser hosts. The execution boundary handles scheduling, callback phases, input, and renderer publication receipts. Native input routes, derived signal expressions, and property bindings are declared before bootstrap. The running Scene can still update values on enrolled trackers.
 
 A native Rust application must be able to build and render a Noon scene without initializing any language host or serialization subsystem.
 

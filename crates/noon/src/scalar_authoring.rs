@@ -178,8 +178,8 @@ impl ValueTrackerPlay<'_> {
             self.target,
             TrackTiming::new(start, duration, self.rate_function),
         );
-        transaction
-            .apply(&mut self.scene.integration_store().borrow_mut())
+        self.scene
+            .apply_semantic_transaction(transaction)
             .map_err(|error| error.to_string())?;
         // The same conditions were checked above; this cannot fail after the
         // declaration commits, avoiding a divergent facade-owned cursor.
@@ -193,11 +193,12 @@ impl ValueTrackerPlay<'_> {
 impl Scene {
     /// Build the first supported tracker expression, `offset + tracker * direction`.
     pub fn position_from_tracker(
-        &self,
+        &mut self,
         tracker: &ValueTracker,
         direction: SemanticVec3,
         offset: SemanticVec3,
     ) -> Result<TrackerPosition, AuthoringError> {
+        self.require_signal_setup()?;
         tracker.require_store(self.integration_store())?;
         if !direction.is_finite() || !offset.is_finite() {
             return Err(AuthoringError::Signal(
@@ -228,21 +229,13 @@ impl Scene {
 
     /// Bind a tracker-derived position through the shared semantic subscription.
     pub fn bind_position(
-        &self,
+        &mut self,
         object: &Mobject,
         position: &TrackerPosition,
     ) -> Result<(), AuthoringError> {
         self.require_object(object)?;
         position.require_store(self.integration_store())?;
-        self.integration_store()
-            .borrow_mut()
-            .bind_semantic_signal(
-                position.node,
-                object.node_id(),
-                SemanticObjectProperty::Translation,
-            )
-            .map(|_| ())
-            .map_err(AuthoringError::from)
+        self.bind_signal(object, position.node, SemanticObjectProperty::Translation)
     }
 
     /// Set a non-timeline-owned tracker at the current authored or running time.
@@ -524,7 +517,7 @@ mod tests {
     #[test]
     fn tracker_handles_reject_foreign_scene_stores() {
         let mut scene = Scene::new();
-        let foreign = Scene::new();
+        let mut foreign = Scene::new();
         let tracker = scene.value_tracker(0.0).unwrap();
         assert!(foreign
             .position_from_tracker(

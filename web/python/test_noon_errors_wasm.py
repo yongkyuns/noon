@@ -81,6 +81,20 @@ class WasmErrorProjectionTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "authoring.foreign_store")
         self.assertEqual(list(other.rootMembershipKeys()), [])
 
+    def test_running_scene_rejects_signal_binding_and_keeps_the_tracker_writable(self):
+        store = wasm.WasmAuthoringStore.new()
+        context = store.createSceneContext()
+        subject = circle(store)
+        context.bindMobject("0", subject)
+        tracker = context.createValueTracker(0.25)
+        context.beginLiveExecution(1)
+        with self.assertRaises(NoonUnsupportedError) as caught:
+            engine_call(context.bindOpacity, subject, tracker)
+        self.assert_diagnostic(caught.exception, "unsupported_operation")
+        self.assertEqual(caught.exception.code, "authoring.unsupported")
+        context.setValueTracker(tracker, 0.75)
+        self.assertEqual(context.valueTrackerValue(tracker), 0.75)
+
     def test_stale_generation_preserves_cause_without_freeing_js_wrapper(self):
         store = wasm.WasmAuthoringStore.new()
         context = store.createSceneContext()

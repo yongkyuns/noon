@@ -1166,6 +1166,27 @@ class Demo(MovingCameraScene):
         finally:
             view.close()
 
+    def test_running_scene_rejects_signal_binding_and_keeps_the_tracker_writable(self):
+        source = '''from noon import Circle, Scene
+from _noon_errors import NoonUnsupportedError
+
+class Demo(Scene):
+    async def construct(self):
+        circle = Circle()
+        self.add(circle)
+        tracker = self.value_tracker(0.25)
+        await self.wait(0.125)
+        try:
+            self.bind_opacity(circle, tracker)
+        except NoonUnsupportedError as error:
+            assert error.code == "authoring.unsupported"
+        else:
+            raise AssertionError("running Scene accepted a new binding")
+        tracker.set_value(0.75)
+        assert tracker.get_value() == 0.75
+'''
+        close_scene(asyncio.run(run_source(source)))
+
     def test_native_scalar_binding_rewinds_across_a_persistent_write(self):
         path = ROOT / "web/python/examples/ordinary_value_tracker_continuation.py"
         view = prepare_view(asyncio.run(run_source(path.read_text(), filename=str(path),
