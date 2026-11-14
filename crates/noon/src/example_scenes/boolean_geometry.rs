@@ -1,5 +1,5 @@
 //! Four filled-region operations share ordinary retained paths and rendering.
-use crate::{BooleanOperation, ManimGeometryOptions, Scene};
+use crate::{BooleanOperation, Scene};
 
 pub fn session() -> Result<crate::SceneExecution, String> {
     let build = || -> Result<_, Box<dyn std::error::Error>> {
@@ -14,7 +14,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             (BooleanOperation::Difference, -2.5, -1.5, noon_core::YELLOW),
             (BooleanOperation::Exclusion, 2.5, -1.5, noon_core::RED),
         ] {
-            let mut options = ManimGeometryOptions::boolean_geometry(op, &[a.clone(), b.clone()])?;
+            let mut options = scene.boolean_geometry_options(op, &[a.clone(), b.clone()])?;
             options.set_color(
                 f64::from(color.red),
                 f64::from(color.green),

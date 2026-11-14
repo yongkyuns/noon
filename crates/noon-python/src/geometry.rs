@@ -11,8 +11,49 @@ impl GeometryOptions {
         Self { options }
     }
 }
+#[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
+pub(crate) struct BooleanOperands(pub(crate) Vec<noon::Mobject>);
+
+#[pymethods]
+impl BooleanOperands {
+    fn push(&mut self, object: &crate::mobject::MobjectHandle) {
+        self.0.push(object.handle.clone());
+    }
+
+    fn free(&mut self) {
+        self.0.clear();
+    }
+}
+
+pub(crate) fn boolean_operation(name: &str) -> PyResult<noon::BooleanOperation> {
+    use noon::BooleanOperation;
+    match name {
+        "Union" => Ok(BooleanOperation::Union),
+        "Intersection" => Ok(BooleanOperation::Intersection),
+        "Difference" => Ok(BooleanOperation::Difference),
+        "Exclusion" => Ok(BooleanOperation::Exclusion),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            "unknown boolean operation",
+        )),
+    }
+}
+
 #[pymethods]
 impl GeometryOptions {
+    #[staticmethod]
+    #[pyo3(name = "booleanOperands")]
+    fn boolean_operands() -> BooleanOperands {
+        BooleanOperands(Vec::new())
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "booleanGeometry")]
+    fn boolean_geometry(name: &str, operands: &BooleanOperands) -> PyResult<Self> {
+        noon::ManimGeometryOptions::boolean_geometry(boolean_operation(name)?, &operands.0)
+            .map(Self::from_options)
+            .map_err(engine_error)
+    }
+
     #[staticmethod]
     #[pyo3(name="polygram", signature=(coordinates,lengths))]
     #[allow(clippy::too_many_arguments)]

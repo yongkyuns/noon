@@ -393,7 +393,7 @@ class Underline(_compat.Line):
         buff_value = _shared._ir._finite_number("buff", buff)
         options = dict(kwargs)
         color = options.pop("color", None)
-        context = _shared._live_constructor_context("Underline")
+        context = _shared._path_authoring_context(mobject)
         candidate = (
             engine_call(target_handle.beginUnderline, buff_value)
             if context is None
@@ -401,7 +401,7 @@ class Underline(_compat.Line):
         )
         _shared._apply_shared_constructor_options(candidate, options)
         _apply_candidate_color(candidate, color)
-        _shared._attach_geometry_options(self, candidate, "Underline")
+        _shared._attach_geometry_options(self, candidate, "Underline", context=context)
         self.buff = buff_value
 
 
@@ -587,7 +587,7 @@ def _boolean_init(self, operation: str, mobjects: tuple, options: dict) -> None:
     try:
         for handle in handles:
             engine_call(operands.push, handle)
-        context = _shared._live_constructor_context(operation)
+        context = _shared._path_authoring_context(*mobjects)
         candidate = (
             engine_call(_shared._geometry_options.booleanGeometry, operation, operands)
             if context is None
@@ -600,9 +600,11 @@ def _boolean_init(self, operation: str, mobjects: tuple, options: dict) -> None:
         _shared._apply_shared_constructor_options(candidate, options)
         _apply_candidate_color(candidate, color)
     except Exception:
-        candidate.free()
+        release = getattr(candidate, "free", None)
+        if release is not None:
+            release()
         raise
-    _shared._attach_geometry_options(self, candidate, operation)
+    _shared._attach_geometry_options(self, candidate, operation, context=context)
 
 
 class Union(_compat.VMobject):

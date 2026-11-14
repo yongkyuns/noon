@@ -203,6 +203,39 @@ impl ManimGeometryOptions {
     }
 }
 
+impl crate::Scene {
+    /// Prepare an Underline from this object's current layout.
+    pub fn underline_options(
+        &self,
+        target: &Mobject,
+        buff: f64,
+    ) -> Result<ManimGeometryOptions, AuthoringError> {
+        self.require_object(target)?;
+        self.require_effective_capture()?;
+        if self
+            .running_execution()
+            .is_some_and(|execution| execution.semantic_object_is_reachable(target.node_id()))
+        {
+            // Retain the authored bounds requirement for empty targets.
+            target
+                .layout_bounds()?
+                .ok_or(AuthoringError::MissingLayoutBounds(target.node_id()))?;
+            let layout = self.effective_layout(target)?;
+            let ((x, y), width, height) = (layout.center, layout.width, layout.height);
+            return ManimGeometryOptions::underline(
+                Bounds2D64 {
+                    min_x: x - width * 0.5,
+                    max_x: x + width * 0.5,
+                    min_y: y - height * 0.5,
+                    max_y: y + height * 0.5,
+                },
+                buff,
+            );
+        }
+        target.underline_options(buff)
+    }
+}
+
 impl Mobject {
     pub fn manim_dot(
         store: Rc<RefCell<SemanticStore>>,
@@ -330,14 +363,19 @@ impl Mobject {
     }
 
     pub fn manim_underline(target: &Self, buff: f64) -> Result<Self, AuthoringError> {
-        target.validate()?;
-        let bounds = target
-            .layout_bounds()?
-            .ok_or(AuthoringError::MissingLayoutBounds(target.node_id()))?;
         Self::from_manim_geometry(
             Rc::clone(target.integration_store()),
-            ManimGeometryOptions::underline(bounds, buff)?,
+            target.underline_options(buff)?,
         )
+    }
+
+    /// Prepare an Underline from detached authored layout.
+    pub fn underline_options(&self, buff: f64) -> Result<ManimGeometryOptions, AuthoringError> {
+        self.validate()?;
+        let bounds = self
+            .layout_bounds()?
+            .ok_or(AuthoringError::MissingLayoutBounds(self.node_id()))?;
+        ManimGeometryOptions::underline(bounds, buff)
     }
 }
 

@@ -90,7 +90,7 @@ fn live_boolean_constructor_observes_current_affine_without_copying_paint() {
         ManimGeometryOptions::boolean_geometry(Op::Union, &[a.clone(), b.clone()]).unwrap();
     let live_options = execution
         .scene()
-        .effective_boolean_geometry_options(Op::Union, &[a.clone(), b])
+        .boolean_geometry_options(Op::Union, &[a.clone(), b])
         .unwrap();
     // Options are snapshots; later execution cannot move either captured region.
     {
@@ -131,7 +131,7 @@ fn live_boolean_constructor_rejects_active_content_override_atomically() {
         .len();
 
     let error = scene
-        .effective_boolean_geometry_options(Op::Union, &[a, b])
+        .boolean_geometry_options(Op::Union, &[a, b])
         .unwrap_err();
     assert!(matches!(
         error,
@@ -158,7 +158,7 @@ fn live_boolean_constructor_preserves_foreign_store_error() {
     assert!(matches!(
         execution
             .scene()
-            .effective_boolean_geometry_options(Op::Union, &[a, foreign]),
+            .boolean_geometry_options(Op::Union, &[a, foreign]),
         Err(noon::AuthoringError::ForeignStore)
     ));
 }

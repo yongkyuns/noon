@@ -1805,6 +1805,32 @@ impl Context {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "beginBooleanGeometry")]
+    fn begin_boolean_geometry(
+        &self,
+        name: &str,
+        operands: &crate::geometry::BooleanOperands,
+    ) -> PyResult<crate::geometry::GeometryOptions> {
+        self.available()?;
+        self.scene
+            .boolean_geometry_options(crate::geometry::boolean_operation(name)?, &operands.0)
+            .map(crate::geometry::GeometryOptions::from_options)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "beginUnderline")]
+    fn begin_underline(
+        &self,
+        target: &crate::mobject::MobjectHandle,
+        buff: f64,
+    ) -> PyResult<crate::geometry::GeometryOptions> {
+        self.available()?;
+        self.scene
+            .underline_options(&target.handle, buff)
+            .map(crate::geometry::GeometryOptions::from_options)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "prepareTangentLine")]
     fn prepare_tangent_line(
         &self,
