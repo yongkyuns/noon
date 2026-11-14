@@ -1805,6 +1805,21 @@ impl Context {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "prepareTangentLine")]
+    fn prepare_tangent_line(
+        &self,
+        source: &MobjectHandle,
+        alpha: f64,
+        length: f64,
+        d_alpha: f64,
+    ) -> PyResult<GeometryOptions> {
+        self.available()?;
+        self.scene
+            .tangent_line_options(&source.handle, alpha, length, d_alpha)
+            .map(GeometryOptions::from_options)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
+    }
+
     #[pyo3(name = "prepareAxesArea")]
     fn prepare_axes_area(
         &self,
