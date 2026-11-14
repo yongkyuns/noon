@@ -2221,6 +2221,24 @@ impl Context {
         plan.publish_on_scene(&mut self.scene, &top, &baseline)
     }
 
+    #[pyo3(name = "createSvgFromString", signature = (source, should_center, height, width_or_defaults))]
+    fn create_svg_from_string(
+        &mut self,
+        source: &str,
+        should_center: bool,
+        height: Option<f64>,
+        width_or_defaults: &Bound<'_, PyAny>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        crate::svg::on_scene(
+            &mut self.scene,
+            source,
+            should_center,
+            height,
+            width_or_defaults,
+        )
+    }
+
     #[pyo3(name = "createCoordinates")]
     fn coordinates(
         &mut self,

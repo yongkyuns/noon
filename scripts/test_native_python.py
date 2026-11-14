@@ -163,6 +163,23 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    def test_svg_import_after_wait_keeps_playback_coherent(self):
+        source = """from noon import *
+class Demo(Scene):
+    async def construct(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>'
+        before = SVGMobject.from_string(svg, height=2, fill_color=BLUE)
+        self.add(before)
+        await self.wait(0.125)
+        after = SVGMobject.from_string(svg, height=2, fill_color=BLUE).shift(RIGHT)
+        assert len(after) == 1
+        assert abs(after.get_center()[0] - before.get_center()[0] - 1) < 1e-6
+        self.add(after)
+        await self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_three_d_axis_labels_publish_after_playback_starts(self):
         source = """from noon import *
 class Demo(ThreeDScene):
