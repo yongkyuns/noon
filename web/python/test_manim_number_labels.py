@@ -662,11 +662,7 @@ class NumericLabelAdapterTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual([entry[0] for entry in self.created], ["Fixture Sans", "Fixture Sans"])
 
-    def test_live_and_callback_guards_precede_allocation(self):
-        labels._shared._live_constructor_context.return_value = object()
-        with self.assertRaises(NotImplementedError):
-            self.invoke((1,))
-        labels._shared._live_constructor_context.return_value = None
+    def test_callback_guard_precedes_allocation(self):
         labels._plot._outside_callback.side_effect = NotImplementedError('callback')
         with self.assertRaises(NotImplementedError):
             self.invoke((1,))

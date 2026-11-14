@@ -326,14 +326,25 @@ async function initializePyodide() {
     );
   };
   self.noonNumberLineDecimalNumberLabelFamily = (
-    line, values, automatic, options, attach,
+    line, values, automatic, options, attach, context,
   ) => {
     if (!latexCompiler) {
       options.free();
       throw new Error(`${latexPreparationHint} before constructing NumberLine numbers`);
     }
-    return line.numberLineDecimalNumberLabelFamily(
-      values, automatic, options, attach, latexCompiler,
+    return context == null
+      ? line.numberLineDecimalNumberLabelFamily(values, automatic, options, attach, latexCompiler)
+      : context.createNumberLineDecimalLabels(line, values, automatic, options, attach, latexCompiler);
+  };
+  self.noonSceneDecimalCoordinateLabelFamilies = (
+    context, xAxis, yAxis, xValues, automaticX, yValues, automaticY, xOptions, yOptions,
+  ) => {
+    if (!latexCompiler) {
+      xOptions.free(); yOptions.free();
+      throw new Error(`${latexPreparationHint} before constructing coordinates`);
+    }
+    return context.createCoordinateDecimalLabels(
+      xAxis, yAxis, xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
     );
   };
   self.noonAxesDecimalCoordinateLabelFamilies = (

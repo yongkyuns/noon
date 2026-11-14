@@ -4,7 +4,7 @@ use crate::numeric_authoring::PreparedDecimalValue;
 use crate::plot_presentation::{NumberLabelAuthoringError as Error, NumberLabelOptions};
 use crate::{
     AuthoringError, AxesFrame, Bounds2D64, LatexBackend, ManimAxes, ManimNextToArgs,
-    ManimNumberLine, ManimNumberPlane, MobjectFamily, NumberLineFrame, TextAuthoringError,
+    ManimNumberLine, ManimNumberPlane, MobjectFamily, NumberLineFrame, Scene, TextAuthoringError,
 };
 use noon_core::{
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
@@ -224,6 +224,16 @@ fn stage(
     Ok(family)
 }
 
+fn publish_authored(
+    store: &mut SemanticStore,
+    transaction: SemanticMutationTransaction,
+) -> Result<SemanticMutationTransactionResult, TextAuthoringError> {
+    transaction
+        .apply(store)
+        .map_err(AuthoringError::from)
+        .map_err(TextAuthoringError::Semantic)
+}
+
 fn publish_decimal_coordinate_families(
     backend: &mut impl LatexBackend,
     store: &mut SemanticStore,
@@ -234,20 +244,15 @@ fn publish_decimal_coordinate_families(
 ) -> Result<[SemanticNodeId; 2], Error> {
     let x = PreparedDecimalLabels::prepare(backend, frame.x(), numbers[0], options[0])?;
     let y = PreparedDecimalLabels::prepare(backend, frame.y(), numbers[1], options[1])?;
-    let (_, roots) = PreparedDecimalLabels::publish_pair(
+    PreparedDecimalLabels::publish_pair(
         store,
         x,
         parents[0].into(),
         y,
         parents[1].into(),
-        |store, transaction| {
-            transaction
-                .apply(store)
-                .map_err(AuthoringError::from)
-                .map_err(TextAuthoringError::Semantic)
-        },
-    )?;
-    Ok(roots)
+        publish_authored,
+    )
+    .map(|(_, roots)| roots)
 }
 
 impl ManimNumberLine {
@@ -261,12 +266,7 @@ impl ManimNumberLine {
         let prepared =
             PreparedDecimalLabels::prepare(backend, self.authored_frame()?, numbers, options)?;
         let store = Rc::clone(self.family().integration_store());
-        let (_, root) = prepared.publish(&mut store.borrow_mut(), None, |store, transaction| {
-            transaction
-                .apply(store)
-                .map_err(AuthoringError::from)
-                .map_err(TextAuthoringError::Semantic)
-        })?;
+        let (_, root) = prepared.publish(&mut store.borrow_mut(), None, publish_authored)?;
         Ok(MobjectFamily::from_node(store, root)?)
     }
 
@@ -283,12 +283,7 @@ impl ManimNumberLine {
         let (_, root) = prepared.publish(
             &mut store.borrow_mut(),
             Some(self.family().node_id().into()),
-            |store, transaction| {
-                transaction
-                    .apply(store)
-                    .map_err(AuthoringError::from)
-                    .map_err(TextAuthoringError::Semantic)
-            },
+            publish_authored,
         )?;
         Ok(MobjectFamily::from_node(store, root)?)
     }
@@ -348,6 +343,77 @@ impl ManimNumberPlane {
         Ok([
             MobjectFamily::from_node(Rc::clone(&store), x)?,
             MobjectFamily::from_node(store, y)?,
+        ])
+    }
+}
+
+impl Scene {
+    /// Create a retained DecimalNumber label family from the current line snapshot.
+    pub fn number_line_decimal_labels(
+        &mut self,
+        line: &ManimNumberLine,
+        backend: &mut impl LatexBackend,
+        numbers: Option<&[f64]>,
+        options: &NumberLabelOptions,
+        attach: bool,
+    ) -> Result<MobjectFamily, Error> {
+        self.require_resource_admission()?;
+        let prepared = PreparedDecimalLabels::prepare(
+            backend,
+            self.number_line_frame(line)?,
+            numbers,
+            options,
+        )?;
+        let parent = attach.then(|| line.family().node_id().into());
+        let (_, root) = self.with_semantic_publication(|store, publish| {
+            Ok(prepared.publish(store, parent, |store, transaction| {
+                publish(store, transaction).map_err(TextAuthoringError::Semantic)
+            }))
+        })??;
+        Ok(MobjectFamily::from_node(
+            Rc::clone(self.integration_store()),
+            root,
+        )?)
+    }
+
+    /// Create and attach both axes' DecimalNumber labels in one publication.
+    pub fn coordinate_decimal_labels(
+        &mut self,
+        x: &ManimNumberLine,
+        y: &ManimNumberLine,
+        backend: &mut impl LatexBackend,
+        numbers: [Option<&[f64]>; 2],
+        options: [&NumberLabelOptions; 2],
+    ) -> Result<[MobjectFamily; 2], Error> {
+        self.require_resource_admission()?;
+        let x_labels = PreparedDecimalLabels::prepare(
+            backend,
+            self.number_line_frame(x)?,
+            numbers[0],
+            options[0],
+        )?;
+        let y_labels = PreparedDecimalLabels::prepare(
+            backend,
+            self.number_line_frame(y)?,
+            numbers[1],
+            options[1],
+        )?;
+        let (_, [x_root, y_root]) = self.with_semantic_publication(|store, publish| {
+            Ok(PreparedDecimalLabels::publish_pair(
+                store,
+                x_labels,
+                x.family().node_id().into(),
+                y_labels,
+                y.family().node_id().into(),
+                |store, transaction| {
+                    publish(store, transaction).map_err(TextAuthoringError::Semantic)
+                },
+            ))
+        })??;
+        let store = self.integration_store();
+        Ok([
+            MobjectFamily::from_node(Rc::clone(store), x_root)?,
+            MobjectFamily::from_node(Rc::clone(store), y_root)?,
         ])
     }
 }

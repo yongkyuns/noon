@@ -232,6 +232,9 @@ if hasattr(_native, "prepare_latex"):
     def noonAxesDecimalCoordinateLabelFamilies(*arguments):
         return _native.decimal_coordinates(_arena(), *arguments, False)
 
+    def noonSceneDecimalCoordinateLabelFamilies(*arguments):
+        return _native.scene_decimal_coordinates(_arena(), *arguments)
+
     def noonDecimalNumberLabelMembers(family):
         return _native.decimal_label_members(_arena(), family)
 

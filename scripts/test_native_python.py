@@ -141,6 +141,28 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    def test_decimal_coordinate_labels_publish_during_playback(self):
+        source = """from noon import *
+class Demo(Scene):
+    async def construct(self):
+        await prepare_latex()
+        axes = Axes((-2, 2, 1), (-2, 2, 1), tips=False)
+        self.add(axes)
+        axes.add_coordinates((1,), (1,))
+        before = axes.x_axis.numbers[0].get_center()
+        await self.play(axes.animate.shift(RIGHT), run_time=0.125)
+        axes.add_coordinates((1,), (-1, 1))
+        assert len(axes.y_axis.numbers) == 2
+        x_label = axes.x_axis.numbers[0]
+        assert x_label.get_value() == 1
+        assert abs(x_label.get_center()[0] - before[0] - 1) < 1e-5
+        axes.x_axis.add_numbers((2,))
+        assert axes.x_axis.numbers[0].get_value() == 2
+        await self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_three_d_axis_labels_publish_after_playback_starts(self):
         source = """from noon import *
 class Demo(ThreeDScene):
