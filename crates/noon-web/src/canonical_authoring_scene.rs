@@ -634,7 +634,7 @@ impl CanonicalAuthoringScene {
         if self.bindings.contains_key(&id) {
             return Err(format!("canonical object {} is already bound", id.get()).into());
         }
-        let frame = self.scene.camera_frame().map_err(AuthoringFailure::from)?;
+        let frame = self.local_authoring_scene()?.camera_frame()?;
         let node = frame.node_id();
         debug_assert!(!self.identities.contains_key(&node));
         self.bindings.insert(id, node);
@@ -868,12 +868,12 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn local_authoring_scene(&mut self) -> Result<&mut noon::Scene, AuthoringFailure> {
-        if self.player_ownership.is_unstarted() {
-            return Ok(&mut self.scene);
+        #[cfg(any(target_arch = "wasm32", test))]
+        if !self.player_ownership.is_unstarted() {
+            return Ok(self.active_live_player()?.scene_mut());
         }
-        Ok(self.active_live_player()?.scene_mut())
+        Ok(&mut self.scene)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

@@ -71,16 +71,10 @@ impl CanonicalAuthoringScene {
         id: noon_core::ObjectId,
         camera: SemanticCamera3D,
     ) -> Result<noon::Mobject, crate::authoring_error::AuthoringFailure> {
-        if !self.player_ownership.is_unstarted() {
-            return Err("3D camera must be declared before execution starts".into());
-        }
         if self.bindings.contains_key(&id) {
             return Err(format!("canonical object {} is already bound", id.get()).into());
         }
-        let object = self
-            .scene
-            .camera_3d(camera)
-            .map_err(crate::authoring_error::AuthoringFailure::from)?;
+        let object = self.local_authoring_scene()?.camera_3d(camera)?;
         let node = object.node_id();
         self.bindings.insert(id, node);
         self.identities.insert(node, id);
@@ -93,12 +87,10 @@ impl CanonicalAuthoringScene {
         color: Color,
         intensity: f64,
     ) -> Result<noon::Mobject, crate::authoring_error::AuthoringFailure> {
-        if !self.player_ownership.is_unstarted() {
-            return Err("3D point lights must be created before execution starts".into());
-        }
-        self.scene
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
             .point_light_3d(position, color, intensity)
-            .map_err(Into::into)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     pub(crate) fn effective_world_transform(
@@ -383,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn camera_binding_and_point_light_are_cold_only_and_fail_without_mutation() {
+    fn camera_initialization_is_setup_only_and_point_lights_use_scene_publication() {
         let mut context = CanonicalAuthoringScene::default();
         let camera_object = context
             .create_camera_3d(ObjectId::new(7), camera())
@@ -403,26 +395,25 @@ mod tests {
 
         let mut late = CanonicalAuthoringScene::default();
         late.live_player(1.0).unwrap();
-        let nodes_before = late.scene.integration_store().borrow().len();
-        assert!(late.create_camera_3d(ObjectId::new(8), camera()).is_err());
-        assert!(late
-            .create_point_light_3d(SemanticVec3::ZERO, Color::WHITE, 0.5)
-            .is_err());
-        assert_eq!(late.scene.integration_store().borrow().len(), nodes_before);
+        let revision = late.scene.integration_store().borrow().scene_revision();
+        let error = late
+            .create_camera_3d(ObjectId::new(8), camera())
+            .unwrap_err();
+        assert_eq!(error.category, "unsupported_operation");
+        assert_eq!(
+            late.scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert!(!late.bindings.contains_key(&ObjectId::new(8)));
 
-        let mut cold = CanonicalAuthoringScene::default();
-        let light = cold
-            .create_point_light_3d(SemanticVec3::new(1.0, 2.0, 3.0), Color::WHITE, 0.5)
+        context.live_player(1.0).unwrap();
+        let position = SemanticVec3::new(1.0, 2.0, 3.0);
+        let light = context
+            .create_point_light_3d(position, Color::WHITE, 0.5)
             .unwrap();
-        assert!(light.validate().is_ok());
-        assert!(!cold
-            .scene
-            .integration_store()
-            .borrow()
-            .node(cold.scene.root())
-            .unwrap()
-            .members()
-            .contains(&light.node_id()));
+        assert!(!context.members().unwrap().contains(&light.node_id()));
+        context.bind_mobject(ObjectId::new(9), &light).unwrap();
+        assert_eq!(context.effective_world_center(&light).unwrap(), position);
     }
 
     #[test]

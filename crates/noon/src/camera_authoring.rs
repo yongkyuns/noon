@@ -1,7 +1,6 @@
 use noon_core::{
-    SemanticMutationImpact, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectRole,
-    SemanticObjectState, SemanticStyle, StoredGeometry, Vec2, DEFAULT_FRAME_HEIGHT,
-    DEFAULT_FRAME_WIDTH,
+    SemanticMutationTransaction, SemanticObjectRole, SemanticObjectState, SemanticStyle,
+    StoredGeometry, Vec2, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH,
 };
 
 use crate::{AuthoringError, Bounds2D64, Mobject, Scene};
@@ -132,11 +131,28 @@ impl Scene {
 
     /// Create and attach the one ordinary semantic object that defines this scene's 2D camera.
     ///
-    /// Camera creation is scene initialization: the root must still be empty. Allocation and root
+    /// Initialize the camera before execution starts, while the root is empty. Allocation and root
     /// membership then commit in one semantic transaction. The frame remains an ordinary
     /// transformable Mobject; its role only tells lowering which effective transform supplies the
     /// renderer viewport.
     pub fn camera_frame(&mut self) -> Result<Mobject, AuthoringError> {
+        self.require_camera_setup()?;
+        let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
+            size: Vec2::new(DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT),
+        });
+        state.style = SemanticStyle {
+            object_opacity: 0.0,
+            ..SemanticStyle::default()
+        };
+        state.set_role(SemanticObjectRole::Camera2D);
+
+        self.create_role_object(state, true)
+    }
+
+    pub(crate) fn require_camera_setup(&self) -> Result<(), AuthoringError> {
+        if self.running_execution().is_some() {
+            return Err(crate::UnsupportedAuthoringOperation::CameraRequiresSetup.into());
+        }
         let store = self.integration_store().borrow();
         let root_is_empty = store
             .node(self.root())
@@ -147,37 +163,11 @@ impl Scene {
             })?
             .members()
             .is_empty();
-        drop(store);
         if !root_is_empty {
             return Err(AuthoringError::CameraRequiresEmptyScene(self.root()));
         }
 
-        let mut state = SemanticObjectState::new(StoredGeometry::Rectangle {
-            size: Vec2::new(DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT),
-        });
-        state.style = SemanticStyle {
-            object_opacity: 0.0,
-            ..SemanticStyle::default()
-        };
-        state.set_role(SemanticObjectRole::Camera2D);
-
-        let mut transaction = SemanticMutationTransaction::new();
-        let frame = transaction.create_node(SemanticNodeCreation::object(state));
-        transaction.add_member(self.root(), frame);
-        let result = transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map_err(AuthoringError::from)?;
-        let id = result
-            .resolve(frame)
-            .ok_or(AuthoringError::UnresolvedCreatedNode(frame))?;
-        debug_assert!(matches!(
-            result.impacts(),
-            [
-                SemanticMutationImpact::NodeAdded { .. },
-                SemanticMutationImpact::FamilyMemberAdded { .. }
-            ]
-        ));
-        Mobject::from_node(std::rc::Rc::clone(self.integration_store()), id)
+        Ok(())
     }
 }
 
@@ -241,6 +231,20 @@ mod tests {
                 .members(),
             [square.node_id()]
         );
+    }
+
+    #[test]
+    fn an_empty_running_scene_rejects_camera_initialization_before_publication() {
+        let mut running = Scene::new().into_execution().unwrap();
+        let publication = running.session().publication_context();
+        let revision = running.scene().revision();
+
+        assert_eq!(
+            running.scene_mut().camera_frame().unwrap_err(),
+            AuthoringError::Unsupported(crate::UnsupportedAuthoringOperation::CameraRequiresSetup)
+        );
+        assert_eq!(running.scene().revision(), revision);
+        assert_eq!(running.session().publication_context(), publication);
     }
 
     #[test]

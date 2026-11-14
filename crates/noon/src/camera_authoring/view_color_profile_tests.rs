@@ -1,6 +1,8 @@
 use super::*;
 use noon_compile::{CompiledObject, CompiledScene, ExecutionPatch};
-use noon_core::{GeometryRef, ObjectId, Style, Transform2D, ViewColorProfile};
+use noon_core::{
+    GeometryRef, ObjectId, SemanticNodeCreation, Style, Transform2D, ViewColorProfile,
+};
 use noon_runtime::{ReplayLimits, SceneInstance};
 
 #[test]

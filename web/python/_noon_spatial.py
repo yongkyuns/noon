@@ -490,7 +490,7 @@ class _RendererCameraProxy:
         if light is None:
             light = self._scene.point_light(position=(-7, -9, 10))
         # PointLight3D remains an ordinary Rust semantic object. Membership is
-        # edited through the same Scene/LiveSession operation as any Mobject.
+        # edited through the same Scene operation as any Mobject.
         self._scene.add_world_mobjects(light)
         return light
 

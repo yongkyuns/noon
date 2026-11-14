@@ -29,22 +29,13 @@ impl Scene {
         profile
             .camera(near, far)
             .ok_or(AuthoringError::NonFiniteObjectState)?;
-        if !self
-            .integration_store()
-            .borrow()
-            .node(self.root())
-            .ok_or(AuthoringError::NonFiniteObjectState)?
-            .members()
-            .is_empty()
-        {
-            return Err(AuthoringError::CameraRequiresEmptyScene(self.root()));
-        }
+        self.require_camera_setup()?;
         let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
         state.set_role(SemanticObjectRole::Camera3D);
         state
             .set_camera_profile(profile, near, far)
             .map_err(|_| AuthoringError::NonFiniteObjectState)?;
-        self.create_spatial_role(state, true)
+        self.create_role_object(state, true)
     }
 
     /// Read camera profile from the current effective frame when running, otherwise authored state.

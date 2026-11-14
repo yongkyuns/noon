@@ -33,6 +33,8 @@ pub enum UnsupportedAuthoringOperation {
     EffectiveTrackerUnavailable,
     /// Native-reactive declarations and subscriptions are lowered at bootstrap.
     SignalAuthoringRequiresSetup,
+    /// The execution plan fixes its camera at bootstrap.
+    CameraRequiresSetup,
     /// Text and external content do not expose a vector path.
     PathQueryContent,
     /// effective layout queries currently support affine and style drivers only.
@@ -103,6 +105,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::EffectiveStateUnavailable => "effective state requires a running Scene",
             Self::EffectiveTrackerUnavailable => "ValueTracker is not lowered into this execution session",
             Self::SignalAuthoringRequiresSetup => "signal declarations and bindings must be authored before execution",
+            Self::CameraRequiresSetup => "camera initialization must precede execution",
             Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
             Self::SpatialMeshBounds2D => "2D bounds queries do not support spatial mesh geometry",

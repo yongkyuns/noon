@@ -137,13 +137,12 @@ impl CanonicalAuthoringScene {
         near: f64,
         far: f64,
     ) -> Result<noon::Mobject, crate::authoring_error::AuthoringFailure> {
-        if !self.player_ownership.is_unstarted() {
-            return Err("3D camera must be declared before execution starts".into());
-        }
         if self.bindings.contains_key(&id) {
             return Err(format!("canonical object {} is already bound", id.get()).into());
         }
-        let object = self.scene.camera_3d_profile(profile, near, far)?;
+        let object = self
+            .local_authoring_scene()?
+            .camera_3d_profile(profile, near, far)?;
         let node = object.node_id();
         self.bindings.insert(id, node);
         self.identities.insert(node, id);

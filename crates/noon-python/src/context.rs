@@ -781,11 +781,6 @@ impl Context {
         far: f64,
     ) -> PyResult<MobjectHandle> {
         self.available()?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "3D camera must be declared before execution starts",
-            ));
-        }
         let position = noon::integration::spatial_input::vec3(&position, "camera position")
             .map_err(engine_error)?;
         let [w, x, y, z] = rotation.as_slice() else {
@@ -818,11 +813,6 @@ impl Context {
         far: f64,
     ) -> PyResult<MobjectHandle> {
         self.available()?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "3D camera must be declared before execution starts",
-            ));
-        }
         let profile =
             noon::integration::spatial_input::camera_profile(&values).map_err(engine_error)?;
         let object = self
@@ -840,11 +830,6 @@ impl Context {
         intensity: f64,
     ) -> PyResult<MobjectHandle> {
         self.available()?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "3D point lights must be created before execution starts",
-            ));
-        }
         let position = noon::integration::spatial_input::vec3(&position, "light position")
             .map_err(engine_error)?;
         let [r, g, b, a] = rgba.as_slice() else {
@@ -852,10 +837,11 @@ impl Context {
         };
         let color =
             noon::integration::spatial_input::color(*r, *g, *b, *a).map_err(engine_error)?;
+        let running = self.has_execution();
         self.scene
             .point_light_3d(position, color, intensity)
             .map(MobjectHandle::from_semantic_mobject)
-            .map_err(engine_error)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "setWorldTransform")]
     fn set_world_transform(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
@@ -1551,9 +1537,6 @@ impl Context {
     #[pyo3(name = "createCameraFrame")]
     fn camera_frame(&mut self, _id: &str) -> PyResult<MobjectHandle> {
         self.available()?;
-        if self.has_execution() {
-            return Err(engine_error("camera initialization must precede execution"));
-        }
         let handle = self.scene.camera_frame().map_err(engine_error)?;
         self.bound_ids.insert(handle.node_id());
         Ok(MobjectHandle::from_semantic_mobject(handle))

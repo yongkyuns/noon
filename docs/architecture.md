@@ -1798,7 +1798,9 @@ Surface cell families use the shared family affine pivots; aggregate world-pose
 and world-center observations are not part of the qualified profile.
 
 `ThreeDScene` and `SpatialScene` use one effective camera and the shared frame
-publication/runtime. Camera profile tracks update the effective pose and
+publication/runtime. Scene initializes the camera before execution. Point lights
+use ordinary Scene creation and membership during setup or playback. Camera
+profile tracks update the effective pose and
 projection together; ambient and 3D-illusion camera motion are authored camera
 state, while ordinary object animation remains on the common timeline.
 Illusion motion evaluates the pinned sine/cosine orientation analytically

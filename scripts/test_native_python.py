@@ -1122,6 +1122,28 @@ class Demo(SpatialScene):
         finally:
             view.close()
 
+    def test_native_point_light_can_be_created_after_wait(self):
+        source = '''from noon import Color, Mesh3D, SpatialScene
+class Demo(SpatialScene):
+    def construct(self):
+        self.wait(0.25)
+        light = self.point_light((4, -3, 6), intensity=0.3)
+        surface = Mesh3D.parametric(lambda u, v: (u, v, 0.25 * u * v),
+            u_range=(-1.5, 1.5), v_range=(-1.5, 1.5), resolution=(2, 2),
+            color=Color(0.2, 0.3, 0.4), point_lit=True)
+        self.add_world_mobjects(light, surface)
+        assert tuple(light.get_center()) == (4.0, -3.0, 6.0)
+        self.wait(0.25)
+'''
+        view = prepare_view(asyncio.run(run_source(source, retain_history=True)))
+        try:
+            before = view.capture(time=0.125, width=160, height=90)
+            after = view.capture(time=0.375, width=160, height=90)
+            self.assertNotEqual(before, after)
+            self.assertEqual(before, view.capture(time=0.125, width=160, height=90))
+        finally:
+            view.close()
+
     def test_named_scene_selection_executes_one_construct(self):
         source = """from noon import *
 context["module"] += 1

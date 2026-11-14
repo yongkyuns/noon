@@ -817,16 +817,7 @@ impl Scene {
     /// Initialize this Scene's one 3D camera before root content is attached.
     /// It remains an ordinary semantic Mobject whose world tracks drive Runtime.
     pub fn camera_3d(&mut self, camera: SemanticCamera3D) -> Result<Mobject, AuthoringError> {
-        if !self
-            .integration_store()
-            .borrow()
-            .node(self.root())
-            .ok_or(AuthoringError::NonFiniteObjectState)?
-            .members()
-            .is_empty()
-        {
-            return Err(AuthoringError::CameraRequiresEmptyScene(self.root()));
-        }
+        self.require_camera_setup()?;
         let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
         state.set_role(SemanticObjectRole::Camera3D);
         state
@@ -839,7 +830,7 @@ impl Scene {
         )
         .ok_or(AuthoringError::NonFiniteObjectState)?
         .into();
-        self.create_spatial_role(state, true)
+        self.create_role_object(state, true)
     }
 
     /// Create a detached point light. Color and intensity use ordinary effective
@@ -866,10 +857,10 @@ impl Scene {
             stroke_width: 0.0,
             ..SemanticStyle::default()
         };
-        self.create_spatial_role(state, false)
+        self.create_role_object(state, false)
     }
 
-    pub(crate) fn create_spatial_role(
+    pub(crate) fn create_role_object(
         &mut self,
         state: SemanticObjectState,
         attach: bool,
