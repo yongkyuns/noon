@@ -37,8 +37,10 @@ not a replacement for `docs/architecture.md`.
 
 ## Live examples
 
-Both the homepage and documentation mount selected live scenes as the page loads.
-There is no poster, captured video, or Open/Run activation gate in these views.
+The homepage and documentation mount the selected scenes on load when the
+primary pointer is a mouse or trackpad. For touch input, the cards start with
+gallery thumbnails. **Play scene** mounts one live embed and retires the previous
+one, releasing its workers and discarding its draft.
 Each scene has a compact **View / Code** switch. The code and canvas panels stay
 mounted; switching views does not reset the draft or execute the source again.
 
@@ -57,15 +59,14 @@ shortcuts through the existing playback controls, without displaying their full
 toolbar. The controls follow the website theme; source editing retains the
 canonical gallery syntax theme. Authored scene colors are not restyled.
 
-Every selected scene has its own context. Editing one does not evict another.
-This intentionally costs more than static captures or an opt-in single preview;
-no physical-device performance claim is made. Navigation retires the contexts and
+Every live scene has its own context. Desktop scenes can run concurrently.
+Navigation retires the contexts and
 the canonical gallery workers. Back/forward cache retains the editor DOM and
 resumes through the ordinary Run action. Merely changing browser tabs does not
 discard drafts. Audio availability remains subject to the existing host/browser
 policy; the site does not bypass user-gesture requirements for sound.
 
-`site/preview.js` owns only DOM lifetime, same-origin shell messages and load-error
+`site/preview.js` owns embed lifetime, same-origin shell messages and load-error
 retry. The initial runtime run is owned by `live-authoring-bootstrap.js`, not the
 embed adapter. Transport failure is not silently replaced by a prerecorded clip.
 Without JavaScript the site still presents documentation and full-editor links.
@@ -106,7 +107,7 @@ xvfb-run -a node scripts/project-site-embed-smoke.mjs
 python3 -m http.server --directory _site 8080
 ```
 
-The structural suite covers curated sources, autoplay mounting, trusted shell
+The structural suite covers curated sources, desktop autoplay, touch activation, trusted shell
 messages, independent contexts, theme changes, legacy routing and staging.
 The layout suite checks 1440/768/390/320 px, both themes, local links/fragments,
 no-JavaScript reading, tab accessibility, useful editing space and retry. It uses

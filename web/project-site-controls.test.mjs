@@ -14,9 +14,10 @@ class Element extends EventTarget {
 }
 function click(element) { element.dispatchEvent(new Event('click')); }
 function event(type, props) { const result = new Event(type); Object.assign(result, props); return result; }
-function fixture(count = 4, pathname = '/noon/site/docs/examples.html') {
+function fixture(count = 4, pathname = '/noon/site/docs/examples.html', coarsePointer = false) {
   const doc = new EventTarget(); doc.hidden = false; doc.documentElement = new Element();
   const win = new EventTarget(); win.location = { href:'https://example.test' + pathname, origin:'https://example.test' };
+  win.matchMedia = query => ({matches:query === '(pointer: coarse)' && coarsePointer});
   const timers = new Map(); let serial = 0;
   win.setTimeout = fn => { timers.set(++serial, fn); return serial; };
   win.clearTimeout = id => timers.delete(id);
@@ -28,8 +29,8 @@ function fixture(count = 4, pathname = '/noon/site/docs/examples.html') {
     return card;
   });
   doc.querySelectorAll = selector => selector === '[data-demo]' ? cards : [];
-  doc.createElement = tag => { assert.equal(tag,'iframe'); return new Element(); };
-  return {doc,win,cards,timers,frames:() => cards.flatMap(card => card.parts['[data-demo-frame]'].children),
+  doc.createElement = tag => Object.assign(new Element(),{tag});
+  return {doc,win,cards,timers,frames:() => cards.flatMap(card => card.parts['[data-demo-frame]'].children).filter(node=>node.tag === 'iframe'),
     install:()=>installPreviews(doc,win,new URL('https://example.test/noon/embed.html'))};
 }
 function message(f, frame, state = 'ready', view = 'view', origin = f.win.location.origin) {
@@ -44,6 +45,35 @@ test('all scenes mount eagerly without an activation click on homepage and docs'
     assert.equal(f.timers.size,4);
     dispose(); assert.equal(f.frames().length,0); assert.equal(f.timers.size,0);
   }
+});
+
+test('touch previews mount only the selected scene and retire the previous live frame', () => {
+  const f = fixture(4, '/noon/index.html', true);
+  const dispose = f.install();
+  const play = index => f.cards[index].parts['[data-demo-retry]'];
+  assert.equal(f.frames().length, 0);
+  assert.equal(f.timers.size, 0);
+  assert.ok(f.cards.every(card => card.dataset.liveState === 'idle'));
+
+  click(play(0));
+  const [first] = f.frames();
+  message(f, first, 'ready', 'code');
+  click(play(1));
+  const [second] = f.frames();
+  assert.equal(f.frames().length, 1);
+  assert.equal(first.removed, true);
+  assert.equal(f.cards[0].dataset.embedView, 'view');
+  assert.equal(play(0).textContent, 'Play scene');
+  assert.equal(f.timers.size, 1);
+
+  second.dispatchEvent(new Event('error'));
+  assert.equal(f.frames().length, 0);
+  assert.equal(play(1).textContent, 'Retry');
+  click(play(1));
+  assert.equal(f.frames().length, 1);
+  dispose();
+  assert.equal(f.frames().length, 0);
+  assert.equal(f.timers.size, 0);
 });
 
 test('View/Code messages preserve all contexts and independent drafts', () => {

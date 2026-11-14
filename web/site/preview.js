@@ -1,20 +1,33 @@
-// Mount the canonical live playground shell automatically. This owns only DOM
-// lifetime and transport errors; authoring, hot reload and playback stay in the
-// gallery. Every card has its own persistent context, including while editing.
+// Touch devices run one live playground at a time to bound the cost of
+// independent Python and renderer instances. The gallery still owns execution.
 export function installPreviews(documentLike = document, windowLike = window,
   embedUrl = new URL('../embed.html', import.meta.url)) {
   const records = new Set();
+  const playOnDemand = windowLike.matchMedia('(pointer: coarse)').matches;
+  let active = null;
   let disposed = false;
   const unmount = record => {
     windowLike.clearTimeout(record.timer);
     record.frame?.remove();
     record.frame = null;
   };
+  const showPreview = record => {
+    unmount(record);
+    record.card.dataset.liveState = 'idle';
+    record.card.dataset.embedView = 'view';
+    record.thumbnail.hidden = false;
+    record.status.hidden = true;
+    record.retry.textContent = 'Play scene';
+    record.retry.hidden = false;
+  };
   const fail = (record, text) => {
     unmount(record);
+    if (active === record) active = null;
+    if (record.thumbnail) record.thumbnail.hidden = false;
     record.card.dataset.liveState = 'error';
     record.status.textContent = text;
     record.status.hidden = false;
+    record.retry.textContent = 'Retry';
     record.retry.hidden = false;
   };
   const mount = record => {
@@ -28,6 +41,11 @@ export function installPreviews(documentLike = document, windowLike = window,
         url.searchParams.get('catalog') !== 'showcase') {
       fail(record, 'Invalid scene address.');
       return;
+    }
+    if (playOnDemand) {
+      if (active && active !== record) showPreview(active);
+      active = record;
+      record.thumbnail.hidden = true;
     }
     const frame = documentLike.createElement('iframe');
     frame.title = `${record.card.dataset.demo} — live scene and editable code`;
@@ -49,7 +67,7 @@ export function installPreviews(documentLike = document, windowLike = window,
         fail(record, 'The live scene did not respond.');
       }
     }, 30000);
-    record.card.querySelector('[data-demo-frame]').append(frame);
+    record.surface.append(frame);
   };
   const onMessage = event => {
     if (event.origin !== windowLike.location.origin || event.data?.type !== 'noon-site-embed-state') return;
@@ -72,6 +90,7 @@ export function installPreviews(documentLike = document, windowLike = window,
       record.retry.removeEventListener('click', record.onRetry);
     }
     records.clear();
+    active = null;
     windowLike.removeEventListener('message', onMessage);
     windowLike.removeEventListener('pagehide', onPageHide);
   };
@@ -84,11 +103,22 @@ export function installPreviews(documentLike = document, windowLike = window,
   windowLike.addEventListener('pagehide', onPageHide);
   for (const card of documentLike.querySelectorAll('[data-demo]')) {
     const record = { card, frame: null, timer: null,
+      surface: card.querySelector('[data-demo-frame]'), thumbnail: null,
       status: card.querySelector('[data-demo-status]'), retry: card.querySelector('[data-demo-retry]') };
     record.onRetry = () => mount(record);
     record.retry.addEventListener('click', record.onRetry);
     records.add(record);
-    mount(record);
+    if (playOnDemand) {
+      const thumbnail = documentLike.createElement('img');
+      thumbnail.alt = '';
+      thumbnail.loading = 'lazy';
+      thumbnail.src = new URL(`../thumbnails/showcase/${encodeURIComponent(card.dataset.demo)}.png`, import.meta.url).href;
+      record.thumbnail = thumbnail;
+      record.surface.append(thumbnail);
+      showPreview(record);
+    } else {
+      mount(record);
+    }
   }
   return dispose;
 }

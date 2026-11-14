@@ -6,7 +6,7 @@ when reporting a problem.
 
 ## The preview is blank
 
-Scenes start automatically. The first execution needs network access for Pyodide
+On a phone or tablet, tap **Play scene**. The first execution needs network access for Pyodide
 and a supported graphics backend. A loading message is not proof of rendered
 output. A failed document load has a **Retry** action. For Python/runtime errors,
 switch to **Code** and inspect the existing gallery diagnostics; correcting the

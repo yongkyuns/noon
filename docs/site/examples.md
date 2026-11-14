@@ -1,10 +1,11 @@
 # Examples
 
-These original Noon scenes start playing when the page loads. Switch between
-**View** and **Code** in each scene. Editing uses the gallery's existing Python
-editor and auto-run behavior: a typing pause reloads the scene, without a Run
-button or a separate editor. Each example keeps its own source while you switch
-views. Syntax errors are shown in Code; correcting the source runs it again.
+On a phone or tablet, tap **Play scene** to run an example. Starting another
+example closes the current one and discards its edits. With a mouse or trackpad,
+the scenes start when the page loads.
+
+Switch between **View** and **Code** within a live scene. Edits run after a typing
+pause. **Code** shows syntax errors and runs the scene again when you fix them.
 
 ## Your first scene
 
