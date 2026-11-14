@@ -262,6 +262,42 @@ impl Scene {
         Ok(f64::from(self.effective(mobject)?.style.stroke_width))
     }
 
+    /// Observe the background stroke RGB at the current publication.
+    pub fn effective_background_stroke_color(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<Option<Color>, AuthoringError> {
+        mobject.background_stroke_color()?;
+        Ok(self
+            .effective(mobject)?
+            .style
+            .background_stroke
+            .map(crate::semantic_mobject::opaque_paint_color))
+    }
+
+    /// Observe the background stroke width in scene units.
+    pub fn effective_background_stroke_width(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<f64, AuthoringError> {
+        Ok(f64::from(
+            self.effective(mobject)?.style.background_stroke_width,
+        ))
+    }
+
+    /// Observe the background stroke alpha, using the Manim default when absent.
+    pub fn effective_background_stroke_opacity(
+        &self,
+        mobject: &Mobject,
+    ) -> Result<f64, AuthoringError> {
+        mobject.background_stroke_opacity()?;
+        Ok(self
+            .effective(mobject)?
+            .style
+            .background_stroke
+            .map_or(1.0, |color| f64::from(color.alpha)))
+    }
+
     pub fn effective_stroke_cap(
         &self,
         mobject: &Mobject,

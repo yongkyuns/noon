@@ -1555,7 +1555,7 @@ impl CanonicalAuthoringScene {
                 .map_err(running_scene_error)
         })
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_background_stroke_color(
         &self,
         target: &noon::Mobject,
@@ -1564,19 +1564,13 @@ impl CanonicalAuthoringScene {
             target,
             noon::Mobject::background_stroke_color,
             |scene, target| {
-                target.background_stroke_color()?;
-                let observed = scene.effective(target).map_err(running_scene_error)?;
-                Ok(observed
-                    .style
-                    .background_stroke
-                    .map(|color| noon_core::Color {
-                        alpha: 1.0,
-                        ..color
-                    }))
+                scene
+                    .effective_background_stroke_color(target)
+                    .map_err(running_scene_error)
             },
         )
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_background_stroke_width(
         &self,
         target: &noon::Mobject,
@@ -1585,12 +1579,13 @@ impl CanonicalAuthoringScene {
             target,
             noon::Mobject::background_stroke_width,
             |scene, target| {
-                let observed = scene.effective(target).map_err(running_scene_error)?;
-                Ok(f64::from(observed.style.background_stroke_width))
+                scene
+                    .effective_background_stroke_width(target)
+                    .map_err(running_scene_error)
             },
         )
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_background_stroke_opacity(
         &self,
         handle: &noon::Mobject,
@@ -1599,14 +1594,9 @@ impl CanonicalAuthoringScene {
             handle,
             noon::Mobject::background_stroke_opacity,
             |scene, handle| {
-                handle
-                    .background_stroke_opacity()
-                    .map_err(AuthoringFailure::from)?;
-                let observed = scene.effective(handle).map_err(running_scene_error)?;
-                Ok(observed
-                    .style
-                    .background_stroke
-                    .map_or(1.0, |color| f64::from(color.alpha)))
+                scene
+                    .effective_background_stroke_opacity(handle)
+                    .map_err(running_scene_error)
             },
         )
     }
@@ -15711,6 +15701,13 @@ mod tests {
         line.set_fill(0.0, 1.0, 0.0, 0.2).unwrap();
         line.set_stroke_color(0.0, 0.0, 1.0, 1.0).unwrap();
         line.set_stroke_opacity(0.8).unwrap();
+        line.set_style(noon::StyleUpdate {
+            background_stroke_color: Some(Color::WHITE),
+            background_stroke_width: Some(0.125),
+            background_stroke_opacity: Some(0.25),
+            ..Default::default()
+        })
+        .unwrap();
         line.set_object_opacity(0.3).unwrap();
         assert!(context.mobject_line_endpoints(&line).is_err());
         assert!(context.mobject_path_query(&line).is_err());
@@ -15758,6 +15755,18 @@ mod tests {
         let color = context.mobject_color(&line).unwrap();
         assert!((context.mobject_fill_opacity(&line).unwrap() - 0.2).abs() < 1e-6);
         assert!((context.mobject_stroke_opacity(&line).unwrap() - 0.6).abs() < 1e-6);
+        assert_eq!(
+            context.mobject_background_stroke_color(&line).unwrap(),
+            Some(Color::WHITE)
+        );
+        assert_eq!(
+            context.mobject_background_stroke_width(&line).unwrap(),
+            0.125
+        );
+        assert_eq!(
+            context.mobject_background_stroke_opacity(&line).unwrap(),
+            0.25
+        );
         assert_eq!(line.stroke_opacity().unwrap(), 0.8);
         assert_eq!(color, Color::rgb(0.0, 1.0, 0.0));
         assert_eq!(line.manim_line_endpoints().unwrap().start, (-1.0, 0.0));
@@ -15765,6 +15774,7 @@ mod tests {
         let player = context.take_execution_player(2.0, 17).unwrap();
         assert!(context.mobject_path_query(&line).is_err());
         assert!(context.mobject_point_count(&line).is_err());
+        assert!(context.mobject_background_stroke_color(&line).is_err());
         {
             let error = context.mobject_line_endpoints(&line).unwrap_err();
             assert_eq!(

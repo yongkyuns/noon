@@ -72,7 +72,7 @@ impl Mobject {
         self.commit_state(state)
     }
 
-    /// Match authored paint; use LiveSession to capture current effective paint.
+    /// Match authored paint. Use [`Scene::match_style`] to capture effective paint.
     pub fn match_style(&self, target: &Self) -> Result<(), AuthoringError> {
         self.require_same_store(target)?;
         let mut state = self.state()?;

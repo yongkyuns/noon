@@ -458,6 +458,25 @@ impl Context {
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
     }
 
+    fn observe_bound_mobject<T>(
+        &self,
+        target: &MobjectHandle,
+        authored: impl FnOnce(&Mobject) -> Result<T, noon::AuthoringError>,
+        effective: impl FnOnce(&Scene, &Mobject) -> Result<T, noon::AuthoringError>,
+    ) -> PyResult<T> {
+        self.require_active()?;
+        self.same_store(target)?;
+        if !self.bound_ids.contains(&target.handle.node_id()) {
+            return Err(engine_error("mobject is not bound to this canonical Scene"));
+        }
+        if self.has_execution() {
+            effective(&self.scene, &target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+        } else {
+            authored(&target.handle).map_err(engine_error)
+        }
+    }
+
     fn place<T>(
         &mut self,
         operation: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
@@ -3702,19 +3721,8 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<crate::family::ColorObservation> {
-        self.require_active()?;
-        self.same_store(target)?;
-        if !self.bound_ids.contains(&target.handle.node_id()) {
-            return Err(engine_error("mobject is not bound to this canonical Scene"));
-        }
-        let color = if self.has_execution() {
-            self.scene
-                .effective_manim_color(&target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
-        } else {
-            target.handle.manim_color().map_err(engine_error)?
-        };
-        Ok(color.into())
+        self.observe_bound_mobject(target, Mobject::manim_color, Scene::effective_manim_color)
+            .map(Into::into)
     }
     #[pyo3(name = "createFamily")]
     fn create_family(
@@ -5365,18 +5373,11 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<crate::mobject::LineEndpoints> {
-        self.require_active()?;
-        self.same_store(target)?;
-        if !self.bound_ids.contains(&target.handle.node_id()) {
-            return Err(engine_error("mobject is not bound to this canonical Scene"));
-        }
-        let value = if self.has_execution() {
-            self.scene
-                .effective_line_endpoints(&target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
-        } else {
-            target.handle.manim_line_endpoints().map_err(engine_error)?
-        };
+        let value = self.observe_bound_mobject(
+            target,
+            Mobject::manim_line_endpoints,
+            Scene::effective_line_endpoints,
+        )?;
         Ok(crate::mobject::LineEndpoints { value })
     }
 
@@ -5385,38 +5386,44 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<Option<crate::family::ColorObservation>> {
-        self.require_active()?;
-        self.same_store(target)?;
-        if !self.bound_ids.contains(&target.handle.node_id()) {
-            return Err(engine_error("mobject is not bound to this canonical Scene"));
-        }
-        let color = if self.has_execution() {
-            self.scene
-                .effective_fill_color(&target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
-        } else {
-            target.handle.fill_color().map_err(engine_error)?
-        };
-        Ok(color.map(Into::into))
+        self.observe_bound_mobject(target, Mobject::fill_color, Scene::effective_fill_color)
+            .map(|color| color.map(Into::into))
     }
     #[pyo3(name = "queryMobjectStrokeColor")]
     fn query_stroke_color(
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<Option<crate::family::ColorObservation>> {
-        self.require_active()?;
-        self.same_store(target)?;
-        if !self.bound_ids.contains(&target.handle.node_id()) {
-            return Err(engine_error("mobject is not bound to this canonical Scene"));
-        }
-        let color = if self.has_execution() {
-            self.scene
-                .effective_stroke_color(&target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
-        } else {
-            target.handle.stroke_color().map_err(engine_error)?
-        };
-        Ok(color.map(Into::into))
+        self.observe_bound_mobject(target, Mobject::stroke_color, Scene::effective_stroke_color)
+            .map(|color| color.map(Into::into))
+    }
+    #[pyo3(name = "queryMobjectBackgroundStrokeColor")]
+    fn query_background_stroke_color(
+        &self,
+        target: &MobjectHandle,
+    ) -> PyResult<Option<crate::family::ColorObservation>> {
+        self.observe_bound_mobject(
+            target,
+            Mobject::background_stroke_color,
+            Scene::effective_background_stroke_color,
+        )
+        .map(|color| color.map(Into::into))
+    }
+    #[pyo3(name = "queryMobjectBackgroundStrokeWidth")]
+    fn query_background_stroke_width(&self, target: &MobjectHandle) -> PyResult<f64> {
+        self.observe_bound_mobject(
+            target,
+            Mobject::background_stroke_width,
+            Scene::effective_background_stroke_width,
+        )
+    }
+    #[pyo3(name = "queryMobjectBackgroundStrokeOpacity")]
+    fn query_background_stroke_opacity(&self, target: &MobjectHandle) -> PyResult<f64> {
+        self.observe_bound_mobject(
+            target,
+            Mobject::background_stroke_opacity,
+            Scene::effective_background_stroke_opacity,
+        )
     }
     #[pyo3(name = "queryMobjectFillOpacity")]
     fn query_fill_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
