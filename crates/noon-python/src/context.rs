@@ -4874,20 +4874,8 @@ impl Context {
                 "requested time is outside the live observation range",
             )));
         }
-        let current_time = scene_execution::session(&self.scene)
-            .map(ExecutionSession::effective_time)
-            .ok_or_else(|| engine_error("no execution session"))?;
-        if time < current_time {
-            scene_execution::seek(&mut self.scene, time)
-                .expect("evaluation uses the installed execution")
-                .map_err(|e| engine_error(e.to_string()))?;
-        } else {
-            scene_execution::session_mut(&mut self.scene)
-                .expect("evaluation uses the installed execution")
-                .advance_to(time)
-                .map_err(|e| engine_error(e.to_string()))?;
-        }
-        Ok(())
+        scene_execution::evaluate(&mut self.scene, time)
+            .map_err(|error| engine_error(error.to_string()))
     }
     #[pyo3(name = "queryEffectiveTranslation")]
     fn query_effective_translation(&self, target: &MobjectHandle) -> PyResult<(f64, f64)> {

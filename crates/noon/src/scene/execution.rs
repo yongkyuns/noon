@@ -19,6 +19,29 @@ pub struct SceneExecution {
     scene: Scene,
 }
 
+/// Failure to evaluate a source with an installed runtime.
+#[derive(Debug)]
+pub enum SceneEvaluationError {
+    /// The authoring Scene has no installed execution.
+    NoExecution,
+    /// Forward evaluation failed without seeking.
+    Advance(noon_runtime::EvaluationError),
+    /// Backward evaluation failed to seek the owned scene.
+    Seek(ExecutionSessionInputError),
+}
+
+impl std::fmt::Display for SceneEvaluationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoExecution => formatter.write_str("no execution session"),
+            Self::Advance(error) => error.fmt(formatter),
+            Self::Seek(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for SceneEvaluationError {}
+
 /// Failure to transfer a Scene and an existing execution into one source owner.
 #[derive(Debug)]
 pub enum SceneExecutionError {
@@ -40,6 +63,16 @@ impl std::fmt::Display for SceneExecutionError {
 impl std::error::Error for SceneExecutionError {}
 
 impl Scene {
+    fn seek_execution(
+        &mut self,
+        time: f64,
+    ) -> Result<&noon_runtime::FrameState, ExecutionSessionInputError> {
+        self.execution
+            .as_mut()
+            .expect("scene execution is installed")
+            .seek_with_store(&mut self.store.borrow_mut(), time)
+    }
+
     /// Consume this scene into the static source used by platform viewers.
     pub fn into_execution(mut self) -> Result<SceneExecution, SceneExecutionError> {
         if self.execution.is_none() {
@@ -76,6 +109,7 @@ impl Scene {
 
 /// Execution services for hosts that retain an authoring Scene across bootstrap.
 pub mod host_execution {
+    pub use super::SceneEvaluationError;
     use super::*;
     pub use crate::execution_session::ExecutionSession;
 
@@ -221,13 +255,24 @@ pub mod host_execution {
         scene.running_execution_mut()
     }
 
-    /// Seek the installed runtime with its owning scene available for input cleanup.
-    pub fn seek(
-        scene: &mut Scene,
-        time: f64,
-    ) -> Option<Result<&noon_runtime::FrameState, ExecutionSessionInputError>> {
-        let execution = scene.execution.as_mut()?;
-        Some(execution.seek_with_store(&mut scene.store.borrow_mut(), time))
+    /// Evaluate a source at an absolute authored time. Moving backward uses
+    /// the canonical Scene for input cleanup after deterministic admission.
+    pub fn evaluate(scene: &mut Scene, time: f64) -> Result<(), SceneEvaluationError> {
+        let execution = scene
+            .execution
+            .as_mut()
+            .ok_or(SceneEvaluationError::NoExecution)?;
+        if time < execution.effective_time() {
+            scene
+                .seek_execution(time)
+                .map(|_| ())
+                .map_err(SceneEvaluationError::Seek)
+        } else {
+            execution
+                .advance_to(time)
+                .map(|_| ())
+                .map_err(SceneEvaluationError::Advance)
+        }
     }
 
     /// Retire input-owned state before discarding execution. Keep the authored
@@ -321,7 +366,7 @@ impl SceneExecution {
         &mut self,
         time: f64,
     ) -> Result<&noon_runtime::FrameState, ExecutionSessionInputError> {
-        host_execution::seek(&mut self.scene, time).expect("scene execution is installed")
+        self.scene.seek_execution(time)
     }
 }
 

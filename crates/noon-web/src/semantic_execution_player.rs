@@ -1313,17 +1313,15 @@ impl SemanticExecutionPlayer {
     /// hold presentation at that same absolute time for a later handoff.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn live_evaluate(&mut self, time: f64) -> Result<(), AuthoringFailure> {
+        use noon::integration::scene_execution;
+
         let mut clock = self.clock.clone();
         clock.seek(time).map_err(AuthoringFailure::from)?;
         clock.pause();
-        if time < self.source.session().frame().time {
-            self.seek_session(time).map_err(AuthoringFailure::from)?;
-        } else {
-            self.source
-                .session_mut()
-                .advance_to(time)
-                .map_err(AuthoringFailure::from)?;
-        }
+        scene_execution::evaluate(self.source.scene_mut(), time).map_err(|error| match error {
+            scene_execution::SceneEvaluationError::Advance(error) => AuthoringFailure::from(error),
+            error => AuthoringFailure::from(error.to_string()),
+        })?;
         self.clock = clock;
         Ok(())
     }
