@@ -174,15 +174,12 @@ fn effective_root_queries_preserve_aliases_and_replay_at_each_coherent_child_pos
                     .unwrap()
             })
             .collect::<Vec<_>>();
-        let points = running
-            .scene()
-            .effective_all_points((&root).into())
-            .unwrap();
+        let points = running.scene().all_points((&root).into()).unwrap();
         assert_eq!(points, expected);
         assert_eq!(
             running
                 .scene()
-                .effective_point_reduction_tree((&root).into())
+                .point_reduction_tree((&root).into())
                 .unwrap()
                 .flattened_points(),
             expected
@@ -190,7 +187,7 @@ fn effective_root_queries_preserve_aliases_and_replay_at_each_coherent_child_pos
         assert_eq!(
             running
                 .scene()
-                .effective_vector_boundary_points((&root).into())
+                .vector_boundary_points((&root).into())
                 .unwrap(),
             boundary
         );
@@ -242,7 +239,7 @@ fn inactive_family_aliases_do_not_prevent_removed_leaf_create() {
     assert_eq!(
         running
             .scene()
-            .effective_vector_boundary_points((&aliases).into())
+            .vector_boundary_points((&aliases).into())
             .unwrap(),
         current.anchors().unwrap()
     );
@@ -296,7 +293,7 @@ fn xyz_reduction_snapshots_keep_tails_aliases_and_live_depth_without_publication
     let before = execution.session().publication_context();
     let current = execution
         .scene()
-        .effective_point_reduction_tree((&root).into())
+        .point_reduction_tree((&root).into())
         .unwrap();
     assert_eq!(current, snapshot);
     assert_eq!(execution.session().publication_context(), before);
@@ -307,7 +304,7 @@ fn xyz_reduction_snapshots_keep_tails_aliases_and_live_depth_without_publication
     let after_edit = execution.session().publication_context();
     let current = execution
         .scene()
-        .effective_point_reduction_tree((&root).into())
+        .point_reduction_tree((&root).into())
         .unwrap();
     let mut shifted = expected.clone();
     for point in &mut shifted[root_points.len()..] {
@@ -380,7 +377,7 @@ fn xyz_boundaries_include_family_owned_points_and_keep_anchor_admission_exact() 
     assert_eq!(
         execution
             .scene()
-            .effective_vector_boundary_points_3d((&root).into())
+            .vector_boundary_points_3d((&root).into())
             .unwrap(),
         expected
     );
@@ -395,7 +392,7 @@ fn xyz_boundaries_include_family_owned_points_and_keep_anchor_admission_exact() 
     assert_eq!(
         execution
             .scene()
-            .effective_vector_boundary_points_3d((&root).into())
+            .vector_boundary_points_3d((&root).into())
             .unwrap(),
         shifted
     );

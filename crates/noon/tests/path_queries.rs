@@ -948,26 +948,21 @@ fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
     let scene = execution.scene();
     let family_target = MobjectTarget::from(&family);
     let object_target = MobjectTarget::from(&object);
-    let points = scene.effective_all_points(family_target).unwrap();
+    let points = scene.all_points(family_target).unwrap();
     let effective_path = scene.effective_path_query(&object).unwrap();
     assert_eq!(points, effective_path.points().unwrap());
     assert_eq!(
-        scene.effective_path_boundary_points(object_target).unwrap(),
+        scene.path_boundary_points(object_target).unwrap(),
         effective_path.anchors().unwrap()
     );
-    assert_eq!(
-        scene.effective_path_boundary_points(family_target).unwrap(),
-        points
-    );
+    assert_eq!(scene.path_boundary_points(family_target).unwrap(), points);
     assert_eq!(
         scene
-            .effective_path_boundary_extremum_along_dim(object_target, 1, 1.)
+            .path_boundary_extremum_along_dim(object_target, 1, 1.)
             .unwrap(),
         1.5
     );
-    let boundary = scene
-        .effective_path_boundary_point(object_target, 0., 1.)
-        .unwrap();
+    let boundary = scene.path_boundary_point(object_target, 0., 1.).unwrap();
     assert_eq!(boundary.1, 1.5);
     assert_ne!(points, family_target.all_points().unwrap());
     let expected_center = (
@@ -975,38 +970,17 @@ fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
         points.iter().map(|point| point.1).sum::<f64>() / points.len() as f64,
     );
     assert_eq!(
-        scene.effective_center_of_mass(family_target).unwrap(),
+        scene.center_of_mass(family_target).unwrap(),
         expected_center
     );
-    let effective_top = scene
-        .effective_boundary_point(family_target, 0., 1.)
-        .unwrap();
+    let effective_top = scene.boundary_point(family_target, 0., 1.).unwrap();
     assert_eq!(effective_top.1, 1.5);
-    assert_eq!(
-        scene.effective_length_over_dim(family_target, 0).unwrap(),
-        2.
-    );
-    assert_eq!(
-        scene.effective_length_over_dim(family_target, 1).unwrap(),
-        1.
-    );
-    assert_eq!(
-        scene.effective_length_over_dim(family_target, 2).unwrap(),
-        0.
-    );
+    assert_eq!(scene.length_over_dim(family_target, 0).unwrap(), 2.);
+    assert_eq!(scene.length_over_dim(family_target, 1).unwrap(), 1.);
+    assert_eq!(scene.length_over_dim(family_target, 2).unwrap(), 0.);
     assert_eq!(family_target.extremum_along_dim(1, 1.).unwrap(), 0.5);
-    assert_eq!(
-        scene
-            .effective_extremum_along_dim(family_target, 1, 1.)
-            .unwrap(),
-        1.5
-    );
-    assert_eq!(
-        scene
-            .effective_extremum_along_dim(family_target, 2, 1.)
-            .unwrap(),
-        0.
-    );
+    assert_eq!(scene.extremum_along_dim(family_target, 1, 1.).unwrap(), 1.5);
+    assert_eq!(scene.extremum_along_dim(family_target, 2, 1.).unwrap(), 0.);
 }
 
 #[test]

@@ -325,7 +325,6 @@ fn effective_path_and_content_require_the_scene_owned_publication() {
 
     for result in [
         scene.effective_path_query(&line).map(|_| ()),
-        scene.effective_all_points((&line).into()).map(|_| ()),
         scene.effective_content(&line).map(|_| ()),
     ] {
         assert!(matches!(
@@ -336,23 +335,22 @@ fn effective_path_and_content_require_the_scene_owned_publication() {
         ));
     }
 
+    let setup_points = scene.all_points((&line).into()).unwrap();
     let execution = scene.execution_session().unwrap();
     scene.install_execution(execution);
     let query = scene.effective_path_query(&line).unwrap();
     assert_eq!(query.start().unwrap(), (1.0, 2.0));
     assert_eq!(query.end().unwrap(), (4.0, 6.0));
     assert!(scene.effective_content(&line).unwrap().geometry().is_some());
-    assert_eq!(
-        scene.effective_all_points((&line).into()).unwrap(),
-        query.points().unwrap()
-    );
+    assert_eq!(setup_points, query.points().unwrap());
+    assert_eq!(scene.all_points((&line).into()).unwrap(), setup_points);
     let publication = scene.owned_execution().publication_context();
 
     let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.line((0.0, 0.0), (1.0, 0.0)).unwrap();
     for result in [
         scene.effective_path_query(&foreign).map(|_| ()),
-        scene.effective_all_points((&foreign).into()).map(|_| ()),
+        scene.all_points((&foreign).into()).map(|_| ()),
         scene.effective_content(&foreign).map(|_| ()),
     ] {
         assert!(matches!(result, Err(crate::AuthoringError::ForeignStore)));
@@ -360,7 +358,7 @@ fn effective_path_and_content_require_the_scene_owned_publication() {
     line.shift(0.0, 1.0).unwrap();
     for result in [
         scene.effective_path_query(&line).map(|_| ()),
-        scene.effective_all_points((&line).into()).map(|_| ()),
+        scene.all_points((&line).into()).map(|_| ()),
         scene.effective_content(&line).map(|_| ()),
     ] {
         assert!(matches!(

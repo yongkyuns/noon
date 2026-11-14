@@ -1322,16 +1322,6 @@ impl crate::Scene {
             .collect())
     }
 
-    /// Capture the effective point arrays for an object or family in the
-    /// current Runtime publication, preserving recursive alias multiplicity.
-    pub fn effective_all_points(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
-        self.execution_for_observation()?;
-        self.all_points(target)
-    }
-
     /// Capture full-coordinate points in recursive order, including repeated aliases.
     pub fn all_points_3d(
         &self,
@@ -1339,15 +1329,6 @@ impl crate::Scene {
     ) -> Result<Vec<SemanticVec3>, AuthoringError> {
         self.point_array(target)
             .map(PointArrayObservation::into_points)
-    }
-
-    /// Capture full-coordinate points, retaining recursive child occurrences.
-    pub fn effective_all_points_3d(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<Vec<SemanticVec3>, AuthoringError> {
-        self.execution_for_observation()?;
-        self.all_points_3d(target)
     }
 
     /// Capture full-coordinate vector anchors in unique family order.
@@ -1366,15 +1347,6 @@ impl crate::Scene {
         target.vector_boundary_points_3d()
     }
 
-    /// Capture full-coordinate vector anchors in unique family order.
-    pub fn effective_vector_boundary_points_3d(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<Vec<SemanticVec3>, AuthoringError> {
-        self.execution_for_observation()?;
-        self.vector_boundary_points_3d(target)
-    }
-
     /// Capture planar vector anchors in unique family order.
     pub fn vector_boundary_points(
         &self,
@@ -1387,15 +1359,6 @@ impl crate::Scene {
         target.vector_boundary_points()
     }
 
-    /// Capture the planar projection of the effective vector anchors.
-    pub fn effective_vector_boundary_points(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
-        self.execution_for_observation()?;
-        self.vector_boundary_points(target)
-    }
-
     /// Capture owned points and ordered child occurrences in one snapshot.
     pub fn point_reduction_tree(
         &self,
@@ -1406,15 +1369,6 @@ impl crate::Scene {
         }
         target.require_store(self.integration_store())?;
         target.point_reduction_tree()
-    }
-
-    /// Capture owned points and ordered child occurrences for one target.
-    pub fn effective_point_reduction_tree(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<PointReductionTree, AuthoringError> {
-        self.execution_for_observation()?;
-        self.point_reduction_tree(target)
     }
 
     /// Select retained-content layout when any addressed member has opaque content.
@@ -1433,15 +1387,6 @@ impl crate::Scene {
         target.requires_content_boundary()
     }
 
-    /// Select retained-content layout when the effective target has opaque content.
-    pub fn effective_requires_content_boundary(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<bool, AuthoringError> {
-        self.execution_for_observation()?;
-        self.requires_content_boundary(target)
-    }
-
     /// Read the current critical point from recursive points or unique vector anchors.
     pub fn critical_point_3d(
         &self,
@@ -1457,17 +1402,6 @@ impl crate::Scene {
         point_values::critical_point_for_xyz_points(&points, direction)
     }
 
-    /// Read the effective boundary coordinate along one direction.
-    pub fn effective_critical_point_3d(
-        &self,
-        target: MobjectTarget<'_>,
-        direction: SemanticVec3,
-        vector_boundary: bool,
-    ) -> Result<SemanticVec3, AuthoringError> {
-        self.execution_for_observation()?;
-        self.critical_point_3d(target, direction, vector_boundary)
-    }
-
     /// Read the min, midpoint, or max of the current points along one dimension.
     pub fn extremum_along_dim(
         &self,
@@ -1478,30 +1412,9 @@ impl crate::Scene {
         extremum_for_xyz_points(&self.all_points_3d(target)?, dim, key)
     }
 
-    /// Query the effective min, midpoint, or max boundary coordinate for a
-    /// dimension from the current Runtime publication.
-    pub fn effective_extremum_along_dim(
-        &self,
-        target: MobjectTarget<'_>,
-        dim: usize,
-        key: f64,
-    ) -> Result<f64, AuthoringError> {
-        self.execution_for_observation()?;
-        self.extremum_along_dim(target, dim, key)
-    }
-
     /// Read the arithmetic mean of the current planar points.
     pub fn center_of_mass(&self, target: MobjectTarget<'_>) -> Result<(f64, f64), AuthoringError> {
         center_of_mass_for_xy_points(&self.all_points(target)?)
-    }
-
-    /// Query the effective center of mass from the current Runtime publication.
-    pub fn effective_center_of_mass(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<(f64, f64), AuthoringError> {
-        self.execution_for_observation()?;
-        self.center_of_mass(target)
     }
 
     /// Read the current point with the greatest projection along a planar direction.
@@ -1514,17 +1427,6 @@ impl crate::Scene {
         boundary_point_for_xy_points(&self.all_points(target)?, direction_x, direction_y)
     }
 
-    /// Query the effective boundary point farthest along a direction.
-    pub fn effective_boundary_point(
-        &self,
-        target: MobjectTarget<'_>,
-        direction_x: f64,
-        direction_y: f64,
-    ) -> Result<(f64, f64), AuthoringError> {
-        self.execution_for_observation()?;
-        self.boundary_point(target, direction_x, direction_y)
-    }
-
     /// Read the extent of the current points along one dimension.
     pub fn length_over_dim(
         &self,
@@ -1532,16 +1434,6 @@ impl crate::Scene {
         dim: usize,
     ) -> Result<f64, AuthoringError> {
         length_over_xyz_points(&self.all_points_3d(target)?, dim)
-    }
-
-    /// Query the effective point extent along one coordinate dimension.
-    pub fn effective_length_over_dim(
-        &self,
-        target: MobjectTarget<'_>,
-        dim: usize,
-    ) -> Result<f64, AuthoringError> {
-        self.execution_for_observation()?;
-        self.length_over_dim(target, dim)
     }
 
     /// Capture planar vector anchors for one object or recursive points for a family.
@@ -1555,16 +1447,6 @@ impl crate::Scene {
         }
     }
 
-    /// Capture effective vector-path boundary anchors for an object or the
-    /// ordinary recursive points for a family target.
-    pub fn effective_path_boundary_points(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
-        self.execution_for_observation()?;
-        self.path_boundary_points(target)
-    }
-
     /// Capture full-coordinate vector anchors for one object or recursive points for a family.
     pub fn path_boundary_points_3d(
         &self,
@@ -1576,15 +1458,6 @@ impl crate::Scene {
         }
     }
 
-    /// Capture the full-coordinate path boundary at the current execution publication.
-    pub fn effective_path_boundary_points_3d(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<Vec<SemanticVec3>, AuthoringError> {
-        self.execution_for_observation()?;
-        self.path_boundary_points_3d(target)
-    }
-
     /// Read a path-boundary extremum along one dimension.
     pub fn path_boundary_extremum_along_dim(
         &self,
@@ -1593,17 +1466,6 @@ impl crate::Scene {
         key: f64,
     ) -> Result<f64, AuthoringError> {
         extremum_for_xyz_points(&self.path_boundary_points_3d(target)?, dim, key)
-    }
-
-    /// Query a vector-path boundary anchor extremum from the current publication.
-    pub fn effective_path_boundary_extremum_along_dim(
-        &self,
-        target: MobjectTarget<'_>,
-        dim: usize,
-        key: f64,
-    ) -> Result<f64, AuthoringError> {
-        self.execution_for_observation()?;
-        self.path_boundary_extremum_along_dim(target, dim, key)
     }
 
     /// Read the path boundary point with greatest projection along a planar direction.
@@ -1618,17 +1480,6 @@ impl crate::Scene {
             direction_x,
             direction_y,
         )
-    }
-
-    /// Query the vector-path boundary anchor farthest along a direction.
-    pub fn effective_path_boundary_point(
-        &self,
-        target: MobjectTarget<'_>,
-        direction_x: f64,
-        direction_y: f64,
-    ) -> Result<(f64, f64), AuthoringError> {
-        self.execution_for_observation()?;
-        self.path_boundary_point(target, direction_x, direction_y)
     }
 }
 
