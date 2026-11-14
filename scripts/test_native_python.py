@@ -120,6 +120,27 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    def test_three_d_axis_labels_publish_after_playback_starts(self):
+        source = """from noon import *
+class Demo(ThreeDScene):
+    async def construct(self):
+        axes = ThreeDAxes()
+        self.add_world_mobjects(axes)
+        before = axes.get_x_axis_label(Text("X"))
+        self.add_world_mobjects(before)
+        await self.wait(0.125)
+        self.shift_world(axes, (1, 0, 0))
+        after = axes.get_x_axis_label(Text("X"))
+        self.add_world_mobjects(after)
+        context = self._canonical_authoring_context
+        def center(label):
+            return context.effectiveWorldFamilyCenter(label._semantic_family_handle)[0]
+        assert abs(center(after) - center(before) - 1) < 1e-5
+        await self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_code_listing_constructed_during_playback_can_be_copied(self):
         source = """from noon import *
 class Demo(Scene):

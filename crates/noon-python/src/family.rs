@@ -808,27 +808,14 @@ impl FamilyHandle {
         buff: f64,
         fixed_orientation: bool,
     ) -> Result<FamilyHandle, PyErr> {
-        // wasm-bindgen cannot represent optional borrowed exported handles.
-        // Inactive arguments alias an active handle; this mask preserves one
-        // typed, atomic call without consuming any caller-owned wrappers.
-        if selected_axes == 0 || selected_axes & !7 != 0 {
-            return Err(engine_error(
-                "axis labels require a nonempty three-axis mask",
-            ));
-        }
         let axes = ManimThreeDAxes::from_family(self.family.clone())
             .map_err(coordinate_failure)
             .map_err(engine_error)?;
-        let mut families = Vec::new();
-        for (index, handle) in [(0, x), (1, y), (2, z)] {
-            if selected_axes & (1 << index) != 0 {
-                families.push((index, handle.family.clone()));
-            }
-        }
-        let labels = families
-            .iter()
-            .map(|(index, family)| (*index, noon::MobjectTarget::Family(family)))
-            .collect::<Vec<_>>();
+        let labels = noon::integration::three_d_axis_label_targets(
+            [&x.family, &y.family, &z.family],
+            selected_axes,
+        )
+        .map_err(engine_error)?;
         axes.create_axis_label_targets(&labels, buff, fixed_orientation)
             .map(Self::from_semantic_family)
             .map_err(coordinate_failure)

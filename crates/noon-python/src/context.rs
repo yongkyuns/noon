@@ -1692,6 +1692,34 @@ impl Context {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "createThreeDAxesLabels")]
+    #[allow(clippy::too_many_arguments)]
+    fn create_three_d_axes_labels(
+        &mut self,
+        axes: &crate::family::FamilyHandle,
+        x: &crate::family::FamilyHandle,
+        y: &crate::family::FamilyHandle,
+        z: &crate::family::FamilyHandle,
+        selected_axes: u32,
+        buff: f64,
+        fixed_orientation: bool,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        let axes = noon::ManimThreeDAxes::from_family(axes.family.clone())
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)?;
+        let labels = noon::integration::three_d_axis_label_targets(
+            [&x.family, &y.family, &z.family],
+            selected_axes,
+        )
+        .map_err(engine_error)?;
+        self.scene
+            .three_d_axis_labels(&axes, &labels, buff, fixed_orientation)
+            .map(crate::family::FamilyHandle::from_semantic_family)
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "prepareAxesArea")]
     fn prepare_axes_area(
         &self,

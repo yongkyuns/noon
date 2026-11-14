@@ -249,3 +249,19 @@ pub fn optional_range(
         )),
     }
 }
+
+/// Decode the three borrowed family arguments used by the language bindings.
+pub fn three_d_axis_label_targets(
+    families: [&crate::MobjectFamily; 3],
+    selected_axes: u32,
+) -> Result<Vec<(usize, crate::MobjectTarget<'_>)>, AuthoringFailure> {
+    if selected_axes == 0 || selected_axes & !7 != 0 {
+        return Err("axis labels require a nonempty three-axis mask".into());
+    }
+    Ok(families
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| selected_axes & (1 << index) != 0)
+        .map(|(index, family)| (index, crate::MobjectTarget::Family(family)))
+        .collect())
+}
