@@ -5,7 +5,6 @@ range normalization, defaults, ticks, and retained filled tips to Rust. The
 bounded ThreeDAxes constructor retains its three default tips.
 Coordinates may be constructed after ordinary plays/waits;
 add late coordinates to the Scene before querying or plotting against them.
-DecimalNumber label families must be constructed before the first play/wait.
 Existing coordinates remain queryable after plays; curves use ordinary live
 geometry publication. Python owns callables/coercion, never coordinate math.
 """

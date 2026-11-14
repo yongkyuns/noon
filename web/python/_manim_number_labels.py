@@ -14,19 +14,16 @@ try:
     from _noon_host import noonNumberLineDecimalNumberLabelFamily as _line_decimal_labels
     from _noon_host import noonAxesDecimalCoordinateLabelFamilies as _axes_decimal_labels
     from _noon_host import noonDecimalNumberLabelMembers as _decimal_members
+    from _noon_host import noonSceneDecimalCoordinateLabelFamilies as _scene_decimal_labels
 except ImportError:
     _plane_decimal_labels = None
-    _line_decimal_labels = _axes_decimal_labels = _decimal_members = None
+    _line_decimal_labels = _axes_decimal_labels = _decimal_members = _scene_decimal_labels = None
 
 
-def _label_context(owner, *, decimal=False):
+def _label_context(owner):
     _plot._outside_callback()
     if _plot._coordinate_options is None:
         raise RuntimeError("numeric labels require the shared Rust authoring host")
-    if decimal:
-        if _shared._live_constructor_context("numeric labels") is not None:
-            raise NotImplementedError("construct DecimalNumber label families before the first play/wait")
-        return None
     return _shared._path_authoring_context(owner)
 
 
@@ -136,7 +133,7 @@ def _axis_options(axis, config, *, excluding=()):
 
 def number_mobjects(axis, values, *, attach, config, excluding=None):
     native_text = "font" in config
-    context = _label_context(axis, decimal=not native_text)
+    context = _label_context(axis)
     values_js = _plot._array(() if values is None else values)
     options, size, color = _axis_options(
         axis, config, excluding=() if excluding is None else excluding,
@@ -151,14 +148,10 @@ def number_mobjects(axis, values, *, attach, config, excluding=None):
         if _line_decimal_labels is None:
             options.free()
             raise RuntimeError("NumberLine DecimalNumber labels require await prepare_latex()")
-        handle = engine_call(
-            _line_decimal_labels,
-            axis._semantic_family_handle,
-            values_js,
-            values is None,
-            options,
-            bool(attach),
-        )
+        args = (axis._semantic_family_handle, values_js, values is None, options, bool(attach))
+        if context is not None:
+            args += (context,)
+        handle = engine_call(_line_decimal_labels, *args)
         labels = _decimal_family(handle, color)
     if attach:
         _remember(axis, labels)
@@ -331,8 +324,8 @@ def _add_axis_custom_labels(axis, values, settings):
 def _add_decimal_coordinate_labels(
     owner, x_values, y_values, *, axis_settings, excluded_numbers, bridge,
 ):
-    _label_context(owner, decimal=True)
-    if bridge is None:
+    context = _label_context(owner)
+    if (bridge if context is None else _scene_decimal_labels) is None:
         raise RuntimeError("DecimalNumber coordinate labels require await prepare_latex()")
     x_settings, y_settings = (dict(settings) for settings in axis_settings)
     x_settings.setdefault("direction", _base.DOWN)
@@ -346,14 +339,19 @@ def _add_decimal_coordinate_labels(
     except BaseException:
         x_options.free()
         raise
-    handles = engine_call(
-        bridge, owner._semantic_family_handle,
-        _plot._array(() if x_values is None else x_values), x_values is None,
-        _plot._array(() if y_values is None else y_values), y_values is None,
-        x_options, y_options,
-    )
-    _remember(owner.x_axis, _decimal_family(handles[0], x_color))
-    _remember(owner.y_axis, _decimal_family(handles[1], y_color))
+    args = (_plot._array(() if x_values is None else x_values), x_values is None,
+            _plot._array(() if y_values is None else y_values), y_values is None,
+            x_options, y_options)
+    x_axis, y_axis = owner.x_axis, owner.y_axis
+    if context is None:
+        handles = engine_call(bridge, owner._semantic_family_handle, *args)
+    else:
+        handles = engine_call(_scene_decimal_labels, context, x_axis._semantic_family_handle,
+                              y_axis._semantic_family_handle, *args)
+    for axis, handle, color in ((x_axis, handles[0], x_color), (y_axis, handles[1], y_color)):
+        family = _decimal_family(handle, color)
+        _remember(axis, family)
+        _bind_label_family(axis, family, context)
     return owner
 
 

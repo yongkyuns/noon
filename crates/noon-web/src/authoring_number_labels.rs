@@ -146,6 +146,63 @@ fn custom_values(values: &[f64], texts: js_sys::Array) -> Result<Vec<(f64, Strin
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = createNumberLineDecimalLabels)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_number_line_decimal_labels(
+        &mut self,
+        family: &WasmAuthoringFamilyHandle,
+        values: &[f64],
+        automatic: bool,
+        options: WasmNumberLabelOptions,
+        attach: bool,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let line = ManimNumberLine::from_family(family.semantic_family()?).map_err(failure)?;
+        self.inner
+            .local_authoring_scene()
+            .map_err(js_error)?
+            .number_line_decimal_labels(
+                &line,
+                compiler,
+                numbers(values, automatic)?,
+                &options.options,
+                attach,
+            )
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(failure)
+    }
+
+    #[wasm_bindgen(js_name = createCoordinateDecimalLabels)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_coordinate_decimal_labels(
+        &mut self,
+        x_axis: &WasmAuthoringFamilyHandle,
+        y_axis: &WasmAuthoringFamilyHandle,
+        x: &[f64],
+        automatic_x: bool,
+        y: &[f64],
+        automatic_y: bool,
+        x_options: WasmNumberLabelOptions,
+        y_options: WasmNumberLabelOptions,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<js_sys::Array, JsValue> {
+        let x_axis = ManimNumberLine::from_family(x_axis.semantic_family()?).map_err(failure)?;
+        let y_axis = ManimNumberLine::from_family(y_axis.semantic_family()?).map_err(failure)?;
+        let values = [numbers(x, automatic_x)?, numbers(y, automatic_y)?];
+        self.inner
+            .local_authoring_scene()
+            .map_err(js_error)?
+            .coordinate_decimal_labels(
+                &x_axis,
+                &y_axis,
+                compiler,
+                values,
+                [&x_options.options, &y_options.options],
+            )
+            .map(label_family_handles)
+            .map_err(failure)
+    }
+
     #[wasm_bindgen(js_name = createNumberLineTextLabels)]
     pub fn create_number_line_text_labels(
         &mut self,

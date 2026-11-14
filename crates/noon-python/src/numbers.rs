@@ -226,16 +226,8 @@ fn decimal_from_mobject(store: &Store, object: &MobjectHandle) -> PyResult<Decim
         .map_err(engine_error)
 }
 
-fn numbers(values: &[f64], automatic: bool) -> PyResult<Option<&[f64]>> {
-    if automatic && !values.is_empty() {
-        return Err(label_failure(
-            "automatic labels cannot supply explicit values",
-        ));
-    }
-    Ok((!automatic).then_some(values))
-}
-
 #[pyfunction]
+#[pyo3(signature = (store, family, values, automatic, options, attach, context=None))]
 fn line_decimal_labels(
     store: &Store,
     family: &FamilyHandle,
@@ -243,11 +235,21 @@ fn line_decimal_labels(
     automatic: bool,
     options: &NumberLabelOptions,
     attach: bool,
+    context: Option<&mut Context>,
 ) -> PyResult<FamilyHandle> {
     let line = noon::ManimNumberLine::from_family(family.family.clone()).map_err(label_failure)?;
-    let values = numbers(&values, automatic)?;
+    let values = crate::coordinates::label_numbers(&values, automatic)?;
     store.latex.with_backend(|backend| {
-        if attach {
+        if let Some(context) = context {
+            context.available()?;
+            context.scene.number_line_decimal_labels(
+                &line,
+                backend,
+                values,
+                &options.options,
+                attach,
+            )
+        } else if attach {
             line.add_decimal_numbers(backend, values, &options.options)
         } else {
             line.decimal_number_labels(backend, values, &options.options)
@@ -270,8 +272,8 @@ fn decimal_coordinates(
     y_options: &NumberLabelOptions,
     plane: bool,
 ) -> PyResult<(FamilyHandle, FamilyHandle)> {
-    let x = numbers(&x, automatic_x)?;
-    let y = numbers(&y, automatic_y)?;
+    let x = crate::coordinates::label_numbers(&x, automatic_x)?;
+    let y = crate::coordinates::label_numbers(&y, automatic_y)?;
     let x_options = &x_options.options;
     let y_options = &y_options.options;
     let [x, y] = store.latex.with_backend(|backend| {
@@ -290,6 +292,48 @@ fn decimal_coordinates(
         FamilyHandle::from_semantic_family(x),
         FamilyHandle::from_semantic_family(y),
     ))
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn scene_decimal_coordinates(
+    store: &Store,
+    context: &mut Context,
+    x_axis: &FamilyHandle,
+    y_axis: &FamilyHandle,
+    x: Vec<f64>,
+    automatic_x: bool,
+    y: Vec<f64>,
+    automatic_y: bool,
+    x_options: &NumberLabelOptions,
+    y_options: &NumberLabelOptions,
+) -> PyResult<(FamilyHandle, FamilyHandle)> {
+    use crate::coordinates::label_numbers;
+    context.available()?;
+    let x_axis =
+        noon::ManimNumberLine::from_family(x_axis.family.clone()).map_err(label_failure)?;
+    let y_axis =
+        noon::ManimNumberLine::from_family(y_axis.family.clone()).map_err(label_failure)?;
+    let values = [
+        label_numbers(&x, automatic_x)?,
+        label_numbers(&y, automatic_y)?,
+    ];
+    let [x, y] = store
+        .latex
+        .with_backend(|backend| {
+            context
+                .scene
+                .coordinate_decimal_labels(
+                    &x_axis,
+                    &y_axis,
+                    backend,
+                    values,
+                    [&x_options.options, &y_options.options],
+                )
+                .map_err(label_failure)
+        })?
+        .map(FamilyHandle::from_semantic_family);
+    Ok((x, y))
 }
 
 #[pyfunction]
@@ -320,5 +364,6 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(decimal_from_mobject, module)?)?;
     module.add_function(wrap_pyfunction!(line_decimal_labels, module)?)?;
     module.add_function(wrap_pyfunction!(decimal_coordinates, module)?)?;
+    module.add_function(wrap_pyfunction!(scene_decimal_coordinates, module)?)?;
     module.add_function(wrap_pyfunction!(decimal_label_members, module)?)
 }

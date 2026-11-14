@@ -74,12 +74,11 @@ class NumericLabelQualification(Scene):
             near(label.get_center(), expected + RIGHT)
         near(axes.c2p(0, 0), origin + RIGHT)
         near(sentinel.get_center(), (4, 2, 0))
-        try:
-            axes.add_coordinates()
-        except NotImplementedError:
-            pass
-        else:
-            raise AssertionError("live label construction silently used authored state")
+        axes.add_coordinates((1,), (1,))
+        x_label = axes.x_axis.numbers[0]
+        assert x_label.get_value() == 1
+        assert abs(x_label.get_center()[0] - axes.c2p(1, 0)[0]) < 1e-6
+        assert axes.y_axis.numbers[0].get_value() == 1
 `;
 
 export async function qualifyNumberLabels(runLive) {
