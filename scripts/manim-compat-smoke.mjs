@@ -1037,6 +1037,7 @@ result = Scene()
   const times = [0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 0.65, 0.7, 0.75, 0.8,
     0.85, 0.9, 1.0, 1.05, 1.1, 1.2, 1.25, 1.3, 1.4];
   await ratePage.goto(`${baseUrl}/web/manim-raster-host.html`);
+  await ratePage.waitForFunction(() => typeof window.noonHostRaster?.ready === "function");
   const sharedRates = await ratePage.evaluate(async ({ source, times }) => {
     await window.noonHostRaster.ready();
     await window.noonHostRaster.load(source, 2);
