@@ -373,9 +373,8 @@ pub use live_program::{
 };
 pub use live_session::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
-    DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,
-    FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, SubsetDisplayMode,
-    TransformToRequest,
+    DrawBorderThenFillOptions, FadeEndpoint, FadeTranslation, IndicateOptions, LiveSession,
+    LiveSessionError, SubsetDisplayMode, TransformToRequest,
 };
 #[cfg(feature = "latex")]
 pub use matrix_display::{
@@ -465,8 +464,8 @@ pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use sample_space::{SampleSpace, SampleSpaceError, SampleSpaceOptions};
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
 pub use scene::{
-    Scene, SceneExecution, SceneExecutionError, SceneSection, SceneSectionNavigation,
-    SectionNavigation, SectionType,
+    EffectiveMobjectLayout, EffectiveMobjectState, Scene, SceneExecution, SceneExecutionError,
+    SceneSection, SceneSectionNavigation, SectionNavigation, SectionType,
 };
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};

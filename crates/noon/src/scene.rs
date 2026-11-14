@@ -13,12 +13,55 @@ use crate::{
 pub use execution::{host_execution, SceneExecution, SceneExecutionError};
 pub(crate) use family::contains_direct;
 use noon_core::{
-    AnimationOptions, RateFunction, SemanticClickIndicate, SemanticMutationImpact,
-    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
-    SemanticNodeId, SemanticStore, SemanticStyle, VectorPath,
+    AnimationOptions, PublicationContext, RateFunction, SemanticClickIndicate,
+    SemanticMutationImpact, SemanticMutationTransaction, SemanticMutationTransactionResult,
+    SemanticNodeCreation, SemanticNodeId, SemanticStore, SemanticStyle, Style, Transform2D,
+    VectorPath,
 };
 pub use sections::{SceneSectionNavigation, SectionNavigation};
 use std::{cell::RefCell, rc::Rc};
+
+/// An owned observation of one effective runtime object at one publication.
+///
+/// The clone makes the observation safe to retain after the next live mutation;
+/// it is an observation, not another runtime authority.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EffectiveMobjectState {
+    /// Continuous fill definition, when present. `style.fill` then carries only
+    /// the independent fill-opacity multiplier in its alpha component.
+    pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
+    pub z_index: f64,
+    pub transform: Transform2D,
+    pub style: Style,
+    pub appearance: f32,
+    pub publication: PublicationContext,
+}
+
+impl EffectiveMobjectState {
+    /// Current fill alpha, excluding the separate object-composite multiplier.
+    pub fn fill_opacity(&self) -> f64 {
+        self.style.fill.map_or(0.0, |color| f64::from(color.alpha))
+    }
+
+    /// Current stroke alpha, excluding the separate object-composite multiplier.
+    pub fn stroke_opacity(&self) -> f64 {
+        self.style
+            .stroke
+            .map_or(0.0, |color| f64::from(color.alpha))
+    }
+}
+
+/// One object's exact layout observation at a coherent runtime publication.
+///
+/// These bounds retain authored layout semantics and therefore exclude the
+/// renderer's conservative stroke expansion used for visibility indexing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectiveMobjectLayout {
+    pub center: (f64, f64),
+    pub width: f64,
+    pub height: f64,
+    pub publication: PublicationContext,
+}
 
 /// Presentation/export intent attached to one authored section boundary.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
