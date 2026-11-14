@@ -3551,31 +3551,27 @@ impl Context {
     fn membership(&self) -> PyResult<Vec<String>> {
         self.require_active()?;
         self.scene
-            .integration_store()
-            .borrow()
-            .node(self.scene.root())
-            .map(|node| {
-                node.members()
-                    .iter()
+            .root_member_ids()
+            .map(|members| {
+                members
+                    .into_iter()
                     .map(|n| format!("{}:{}", n.slot(), n.generation()))
                     .collect()
             })
-            .ok_or_else(|| engine_error("scene root has been retired"))
+            .map_err(|_| engine_error("scene root has been retired"))
     }
     #[pyo3(name = "rootForegroundKeys")]
     fn foreground(&self) -> PyResult<Vec<String>> {
         self.require_active()?;
         self.scene
-            .integration_store()
-            .borrow()
-            .node(self.scene.root())
-            .map(|node| {
-                node.foreground_members()
-                    .iter()
+            .foreground_member_ids()
+            .map(|members| {
+                members
+                    .into_iter()
                     .map(|n| format!("{}:{}", n.slot(), n.generation()))
                     .collect()
             })
-            .ok_or_else(|| engine_error("retired scene root"))
+            .map_err(|_| engine_error("retired scene root"))
     }
     #[pyo3(name = "bindMobject")]
     fn bind(&mut self, _id: &str, target: &MobjectHandle) -> PyResult<()> {

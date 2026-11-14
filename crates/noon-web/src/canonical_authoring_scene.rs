@@ -3654,12 +3654,10 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn root_membership_keys(&self) -> Result<Vec<String>, AuthoringFailure> {
         self.scene
-            .integration_store()
-            .borrow()
-            .semantic_family_members_checked(self.scene.root())
+            .root_member_ids()
             .map(|members| {
                 members
-                    .iter()
+                    .into_iter()
                     .map(|node| format!("{}:{}", node.slot(), node.generation()))
                     .collect()
             })
@@ -3668,17 +3666,15 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn root_foreground_keys(&self) -> Result<Vec<String>, AuthoringFailure> {
-        let store = self.scene.integration_store().borrow();
-        let root = store.node(self.scene.root()).ok_or_else(|| {
+        let foreground = self.scene.foreground_member_ids().map_err(|_| {
             AuthoringFailure::new(
                 "state",
                 "scene.root_missing",
                 "semantic scene root is no longer live",
             )
         })?;
-        Ok(root
-            .foreground_members()
-            .iter()
+        Ok(foreground
+            .into_iter()
             .map(|node| format!("{}:{}", node.slot(), node.generation()))
             .collect())
     }
@@ -12089,6 +12085,7 @@ mod tests {
         );
         assert_eq!(context.root_foreground_keys().unwrap().len(), 2);
 
+        context.ordinary_wait(0.25).unwrap();
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::RemoveForeground,

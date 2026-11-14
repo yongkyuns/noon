@@ -137,6 +137,24 @@ impl Scene {
         contains_direct(self.integration_store(), self.root(), object)
     }
 
+    /// Snapshot the semantic identities of the Scene's direct members in display order.
+    pub fn root_member_ids(&self) -> Result<Vec<noon_core::SemanticNodeId>, AuthoringError> {
+        Ok(self
+            .store
+            .borrow()
+            .semantic_family_members_checked(self.root)?)
+    }
+
+    /// Snapshot the ordered foreground declarations, independently of display membership.
+    pub fn foreground_member_ids(&self) -> Result<Vec<noon_core::SemanticNodeId>, AuthoringError> {
+        Ok(self
+            .store
+            .borrow()
+            .semantic_family_checked(self.root)?
+            .foreground_members()
+            .to_vec())
+    }
+
     /// Check membership through the root or any of its descendants.
     pub fn contains(&self, object: &Mobject) -> Result<bool, AuthoringError> {
         self.require_object(object)?;
