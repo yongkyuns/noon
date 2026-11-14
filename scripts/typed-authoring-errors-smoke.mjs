@@ -644,7 +644,7 @@ json.dumps({"matrix": results, "liveProperties": property_results, "advancement"
   assert.equal(report.python.liveProperties.length, 29);
   assert.equal(report.python.advancement.length, 9);
   assert.equal(report.python.contentObservations.length, 11);
-  assert.equal(report.python.additionalTests, 17);
+  assert.equal(report.python.additionalTests, 18);
 
 
   assert.equal(report.python.callbackTests, 11);
