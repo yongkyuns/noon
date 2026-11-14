@@ -7,9 +7,7 @@ use noon_core::{
     SemanticStore,
 };
 
-use crate::{
-    AuthoringError, LiveSession, LiveSessionError, Mobject, MobjectFamily, MobjectTarget, Scene,
-};
+use crate::{AuthoringError, Mobject, MobjectFamily, MobjectTarget, Scene};
 
 /// A store-scoped generational attachment reference. Dropping it never detaches
 /// an effect. `authored_definition` is explicitly not an effective-runtime query.
@@ -117,10 +115,20 @@ fn add_transaction(
     definition: EffectDefinition,
     name: &str,
 ) -> Result<SemanticMutationTransaction, AuthoringError> {
-    object.validate()?;
     let mut tx = SemanticMutationTransaction::new();
-    tx.create_effect(object.node_id(), name, definition);
+    append_attachment(&mut tx, object, definition, name)?;
     Ok(tx)
+}
+
+fn append_attachment(
+    transaction: &mut SemanticMutationTransaction,
+    object: MobjectTarget<'_>,
+    definition: EffectDefinition,
+    name: &str,
+) -> Result<(), AuthoringError> {
+    object.validate()?;
+    transaction.create_effect(object.node_id(), name, definition);
+    Ok(())
 }
 
 fn update_transaction(
@@ -334,15 +342,13 @@ impl Scene {
         self.apply_semantic_transaction(remove_glow_transaction(object)?)?;
         Ok(())
     }
-}
 
-impl LiveSession<'_> {
     /// Stage one atomic batch of named attachments for the existing program's
     /// publication-preparation barrier. No attachment/revision is visible yet.
     pub fn prepare_effect_attachments<'owner, 'name, T>(
         &mut self,
         attachments: impl IntoIterator<Item = (T, EffectDefinition, &'name str)>,
-    ) -> Result<crate::StagedEffectPublication, LiveSessionError>
+    ) -> Result<crate::StagedEffectPublication, AuthoringError>
     where
         T: Into<MobjectTarget<'owner>>,
     {
@@ -350,8 +356,7 @@ impl LiveSession<'_> {
         for (object, definition, name) in attachments {
             let object = object.into();
             object.require_store(self.integration_store())?;
-            object.validate()?;
-            transaction.create_effect(object.node_id(), name, definition);
+            append_attachment(&mut transaction, object, definition, name)?;
         }
         self.stage_effect_publication(transaction)
     }

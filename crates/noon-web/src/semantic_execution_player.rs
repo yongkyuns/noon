@@ -709,8 +709,11 @@ impl SemanticExecutionPlayer {
             Err(noon::AuthoringError::ExecutionPublication(
                 noon::ExecutionSessionPublicationError::ExternalEffectPreparationRequired,
             )) if prepare => self
-                .with_live_session(|live| live.prepare_membership(request))
-                .map(Some),
+                .source
+                .scene_mut()
+                .prepare_membership(request)
+                .map(Some)
+                .map_err(|error| AuthoringFailure::from_scene_mutation(error, true)),
             result => result
                 .map(|_| None)
                 .map_err(|error| AuthoringFailure::from_scene_mutation(error, true)),

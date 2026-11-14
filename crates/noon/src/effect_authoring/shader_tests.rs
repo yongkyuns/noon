@@ -122,7 +122,7 @@ fn shader_composition_revalidates_prepared_program_view_and_detached_membership(
             }
             _ => {
                 let addition = session
-                    .live()
+                    .scene_mut()
                     .prepare_membership(crate::SceneMembershipRequest::Add(&[(&source).into()]))
                     .unwrap();
                 session.live().publish_staged_effects(addition).unwrap();
@@ -157,7 +157,7 @@ fn shader_membership_revalidates_program_and_view_after_preparation() {
         session.session_mut().require_effect_resource_preparation();
         let members = [(&source).into()];
         let pending = session
-            .live()
+            .scene_mut()
             .prepare_membership(crate::SceneMembershipRequest::Add(&members))
             .unwrap();
         if change_program {
@@ -201,7 +201,7 @@ fn shader_membership_revalidates_program_and_view_after_preparation() {
             .is_none());
         if change_program {
             let retry = session
-                .live()
+                .scene_mut()
                 .prepare_membership(crate::SceneMembershipRequest::Add(&members))
                 .unwrap();
             assert_ne!(retry.programs(), &[original]);
@@ -226,7 +226,7 @@ fn shader_membership_preparation_preserves_replacement_foreground_and_provenance
     let mut session = scene.into_execution().unwrap();
     session.session_mut().require_effect_resource_preparation();
     let pending = session
-        .live()
+        .scene_mut()
         .prepare_membership(crate::SceneMembershipRequest::Replace {
             old: (&old).into(),
             new: (&source).into(),
@@ -236,7 +236,7 @@ fn shader_membership_preparation_preserves_replacement_foreground_and_provenance
     drop(pending);
     assert!(session.scene_mut().contains_direct(&old).unwrap());
     let pending = session
-        .live()
+        .scene_mut()
         .prepare_membership(crate::SceneMembershipRequest::Replace {
             old: (&old).into(),
             new: (&source).into(),
@@ -247,13 +247,13 @@ fn shader_membership_preparation_preserves_replacement_foreground_and_provenance
     assert!(session.scene_mut().contains_direct(&source).unwrap());
     let members = [(&source).into()];
     let pending = session
-        .live()
+        .scene_mut()
         .prepare_membership(crate::SceneMembershipRequest::AddForeground(&members))
         .unwrap();
     assert!(pending.programs().is_empty());
     session.live().publish_staged_effects(pending).unwrap();
     let pending = session
-        .live()
+        .scene_mut()
         .prepare_membership(crate::SceneMembershipRequest::Remove(&members))
         .unwrap();
     let mut foreign_scene = Scene::new();
@@ -266,7 +266,7 @@ fn shader_membership_preparation_preserves_replacement_foreground_and_provenance
     let foreign = foreign_scene.circle(0.3).unwrap();
     let before = session.session().publication_context();
     assert!(session
-        .live()
+        .scene_mut()
         .prepare_membership(crate::SceneMembershipRequest::Add(&[(&foreign).into()]))
         .is_err());
     assert_eq!(session.session().publication_context(), before);
@@ -293,14 +293,14 @@ fn shader_membership_preparation_keeps_scene_and_family_insertion_atomic() {
         let members = [(&source).into()];
         let pending = if family_edit {
             let (pending, changed) = session
-                .live()
-                .prepare_family_membership(&family, &members, true)
+                .scene_mut()
+                .prepare_family_addition(&family, &members)
                 .unwrap();
             assert_eq!(changed, [true]);
             pending
         } else {
             session
-                .live()
+                .scene_mut()
                 .prepare_membership(crate::SceneMembershipRequest::Add(&members))
                 .unwrap()
         };
@@ -394,8 +394,8 @@ fn shader_view_rejects_live_profile_or_attachment_before_publication() {
         assert!(session.take_frame_changes().is_empty());
         if hdr {
             assert!(source.get_effect("material").is_err());
+            crate::integration::scene_execution::attach(&mut scene, session).unwrap();
             assert!(scene
-                .live(&mut session)
                 .prepare_effect_attachments([(
                     &source,
                     ShaderEffect::new(program()).into(),
@@ -428,33 +428,32 @@ fn shader_view_revalidates_a_profile_change_during_external_preparation() {
     let camera = scene.camera_frame().unwrap();
     let source = scene.circle(0.5).unwrap();
     scene.add(&source).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    session.require_effect_resource_preparation();
-    let pending = scene
-        .live(&mut session)
+    let mut execution = scene.into_execution().unwrap();
+    execution
+        .session_mut()
+        .require_effect_resource_preparation();
+    let pending = execution
+        .scene_mut()
         .prepare_effect_attachments([(&source, ShaderEffect::new(program()).into(), "material")])
         .unwrap();
     let mut tx = SemanticMutationTransaction::new();
     tx.set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
-    crate::integration::scene_execution::publish_at_root(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        tx,
-    )
-    .unwrap();
-    session.take_frame_changes();
-    let before = session.publication_context();
-    let frame = session.frame().clone();
-    let error = scene
-        .live(&mut session)
+    execution
+        .scene_mut()
+        .apply_semantic_transaction(tx)
+        .unwrap();
+    execution.session_mut().take_frame_changes();
+    let before = execution.session().publication_context();
+    let frame = execution.session().frame().clone();
+    let error = execution
+        .live()
         .publish_staged_effects(pending)
         .unwrap_err();
     assert!(format!("{error:?}").contains("UnsupportedEffectProfile"));
     assert!(source.get_effect("material").is_err());
-    assert_eq!(session.publication_context(), before);
-    assert_eq!(session.frame(), &frame);
-    assert!(session.take_frame_changes().is_empty());
+    assert_eq!(execution.session().publication_context(), before);
+    assert_eq!(execution.session().frame(), &frame);
+    assert!(execution.session_mut().take_frame_changes().is_empty());
 }
 
 #[test]

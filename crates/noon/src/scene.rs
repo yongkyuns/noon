@@ -326,6 +326,30 @@ impl Scene {
         self.apply_semantic_transaction(transaction)
     }
 
+    /// Stage a membership edit for a host that prepares renderer shader resources.
+    /// The edit stays unpublished until the host acknowledges preparation.
+    pub fn prepare_membership(
+        &mut self,
+        request: SceneMembershipRequest<'_>,
+    ) -> Result<crate::StagedEffectPublication, AuthoringError> {
+        let transaction =
+            crate::scene_membership::prepare_scene_membership(&self.store, self.root, request)?;
+        self.stage_effect_publication(transaction)
+    }
+
+    pub(crate) fn stage_effect_publication(
+        &mut self,
+        transaction: SemanticMutationTransaction,
+    ) -> Result<crate::StagedEffectPublication, AuthoringError> {
+        let execution = self
+            .execution
+            .as_mut()
+            .ok_or(crate::UnsupportedAuthoringOperation::EffectPreparationRequiresExecution)?;
+        execution
+            .stage_effect_publication(&mut self.store.borrow_mut(), self.root, transaction)
+            .map_err(Into::into)
+    }
+
     /// Publish one canonical persistent transaction through a coherent running
     /// Scene root. Compatibility live facades reuse this route instead of owning
     /// another store/session publication branch.

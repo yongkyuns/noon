@@ -15,13 +15,14 @@ use crate::{
     DeclaredAnimation, EffectiveMobjectLayout, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError, Mobject,
-    MobjectFamily, MobjectTarget, SceneMembershipRequest, TranslationDragError, ValueTracker,
+    MobjectFamily, MobjectTarget, TranslationDragError, ValueTracker,
 };
+#[cfg(test)]
+use noon_core::SemanticMutationTransaction;
 use noon_core::{
     AnimationOptions, Bounds2D64, Color, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticFadeDirection,
-    SemanticMutationTransaction, SemanticNodeId, SemanticObjectState, SemanticStore,
-    SemanticSubsetDisplayMode, SemanticVec3,
+    SemanticNodeId, SemanticObjectState, SemanticStore, SemanticSubsetDisplayMode, SemanticVec3,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -528,14 +529,6 @@ impl<'a> LiveSession<'a> {
         }
     }
 
-    pub(crate) fn stage_effect_publication(
-        &mut self,
-        transaction: SemanticMutationTransaction,
-    ) -> Result<crate::StagedEffectPublication, LiveSessionError> {
-        self.session
-            .stage_effect_publication(&mut self.store.borrow_mut(), self.root, transaction)
-            .map_err(Into::into)
-    }
     /// Host acknowledgement after preparing the staged immutable resources.
     /// Fresh canonical validation runs before either live authority commits.
     pub fn publish_staged_effects(
@@ -545,17 +538,6 @@ impl<'a> LiveSession<'a> {
         self.session
             .publish_staged_effects(&mut self.store.borrow_mut(), staged)
             .map_err(Into::into)
-    }
-
-    /// Stage an existing membership request until the host prepares any newly
-    /// executable shader programs. Membership and identities remain unpublished.
-    pub fn prepare_membership(
-        &mut self,
-        request: SceneMembershipRequest<'_>,
-    ) -> Result<crate::StagedEffectPublication, LiveSessionError> {
-        let transaction =
-            crate::scene_membership::prepare_scene_membership(self.store, self.root, request)?;
-        self.stage_effect_publication(transaction)
     }
 
     fn is_direct_member(&self, mobject: &Mobject) -> Result<bool, LiveSessionError> {
@@ -569,21 +551,6 @@ impl<'a> LiveSession<'a> {
     ) -> Result<SemanticObjectState, LiveSessionError> {
         crate::effective_capture::capture_mobject_state(self.store, self.session, source)
             .map_err(LiveSessionError::from)
-    }
-
-    /// Stage the ordinary family edit for the same resource-preparation barrier
-    /// as scene insertion. The returned change flags describe the pending edit.
-    pub fn prepare_family_membership<'root>(
-        &mut self,
-        family: impl Into<MobjectTarget<'root>>,
-        members: &[MobjectTarget<'_>],
-        adding: bool,
-    ) -> Result<(crate::StagedEffectPublication, Vec<bool>), LiveSessionError> {
-        let family = family.into();
-        self.require_membership_root(family)?;
-        let (transaction, changed) =
-            crate::family_authoring::family_membership_transaction(family, members, adding)?;
-        Ok((self.stage_effect_publication(transaction)?, changed))
     }
 
     /// Read the current effective runtime value at the session's publication.

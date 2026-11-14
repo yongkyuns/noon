@@ -98,8 +98,8 @@ impl LiveContinuation for ShaderSweep {
                         Introduction::Membership => {
                             let members = self.panels.each_ref().map(crate::MobjectTarget::from);
                             scene
-                                .live()
                                 .prepare_membership(crate::SceneMembershipRequest::Add(&members))
+                                .map_err(crate::LiveSessionError::from)
                         }
                         Introduction::Fade => scene.live().prepare_composition(
                             &AnimationCompositionRequest::Composition {
