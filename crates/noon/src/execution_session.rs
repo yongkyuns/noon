@@ -1045,20 +1045,8 @@ impl ExecutionSession {
         Ok(session)
     }
 
-    /// Instantiate one scene with an explicitly selected, exact authored animation graph.
-    ///
-    /// The compiler validates the graph and its targets before publishing any execution
-    /// identity. Detached animation declarations outside this root remain unscheduled.
-    pub fn from_semantic_root_with_animation_root(
-        store: &SemanticStore,
-        root: SemanticNodeId,
-        animation_root: SemanticNodeId,
-    ) -> Result<Self, SemanticExecutionLoweringError> {
-        Self::from_semantic_root_with_animation_root_at(store, root, animation_root, 0.0)
-    }
-
     /// Instantiate an initial animation graph at an explicit activation origin.
-    pub fn from_semantic_root_with_animation_root_at(
+    pub(crate) fn from_semantic_root_with_animation_root_at(
         store: &SemanticStore,
         root: SemanticNodeId,
         animation_root: SemanticNodeId,

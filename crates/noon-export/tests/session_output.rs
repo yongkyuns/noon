@@ -8,13 +8,12 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     ExportEndReason, ExportFrameOptions, ExportStop, FrameRate, HostCallbackId,
     SemanticMutationTransaction,
 };
 use noon::{
-    AnimationOptions, AudioClipOptions, AudioResource, RateFunction, Scene,
+    AnimationOptions, AudioClipOptions, AudioResource, RateFunction, Scene, SceneExecution,
     SemanticAnimationCompositionKind, SemanticVec3,
 };
 use noon_core::{
@@ -87,7 +86,7 @@ impl Tone {
     }
 }
 
-fn fixture(visual_duration: f64, tone: Option<Tone>) -> ExecutionSession {
+fn fixture(visual_duration: f64, tone: Option<Tone>) -> SceneExecution {
     let mut scene = Scene::new();
     let mut marker = scene.square(0.8).unwrap();
     marker.set_translation(-2.0, 0.0).unwrap();
@@ -144,13 +143,9 @@ fn fixture(visual_duration: f64, tone: Option<Tone>) -> ExecutionSession {
             )
             .unwrap();
     }
-    let execution = ExecutionSession::from_semantic_root_with_animation_root(
-        &scene.integration_store().borrow(),
-        scene.root(),
-        animation.node_id(),
-    )
-    .unwrap();
-    execution
+    scene
+        .into_execution_with_animation_root(&animation)
+        .unwrap()
 }
 
 fn frame_options() -> ExportFrameOptions {
@@ -178,7 +173,8 @@ fn invalid_configuration_and_cancellation_do_not_touch_session_or_destination() 
     let path = directory.path.join("existing.mp4");
     fs::write(&path, b"existing user video").unwrap();
     for cancelled in [false, true] {
-        let mut session = fixture(0.73, Some(Tone::new(0.125, 0.35)));
+        let mut source = fixture(0.73, Some(Tone::new(0.125, 0.35)));
+        let session = source.session_mut();
         let publication = session.publication_context();
         let mut capture = capture_options();
         if cancelled {
@@ -189,8 +185,7 @@ fn invalid_configuration_and_cancellation_do_not_touch_session_or_destination() 
         let mut output = OutputOptions::mp4(&path);
         output.overwrite = true;
         output.ffmpeg = directory.path.join("must-not-be-executed");
-        let error =
-            export_session_file(&mut session, frame_options(), capture, output).unwrap_err();
+        let error = export_session_file(session, frame_options(), capture, output).unwrap_err();
         if cancelled {
             assert!(matches!(
                 error,
@@ -208,11 +203,12 @@ fn invalid_configuration_and_cancellation_do_not_touch_session_or_destination() 
 #[test]
 fn an_advanced_session_is_rejected_before_any_files_are_created() {
     let directory = TestDirectory::new("advanced", false);
-    let mut session = fixture(0.73, Some(Tone::new(0.125, 0.35)));
+    let mut source = fixture(0.73, Some(Tone::new(0.125, 0.35)));
+    let session = source.session_mut();
     session.seek(0.1).unwrap();
     let publication = session.publication_context();
     let result = export_session_file(
-        &mut session,
+        session,
         frame_options(),
         capture_options(),
         OutputOptions::mp4(directory.path.join("video.mp4")),
@@ -256,13 +252,14 @@ fn callback_driven_sessions_do_not_enter_the_immutable_export_profile() {
 #[test]
 fn retained_source_history_does_not_enter_the_immutable_export_profile() {
     let directory = TestDirectory::new("history", false);
-    let mut session = fixture(0.73, None);
+    let mut source = fixture(0.73, None);
+    let session = source.session_mut();
     session.begin_replay_retention(Default::default()).unwrap();
     let publication = session.publication_context();
     assert!(session.replay_scope_active());
     assert!(matches!(
         export_session_file(
-            &mut session,
+            session,
             frame_options(),
             capture_options(),
             OutputOptions::mp4(directory.path.join("video.mp4")),
@@ -278,11 +275,12 @@ fn retained_source_history_does_not_enter_the_immutable_export_profile() {
 #[test]
 fn safety_cap_failure_does_not_publish_a_partial_movie() {
     let directory = TestDirectory::new("frame-limit", false);
-    let mut session = fixture(0.73, None);
+    let mut source = fixture(0.73, None);
+    let session = source.session_mut();
     let publication = session.publication_context();
     assert!(matches!(
         export_session_file(
-            &mut session,
+            session,
             ExportFrameOptions {
                 max_frames: 2,
                 ..frame_options()
@@ -302,12 +300,13 @@ fn existing_destination_is_preserved_before_encoder_or_gpu_creation() {
     let directory = TestDirectory::new("existing", false);
     let path = directory.path.join("existing.mp4");
     fs::write(&path, b"existing user video").unwrap();
-    let mut session = fixture(0.73, Some(Tone::new(0.125, 0.35)));
+    let mut source = fixture(0.73, Some(Tone::new(0.125, 0.35)));
+    let session = source.session_mut();
     let publication = session.publication_context();
     let mut output = OutputOptions::mp4(&path);
     output.ffmpeg = directory.path.join("must-not-be-executed");
     assert!(matches!(
-        export_session_file(&mut session, frame_options(), capture_options(), output),
+        export_session_file(session, frame_options(), capture_options(), output),
         Err(SessionFileExportError::Output(error)) if error.kind() == io::ErrorKind::AlreadyExists
     ));
     assert_eq!(session.frame().time, 0.0);
@@ -703,13 +702,14 @@ fn finite_movies_keep_audio_phase_gaps_crop_holds_and_exact_presentation_endpoin
     ];
     for case in cases {
         let path = directory.path.join(format!("{}.mp4", case.name));
-        let mut session = fixture(case.visual_duration, Some(case.tone));
+        let mut source = fixture(case.visual_duration, Some(case.tone));
+        let session = source.session_mut();
         let source_end = case
             .visual_duration
             .max(case.tone.start + case.tone.duration);
         assert!((session.finite_timeline_end_time().unwrap() - source_end).abs() < 1e-12);
         let summary = export_session_file(
-            &mut session,
+            session,
             ExportFrameOptions {
                 start_frame: case.start_frame,
                 stop: case.stop,
@@ -759,9 +759,10 @@ fn finite_movies_keep_audio_phase_gaps_crop_holds_and_exact_presentation_endpoin
 fn video_only_sessions_and_explicit_visual_png_output_keep_their_profiles() {
     let directory = TestDirectory::new("profiles", true);
     let path = directory.path.join("video-only.mp4");
-    let mut session = fixture(0.23, None);
+    let mut source = fixture(0.23, None);
+    let session = source.session_mut();
     let summary = export_session_file(
-        &mut session,
+        session,
         frame_options(),
         capture_options(),
         OutputOptions::mp4(&path),
@@ -775,10 +776,11 @@ fn video_only_sessions_and_explicit_visual_png_output_keep_their_profiles() {
     // does not enter the mixer or create an undocumented soundtrack sidecar.
     let mut tone = Tone::new(0.0, 0.18);
     tone.gain = 8.0;
-    let mut session = fixture(0.23, Some(tone));
+    let mut source = fixture(0.23, Some(tone));
+    let session = source.session_mut();
     let images = directory.path.join("images");
     let summary = export_session_file(
-        &mut session,
+        session,
         ExportFrameOptions {
             stop: ExportStop::FrameCount(1),
             ..frame_options()
@@ -805,12 +807,13 @@ fn soundtrack_failure_precedes_visual_advancement_and_preserves_existing_video()
     fs::write(&path, b"existing user video").unwrap();
     let mut tone = Tone::new(0.0, 0.18);
     tone.gain = 8.0;
-    let mut session = fixture(0.23, Some(tone));
+    let mut source = fixture(0.23, Some(tone));
+    let session = source.session_mut();
     let publication = session.publication_context();
     let mut output = OutputOptions::mp4(&path);
     output.overwrite = true;
     let error =
-        export_session_file(&mut session, frame_options(), capture_options(), output).unwrap_err();
+        export_session_file(session, frame_options(), capture_options(), output).unwrap_err();
     assert!(
         matches!(error, SessionFileExportError::Output(_)),
         "{error}"
