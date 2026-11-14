@@ -198,7 +198,9 @@ scene.remove_updater(&turn)?;
 
 The updater target reads and writes the current ordered effective callback phase.
 Ordinary scene edits change persistent authored state. `scene.authored(&object)`
-and `scene.effective(&object)` make that observation choice explicit.
+and `scene.effective(&object)` make that observation choice explicit. Use
+`scene.effective_content(&object)` to inspect the content currently published
+for an object, such as text or geometry after `Scene::replace_content`.
 
 The same persistent `set_color`, `set_fill`, `set_fill_opacity`, `set_stroke_width`, and `shift`
 operations are available on an ordinary `Scene` before and after its owned

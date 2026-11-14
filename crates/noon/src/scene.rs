@@ -13,7 +13,7 @@ use crate::{
 pub use execution::{host_execution, SceneExecution, SceneExecutionError};
 pub(crate) use family::contains_direct;
 use noon_core::{
-    AnimationOptions, PublicationContext, RateFunction, SemanticClickIndicate,
+    AnimationOptions, ObjectContentRef, PublicationContext, RateFunction, SemanticClickIndicate,
     SemanticMutationImpact, SemanticMutationTransaction, SemanticMutationTransactionResult,
     SemanticNodeCreation, SemanticNodeId, SemanticStore, SemanticStyle, Style, Transform2D,
     VectorPath,
@@ -777,6 +777,18 @@ impl Scene {
         self.require_object(object)?;
         let execution = self.execution_for_observation()?;
         Self::observe_effective(&self.store, execution, object).map_err(AuthoringError::from)
+    }
+
+    /// Read the object's content from this Scene's current Runtime publication.
+    ///
+    /// For authored content use [`Self::authored`]. Use path queries to observe
+    /// geometry during an active reveal or morph.
+    pub fn effective_content(&self, object: &Mobject) -> Result<ObjectContentRef, AuthoringError> {
+        self.require_object(object)?;
+        let execution = self.execution_for_observation()?;
+        let store = self.store.borrow();
+        let observed = execution.effective_semantic_object(&store, object.node_id())?;
+        Ok(observed.object.content.clone())
     }
 
     pub(crate) fn observe_effective(

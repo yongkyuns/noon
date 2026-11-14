@@ -765,10 +765,9 @@ pub fn ordinary_affine_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
 
 /// Ordinary Rust continuation used unchanged by native and direct Rust/WASM hosts.
 ///
-/// It owns only direct Rust locals and shared semantic handles. Every interval,
-/// endpoint, completion, and authored mutation goes through the borrowed
-/// [`LiveSession`], so a host only drives the returned segment and admits its
-/// renderer publication.
+/// Persistent edits and target construction use the owning [`Scene`].
+/// [`crate::LiveSession`] schedules the segments. The host drives each returned
+/// segment and admits its renderer publication.
 pub struct OrdinaryAffineContinuation {
     circle: Mobject,
     first_target: Mobject,
@@ -1048,7 +1047,7 @@ pub fn ordinary_value_tracker_continuation_program(
 
     // Model a host-language tracker constructed before its eventual Scene body:
     // the shared store owns its identity/value while it is detached. The first
-    // continuation step enrolls this same handle through LiveSession.
+    // continuation step enrolls this same handle through Scene.
     let tracker = ValueTracker::detached(Rc::clone(scene.integration_store()), 0.0)
         .map_err(|error| error.to_string())?;
     let position = scene
