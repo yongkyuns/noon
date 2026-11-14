@@ -1190,9 +1190,8 @@ mod wasm {
         pub fn arrow_for(
             &self,
             source: &crate::WasmAuthoringArrowHandle,
-            vector_index: Option<u32>,
         ) -> Result<crate::WasmAuthoringArrowHandle, JsValue> {
-            source.rebind_from_family_copy(&self.copied, vector_index)
+            source.rebind_from_family_copy(&self.copied)
         }
     }
 

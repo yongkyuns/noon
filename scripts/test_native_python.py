@@ -32,7 +32,7 @@ class NativePythonTests(unittest.TestCase):
                      "camera_bloom", "showcase_bloom_emission", "pixelate", "scope_opacity",
                      "showcase_glass_lens", "showcase_camera_follows_path",
                      "ordinary_family_arrangement", "top_level_family_arrangement", "ordinary_family_grid",
-                     "ordinary_planar_affine", "ordinary_dimension_fitting", "ordinary_arrow_geometry",
+                     "ordinary_planar_affine", "ordinary_dimension_fitting", "ordinary_arrow_geometry", "manim_compatible_arrow_vector_field",
                      "ordinary_live_primitive_construction", "ordinary_paint_queries_gradients", "ordinary_style_operations", "ordinary_family_paint",
                      "ordinary_circle_surround", "ordinary_family_replacement",
                      "tutorial_positioning", "tutorial_composition", "ordinary_value_tracker_continuation",
@@ -158,6 +158,41 @@ class Demo(Scene):
         assert abs(x_label.get_center()[0] - before[0] - 1) < 1e-5
         axes.x_axis.add_numbers((2,))
         assert axes.x_axis.numbers[0].get_value() == 2
+        await self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
+    def test_vector_field_samples_and_copies_during_playback(self):
+        source = """from noon import *
+class Demo(Scene):
+    async def construct(self):
+        anchor = Circle(0.25).move_to(2 * LEFT)
+        self.add(anchor)
+        await self.wait(0.125)
+        points, lengths, values = [], [], []
+        def field(point):
+            points.append(point)
+            return point
+        def length(norm):
+            lengths.append(norm)
+            return 0.5
+        def color(vector):
+            values.append(vector)
+            return abs(vector[0])
+        vectors = ArrowVectorField(
+            field, x_range=(0, 1, 1), y_range=(0, 0, 1),
+            length_func=length, color_scheme=color, colors=(BLUE, RED),
+        )
+        assert points == [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)]
+        assert values == points and lengths == [1.0]
+        assert len(vectors) == 2 and abs(vectors[1].get_length() - 0.5) < 1e-6
+        copied = vectors.copy()
+        copied[1].scale(2)
+        assert abs(copied[1].get_length() - 1.0) < 1e-6
+        assert abs(vectors[1].get_length() - 0.5) < 1e-6
+        copied.shift(UP)
+        self.add(vectors, copied)
         await self.wait(0.125)
 """
         scene = asyncio.run(run_source(source))

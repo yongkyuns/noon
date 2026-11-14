@@ -2638,14 +2638,12 @@ impl Context {
     #[pyo3(name = "createManimArrow")]
     fn create_arrow(
         &mut self,
-        options: &crate::arrow::ArrowOptions,
-    ) -> PyResult<crate::arrow::ArrowHandle> {
+        py: Python<'_>,
+        request: crate::arrow::ArrowRequest<'_>,
+    ) -> PyResult<Py<PyAny>> {
         self.available()?;
         let running = self.has_execution();
-        self.scene
-            .manim_arrow(options.0.clone())
-            .map(crate::arrow::ArrowHandle)
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+        request.publish_in_scene(py, &mut self.scene, running)
     }
 
     #[pyo3(name = "scaleArrow")]

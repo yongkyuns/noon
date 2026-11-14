@@ -1,7 +1,11 @@
 //! Native language projections of the shared Arrow family.
 
 use crate::{context::Store, engine_error, family::FamilyHandle, mobject::MobjectHandle};
-use noon::{ManimArrow, ManimArrowOptions, ManimLineEndpoints};
+use noon::{
+    integration::AuthoringFailure, manim_default_vector_field_ranges_2d, ArrowVectorFieldOptions,
+    ManimArrow, ManimArrowOptions, ManimArrowVectorField, ManimLineEndpoints, Scene,
+    VectorFieldAxisRange,
+};
 use pyo3::prelude::*;
 use std::rc::Rc;
 
@@ -32,6 +36,90 @@ impl ArrowOptions {
         ManimArrowOptions::double_arrow(start_x, start_y, end_x, end_y)
             .map(Self)
             .map_err(engine_error)
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "vectorField")]
+    #[allow(clippy::too_many_arguments)]
+    fn vector_field(
+        x_start: f64,
+        x_end: f64,
+        x_step: f64,
+        y_start: f64,
+        y_end: f64,
+        y_step: f64,
+        custom_length: bool,
+    ) -> PyResult<VectorFieldOptions> {
+        Self::vector_field_with_default_ranges(
+            false,
+            x_start,
+            x_end,
+            x_step,
+            false,
+            y_start,
+            y_end,
+            y_step,
+            custom_length,
+        )
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "vectorFieldWithDefaultRanges")]
+    #[allow(clippy::too_many_arguments)]
+    fn vector_field_with_default_ranges(
+        default_x: bool,
+        x_start: f64,
+        x_end: f64,
+        x_step: f64,
+        default_y: bool,
+        y_start: f64,
+        y_end: f64,
+        y_step: f64,
+        custom_length: bool,
+    ) -> PyResult<VectorFieldOptions> {
+        ArrowVectorFieldOptions::new(
+            (!default_x).then(|| VectorFieldAxisRange::new(x_start, x_end, x_step)),
+            (!default_y).then(|| VectorFieldAxisRange::new(y_start, y_end, y_step)),
+            custom_length,
+        )
+        .map(VectorFieldOptions)
+        .map_err(engine_error)
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "defaultVectorFieldXStart")]
+    fn default_vector_field_x_start() -> f64 {
+        manim_default_vector_field_ranges_2d().x.start
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "defaultVectorFieldXEnd")]
+    fn default_vector_field_x_end() -> f64 {
+        manim_default_vector_field_ranges_2d().x.end
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "defaultVectorFieldXStep")]
+    fn default_vector_field_x_step() -> f64 {
+        manim_default_vector_field_ranges_2d().x.step
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "defaultVectorFieldYStart")]
+    fn default_vector_field_y_start() -> f64 {
+        manim_default_vector_field_ranges_2d().y.start
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "defaultVectorFieldYEnd")]
+    fn default_vector_field_y_end() -> f64 {
+        manim_default_vector_field_ranges_2d().y.end
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "defaultVectorFieldYStep")]
+    fn default_vector_field_y_step() -> f64 {
+        manim_default_vector_field_ranges_2d().y.step
     }
 
     #[staticmethod]
@@ -189,6 +277,136 @@ impl ArrowOptions {
     }
 }
 
+#[pyclass(skip_from_py_object, module = "_noon_native")]
+pub(crate) struct VectorFieldOptions(ArrowVectorFieldOptions);
+
+#[pymethods]
+impl VectorFieldOptions {
+    #[getter(sampleCount)]
+    fn sample_count(&self) -> usize {
+        self.0.sample_count()
+    }
+
+    #[pyo3(name = "sampleX")]
+    fn sample_x(&self, index: usize) -> PyResult<f64> {
+        self.0
+            .sample_point(index)
+            .map(|point| point.x)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "sampleY")]
+    fn sample_y(&self, index: usize) -> PyResult<f64> {
+        self.0
+            .sample_point(index)
+            .map(|point| point.y)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setVector")]
+    fn set_vector(&mut self, index: usize, x: f64, y: f64) -> PyResult<()> {
+        self.0.set_vector(index, x, y).map_err(engine_error)
+    }
+
+    #[pyo3(name = "setDisplayLength")]
+    fn set_display_length(&mut self, index: usize, value: f64) -> PyResult<()> {
+        self.0
+            .set_display_length(index, value)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setFieldColor")]
+    fn set_field_color(&mut self, red: f64, green: f64, blue: f64, alpha: f64) -> PyResult<()> {
+        self.0
+            .set_field_color(red, green, blue, alpha)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setColorGradient")]
+    fn set_color_gradient(&mut self, min: f64, max: f64, custom_scheme: bool) {
+        self.0.set_color_gradient(min, max, custom_scheme);
+    }
+
+    #[pyo3(name = "addColorGradientStop")]
+    fn add_color_gradient_stop(
+        &mut self,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+    ) -> PyResult<()> {
+        self.0
+            .add_color_gradient_stop(red, green, blue, alpha)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "setColorValue")]
+    fn set_color_value(&mut self, index: usize, value: f64) -> PyResult<()> {
+        self.0.set_color_value(index, value).map_err(engine_error)
+    }
+}
+
+#[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
+pub(crate) struct VectorFieldHandle(ManimArrowVectorField);
+
+#[pymethods]
+impl VectorFieldHandle {
+    fn family(&self) -> FamilyHandle {
+        FamilyHandle::from_semantic_family(self.0.family().clone())
+    }
+
+    #[getter(vectorCount)]
+    fn vector_count(&self) -> usize {
+        self.0.vectors().len()
+    }
+
+    #[pyo3(name = "vectorAt")]
+    fn vector_at(&self, index: usize) -> PyResult<ArrowHandle> {
+        self.0
+            .vectors()
+            .get(index)
+            .cloned()
+            .map(ArrowHandle)
+            .ok_or_else(|| {
+                engine_error(AuthoringFailure::new(
+                    "invalid_input",
+                    "vector_field.vector_index",
+                    format!("vector-field vector index {index} is out of range"),
+                ))
+            })
+    }
+}
+
+#[derive(FromPyObject)]
+pub(crate) enum ArrowRequest<'py> {
+    Arrow(PyRef<'py, ArrowOptions>),
+    VectorField(PyRef<'py, VectorFieldOptions>),
+}
+
+impl ArrowRequest<'_> {
+    pub(crate) fn publish_in_scene(
+        self,
+        py: Python<'_>,
+        scene: &mut Scene,
+        running: bool,
+    ) -> PyResult<Py<PyAny>> {
+        match self {
+            Self::Arrow(options) => scene
+                .manim_arrow(options.0.clone())
+                .map_err(|error| {
+                    engine_error(AuthoringFailure::from_scene_mutation(error, running))
+                })
+                .and_then(|arrow| Py::new(py, ArrowHandle(arrow)).map(Py::into_any)),
+            Self::VectorField(options) => scene
+                .manim_arrow_vector_field(options.0.clone())
+                .map_err(|error| {
+                    engine_error(AuthoringFailure::from_scene_vector_field(error, running))
+                })
+                .and_then(|field| Py::new(py, VectorFieldHandle(field)).map(Py::into_any)),
+        }
+    }
+}
+
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub(crate) struct ArrowHandle(pub(crate) ManimArrow);
 
@@ -326,10 +544,20 @@ pub(crate) fn scale_error(error: noon::ArrowScaleError) -> PyErr {
 }
 
 #[pyfunction]
-fn create_arrow(store: &Store, options: &ArrowOptions) -> PyResult<ArrowHandle> {
-    ManimArrow::create(Rc::clone(&store.semantics), options.0.clone())
-        .map(ArrowHandle)
-        .map_err(engine_error)
+fn create_arrow(py: Python<'_>, store: &Store, request: ArrowRequest<'_>) -> PyResult<Py<PyAny>> {
+    match request {
+        ArrowRequest::Arrow(options) => {
+            ManimArrow::create(Rc::clone(&store.semantics), options.0.clone())
+                .map_err(engine_error)
+                .and_then(|arrow| Py::new(py, ArrowHandle(arrow)).map(Py::into_any))
+        }
+        ArrowRequest::VectorField(options) => options
+            .0
+            .clone()
+            .publish_detached(Rc::clone(&store.semantics))
+            .map_err(engine_error)
+            .and_then(|field| Py::new(py, VectorFieldHandle(field)).map(Py::into_any)),
+    }
 }
 
 #[pyfunction]
@@ -340,6 +568,8 @@ fn linear_transformation_path_arc(values: Vec<f64>, rows: usize, columns: usize)
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ArrowOptions>()?;
     module.add_class::<ArrowHandle>()?;
+    module.add_class::<VectorFieldOptions>()?;
+    module.add_class::<VectorFieldHandle>()?;
     module.add_function(wrap_pyfunction!(create_arrow, module)?)?;
     module.add_function(wrap_pyfunction!(linear_transformation_path_arc, module)?)
 }

@@ -3635,17 +3635,6 @@ impl CanonicalAuthoringScene {
             .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn create_manim_arrow(
-        &mut self,
-        options: noon::ManimArrowOptions,
-    ) -> Result<noon::ManimArrow, AuthoringFailure> {
-        let running = !self.player_ownership.is_unstarted();
-        self.local_authoring_scene()?
-            .manim_arrow(options)
-            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
-    }
-
     #[cfg(target_arch = "wasm32")]
     fn create_image(
         &mut self,
@@ -9971,17 +9960,17 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        /// Publish one retained Arrow family through the current live session.
+        /// Publish an Arrow or ArrowVectorField through its Scene.
         #[wasm_bindgen(js_name = createManimArrow)]
         pub fn create_manim_arrow(
             &mut self,
             candidate: crate::WasmManimArrowOptions,
         ) -> Result<crate::WasmAuthoringArrowHandle, JsValue> {
-            let options = candidate.into_live_arrow_options()?;
-            self.inner
-                .create_manim_arrow(options)
-                .map(crate::WasmAuthoringArrowHandle::from_manim_arrow)
-                .map_err(typed_js_error)
+            let running = !self.inner.player_ownership.is_unstarted();
+            candidate.publish_in_scene(
+                self.inner.local_authoring_scene().map_err(typed_js_error)?,
+                running,
+            )
         }
 
         /// Publish a fully configured image through its Scene.
@@ -13578,7 +13567,14 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let mut options = noon::ManimArrowOptions::arrow(-1.0, 0.0, 1.0, 0.0).unwrap();
         options.set_buff(0.0).unwrap();
-        let arrow = context.create_manim_arrow(options.clone()).unwrap();
+        let arrow = context
+            .local_authoring_scene()
+            .and_then(|scene| {
+                scene
+                    .manim_arrow(options.clone())
+                    .map_err(AuthoringFailure::from)
+            })
+            .unwrap();
         context.scene.add_many(&[arrow.family().into()]).unwrap();
         context.live_player(1.0).unwrap();
         let player = context.take_execution_player(1.0, 17).unwrap();
@@ -13587,7 +13583,12 @@ mod tests {
         let before_tip = arrow.end_tip().state().unwrap();
 
         assert!(context.scale_arrow(&arrow, 0.5, false).is_err());
-        assert!(context.create_manim_arrow(options.clone()).is_err());
+        assert!(context
+            .local_authoring_scene()
+            .and_then(|scene| scene
+                .manim_arrow(options.clone())
+                .map_err(AuthoringFailure::from))
+            .is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
             revision
@@ -13598,7 +13599,11 @@ mod tests {
         context.return_execution_player(player).unwrap();
         context.scale_arrow(&arrow, 0.5, false).unwrap();
         assert!((arrow.manim_length().unwrap() - 1.0).abs() < 1e-5);
-        let detached = context.create_manim_arrow(options).unwrap();
+        let detached = context
+            .local_authoring_scene()
+            .unwrap()
+            .manim_arrow(options)
+            .unwrap();
         assert!((detached.manim_length().unwrap() - 2.0).abs() < 1e-5);
     }
 
