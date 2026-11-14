@@ -950,7 +950,6 @@ impl From<noon_compile::SemanticPublicationLoweringError> for AuthoringFailure {
             E::PlaybackControlUnavailable { .. } => "lowering.playback_control_unavailable",
             E::UnsupportedMutation { .. } => "lowering.unsupported_mutation",
             E::UnsupportedReactiveMembership { .. } => "lowering.unsupported_reactive_membership",
-            E::UnsupportedTextMembership { .. } => "lowering.unsupported_text_membership",
             E::UnsupportedCameraMembership { .. } => "lowering.unsupported_camera_membership",
             E::UnsupportedNodeRemoval { .. } => "lowering.unsupported_node_removal",
             E::Value(noon_compile::SemanticLoweringError::UnsupportedEffectProfile { .. }) => {

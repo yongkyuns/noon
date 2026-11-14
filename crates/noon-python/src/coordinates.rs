@@ -1019,6 +1019,32 @@ pub(crate) fn label_failure(error: impl std::fmt::Display) -> PyErr {
     ))
 }
 #[cfg(feature = "native-text")]
+pub(crate) fn label_numbers(values: &[f64], automatic: bool) -> PyResult<Option<&[f64]>> {
+    if automatic && !values.is_empty() {
+        return Err(label_failure(
+            "automatic labels cannot supply explicit values",
+        ));
+    }
+    Ok((!automatic).then_some(values))
+}
+
+#[cfg(feature = "native-text")]
+pub(crate) fn custom_label_values(
+    values: Vec<f64>,
+    texts: Vec<String>,
+) -> PyResult<Vec<(f64, String)>> {
+    if values.len() != texts.len() {
+        return Err(label_failure(
+            "custom label positions and texts must have equal lengths",
+        ));
+    }
+    if values.len() > noon::plot_presentation::MAX_PLOT_LABELS {
+        return Err(label_failure("number-label limit exceeded"));
+    }
+    Ok(values.into_iter().zip(texts).collect())
+}
+
+#[cfg(feature = "native-text")]
 #[pyclass(unsendable, module = "_noon_native")]
 pub struct NumberLabelOptions {
     pub(crate) options: noon::plot_presentation::NumberLabelOptions,

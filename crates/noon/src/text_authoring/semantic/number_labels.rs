@@ -1,4 +1,4 @@
-//! Numeric labels become ordinary Text leaves through one cold transaction.
+//! Numeric labels become ordinary Text leaves through one semantic publication.
 use super::super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
 use crate::family_layout::RelativePlacement;
 use crate::plot_presentation::{
@@ -7,12 +7,12 @@ use crate::plot_presentation::{
 };
 use crate::{
     AuthoringError, Bounds2D64, ManimAxes, ManimNextToArgs, ManimNumberLine, ManimNumberPlane,
-    MobjectFamily, NumberLineFrame,
+    MobjectFamily, NumberLineFrame, Scene,
 };
 use noon_core::{
-    format_decimal, FontResourceArena, SemanticMutationTransaction, SemanticNodeCreation,
-    SemanticNodeId, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle,
-    SemanticTransform2_5D, SemanticVec3, TextResource,
+    format_decimal, FontResourceArena, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId, SemanticObjectState,
+    SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D, SemanticVec3, TextResource,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -108,9 +108,12 @@ fn prepare_display_labels(
     Ok(prepared)
 }
 
+type LabelGroups = Vec<(Option<SemanticNodeId>, Vec<PreparedLabel>)>;
+
 fn publish(
-    store: Rc<RefCell<SemanticStore>>,
-    groups: Vec<(Option<SemanticNodeId>, Vec<PreparedLabel>)>,
+    store: &Rc<RefCell<SemanticStore>>,
+    scene: Option<&mut Scene>,
+    groups: LabelGroups,
 ) -> Result<Vec<MobjectFamily>, Error> {
     let count: usize = groups.iter().map(|(_, labels)| labels.len()).sum();
     let mut inputs = Vec::new();
@@ -128,42 +131,52 @@ fn publish(
     }
     let mut roots = Vec::new();
     roots.try_reserve_exact(targets.len())?;
-    let result = store
-        .borrow_mut()
-        .apply_glyph_text_transaction::<Error>(inputs, |handles| {
-            let mut transaction = SemanticMutationTransaction::new();
-            let mut entries = handles.iter().zip(presentations);
-            for (parent, count) in targets {
-                let root = transaction.create_node(SemanticNodeCreation::family());
-                roots.push(root);
-                for _ in 0..count {
-                    let (handle, (transform, style)) =
-                        entries.next().expect("prepared label count");
-                    let mut state = SemanticObjectState::new(*handle);
-                    state.transform = transform.into();
-                    state.style = style;
-                    let leaf = transaction.create_node(SemanticNodeCreation::object(state));
-                    transaction.add_member(root, leaf);
-                }
-                if let Some(parent) = parent {
-                    transaction.add_member(parent, root);
-                }
+    let stage = |handles: &[noon_core::TextResourceHandle]| {
+        let mut transaction = SemanticMutationTransaction::new();
+        let mut entries = handles.iter().zip(presentations);
+        for (parent, count) in targets {
+            let root = transaction.create_node(SemanticNodeCreation::family());
+            roots.push(root);
+            for _ in 0..count {
+                let (handle, (transform, style)) = entries.next().expect("prepared label count");
+                let mut state = SemanticObjectState::new(*handle);
+                state.transform = transform.into();
+                state.style = style;
+                let leaf = transaction.create_node(SemanticNodeCreation::object(state));
+                transaction.add_member(root, leaf);
             }
-            Ok(transaction)
-        })?;
+            if let Some(parent) = parent {
+                transaction.add_member(parent, root);
+            }
+        }
+        transaction
+    };
+    let result: SemanticMutationTransactionResult = if let Some(scene) = scene {
+        scene.require_resource_admission()?;
+        scene.with_semantic_publication(|store, publish| {
+            Ok(store.with_glyph_text_resources(inputs, |store, handles| {
+                Ok::<_, Error>(publish(store, stage(handles))?)
+            }))
+        })??
+    } else {
+        store
+            .borrow_mut()
+            .apply_glyph_text_transaction::<Error>(inputs, |h| Ok(stage(h)))?
+    };
     roots
         .into_iter()
         .map(|root| {
             let node = result
                 .resolve(root)
                 .ok_or(AuthoringError::UnresolvedCreatedNode(root))?;
-            Ok(MobjectFamily::from_node(Rc::clone(&store), node)?)
+            Ok(MobjectFamily::from_node(Rc::clone(store), node)?)
         })
         .collect()
 }
 
 fn add_coordinate_families(
-    store: Rc<RefCell<SemanticStore>>,
+    store: &Rc<RefCell<SemanticStore>>,
+    scene: Option<&mut Scene>,
     frame: crate::AxesFrame,
     parents: [SemanticNodeId; 2],
     numbers: [Option<&[f64]>; 2],
@@ -173,6 +186,7 @@ fn add_coordinate_families(
     let y_labels = prepare(frame.y(), numbers[1], options[1])?;
     let mut families = publish(
         store,
+        scene,
         vec![(Some(parents[0]), x_labels), (Some(parents[1]), y_labels)],
     )?;
     let y = families.pop().expect("Y label family");
@@ -191,13 +205,14 @@ impl ManimNumberLine {
     ) -> Result<MobjectFamily, Error> {
         let labels = prepare(self.authored_frame()?, numbers, options)?;
         Ok(publish(
-            Rc::clone(self.family().integration_store()),
+            self.family().integration_store(),
+            None,
             vec![(None, labels)],
         )?
         .remove(0))
     }
 
-    /// Cold-only atomic construction AND attachment. Each call appends a label
+    /// Detached-authoring atomic construction AND attachment. Each call appends a label
     /// family, matching ordinary add semantics; it does not silently replace
     /// earlier labels. It does not publish into an already running execution.
     pub fn add_numbers(
@@ -207,13 +222,14 @@ impl ManimNumberLine {
     ) -> Result<MobjectFamily, Error> {
         let labels = prepare(self.authored_frame()?, numbers, options)?;
         Ok(publish(
-            Rc::clone(self.family().integration_store()),
+            self.family().integration_store(),
+            None,
             vec![(Some(self.family().node_id()), labels)],
         )?
         .remove(0))
     }
 
-    /// Cold-only attachment of unchanged caller strings at Rust-mapped positions.
+    /// Detached-authoring attachment of unchanged caller strings at Rust-mapped positions.
     pub fn add_labels(
         &self,
         labels: &[(f64, String)],
@@ -221,7 +237,8 @@ impl ManimNumberLine {
     ) -> Result<MobjectFamily, Error> {
         let prepared = prepare_text(self.authored_frame()?, labels, options)?;
         Ok(publish(
-            Rc::clone(self.family().integration_store()),
+            self.family().integration_store(),
+            None,
             vec![(Some(self.family().node_id()), prepared)],
         )?
         .remove(0))
@@ -229,7 +246,7 @@ impl ManimNumberLine {
 }
 
 impl ManimAxes {
-    /// Cold-only construction and attachment of both axis label families in one
+    /// Detached-authoring construction and attachment of both axis label families in one
     /// transaction. A failure preparing Y cannot leave X labels/resources behind.
     /// Text labels are an explicit Noon native-Text subset, not DecimalNumber or
     /// TeX glyph parity. Return handles to the X/Y label families respectively.
@@ -244,7 +261,8 @@ impl ManimAxes {
         let y = self.y_axis()?;
         let frame = self.authored_frame()?;
         add_coordinate_families(
-            Rc::clone(self.family().integration_store()),
+            self.family().integration_store(),
+            None,
             frame,
             [x.family().node_id(), y.family().node_id()],
             [x_numbers, y_numbers],
@@ -267,11 +285,66 @@ impl ManimNumberPlane {
         let x_axis = self.x_axis()?;
         let y_axis = self.y_axis()?;
         add_coordinate_families(
-            Rc::clone(self.family().integration_store()),
+            self.family().integration_store(),
+            None,
             frame,
             [x_axis.family().node_id(), y_axis.family().node_id()],
             [x_numbers, y_numbers],
             [x_options, y_options],
+        )
+    }
+}
+
+impl Scene {
+    /// Place native text numbers in the current NumberLine frame.
+    pub fn number_line_labels(
+        &mut self,
+        line: &ManimNumberLine,
+        numbers: Option<&[f64]>,
+        options: &NumberLabelOptions,
+        attach: bool,
+    ) -> Result<MobjectFamily, Error> {
+        let labels = prepare(self.number_line_frame(line)?, numbers, options)?;
+        Ok(publish(
+            line.family().integration_store(),
+            Some(self),
+            vec![(attach.then_some(line.family().node_id()), labels)],
+        )?
+        .remove(0))
+    }
+
+    /// Attach retained strings at positions in the current NumberLine frame.
+    pub fn number_line_custom_labels(
+        &mut self,
+        line: &ManimNumberLine,
+        labels: &[(f64, String)],
+        options: &NumberLabelOptions,
+    ) -> Result<MobjectFamily, Error> {
+        let labels = prepare_text(self.number_line_frame(line)?, labels, options)?;
+        Ok(publish(
+            line.family().integration_store(),
+            Some(self),
+            vec![(Some(line.family().node_id()), labels)],
+        )?
+        .remove(0))
+    }
+
+    /// Attach two native Text label families as one Scene publication.
+    pub fn coordinate_text_labels(
+        &mut self,
+        x: &ManimNumberLine,
+        y: &ManimNumberLine,
+        numbers: [Option<&[f64]>; 2],
+        options: [&NumberLabelOptions; 2],
+    ) -> Result<[MobjectFamily; 2], Error> {
+        let frame = crate::AxesFrame::new(self.number_line_frame(x)?, self.number_line_frame(y)?);
+        add_coordinate_families(
+            x.family().integration_store(),
+            Some(self),
+            frame,
+            [x.family().node_id(), y.family().node_id()],
+            numbers,
+            options,
         )
     }
 }

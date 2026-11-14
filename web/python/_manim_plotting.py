@@ -5,7 +5,7 @@ range normalization, defaults, ticks, and retained filled tips to Rust. The
 bounded ThreeDAxes constructor retains its three default tips.
 Coordinates may be constructed after ordinary plays/waits;
 add late coordinates to the Scene before querying or plotting against them.
-Numeric native Text label families must be constructed before the first play/wait.
+DecimalNumber label families must be constructed before the first play/wait.
 Existing coordinates remain queryable after plays; curves use ordinary live
 geometry publication. Python owns callables/coercion, never coordinate math.
 """
@@ -799,7 +799,7 @@ class NumberLine(_compat.Group):
         return self
 
     def add_numbers(self, x_values=None, excluding=None, **kwargs):
-        """Atomically append DecimalNumber labels before playback; expose .numbers.
+        """Atomically append numeric labels and expose the latest family as .numbers.
 
         Repeated calls append another label family, rather than replacing the
         earlier one. Passing ``font`` opts into the native-Text subset. Explicit

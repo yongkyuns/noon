@@ -120,6 +120,27 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    def test_native_coordinate_text_labels_publish_during_playback(self):
+        source = """from noon import *
+class Demo(Scene):
+    async def construct(self):
+        axes = Axes((-2, 2, 1), (-2, 2, 1), tips=False)
+        self.add(axes)
+        axes.add_coordinates((-1, 1), (-1, 1), font="DejaVu Sans Mono")
+        assert len(axes.x_axis.numbers) == len(axes.y_axis.numbers) == 2
+        before = axes.x_axis.numbers[1].get_center()
+        await self.play(axes.animate.shift(RIGHT), run_time=0.125)
+        axes.x_axis.add_labels({1: "X"})
+        assert axes.x_axis.labels[0].text == "X"
+        numbers = axes.x_axis.get_number_mobjects(1, font="DejaVu Sans Mono")
+        assert abs(numbers[0].get_center()[0] - before[0] - 1) < 1e-5
+        axes.add_coordinates((1,), (1,), font="DejaVu Sans Mono")
+        assert len(axes.x_axis.numbers) == len(axes.y_axis.numbers) == 1
+        await self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_three_d_axis_labels_publish_after_playback_starts(self):
         source = """from noon import *
 class Demo(ThreeDScene):

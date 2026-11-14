@@ -608,19 +608,10 @@ impl FamilyHandle {
         options: &crate::coordinates::NumberLabelOptions,
         attach: bool,
     ) -> PyResult<Self> {
-        use crate::coordinates::label_failure;
-        if automatic && !values.is_empty() {
-            return Err(label_failure(
-                "automatic labels cannot supply explicit values",
-            ));
-        }
+        use crate::coordinates::{label_failure, label_numbers};
         let line =
             noon::ManimNumberLine::from_family(self.family.clone()).map_err(label_failure)?;
-        let values = if automatic {
-            None
-        } else {
-            Some(values.as_slice())
-        };
+        let values = label_numbers(&values, automatic)?;
         let family = if attach {
             line.add_numbers(values, &options.options)
         } else {
@@ -630,6 +621,22 @@ impl FamilyHandle {
             .map(Self::from_semantic_family)
             .map_err(label_failure)
     }
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "numberLineCustomLabelFamily")]
+    fn number_line_custom_label_family(
+        &self,
+        values: Vec<f64>,
+        texts: Vec<String>,
+        options: &crate::coordinates::NumberLabelOptions,
+    ) -> PyResult<Self> {
+        use crate::coordinates::{custom_label_values, label_failure};
+        let line =
+            noon::ManimNumberLine::from_family(self.family.clone()).map_err(label_failure)?;
+        line.add_labels(&custom_label_values(values, texts)?, &options.options)
+            .map(Self::from_semantic_family)
+            .map_err(label_failure)
+    }
+
     #[cfg(feature = "native-text")]
     #[pyo3(name = "numberLabelMembers")]
     fn number_label_members(&self) -> PyResult<Vec<(MobjectHandle, String)>> {
