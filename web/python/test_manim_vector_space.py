@@ -245,7 +245,7 @@ class ManimVectorSpaceTests(unittest.TestCase):
                 _semantic_family_handle = Handle()
             plane = Plane()
 
-            labels._cold_labels = lambda: None
+            labels._label_context = lambda owner: None
             labels._plot._array = lambda values: tuple(values)
             labels._compat.VGroup = lambda *members: tuple(members)
             options = []

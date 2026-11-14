@@ -1692,6 +1692,91 @@ impl Context {
             .map_err(engine_error)
     }
 
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "createNumberLineTextLabels")]
+    fn create_number_line_text_labels(
+        &mut self,
+        family: &crate::family::FamilyHandle,
+        values: Vec<f64>,
+        automatic: bool,
+        options: &crate::coordinates::NumberLabelOptions,
+        attach: bool,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        use crate::coordinates::{label_failure, label_numbers};
+        self.available()?;
+        let line =
+            noon::ManimNumberLine::from_family(family.family.clone()).map_err(label_failure)?;
+        self.scene
+            .number_line_labels(
+                &line,
+                label_numbers(&values, automatic)?,
+                &options.options,
+                attach,
+            )
+            .map(crate::family::FamilyHandle::from_semantic_family)
+            .map_err(label_failure)
+    }
+
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "createNumberLineCustomLabels")]
+    fn create_number_line_custom_labels(
+        &mut self,
+        family: &crate::family::FamilyHandle,
+        values: Vec<f64>,
+        texts: Vec<String>,
+        options: &crate::coordinates::NumberLabelOptions,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        use crate::coordinates::{custom_label_values, label_failure};
+        self.available()?;
+        let line =
+            noon::ManimNumberLine::from_family(family.family.clone()).map_err(label_failure)?;
+        self.scene
+            .number_line_custom_labels(
+                &line,
+                &custom_label_values(values, texts)?,
+                &options.options,
+            )
+            .map(crate::family::FamilyHandle::from_semantic_family)
+            .map_err(label_failure)
+    }
+
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "createCoordinateTextLabels")]
+    #[allow(clippy::too_many_arguments)]
+    fn create_coordinate_text_labels(
+        &mut self,
+        x_axis: &crate::family::FamilyHandle,
+        y_axis: &crate::family::FamilyHandle,
+        x: Vec<f64>,
+        automatic_x: bool,
+        y: Vec<f64>,
+        automatic_y: bool,
+        x_options: &crate::coordinates::NumberLabelOptions,
+        y_options: &crate::coordinates::NumberLabelOptions,
+    ) -> PyResult<(crate::family::FamilyHandle, crate::family::FamilyHandle)> {
+        use crate::coordinates::{label_failure, label_numbers};
+        self.available()?;
+        let x_axis =
+            noon::ManimNumberLine::from_family(x_axis.family.clone()).map_err(label_failure)?;
+        let y_axis =
+            noon::ManimNumberLine::from_family(y_axis.family.clone()).map_err(label_failure)?;
+        let values = [
+            label_numbers(&x, automatic_x)?,
+            label_numbers(&y, automatic_y)?,
+        ];
+        let [x, y] = self
+            .scene
+            .coordinate_text_labels(
+                &x_axis,
+                &y_axis,
+                values,
+                [&x_options.options, &y_options.options],
+            )
+            .map_err(label_failure)?
+            .map(crate::family::FamilyHandle::from_semantic_family);
+        Ok((x, y))
+    }
+
     #[pyo3(name = "createThreeDAxesLabels")]
     #[allow(clippy::too_many_arguments)]
     fn create_three_d_axes_labels(
