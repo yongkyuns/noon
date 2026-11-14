@@ -943,6 +943,10 @@ class Demo(Scene):
         live.complete()
         live.evaluate(1.5)
         assert tuple(c.get_center()) == (1.0, 0.0, 0.0)
+        live.evaluate(0.5)
+        assert tuple(c.get_center()) == (0.0, 0.0, 0.0)
+        live.evaluate(1.5)
+        assert tuple(c.get_center()) == (1.0, 0.0, 0.0)
 """
         view = prepare_view(asyncio.run(run_source(source, retain_history=True)))
         try:

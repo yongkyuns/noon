@@ -173,7 +173,7 @@ fn planar_depth_fitting_and_stretch_preserve_aliases_without_publication() {
     assert_eq!(
         execution
             .scene()
-            .effective_length_over_dim((&family).into(), 2)
+            .length_over_dim((&family).into(), 2)
             .unwrap(),
         0.0
     );

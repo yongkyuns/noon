@@ -241,7 +241,14 @@ fn transferred_context_cannot_drive_query_publish_or_take_again() {
         scene.active_live_player().unwrap().ownership_identity(),
         identity
     );
-    assert_eq!(scene.mobject_layout(&circle).unwrap(), (0.0, 0.0, 2.0, 2.0));
+    assert_eq!(
+        scene.mobject_layout(&circle).unwrap(),
+        noon::MobjectLayout {
+            center: (0.0, 0.0),
+            width: 2.0,
+            height: 2.0
+        }
+    );
 }
 
 #[test]
@@ -428,7 +435,11 @@ fn publication_while_leased_does_not_invalidate_the_ownership_identity() {
     scene.return_execution_player(player).unwrap();
     assert_eq!(
         scene.mobject_layout(&circle).unwrap(),
-        (3.0, -1.0, 2.0, 2.0)
+        noon::MobjectLayout {
+            center: (3.0, -1.0),
+            width: 2.0,
+            height: 2.0
+        }
     );
     scene.prepare_execution_run().unwrap();
     assert_eq!(
@@ -457,7 +468,11 @@ fn only_a_stale_returned_runtime_can_be_replaced_at_a_rerun_boundary() {
     circle.shift(3.0, -1.0).unwrap();
     assert_eq!(
         scene.mobject_layout(&circle).unwrap(),
-        (3.0, -1.0, 2.0, 2.0)
+        noon::MobjectLayout {
+            center: (3.0, -1.0),
+            width: 2.0,
+            height: 2.0
+        }
     );
     assert_eq!(
         scene.active_live_player().unwrap().ownership_identity(),

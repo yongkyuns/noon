@@ -21,7 +21,7 @@ fn assert_depth(
     minimum: f64,
     maximum: f64,
 ) -> Result<(), LiveSessionError> {
-    let snapshot = scene.effective_point_reduction_tree(root.into())?;
+    let snapshot = scene.point_reduction_tree(root.into())?;
     assert!(!snapshot.points.is_empty());
     assert!(snapshot.points.iter().all(|point| point.z == own));
     let coordinates = snapshot

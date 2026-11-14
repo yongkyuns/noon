@@ -1,7 +1,7 @@
 //! Fixed-point spotlight with a live continuation on both direct Rust hosts.
 use crate::{
-    AnimationOptions, Color, ContinuationStep, FocusOnOptions, LiveContinuation, LiveProgram,
-    Mobject, RateFunction, Scene,
+    AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep, FocusOnOptions,
+    LiveContinuation, LiveProgram, Mobject, RateFunction, Scene,
 };
 
 pub struct OrdinaryFocusOn {
@@ -13,20 +13,23 @@ impl LiveContinuation for OrdinaryFocusOn {
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         let result = match self.stage {
             0 => scene.live().wait_segment(0.25),
-            1 => scene.live().declare_and_activate_focus_on(
-                FocusOnOptions {
-                    point: (2.0, 1.0),
-                    opacity: 0.8,
-                    color: Color {
-                        red: 0.0,
-                        green: 1.0,
-                        blue: 1.0,
-                        alpha: 1.0,
+            1 => scene.live().declare_and_activate_composition(
+                &AnimationCompositionRequest::FocusOn {
+                    focus: FocusOnOptions {
+                        point: (2.0, 1.0),
+                        opacity: 0.8,
+                        color: Color {
+                            red: 0.0,
+                            green: 1.0,
+                            blue: 1.0,
+                            alpha: 1.0,
+                        },
                     },
+                    options: AnimationOptions::new()
+                        .run_time(2.0)
+                        .rate_func(RateFunction::Linear),
                 },
-                AnimationOptions::new()
-                    .run_time(2.0)
-                    .rate_func(RateFunction::Linear),
+                AnimationOptions::new(),
             ),
             2 => {
                 if !scene

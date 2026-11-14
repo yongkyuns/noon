@@ -63,6 +63,35 @@ pub struct EffectiveMobjectLayout {
     pub publication: PublicationContext,
 }
 
+/// The center and dimensions of a Scene layout observation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MobjectLayout {
+    pub center: (f64, f64),
+    pub width: f64,
+    pub height: f64,
+}
+
+impl From<EffectiveMobjectLayout> for MobjectLayout {
+    fn from(layout: EffectiveMobjectLayout) -> Self {
+        Self {
+            center: layout.center,
+            width: layout.width,
+            height: layout.height,
+        }
+    }
+}
+
+/// Select the center of an authored object layout.
+///
+/// During execution the current publication supplies the semantic center.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthoredLayoutCenter {
+    /// Use the semantic content boundary, including vector path anchors.
+    Boundary,
+    /// Use the midpoint of the dimension bounds, including cubic handles.
+    Bounds,
+}
+
 /// Presentation/export intent attached to one authored section boundary.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SectionType {
@@ -569,6 +598,17 @@ impl Scene {
         )]))
         .map(|_| ())
     }
+
+    /// Capture one object's world-space path. A running Scene reads the
+    /// current Runtime publication, including animation and reveal.
+    pub fn path_query(&self, object: &Mobject) -> Result<crate::PathQuery, AuthoringError> {
+        if let Some(execution) = self.running_execution() {
+            return crate::path_queries::effective_path_query(&self.store, execution, object);
+        }
+        MobjectTarget::from(object).require_store(&self.store)?;
+        object.path_query()
+    }
+
     /// Capture exact current path controls and transform from one coherent
     /// Runtime publication. Cold Scenes fail explicitly rather than falling back
     /// to authored geometry.
@@ -580,82 +620,10 @@ impl Scene {
         crate::path_queries::effective_path_query(&self.store, execution, object)
     }
 
-    /// Capture the effective point arrays for an object or family in the
-    /// current Runtime publication, preserving recursive alias multiplicity.
-    pub fn effective_all_points(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_all_points(&self.store, execution, target)
-    }
-
     pub(crate) fn execution_for_observation(&self) -> Result<&ExecutionSession, AuthoringError> {
         self.running_execution().ok_or(AuthoringError::Unsupported(
             crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
         ))
-    }
-
-    /// Capture full-coordinate points, retaining recursive child occurrences.
-    pub fn effective_all_points_3d(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_all_points_3d(&self.store, execution, target)
-    }
-
-    /// Capture full-coordinate vector anchors in unique family order.
-    pub fn effective_vector_boundary_points_3d(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_vector_boundary_points_3d(&self.store, execution, target)
-    }
-
-    /// Capture the planar projection of the effective vector anchors.
-    pub fn effective_vector_boundary_points(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_vector_boundary_points(&self.store, execution, target)
-    }
-
-    /// Capture owned points and ordered child occurrences for one target.
-    pub fn effective_point_reduction_tree(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<crate::PointReductionTree, AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_point_reduction_tree(&self.store, execution, target)
-    }
-
-    /// Select retained-content layout when the effective target has opaque content.
-    pub fn effective_requires_content_boundary(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<bool, AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_requires_content_boundary(&self.store, execution, target)
-    }
-
-    /// Read the effective boundary coordinate along one direction.
-    pub fn effective_critical_point_3d(
-        &self,
-        target: MobjectTarget<'_>,
-        direction: noon_core::SemanticVec3,
-        vector_boundary: bool,
-    ) -> Result<noon_core::SemanticVec3, AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_critical_point_3d(
-            &self.store,
-            execution,
-            target,
-            direction,
-            vector_boundary,
-        )
     }
 
     /// Read one analytic Line's world endpoints at the current publication.
@@ -675,107 +643,6 @@ impl Scene {
         let transform = observed.object.transform;
         drop(store);
         mobject.manim_line_endpoints_at(transform)
-    }
-
-    /// Query the effective min, midpoint, or max boundary coordinate for a
-    /// dimension from the current Runtime publication.
-    pub fn effective_extremum_along_dim(
-        &self,
-        target: MobjectTarget<'_>,
-        dim: usize,
-        key: f64,
-    ) -> Result<f64, AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_extremum_along_dim(&self.store, execution, target, dim, key)
-    }
-
-    /// Query the effective center of mass from the current Runtime publication.
-    pub fn effective_center_of_mass(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<(f64, f64), AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_center_of_mass(&self.store, execution, target)
-    }
-
-    /// Query the effective boundary point farthest along a direction.
-    pub fn effective_boundary_point(
-        &self,
-        target: MobjectTarget<'_>,
-        direction_x: f64,
-        direction_y: f64,
-    ) -> Result<(f64, f64), AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_boundary_point(
-            &self.store,
-            execution,
-            target,
-            direction_x,
-            direction_y,
-        )
-    }
-
-    /// Query the effective point extent along one coordinate dimension.
-    pub fn effective_length_over_dim(
-        &self,
-        target: MobjectTarget<'_>,
-        dim: usize,
-    ) -> Result<f64, AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_length_over_dim(&self.store, execution, target, dim)
-    }
-
-    /// Capture effective vector-path boundary anchors for an object or the
-    /// ordinary recursive points for a family target.
-    pub fn effective_path_boundary_points(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_path_boundary_points(&self.store, execution, target)
-    }
-
-    /// Capture the full-coordinate path boundary at the current execution publication.
-    pub fn effective_path_boundary_points_3d(
-        &self,
-        target: MobjectTarget<'_>,
-    ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_path_boundary_points_3d(&self.store, execution, target)
-    }
-
-    /// Query a vector-path boundary anchor extremum from the current publication.
-    pub fn effective_path_boundary_extremum_along_dim(
-        &self,
-        target: MobjectTarget<'_>,
-        dim: usize,
-        key: f64,
-    ) -> Result<f64, AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_path_boundary_extremum_along_dim(
-            &self.store,
-            execution,
-            target,
-            dim,
-            key,
-        )
-    }
-
-    /// Query the vector-path boundary anchor farthest along a direction.
-    pub fn effective_path_boundary_point(
-        &self,
-        target: MobjectTarget<'_>,
-        direction_x: f64,
-        direction_y: f64,
-    ) -> Result<(f64, f64), AuthoringError> {
-        let execution = self.execution_for_observation()?;
-        crate::path_queries::effective_path_boundary_point(
-            &self.store,
-            execution,
-            target,
-            direction_x,
-            direction_y,
-        )
     }
 
     /// Read one persistent authored/base object declaration.

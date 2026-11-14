@@ -300,7 +300,7 @@ impl Context {
         let segment = self
             .segment
             .ok_or_else(|| engine_error("no pending segment"))?;
-        let (store, _, session) = noon::integration::scene_execution::parts_mut(&mut self.scene)
+        let session = scene_execution::session_mut(&mut self.scene)
             .ok_or_else(|| engine_error("no execution"))?;
         loop {
             let requested = match self.requested_sample {
@@ -353,9 +353,9 @@ impl Context {
                 .saturating_add(1)
                 .max(((requested * self.sample_hz).floor() as u64).saturating_add(1));
             if session.frame().time >= segment.end_time() {
-                session
-                    .complete_segment(&mut store.borrow_mut(), segment)
-                    .map_err(noon::LiveSessionError::from)
+                scene_execution::live(&mut self.scene)
+                    .expect("callback drive uses the installed execution")
+                    .complete_segment(segment)
                     .map_err(engine_error)?;
                 self.segment = None;
                 return event(py, "complete", None);
@@ -370,8 +370,8 @@ impl Context {
         value: &Bound<'_, PyDict>,
     ) -> PyResult<Py<PyDict>> {
         self.require_active()?;
-        let (store, _, session) = scene_execution::parts_mut(&mut self.scene)
-            .ok_or_else(|| engine_error("no execution"))?;
+        let session =
+            scene_execution::session(&self.scene).ok_or_else(|| engine_error("no execution"))?;
         let expected = session
             .pending_callback_token()
             .ok_or_else(|| engine_error("no pending callback"))?;
@@ -477,7 +477,7 @@ impl Context {
                         })?;
                     resolve_callback_provisional(
                         collector,
-                        &mut store.borrow_mut(),
+                        &mut self.scene.integration_store().borrow_mut(),
                         target,
                         key.extract::<&str>()?,
                         &mut writes,
@@ -516,6 +516,8 @@ impl Context {
             }
         }
         let batch = EffectivePropertyBatch::new(expected, writes).with_region(region);
+        let session = scene_execution::session_mut(&mut self.scene)
+            .expect("callback submission uses the installed execution");
         match session
             .submit_required_callback_region(batch)
             .map_err(engine_error)?
@@ -574,8 +576,8 @@ impl Context {
         request: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyDict>> {
         self.require_active()?;
-        let (_, _, session) = noon::integration::scene_execution::parts_mut(&mut self.scene)
-            .ok_or_else(|| engine_error("no execution"))?;
+        let session =
+            scene_execution::session(&self.scene).ok_or_else(|| engine_error("no execution"))?;
         let expected = session
             .pending_callback_token()
             .ok_or_else(|| engine_error("no pending callback"))?;
@@ -610,7 +612,7 @@ impl Context {
         message: &str,
     ) -> PyResult<()> {
         self.require_active()?;
-        let (_, _, session) = noon::integration::scene_execution::parts_mut(&mut self.scene)
+        let session = scene_execution::session_mut(&mut self.scene)
             .ok_or_else(|| engine_error("no execution"))?;
         let expected = session
             .pending_callback_token()

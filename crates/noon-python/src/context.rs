@@ -246,7 +246,7 @@ pub struct Context {
     // Host binding provenance only; membership and object state stay in Rust Scene.
     bound_ids: HashSet<noon_core::SemanticNodeId>,
     // Pointer policy declared before the first segment installs the session.
-    drag_targets: Vec<noon_core::SemanticNodeId>,
+    drag_targets: Vec<Mobject>,
     pub(crate) segment: Option<ExecutionSegment>,
     pub(crate) terminal: bool,
     pub(crate) sample_hz: f64,
@@ -309,9 +309,9 @@ impl Context {
         session.require_effect_resource_preparation();
         // Predeclared audio uses the immutable timeline for preview and export.
         if !self.drag_targets.is_empty() {
-            session
-                .set_translation_drag_targets(self.drag_targets.iter().copied())
-                .map_err(|error| engine_error(noon::LiveSessionError::TranslationDrag(error)))?;
+            scene_execution::borrow_uninstalled(&self.scene, &mut session)
+                .set_translation_drag_targets(&self.drag_targets)
+                .map_err(engine_error)?;
         } else if self.retain_history && !session.has_audio() {
             session
                 .begin_replay_retention(Default::default())
@@ -347,45 +347,22 @@ impl Context {
             let session = self.bootstrap()?;
             self.attach_session(session)?;
         }
-        let (_, _, session) = scene_execution::parts_mut(&mut self.scene)
-            .expect("viewer bootstrap installed execution");
-        let interactive = session.has_translation_drag_targets();
-        if interactive {
-            if session.has_required_callbacks() || session.pending_callback_token().is_some() {
-                return Err(engine_error(
-                    "native translation drag requires completed source without required callbacks",
-                ));
-            }
-            session.discard_replay_retention();
-        } else if session.replay_scope_active() {
-            session.seal_replay_for_viewer().map_err(|error| {
-                engine_error(noon::integration::AuthoringFailure::new(
-                    "unsupported_operation",
-                    "python.preview_history",
-                    error,
-                ))
-            })?;
-        } else if !session.supports_immutable_playback() {
-            return Err(engine_error(
-                "prepare the source with retain_history=True before native preview",
-            ));
-        }
-        // Transfer the exact arena/session pair at the authored frontier. Only
-        // then select history; no source rerun, scene clone or relowering.
-        let scene = std::mem::take(&mut self.scene);
+        let execution = scene_execution::take_for_native_viewer(&mut self.scene).map_err(
+            |error| match error {
+                scene_execution::NativeViewerError::HistoryRequired => engine_error(
+                    "prepare the source with retain_history=True before native preview",
+                ),
+                scene_execution::NativeViewerError::Replay(error) => engine_error(
+                    AuthoringFailure::new("unsupported_operation", "python.preview_history", error),
+                ),
+                error => engine_error(error.to_string()),
+            },
+        )?;
         #[cfg(feature = "capture")]
         {
             self.effect_preparer = None;
         }
         self.terminal = true;
-        let mut execution = scene
-            .into_execution()
-            .map_err(|e| engine_error(e.to_string()))?;
-        if !interactive {
-            execution
-                .seek(0.0)
-                .map_err(|e| engine_error(e.to_string()))?;
-        }
         Ok(execution)
     }
 
@@ -447,33 +424,27 @@ impl Context {
         operation(&mut live).map_err(engine_error)
     }
 
-    fn observe_effective(&self, target: &MobjectHandle) -> PyResult<noon::EffectiveMobjectState> {
-        self.require_active()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        self.scene
-            .effective(&target.handle)
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
-    }
-
     fn observe_bound_mobject<T>(
         &self,
         target: &MobjectHandle,
-        authored: impl FnOnce(&Mobject) -> Result<T, noon::AuthoringError>,
-        effective: impl FnOnce(&Scene, &Mobject) -> Result<T, noon::AuthoringError>,
+        observe: impl FnOnce(&Scene, &Mobject) -> Result<T, noon::AuthoringError>,
     ) -> PyResult<T> {
         self.require_active()?;
         self.same_store(target)?;
         if !self.bound_ids.contains(&target.handle.node_id()) {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
-        if self.has_execution() {
-            effective(&self.scene, &target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
-        } else {
-            authored(&target.handle).map_err(engine_error)
-        }
+        self.observe_mobject(target, observe)
+    }
+
+    fn observe_mobject<T>(
+        &self,
+        target: &MobjectHandle,
+        observe: impl FnOnce(&Scene, &Mobject) -> Result<T, noon::AuthoringError>,
+    ) -> PyResult<T> {
+        let running = self.has_execution();
+        observe(&self.scene, &target.handle)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
 
     fn place<T>(
@@ -549,19 +520,10 @@ impl Context {
     fn observe_points<'a, T>(
         &self,
         target: MobjectTarget<'a>,
-        authored: impl FnOnce(&MobjectTarget<'a>) -> Result<T, noon::AuthoringError>,
-        effective: impl FnOnce(&Scene, MobjectTarget<'a>) -> Result<T, noon::AuthoringError>,
+        observe: impl FnOnce(&Scene, MobjectTarget<'a>) -> Result<T, noon::AuthoringError>,
     ) -> PyResult<T> {
         self.require_active()?;
-        target
-            .require_store(self.scene.integration_store())
-            .map_err(engine_error)?;
-        let value = if self.has_execution() {
-            effective(&self.scene, target)
-        } else {
-            authored(&target)
-        };
-        value.map_err(engine_error)
+        observe(&self.scene, target).map_err(engine_error)
     }
 
     fn critical_point_3d(
@@ -570,17 +532,9 @@ impl Context {
         direction: noon::SemanticVec3,
         vector_boundary: bool,
     ) -> PyResult<(f64, f64, f64)> {
-        self.observe_points(
-            target,
-            |target| {
-                if vector_boundary {
-                    target.vector_critical_point_3d(direction)
-                } else {
-                    target.critical_point_3d(direction)
-                }
-            },
-            |scene, target| scene.effective_critical_point_3d(target, direction, vector_boundary),
-        )
+        self.observe_points(target, |scene, target| {
+            scene.critical_point_3d(target, direction, vector_boundary)
+        })
         .map(|point| (point.x, point.y, point.z))
     }
 
@@ -2538,12 +2492,10 @@ impl Context {
     fn query_stroke_cap(&self, target: &MobjectHandle) -> PyResult<&'static str> {
         self.require_active()?;
         self.same_store(target)?;
-        let cap = if self.has_execution() {
-            self.scene.effective_stroke_cap(&target.handle)
-        } else {
-            target.handle.stroke_cap()
-        };
-        cap.map(|cap| cap.as_str()).map_err(engine_error)
+        self.scene
+            .stroke_cap(&target.handle)
+            .map(|cap| cap.as_str())
+            .map_err(engine_error)
     }
 
     fn fade(&mut self, target: &MobjectHandle, darkness: f64) -> PyResult<()> {
@@ -2808,32 +2760,20 @@ impl Context {
 
     #[pyo3(name = "queryMobjectPathBoundaryPoints3D")]
     fn mobject_path_boundary_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
-        self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::path_boundary_points_3d,
-            Scene::effective_path_boundary_points_3d,
-        )
-        .map(crate::path_input::flat_points_3d)
+        self.observe_points((&target.handle).into(), Scene::path_boundary_points_3d)
+            .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryMobjectVectorBoundaryPoints3D")]
     fn mobject_vector_boundary_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
-        self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::vector_boundary_points_3d,
-            Scene::effective_vector_boundary_points_3d,
-        )
-        .map(crate::path_input::flat_points_3d)
+        self.observe_points((&target.handle).into(), Scene::vector_boundary_points_3d)
+            .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryMobjectAllPoints3D")]
     fn mobject_all_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
-        self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::all_points_3d,
-            Scene::effective_all_points_3d,
-        )
-        .map(crate::path_input::flat_points_3d)
+        self.observe_points((&target.handle).into(), Scene::all_points_3d)
+            .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryMobjectExtremumAlongDim")]
@@ -2843,29 +2783,21 @@ impl Context {
         dim: usize,
         key: f64,
     ) -> PyResult<f64> {
-        self.observe_points(
-            (&target.handle).into(),
-            |target| target.extremum_along_dim(dim, key),
-            |scene, target| scene.effective_extremum_along_dim(target, dim, key),
-        )
+        self.observe_points((&target.handle).into(), |scene, target| {
+            scene.extremum_along_dim(target, dim, key)
+        })
     }
 
     #[pyo3(name = "queryMobjectLengthOverDim")]
     fn mobject_length_over_dim(&self, target: &MobjectHandle, dim: usize) -> PyResult<f64> {
-        self.observe_points(
-            (&target.handle).into(),
-            |target| target.length_over_dim(dim),
-            |scene, target| scene.effective_length_over_dim(target, dim),
-        )
+        self.observe_points((&target.handle).into(), |scene, target| {
+            scene.length_over_dim(target, dim)
+        })
     }
 
     #[pyo3(name = "queryMobjectCenterOfMass")]
     fn mobject_center_of_mass(&self, target: &MobjectHandle) -> PyResult<(f64, f64)> {
-        self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::center_of_mass,
-            Scene::effective_center_of_mass,
-        )
+        self.observe_points((&target.handle).into(), Scene::center_of_mass)
     }
 
     #[pyo3(name = "queryMobjectBoundaryPoint")]
@@ -2875,11 +2807,9 @@ impl Context {
         direction_x: f64,
         direction_y: f64,
     ) -> PyResult<(f64, f64)> {
-        self.observe_points(
-            (&target.handle).into(),
-            |target| target.boundary_point(direction_x, direction_y),
-            |scene, target| scene.effective_boundary_point(target, direction_x, direction_y),
-        )
+        self.observe_points((&target.handle).into(), |scene, target| {
+            scene.boundary_point(target, direction_x, direction_y)
+        })
     }
 
     #[pyo3(name = "queryMobjectPathBoundaryExtremumAlongDim")]
@@ -2889,11 +2819,9 @@ impl Context {
         dim: usize,
         key: f64,
     ) -> PyResult<f64> {
-        self.observe_points(
-            (&target.handle).into(),
-            |target| target.path_boundary_extremum_along_dim(dim, key),
-            |scene, target| scene.effective_path_boundary_extremum_along_dim(target, dim, key),
-        )
+        self.observe_points((&target.handle).into(), |scene, target| {
+            scene.path_boundary_extremum_along_dim(target, dim, key)
+        })
     }
 
     #[pyo3(name = "queryMobjectPathBoundaryPoint")]
@@ -2903,11 +2831,9 @@ impl Context {
         direction_x: f64,
         direction_y: f64,
     ) -> PyResult<(f64, f64)> {
-        self.observe_points(
-            (&target.handle).into(),
-            |target| target.path_boundary_point(direction_x, direction_y),
-            |scene, target| scene.effective_path_boundary_point(target, direction_x, direction_y),
-        )
+        self.observe_points((&target.handle).into(), |scene, target| {
+            scene.path_boundary_point(target, direction_x, direction_y)
+        })
     }
 
     #[pyo3(name = "queryFamilyPathBoundaryPoints3D")]
@@ -2915,12 +2841,8 @@ impl Context {
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<Vec<f64>> {
-        self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::path_boundary_points_3d,
-            Scene::effective_path_boundary_points_3d,
-        )
-        .map(crate::path_input::flat_points_3d)
+        self.observe_points((&target.family).into(), Scene::path_boundary_points_3d)
+            .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryFamilyVectorBoundaryPoints3D")]
@@ -2928,22 +2850,14 @@ impl Context {
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<Vec<f64>> {
-        self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::vector_boundary_points_3d,
-            Scene::effective_vector_boundary_points_3d,
-        )
-        .map(crate::path_input::flat_points_3d)
+        self.observe_points((&target.family).into(), Scene::vector_boundary_points_3d)
+            .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryFamilyAllPoints3D")]
     fn family_all_points_3d(&self, target: &crate::family::FamilyHandle) -> PyResult<Vec<f64>> {
-        self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::all_points_3d,
-            Scene::effective_all_points_3d,
-        )
-        .map(crate::path_input::flat_points_3d)
+        self.observe_points((&target.family).into(), Scene::all_points_3d)
+            .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryFamilyExtremumAlongDim")]
@@ -2953,11 +2867,9 @@ impl Context {
         dim: usize,
         key: f64,
     ) -> PyResult<f64> {
-        self.observe_points(
-            (&target.family).into(),
-            |target| target.extremum_along_dim(dim, key),
-            |scene, target| scene.effective_extremum_along_dim(target, dim, key),
-        )
+        self.observe_points((&target.family).into(), |scene, target| {
+            scene.extremum_along_dim(target, dim, key)
+        })
     }
 
     #[pyo3(name = "queryFamilyLengthOverDim")]
@@ -2966,20 +2878,14 @@ impl Context {
         target: &crate::family::FamilyHandle,
         dim: usize,
     ) -> PyResult<f64> {
-        self.observe_points(
-            (&target.family).into(),
-            |target| target.length_over_dim(dim),
-            |scene, target| scene.effective_length_over_dim(target, dim),
-        )
+        self.observe_points((&target.family).into(), |scene, target| {
+            scene.length_over_dim(target, dim)
+        })
     }
 
     #[pyo3(name = "queryFamilyCenterOfMass")]
     fn family_center_of_mass(&self, target: &crate::family::FamilyHandle) -> PyResult<(f64, f64)> {
-        self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::center_of_mass,
-            Scene::effective_center_of_mass,
-        )
+        self.observe_points((&target.family).into(), Scene::center_of_mass)
     }
 
     #[pyo3(name = "queryFamilyBoundaryPoint")]
@@ -2989,11 +2895,9 @@ impl Context {
         direction_x: f64,
         direction_y: f64,
     ) -> PyResult<(f64, f64)> {
-        self.observe_points(
-            (&target.family).into(),
-            |target| target.boundary_point(direction_x, direction_y),
-            |scene, target| scene.effective_boundary_point(target, direction_x, direction_y),
-        )
+        self.observe_points((&target.family).into(), |scene, target| {
+            scene.boundary_point(target, direction_x, direction_y)
+        })
     }
 
     #[pyo3(name = "prepareFamilySubsetDisplay")]
@@ -3015,11 +2919,7 @@ impl Context {
         py: Python<'py>,
         target: &MobjectHandle,
     ) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
-        let tree = self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::point_reduction_tree,
-            Scene::effective_point_reduction_tree,
-        )?;
+        let tree = self.observe_points((&target.handle).into(), Scene::point_reduction_tree)?;
         crate::path_input::point_reduction_tree(py, tree)
     }
 
@@ -3029,11 +2929,7 @@ impl Context {
         py: Python<'py>,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
-        let tree = self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::point_reduction_tree,
-            Scene::effective_point_reduction_tree,
-        )?;
+        let tree = self.observe_points((&target.family).into(), Scene::point_reduction_tree)?;
         crate::path_input::point_reduction_tree(py, tree)
     }
 
@@ -3062,24 +2958,16 @@ impl Context {
 
     #[pyo3(name = "queryMobjectPointArray")]
     fn object_point_array(&self, target: &MobjectHandle) -> PyResult<(Vec<f64>, Vec<usize>)> {
-        self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::point_array,
-            Scene::effective_point_array,
-        )
-        .map(crate::path_input::point_array)
+        self.observe_points((&target.handle).into(), Scene::point_array)
+            .map(crate::path_input::point_array)
     }
     #[pyo3(name = "queryFamilyPointArray")]
     fn family_point_array(
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<(Vec<f64>, Vec<usize>)> {
-        self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::point_array,
-            Scene::effective_point_array,
-        )
-        .map(crate::path_input::point_array)
+        self.observe_points((&target.family).into(), Scene::point_array)
+            .map(crate::path_input::point_array)
     }
 
     #[pyo3(name="setFillImage",signature=(target,paint,opacity))]
@@ -3346,11 +3234,7 @@ impl Context {
 
     #[pyo3(name = "queryMobjectRequiresContentBoundary")]
     fn mobject_requires_content_boundary(&self, target: &MobjectHandle) -> PyResult<bool> {
-        self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::requires_content_boundary,
-            Scene::effective_requires_content_boundary,
-        )
+        self.observe_points((&target.handle).into(), Scene::requires_content_boundary)
     }
 
     #[pyo3(name = "queryMobjectCriticalPoint3D")]
@@ -3374,11 +3258,7 @@ impl Context {
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<bool> {
-        self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::requires_content_boundary,
-            Scene::effective_requires_content_boundary,
-        )
+        self.observe_points((&target.family).into(), Scene::requires_content_boundary)
     }
 
     #[pyo3(name = "queryFamilyCriticalPoint3D")]
@@ -3426,7 +3306,7 @@ impl Context {
     #[pyo3(name = "setTranslationDragTargets")]
     fn set_translation_drag_targets(&mut self, batch: &MembershipBatch) -> PyResult<()> {
         self.available()?;
-        let mut nodes = Vec::new();
+        let mut targets = Vec::new();
         let mut seen = HashSet::new();
         for target in batch.add_targets()? {
             let MobjectTarget::Object(object) = target else {
@@ -3445,14 +3325,13 @@ impl Context {
             if !seen.insert(node) {
                 return Err(engine_error("translation drag targets must be unique"));
             }
-            nodes.push(node);
+            targets.push(object);
         }
-        if let Some((_, _, session)) = scene_execution::parts_mut(&mut self.scene) {
-            session
-                .set_translation_drag_targets(nodes)
-                .map_err(|error| engine_error(noon::LiveSessionError::TranslationDrag(error)))?;
+        if let Some(mut live) = scene_execution::live(&mut self.scene) {
+            live.set_translation_drag_targets(targets)
+                .map_err(engine_error)?;
         } else {
-            self.drag_targets = nodes;
+            self.drag_targets = targets.into_iter().cloned().collect();
         }
         Ok(())
     }
@@ -3672,31 +3551,27 @@ impl Context {
     fn membership(&self) -> PyResult<Vec<String>> {
         self.require_active()?;
         self.scene
-            .integration_store()
-            .borrow()
-            .node(self.scene.root())
-            .map(|node| {
-                node.members()
-                    .iter()
+            .root_member_ids()
+            .map(|members| {
+                members
+                    .into_iter()
                     .map(|n| format!("{}:{}", n.slot(), n.generation()))
                     .collect()
             })
-            .ok_or_else(|| engine_error("scene root has been retired"))
+            .map_err(|_| engine_error("scene root has been retired"))
     }
     #[pyo3(name = "rootForegroundKeys")]
     fn foreground(&self) -> PyResult<Vec<String>> {
         self.require_active()?;
         self.scene
-            .integration_store()
-            .borrow()
-            .node(self.scene.root())
-            .map(|node| {
-                node.foreground_members()
-                    .iter()
+            .foreground_member_ids()
+            .map(|members| {
+                members
+                    .into_iter()
                     .map(|n| format!("{}:{}", n.slot(), n.generation()))
                     .collect()
             })
-            .ok_or_else(|| engine_error("retired scene root"))
+            .map_err(|_| engine_error("retired scene root"))
     }
     #[pyo3(name = "bindMobject")]
     fn bind(&mut self, _id: &str, target: &MobjectHandle) -> PyResult<()> {
@@ -3713,12 +3588,8 @@ impl Context {
         if !self.bound_ids.contains(&target.handle.node_id()) {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
-        let query = if self.has_execution() {
-            self.scene.effective_path_query(&target.handle)
-        } else {
-            target.handle.path_query()
-        };
-        query
+        self.scene
+            .path_query(&target.handle)
             .map(crate::path_query::PathQuery::new)
             .map_err(engine_error)
     }
@@ -3727,7 +3598,7 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<crate::family::ColorObservation> {
-        self.observe_bound_mobject(target, Mobject::manim_color, Scene::effective_manim_color)
+        self.observe_bound_mobject(target, Scene::manim_color)
             .map(Into::into)
     }
     #[pyo3(name = "createFamily")]
@@ -3989,36 +3860,25 @@ impl Context {
     ) -> PyResult<LayoutObservation> {
         self.require_active()?;
         self.same_family_store(target)?;
-        if self.has_execution() {
-            self.scene
-                .effective_family_layout(&target.family)
-                .map_err(|error| engine_error(noon::LiveSessionError::from(error)))
-                .map(LayoutObservation::from_effective)
-        } else {
-            let layout = target.family.layout().map_err(engine_error)?;
-            Ok(LayoutObservation {
-                center: layout.center(),
-                width: layout.width(),
-                height: layout.height(),
+        self.scene
+            .family_layout(&target.family)
+            .map(Into::into)
+            .map_err(|error| {
+                if self.has_execution() {
+                    engine_error(noon::LiveSessionError::from(error))
+                } else {
+                    engine_error(error)
+                }
             })
-        }
     }
     #[pyo3(name = "queryMobjectLayout")]
     fn layout(&mut self, target: &MobjectHandle) -> PyResult<LayoutObservation> {
         self.require_active()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            self.scene
-                .effective_layout(&target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
-                .map(LayoutObservation::from_effective)
-        } else {
-            Ok(LayoutObservation {
-                center: target.handle.center().map_err(engine_error)?,
-                width: target.handle.width().map_err(engine_error)?,
-                height: target.handle.height().map_err(engine_error)?,
-            })
-        }
+        self.observe_mobject(target, |scene, object| {
+            scene.layout(object, noon::AuthoredLayoutCenter::Boundary)
+        })
+        .map(Into::into)
     }
     #[pyo3(name = "targetEditor")]
     fn target(&mut self, source: &MobjectHandle) -> PyResult<MobjectHandle> {
@@ -4095,13 +3955,8 @@ impl Context {
         target: &crate::family::FamilyHandle,
     ) -> PyResult<crate::path_query::PathQuery> {
         self.require_active()?;
-        self.same_family_store(target)?;
-        let value = if self.has_execution() {
-            self.scene.effective_family_own_path_query(&target.family)
-        } else {
-            target.family.own_path_query()
-        };
-        value
+        self.scene
+            .family_own_path_query(&target.family)
             .map(crate::path_query::PathQuery::new)
             .map_err(engine_error)
     }
@@ -4991,18 +4846,8 @@ impl Context {
                 "requested time is outside the live observation range",
             )));
         }
-        let (store, _, session) = scene_execution::parts_mut(&mut self.scene)
-            .ok_or_else(|| engine_error("no execution session"))?;
-        if time < session.frame().time {
-            session
-                .seek_with_store(&mut store.borrow_mut(), time)
-                .map_err(|e| engine_error(e.to_string()))?;
-        } else {
-            session
-                .advance_to(time)
-                .map_err(|e| engine_error(e.to_string()))?;
-        }
-        Ok(())
+        scene_execution::evaluate(&mut self.scene, time)
+            .map_err(|error| engine_error(error.to_string()))
     }
     #[pyo3(name = "queryEffectiveTranslation")]
     fn query_effective_translation(&self, target: &MobjectHandle) -> PyResult<(f64, f64)> {
@@ -5173,14 +5018,10 @@ impl Context {
         if self.terminal {
             return Ok(());
         }
-        if let Some((_, _, session)) = scene_execution::parts_mut(&mut self.scene) {
-            if let Some(token) = session.pending_callback_token() {
-                session
-                    .interrupt_required_callback_phase(token)
-                    .map_err(engine_error)?;
-            }
-        }
-        scene_execution::retire(&mut self.scene).map_err(|e| engine_error(e.to_string()))?;
+        scene_execution::retire(&mut self.scene).map_err(|error| match error {
+            scene_execution::SceneRetirementError::Callback(error) => engine_error(error),
+            error => engine_error(error.to_string()),
+        })?;
         #[cfg(feature = "capture")]
         {
             self.effect_preparer = None;
@@ -5379,11 +5220,7 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<crate::mobject::LineEndpoints> {
-        let value = self.observe_bound_mobject(
-            target,
-            Mobject::manim_line_endpoints,
-            Scene::effective_line_endpoints,
-        )?;
+        let value = self.observe_bound_mobject(target, Scene::line_endpoints)?;
         Ok(crate::mobject::LineEndpoints { value })
     }
 
@@ -5392,7 +5229,7 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<Option<crate::family::ColorObservation>> {
-        self.observe_bound_mobject(target, Mobject::fill_color, Scene::effective_fill_color)
+        self.observe_bound_mobject(target, Scene::fill_color)
             .map(|color| color.map(Into::into))
     }
     #[pyo3(name = "queryMobjectStrokeColor")]
@@ -5400,7 +5237,7 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<Option<crate::family::ColorObservation>> {
-        self.observe_bound_mobject(target, Mobject::stroke_color, Scene::effective_stroke_color)
+        self.observe_bound_mobject(target, Scene::stroke_color)
             .map(|color| color.map(Into::into))
     }
     #[pyo3(name = "queryMobjectBackgroundStrokeColor")]
@@ -5408,58 +5245,40 @@ impl Context {
         &self,
         target: &MobjectHandle,
     ) -> PyResult<Option<crate::family::ColorObservation>> {
-        self.observe_bound_mobject(
-            target,
-            Mobject::background_stroke_color,
-            Scene::effective_background_stroke_color,
-        )
-        .map(|color| color.map(Into::into))
+        self.observe_bound_mobject(target, Scene::background_stroke_color)
+            .map(|color| color.map(Into::into))
     }
     #[pyo3(name = "queryMobjectBackgroundStrokeWidth")]
     fn query_background_stroke_width(&self, target: &MobjectHandle) -> PyResult<f64> {
-        self.observe_bound_mobject(
-            target,
-            Mobject::background_stroke_width,
-            Scene::effective_background_stroke_width,
-        )
+        self.observe_bound_mobject(target, Scene::background_stroke_width)
     }
     #[pyo3(name = "queryMobjectBackgroundStrokeOpacity")]
     fn query_background_stroke_opacity(&self, target: &MobjectHandle) -> PyResult<f64> {
-        self.observe_bound_mobject(
-            target,
-            Mobject::background_stroke_opacity,
-            Scene::effective_background_stroke_opacity,
-        )
+        self.observe_bound_mobject(target, Scene::background_stroke_opacity)
     }
     #[pyo3(name = "queryMobjectFillOpacity")]
     fn query_fill_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
         if self.has_execution() {
-            self.observe_effective(target).map(|v| v.fill_opacity())
-        } else {
-            target.handle.fill_opacity().map_err(engine_error)
+            self.require_active()?;
         }
+        self.observe_mobject(target, Scene::fill_opacity)
     }
     #[pyo3(name = "queryMobjectStrokeOpacity")]
     fn query_stroke_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
         if self.has_execution() {
-            self.observe_effective(target).map(|v| v.stroke_opacity())
-        } else {
-            target.handle.stroke_opacity().map_err(engine_error)
+            self.require_active()?;
         }
+        self.observe_mobject(target, Scene::stroke_opacity)
     }
     #[pyo3(name = "queryMobjectStrokeWidth")]
     fn query_stroke_width(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
         if self.has_execution() {
             self.require_active()?;
-            self.scene
-                .effective_stroke_width(&target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
-        } else {
-            target.handle.stroke_width().map_err(engine_error)
         }
+        self.observe_mobject(target, Scene::stroke_width)
     }
     #[pyo3(name = "moveToPoint")]
     #[allow(clippy::too_many_arguments)]

@@ -500,10 +500,7 @@ impl<'a> LiveSession<'a> {
     ) -> Result<(), LiveSessionError> {
         let mut nodes = Vec::new();
         for target in targets {
-            if !Rc::ptr_eq(self.store, target.integration_store()) {
-                return Err(LiveSessionError::ForeignMobjectStore);
-            }
-            target.validate().map_err(LiveSessionError::from)?;
+            self.require_mobject(target)?;
             nodes.push(target.node_id());
         }
         self.session
@@ -771,21 +768,6 @@ impl<'a> LiveSession<'a> {
         self.declare_and_activate_composition(&request, AnimationOptions::new())
     }
 
-    /// Draw an ordered vector family through one atomic lagged composition.
-    pub fn declare_and_activate_family_draw_border_then_fill(
-        &mut self,
-        target: &MobjectFamily,
-        outline: DrawBorderThenFillOptions,
-        options: AnimationOptions,
-    ) -> Result<ExecutionSegment, LiveSessionError> {
-        let request = AnimationCompositionRequest::FamilyDrawBorderThenFill {
-            target,
-            outline,
-            options,
-        };
-        self.declare_and_activate_composition(&request, AnimationOptions::new())
-    }
-
     /// Display an ordered family through the shared floor/ceil subset thresholds.
     pub fn declare_and_activate_family_subset_display(
         &mut self,
@@ -868,35 +850,6 @@ impl<'a> LiveSession<'a> {
             &AnimationCompositionRequest::FamilyReveal {
                 target,
                 reverse,
-                options,
-            },
-            AnimationOptions::new(),
-        )
-    }
-
-    /// Construct, animate and remove a fixed-point spotlight in one shared session.
-    pub fn declare_and_activate_focus_on(
-        &mut self,
-        focus: crate::FocusOnOptions,
-        options: AnimationOptions,
-    ) -> Result<ExecutionSegment, LiveSessionError> {
-        self.declare_and_activate_composition(
-            &AnimationCompositionRequest::FocusOn { focus, options },
-            AnimationOptions::new(),
-        )
-    }
-
-    /// Flash one exact analytic Line through fixed transient membership.
-    pub fn declare_and_activate_passing_flash(
-        &mut self,
-        target: &Mobject,
-        time_width: f64,
-        options: AnimationOptions,
-    ) -> Result<ExecutionSegment, LiveSessionError> {
-        self.declare_and_activate_composition(
-            &AnimationCompositionRequest::PassingFlash {
-                target,
-                time_width,
                 options,
             },
             AnimationOptions::new(),

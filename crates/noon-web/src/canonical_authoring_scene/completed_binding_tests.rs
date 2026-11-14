@@ -96,7 +96,7 @@ fn completed_binding_preserves_matching_identity_getters_and_second_animation() 
     );
     assert_eq!(context.bindings[&ObjectId::new(1)], target_leaf.node_id());
     assert_eq!(context.identities[&target_leaf.node_id()], ObjectId::new(1));
-    assert!((context.mobject_layout(&target_leaf).unwrap().0 - 4.0).abs() < 1e-6);
+    assert!((context.mobject_layout(&target_leaf).unwrap().center.0 - 4.0).abs() < 1e-6);
     let end = context
         .begin_ordinary_mixed_composition(
             noon_core::SemanticAnimationCompositionKind::Parallel,
@@ -112,13 +112,13 @@ fn completed_binding_preserves_matching_identity_getters_and_second_animation() 
         )
         .unwrap();
     complete(&mut context, end);
-    assert!((context.mobject_layout(&target_leaf).unwrap().0 - 4.0).abs() < 1e-6);
+    assert!((context.mobject_layout(&target_leaf).unwrap().center.0 - 4.0).abs() < 1e-6);
     context
         .bind_mobject(ObjectId::new(0), &source_leaf)
         .unwrap();
     assert!(context.contains_mobject(&source_leaf).unwrap());
     assert_eq!(context.identities[&source_leaf.node_id()], ObjectId::new(0));
-    assert!((context.mobject_layout(&source_leaf).unwrap().0 + 2.0).abs() < 1e-6);
+    assert!((context.mobject_layout(&source_leaf).unwrap().center.0 + 2.0).abs() < 1e-6);
 }
 
 #[test]

@@ -116,7 +116,12 @@ fn live_empty_point_array_publication_preserves_shapes_and_invalid_edits_are_ato
             crate::CompositeEntryHandle::Mobject(scene.circle(0.2).unwrap())
         };
         scene.add_many(&[source.as_target()]).unwrap();
+        let authored = scene.point_array(source.as_target()).unwrap();
         let mut running = scene.into_execution().unwrap();
+        assert_eq!(
+            running.scene().point_array(source.as_target()).unwrap(),
+            authored
+        );
         let shape = PointArrayShape::new(vec![0, 2, 3]).unwrap();
         {
             running
@@ -126,7 +131,7 @@ fn live_empty_point_array_publication_preserves_shapes_and_invalid_edits_are_ato
             assert_eq!(
                 running
                     .scene()
-                    .effective_point_array(source.as_target())
+                    .point_array(source.as_target())
                     .unwrap()
                     .shape(),
                 &shape
@@ -138,15 +143,12 @@ fn live_empty_point_array_publication_preserves_shapes_and_invalid_edits_are_ato
             assert_eq!(
                 running
                     .scene()
-                    .effective_point_array(copied.root().as_target())
+                    .point_array(copied.root().as_target())
                     .unwrap()
                     .shape(),
                 &shape
             );
-            assert!(running
-                .scene()
-                .effective_point_array(source.as_target())
-                .is_err());
+            assert!(running.scene().point_array(source.as_target()).is_err());
         }
         let revision = running.scene().revision();
         let nodes = running.scene().integration_store().borrow().len();

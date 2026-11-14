@@ -101,14 +101,26 @@ impl MobjectTarget<'_> {
 }
 
 impl crate::Scene {
+    /// Capture the current shaped array, preserving recursive family
+    /// occurrences. A running Scene observes one coherent publication.
+    pub fn point_array(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<PointArrayObservation, AuthoringError> {
+        let store = self.integration_store();
+        if let Some(execution) = self.running_execution() {
+            return effective_point_array(store, execution, target);
+        }
+        target.require_store(store)?;
+        target.point_array()
+    }
+
     /// Observe the effective array, including its dimensions and family occurrences.
     pub fn effective_point_array(
         &self,
         target: MobjectTarget<'_>,
     ) -> Result<PointArrayObservation, AuthoringError> {
-        let execution = self.running_execution().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         effective_point_array(self.integration_store(), execution, target)
     }
 }

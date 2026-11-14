@@ -1,6 +1,9 @@
 //! Family membership and layout queries through the owning Scene.
 
-use crate::{AuthoringError, EffectiveMobjectLayout, Mobject, MobjectFamily, MobjectTarget, Scene};
+use crate::{
+    AuthoredLayoutCenter, AuthoringError, EffectiveMobjectLayout, Mobject, MobjectFamily,
+    MobjectLayout, MobjectTarget, Scene,
+};
 
 impl Scene {
     /// Add or move direct members to the end of an object or family in one publication.
@@ -134,6 +137,24 @@ impl Scene {
         contains_direct(self.integration_store(), self.root(), object)
     }
 
+    /// Snapshot the semantic identities of the Scene's direct members in display order.
+    pub fn root_member_ids(&self) -> Result<Vec<noon_core::SemanticNodeId>, AuthoringError> {
+        Ok(self
+            .store
+            .borrow()
+            .semantic_family_members_checked(self.root)?)
+    }
+
+    /// Snapshot the ordered foreground declarations, independently of display membership.
+    pub fn foreground_member_ids(&self) -> Result<Vec<noon_core::SemanticNodeId>, AuthoringError> {
+        Ok(self
+            .store
+            .borrow()
+            .semantic_family_checked(self.root)?
+            .foreground_members()
+            .to_vec())
+    }
+
     /// Check membership through the root or any of its descendants.
     pub fn contains(&self, object: &Mobject) -> Result<bool, AuthoringError> {
         self.require_object(object)?;
@@ -159,6 +180,52 @@ impl Scene {
         )?;
         self.apply_semantic_transaction(transaction)
             .map_err(|error| error.to_string())
+    }
+
+    /// Observe one object's current layout. Authored center selection applies
+    /// during setup. A running Scene reads the coherent effective layout.
+    pub fn layout(
+        &self,
+        object: &Mobject,
+        authored_center: AuthoredLayoutCenter,
+    ) -> Result<MobjectLayout, AuthoringError> {
+        if self.running_execution().is_some() {
+            return self.effective_layout(object).map(Into::into);
+        }
+        self.require_object(object)?;
+        let (center, bounds) = match authored_center {
+            AuthoredLayoutCenter::Boundary => (object.center()?, object.layout_bounds()?),
+            AuthoredLayoutCenter::Bounds => {
+                let bounds = object.layout_bounds()?;
+                let center = match bounds {
+                    Some(bounds) => (
+                        (bounds.min_x + bounds.max_x) * 0.5,
+                        (bounds.min_y + bounds.max_y) * 0.5,
+                    ),
+                    None => object.center()?,
+                };
+                (center, bounds)
+            }
+        };
+        Ok(MobjectLayout {
+            center,
+            width: bounds.map_or(0.0, crate::Bounds2D64::width),
+            height: bounds.map_or(0.0, crate::Bounds2D64::height),
+        })
+    }
+
+    /// Observe one family's current layout, including its unique descendants.
+    pub fn family_layout(&self, family: &MobjectFamily) -> Result<MobjectLayout, AuthoringError> {
+        if self.running_execution().is_some() {
+            return self.effective_family_layout(family).map(Into::into);
+        }
+        MobjectTarget::from(family).require_store(self.integration_store())?;
+        let layout = family.layout()?;
+        Ok(MobjectLayout {
+            center: layout.center(),
+            width: layout.width(),
+            height: layout.height(),
+        })
     }
 
     /// Read own content and unique descendants from one coherent effective publication.

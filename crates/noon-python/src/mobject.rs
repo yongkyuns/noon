@@ -1895,8 +1895,8 @@ impl LayoutObservation {
     }
 }
 
-impl LayoutObservation {
-    pub(crate) fn from_effective(value: noon::EffectiveMobjectLayout) -> Self {
+impl From<noon::MobjectLayout> for LayoutObservation {
+    fn from(value: noon::MobjectLayout) -> Self {
         Self {
             center: value.center,
             width: value.width,

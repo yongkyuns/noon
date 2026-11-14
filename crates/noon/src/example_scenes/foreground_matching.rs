@@ -1,11 +1,8 @@
 //! Native/direct-WASM counterpart of the pinned foreground matching overlap fixture.
-use std::{cell::RefCell, rc::Rc};
-
 use crate::{
     AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, ManimGeometryOptions,
-    Mobject, MobjectFamily, RateFunction, Scene, SemanticNodeId, Vec2, VectorPath,
+    Mobject, MobjectFamily, RateFunction, Scene, Vec2, VectorPath,
 };
-use noon_core::SemanticStore;
 
 pub struct ForegroundMatching {
     source: MobjectFamily,
@@ -13,23 +10,21 @@ pub struct ForegroundMatching {
     left: Mobject,
     right: Mobject,
     later: Mobject,
-    store: Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
     stage: u8,
 }
 
 impl ForegroundMatching {
-    fn check_completion(&self, include_later: bool) -> Result<(), String> {
-        let store = self.store.borrow();
-        let root = store.node(self.root).ok_or("scene root was retired")?;
+    fn check_completion(&self, scene: &Scene, include_later: bool) -> Result<(), String> {
         let mut expected = vec![self.target.node_id()];
         if include_later {
             expected.push(self.later.node_id());
         }
         expected.extend([self.left.node_id(), self.right.node_id()]);
-        if root.members() != expected
-            || root.foreground_members() != [self.left.node_id(), self.right.node_id()]
-        {
+        let members = scene.root_member_ids().map_err(|error| error.to_string())?;
+        let foreground = scene
+            .foreground_member_ids()
+            .map_err(|error| error.to_string())?;
+        if members != expected || foreground != [self.left.node_id(), self.right.node_id()] {
             return Err("matching completion changed foreground membership".into());
         }
         Ok(())
@@ -51,17 +46,17 @@ impl LiveContinuation for ForegroundMatching {
                         .rate_func(RateFunction::Linear),
                 ),
             1 => {
-                self.check_completion(false)?;
+                self.check_completion(scene, false)?;
                 scene.live().wait_segment(0.2)
             }
             2 => {
-                self.check_completion(false)?;
+                self.check_completion(scene, false)?;
                 scene.add(&self.later).map_err(|error| error.to_string())?;
-                self.check_completion(true)?;
+                self.check_completion(scene, true)?;
                 scene.live().wait_segment(0.2)
             }
             3 => {
-                self.check_completion(true)?;
+                self.check_completion(scene, true)?;
                 self.stage += 1;
                 return Ok(ContinuationStep::Finished);
             }
@@ -182,8 +177,6 @@ pub fn program(
         left,
         right,
         later,
-        store: Rc::clone(scene.integration_store()),
-        root: scene.root(),
         stage: 0,
     };
     scene

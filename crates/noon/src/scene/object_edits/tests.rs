@@ -53,6 +53,10 @@ fn persistent_edits_share_cold_and_running_semantics_and_remain_local() {
         scene.set_stroke_width(&object, 2.0).unwrap();
         scene.shift(&object, RIGHT * 2.0 + UP).unwrap();
 
+        assert_eq!(scene.fill_color(&object).unwrap(), Some(Color::YELLOW));
+        assert_eq!(scene.fill_opacity(&object).unwrap(), 0.25);
+        assert_eq!(scene.stroke_width(&object).unwrap(), 2.0);
+        assert_eq!(scene.manim_color(&object).unwrap(), Color::YELLOW);
         assert_eq!(scene.revision().get(), before_revision.get() + 5);
         assert_eq!(scene.integration_store().borrow().len(), before_nodes);
         assert_eq!(
