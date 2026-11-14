@@ -163,6 +163,28 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    def test_derived_geometry_captures_published_layout_and_path(self):
+        source = """from noon import *
+class Demo(Scene):
+    async def construct(self):
+        left = Square(1).move_to(2 * LEFT)
+        right = Square(1).move_to(2 * RIGHT)
+        self.add(left, right)
+        before = Union(left, right)
+        self.add(before, Underline(left, buff=0.25))
+        assert abs(before.width - 5) < 1e-5
+        await self.play(left.animate.shift(2 * RIGHT), run_time=0.125)
+        after = Union(left, right)
+        underline = Underline(left, buff=0.25)
+        assert abs(after.width - 3) < 1e-5
+        assert abs(underline.get_center()[0]) < 1e-5
+        assert abs(underline.get_center()[1] + 0.75) < 1e-5
+        self.add(after, underline)
+        await self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_vector_field_samples_and_copies_during_playback(self):
         source = """from noon import *
 class Demo(Scene):

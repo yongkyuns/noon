@@ -41,12 +41,8 @@ fn cross_line(
 impl WasmAuthoringMobjectHandle {
     #[wasm_bindgen(js_name = beginUnderline)]
     pub fn begin_underline(&self, buff: f64) -> Result<WasmManimGeometryOptions, JsValue> {
-        let bounds = self
-            .semantic_mobject()
-            .layout_bounds()
-            .map_err(js_error)?
-            .ok_or_else(|| js_error("Underline target has no layout bounds"))?;
-        ManimGeometryOptions::underline(bounds, buff)
+        self.semantic_mobject()
+            .underline_options(buff)
             .map(WasmManimGeometryOptions::from_options)
             .map_err(js_error)
     }

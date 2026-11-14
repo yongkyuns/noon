@@ -60,6 +60,14 @@ impl MobjectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[pyo3(name = "beginUnderline")]
+    fn begin_underline(&self, buff: f64) -> PyResult<crate::geometry::GeometryOptions> {
+        self.handle
+            .underline_options(buff)
+            .map(crate::geometry::GeometryOptions::from_options)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "tangentLineOptions")]
     fn tangent_line_options(
         &self,

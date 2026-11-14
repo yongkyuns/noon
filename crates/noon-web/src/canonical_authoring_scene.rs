@@ -1653,62 +1653,15 @@ impl CanonicalAuthoringScene {
         })
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn begin_boolean_geometry(
-        &self,
-        operation: noon::BooleanOperation,
-        operands: &[noon::Mobject],
-    ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        for object in operands {
-            if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
-                return Err(noon::AuthoringError::ForeignStore.into());
-            }
-            object.validate().map_err(AuthoringFailure::from)?;
-        }
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local() {
-                return player
-                    .scene()
-                    .effective_boolean_geometry_options(operation, operands)
-                    .map_err(Into::into);
-            }
-        }
-        noon::ManimGeometryOptions::boolean_geometry(operation, operands).map_err(Into::into)
-    }
-
-    /// Inert bounds-dependent construction observes this runtime for bound targets,
-    /// while fresh detached targets retain their shared authored layout.
     #[cfg(any(target_arch = "wasm32", test))]
     fn begin_underline(
         &mut self,
         handle: &noon::Mobject,
         buff: f64,
     ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
-            return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
-                .with_message("mobject belongs to another authoring store"));
-        }
-        handle.validate().map_err(AuthoringFailure::from)?;
-        let mut bounds = handle
-            .layout_bounds()
-            .map_err(AuthoringFailure::from)?
-            .ok_or("Underline target has no layout bounds")?;
-        if self.identities.contains_key(&handle.node_id()) {
-            let (x, y, width, height) = self.mobject_layout(handle)?;
-            bounds = noon_core::Bounds2D64 {
-                min_x: x - width * 0.5,
-                max_x: x + width * 0.5,
-                min_y: y - height * 0.5,
-                max_y: y + height * 0.5,
-            };
-        }
-        noon::ManimGeometryOptions::underline(bounds, buff).map_err(AuthoringFailure::from)
+        self.local_authoring_scene()?
+            .underline_options(handle, buff)
+            .map_err(AuthoringFailure::from_scene_capture)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -7873,12 +7826,14 @@ mod wasm {
             operands: &crate::authoring_geometry::WasmBooleanOperands,
         ) -> Result<crate::WasmManimGeometryOptions, JsValue> {
             self.inner
-                .begin_boolean_geometry(
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .boolean_geometry_options(
                     crate::authoring_geometry::boolean_operation(name)?,
                     &operands.objects,
                 )
                 .map(crate::WasmManimGeometryOptions::from_options)
-                .map_err(typed_js_error)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
         #[wasm_bindgen(js_name = beginUnderline)]
