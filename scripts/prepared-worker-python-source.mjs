@@ -60,7 +60,7 @@ assert source_context.liveExecutionOwnership() == "active"
         await pyodide.runPythonAsync("assert live.play(animation) == 2.0");
         player.prepareSourceSegment(context);
         await pyodide.runPythonAsync(`
-assert abs(live.effective_center(target).x - 2.0) < 1e-6
+assert abs(scene.effective_translation(target).x - 2.0) < 1e-6
 assert abs(target.get_center().x - 2.0) < 1e-6
 assert source_context.liveExecutionOwnership() == "active"
 `);
@@ -71,7 +71,7 @@ assert source_context.liveExecutionOwnership() == "active"
         player.prepareSourceSegment(context); adopt();
         // A final same-time edit is authored before sealing, not inferred from
         // the wait's segment completion or a transport acknowledgment.
-        await pyodide.runPythonAsync("live.set_translation(target, 3.0, 0.0)");
+        await pyodide.runPythonAsync("scene.set_translation(target, 3.0, 0.0)");
         player.finishSourcePreparation(context); adopt(); delivered++;
         await pyodide.runPythonAsync(`
 del live, animation, endpoint, target, scene, source_context

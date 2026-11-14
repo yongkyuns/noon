@@ -413,6 +413,8 @@ input, and staged publication. Hosts that configure a runtime before installatio
 use `integration::scene_execution`. Sequential sources use `ScriptScene` for
 authoring and `play`/`wait`. Use the owning `Scene` to observe coordinates,
 including through `LiveProgram::scene()` while a segment is running.
+Python's `Scene.live_execution()` drives explicit segments. Use the Python
+`Scene` for membership, content replacement, affine edits, and published translation.
 
 ### `SceneInstance`
 

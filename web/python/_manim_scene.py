@@ -3508,14 +3508,47 @@ def execution_context(scene):
     return context
 
 
-class LiveExecution:
-    """Explicit live property/query facade over one Rust/WASM execution session.
+def _scene_object_handle(scene, mobject, *, allow_detached=True):
+    if not isinstance(mobject, _base.Mobject):
+        raise ValueError("expected a typed Scene Mobject")
+    if mobject._scene is not scene and not (allow_detached and mobject._scene is None):
+        raise ValueError("Mobject must belong to this Scene")
+    handle = getattr(mobject, "_semantic_handle", None)
+    if handle is None:
+        raise ValueError("Scene operation requires a typed semantic Mobject handle")
+    return handle
 
-    The wrapper retains only Python object ergonomics. The canonical context
-    owns the semantic store and its one runtime session until normal execution
-    leases that same session to the renderer; no Python snapshot is consulted
-    for a live read or write.
-    """
+
+def _edit_scene_transform(scene, mobject, method, operation, *values):
+    context = _context(scene)
+    handle = _scene_object_handle(scene, mobject)
+    engine_call(getattr(context, method), handle, *map(float, values), operation=operation)
+    return scene
+
+
+def _replace_scene_content(scene, target, source):
+    engine_call(
+        _context(scene).replaceContent,
+        _scene_object_handle(scene, target),
+        _scene_object_handle(scene, source),
+        operation="Scene.replace_content",
+    )
+    return scene
+
+
+def _effective_scene_translation(scene, mobject):
+    context = _context(scene)
+    owned = getattr(mobject, "_canonical_live_target_context", None) is context
+    translation = engine_call(
+        context.queryEffectiveTranslation,
+        _scene_object_handle(scene, mobject, allow_detached=owned),
+        operation="Scene.effective_translation",
+    )
+    return _base.Vec2(float(translation[0]), float(translation[1]))
+
+
+class LiveExecution:
+    """Drive explicit animation segments on the owning Scene."""
 
     def __init__(self, scene: _base.Scene, duration: float | None = None) -> None:
         context = execution_context(scene)
@@ -3527,72 +3560,6 @@ class LiveExecution:
             )
         context.beginLiveExecution(float(duration))
         self._context = context
-
-    def _handle(self, mobject: _base.Mobject, *, allow_detached: bool = False) -> object:
-        if not isinstance(mobject, _base.Mobject):
-            raise ValueError("live Mobject must belong to this Scene")
-        if mobject._scene is not self._scene and not (
-            allow_detached and mobject._scene is None
-        ):
-            raise ValueError("live Mobject must belong to this Scene")
-        handle = getattr(mobject, "_semantic_handle", None)
-        if handle is None:
-            raise ValueError("live execution requires a typed semantic Mobject handle")
-        return handle
-
-    def add(self, mobject: _base.Mobject) -> None:
-        handle = self._handle(mobject, allow_detached=True)
-        if mobject._scene is self._scene:
-            engine_call(self._context.bindMobject, str(mobject.id), handle, operation="LiveExecution.add")
-            return
-        reservation = _reserve_typed_binding(mobject, self._scene, handle, None)
-        engine_call(self._context.bindMobject, str(reservation.object.id), handle, operation="LiveExecution.add")
-        _commit_typed_binding(mobject, self._scene, reservation, handle)
-
-    def remove(self, mobject: _base.Mobject) -> None:
-        self._handle(mobject)
-        self._scene.remove(mobject)
-
-    def replace_content(self, target: _base.Mobject, source: _base.Mobject) -> None:
-        """Use preauthored source content while preserving target identity and state."""
-        engine_call(
-            self._context.replaceContent,
-            self._handle(target),
-            self._handle(source, allow_detached=True),
-            operation="LiveExecution.replace_content",
-        )
-
-    def set_translation(self, mobject: _base.Mobject, x: float, y: float) -> None:
-        engine_call(
-            self._context.setTranslation, self._handle(mobject), float(x), float(y),
-            operation="LiveExecution.set_translation",
-        )
-
-    def shift(self, mobject: _base.Mobject, x: float, y: float) -> None:
-        engine_call(
-            self._context.shift, self._handle(mobject), float(x), float(y),
-            operation="LiveExecution.shift",
-        )
-
-    def set_scale(self, mobject: _base.Mobject, x: float, y: float) -> None:
-        engine_call(
-            self._context.setScale, self._handle(mobject), float(x), float(y),
-            operation="LiveExecution.set_scale",
-        )
-
-    def set_rotation(self, mobject: _base.Mobject, angle: float) -> None:
-        engine_call(
-            self._context.setRotation, self._handle(mobject), float(angle),
-            operation="LiveExecution.set_rotation",
-        )
-
-    def effective_center(self, mobject: _base.Mobject) -> _base.Vec2:
-        owned = getattr(mobject, "_canonical_live_target_context", None) is self._context
-        translation = engine_call(
-            self._context.queryEffectiveTranslation, self._handle(mobject, allow_detached=owned),
-            operation="LiveExecution.effective_center",
-        )
-        return _base.Vec2(float(translation[0]), float(translation[1]))
 
     def play(self, animation: "LiveAnimation") -> float:
         """Activate an animation declaration on this Scene."""

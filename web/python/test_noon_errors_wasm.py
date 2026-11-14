@@ -277,7 +277,7 @@ class WasmErrorProjectionTests(unittest.TestCase):
         live.complete()
         self.assertEqual(snapshot(context)[1]["time"], 0.25)
 
-    def test_public_live_transform_errors_preserve_python_coercion_and_recover(self):
+    def test_scene_transform_errors_preserve_python_coercion_and_recover(self):
         host.resetStore()
         from noon import Circle, Scene
         from _manim_scene import _context
@@ -296,7 +296,7 @@ class WasmErrorProjectionTests(unittest.TestCase):
         live.wait(0.25)
         for name, valid, field, expected in operations:
             with self.subTest(operation=name):
-                method = getattr(live, name)
+                method = getattr(scene, name)
                 before = (snapshot(context), target._semantic_handle.snapshotJson())
                 # All argument coercion stays outside the shared engine call.
                 sentinel = ValueError("foreign stale pending unsupported")
@@ -312,7 +312,7 @@ class WasmErrorProjectionTests(unittest.TestCase):
                     method(target, float("nan"), *valid[1:])
                 error = caught.exception
                 self.assert_diagnostic(error, "invalid_input")
-                self.assertEqual(error.operation, "LiveExecution." + name)
+                self.assertEqual(error.operation, "Scene." + name)
                 self.assertEqual(codes(error), ["live.publication", "publication.semantic",
                                                "transaction.non_finite_property_value"])
                 self.assertEqual((snapshot(context), target._semantic_handle.snapshotJson()), before)
@@ -326,7 +326,7 @@ class WasmErrorProjectionTests(unittest.TestCase):
         live.complete()
         self.assertEqual(snapshot(context)[1]["time"], 0.25)
 
-    def test_public_live_content_and_effective_query_errors_recover(self):
+    def test_scene_content_and_effective_query_errors_recover(self):
         host.resetStore()
         from noon import Circle, Square, Scene
         from _manim_scene import _context
@@ -345,9 +345,9 @@ class WasmErrorProjectionTests(unittest.TestCase):
         # Retain the ordinary Python wrapper; substitute only the real Rust
         # handle to exercise provenance at the actual language boundary.
         for wrapper, invoke, operation in [
-            (target, lambda: live.replace_content(target, source), "replace_content"),
-            (source, lambda: live.replace_content(target, source), "replace_content"),
-            (target, lambda: live.effective_center(target), "effective_center"),
+            (target, lambda: scene.replace_content(target, source), "replace_content"),
+            (source, lambda: scene.replace_content(target, source), "replace_content"),
+            (target, lambda: scene.effective_translation(target), "effective_translation"),
         ]:
             original = wrapper._semantic_handle
             before = state()
@@ -356,31 +356,31 @@ class WasmErrorProjectionTests(unittest.TestCase):
                 with self.assertRaises(NoonForeignHandleError) as caught:
                     invoke()
                 self.assert_diagnostic(caught.exception, "foreign_handle")
-                self.assertEqual(caught.exception.operation, "LiveExecution." + operation)
+                self.assertEqual(caught.exception.operation, "Scene." + operation)
             finally:
                 wrapper._semantic_handle = original
             self.assertEqual(state(), before)
 
-        live.remove(target)
+        scene.remove(target)
         before = state()
         with self.assertRaises(NoonStaleHandleError) as caught:
-            live.effective_center(target)
+            scene.effective_translation(target)
         self.assertEqual(codes(caught.exception), ["live.publication", "publication.unknown_object"])
         self.assertEqual(state(), before)
-        live.add(target)
-        self.assertEqual(live.effective_center(target).x, 0)
+        scene.add(target)
+        self.assertEqual(scene.effective_translation(target).x, 0)
 
         context.returnExecutionPlayer(context.createExecutionPlayer(1, 41))
         target._semantic_handle.shift(2, -1)
         before = state()
         for invoke, operation in [
-            (lambda: live.replace_content(target, source), "replace_content"),
-            (lambda: live.effective_center(target), "effective_center"),
+            (lambda: scene.replace_content(target, source), "replace_content"),
+            (lambda: scene.effective_translation(target), "effective_translation"),
         ]:
             with self.assertRaises(NoonStalePublicationError) as caught:
                 invoke()
             self.assert_diagnostic(caught.exception, "stale_publication")
-            self.assertEqual(caught.exception.operation, "LiveExecution." + operation)
+            self.assertEqual(caught.exception.operation, "Scene." + operation)
             self.assertEqual(codes(caught.exception), ["live.publication", "publication.stale_scene_revision"])
             self.assertEqual(state(), before)
         # The explicit existing new-run boundary, not exception mapping, owns
@@ -389,12 +389,12 @@ class WasmErrorProjectionTests(unittest.TestCase):
         context.beginLiveExecution(1)
         prior = json.loads(target._semantic_handle.snapshotJson())
         live.wait(0.25)
-        live.replace_content(target, source)
+        scene.replace_content(target, source)
         after = json.loads(target._semantic_handle.snapshotJson())
         self.assertEqual(after["geometry"], json.loads(source._semantic_handle.snapshotJson())["geometry"])
         self.assertEqual(after["transform"], prior["transform"])
         self.assertEqual(after["style"], prior["style"])
-        center = live.effective_center(target)
+        center = scene.effective_translation(target)
         self.assertEqual((center.x, center.y), (2, -1))
         live.advance_to(0.25)
         live.complete()

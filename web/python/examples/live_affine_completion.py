@@ -28,26 +28,26 @@ class LiveAffineCompletion(Scene):
             raise AssertionError("a pending segment must exclude new animation declarations")
         assert not live.advance_to(first_end)
         live.complete()
-        assert live.effective_center(circle) == (2.0, -2.0)
+        assert self.effective_translation(circle) == (2.0, -2.0)
 
-        live.set_translation(circle, 3.0, -2.0)
+        self.set_translation(circle, 3.0, -2.0)
         wait_end = live.wait(0.25)
         assert live.advance_to(wait_end)
         live.complete()
-        assert live.effective_center(circle) == (3.0, -2.0)
+        assert self.effective_translation(circle) == (3.0, -2.0)
 
         second = self.declare_live_transform_to(
             circle, second_target, run_time=2.0, rate_func=linear
         )
         second_end = live.play(second)
         assert not live.advance_to(second_end - 1.0)
-        assert live.effective_center(circle) == (4.0, -2.0)
+        assert self.effective_translation(circle) == (4.0, -2.0)
         assert tuple(circle.get_center()) == (4.0, -2.0, 0.0)
         assert circle.width == 2.0
         assert circle.height == 2.0
         assert not live.advance_to(second_end)
         live.complete()
-        assert live.effective_center(circle) == (5.0, -2.0)
+        assert self.effective_translation(circle) == (5.0, -2.0)
         assert tuple(circle.get_center()) == (5.0, -2.0, 0.0)
         assert circle.width == 2.0
         assert circle.height == 2.0

@@ -451,7 +451,7 @@ class AnimateParity(Scene):
             raise AssertionError("cyclic live family batch must fail")
         assert pair.submobjects == before_members
         for member in pair:
-            self.live_execution().add(member)
+            self.add(member)
         self.play(pair.animate(run_time=1.2, lag_ratio=0.5).shift(UP))
 
         override = Circle(radius=0.2, color=PURPLE)
