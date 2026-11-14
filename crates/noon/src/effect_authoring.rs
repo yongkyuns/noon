@@ -228,7 +228,7 @@ impl Mobject {
 
 impl MobjectFamily {
     /// Author an isolated family treatment before execution. Descendants never
-    /// receive copied per-leaf attachments. Live edits use Scene or LiveSession.
+    /// receive copied per-leaf attachments. Use `Scene::add_effect` during playback.
     pub fn add_effect(
         &mut self,
         definition: impl Into<EffectDefinition>,
@@ -308,6 +308,25 @@ impl Scene {
         let object = object.into();
         object.require_store(self.integration_store())?;
         lookup(object, name.into())
+    }
+
+    /// Read the current published parameters for an object's or family's exact attachment.
+    /// Use [`EffectHandle::authored_definition`] to inspect its persistent declaration.
+    pub fn effective_effect(
+        &self,
+        effect: &EffectHandle,
+    ) -> Result<EffectDefinition, AuthoringError> {
+        if !Rc::ptr_eq(self.integration_store(), &effect.store) {
+            return Err(AuthoringError::ForeignStore);
+        }
+        let execution = self.execution_for_observation()?;
+        let store = self.integration_store().borrow();
+        let owner = store.semantic_effect_state(effect.node)?.owner();
+        execution
+            .effective_effects(&store, owner)?
+            .and_then(|stack| stack.get(effect.node))
+            .map(|effect| effect.definition)
+            .ok_or(AuthoringError::EffectCaptureMismatch { owner })
     }
 
     pub fn set_effect<'owner, 'a>(

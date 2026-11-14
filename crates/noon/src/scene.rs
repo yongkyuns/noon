@@ -590,7 +590,7 @@ impl Scene {
         crate::path_queries::effective_all_points(&self.store, execution, target)
     }
 
-    fn execution_for_observation(&self) -> Result<&ExecutionSession, AuthoringError> {
+    pub(crate) fn execution_for_observation(&self) -> Result<&ExecutionSession, AuthoringError> {
         self.running_execution().ok_or(AuthoringError::Unsupported(
             crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
         ))

@@ -410,10 +410,11 @@ succeeds. Hosts that manage a standalone runtime import it from
 
 `SceneExecution::live` and `ContinuationScene::live` borrow segment controls
 from the owning Scene. `LiveSession` handles activation, progression, completion,
-input, and staged publication. Hosts that configure a runtime before installation
-use `integration::scene_execution`. Sequential sources use `ScriptScene` for
-authoring and `play`/`wait`. Use the owning `Scene` to observe coordinates,
-including through `LiveProgram::scene()` while a segment is running.
+drag target configuration, and acknowledgment of prepared renderer resources.
+Hosts that configure a runtime before installation use `integration::scene_execution`.
+Sequential sources use `ScriptScene` for authoring and `play`/`wait`. Use the
+owning `Scene` to observe coordinates and effect parameters, including through
+`LiveProgram::scene()` while a segment is running.
 Python's `Scene.live_execution()` drives explicit segments. Use the Python
 `Scene` for membership, content replacement, affine edits, and published translation.
 

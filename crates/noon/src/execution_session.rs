@@ -47,9 +47,9 @@ pub use callback::{
 pub use completion::ExecutionSegmentCompletionError;
 pub use effective_content::ExecutionSessionContentError;
 pub use noon_runtime::SignalTimelineAppendError;
+pub(crate) use publication::EffectiveSemanticObject;
 pub use publication::{
-    EffectiveSemanticObject, ExecutionSessionPublicationError, StagedEffectPublication,
-    StructuralPublicationStats,
+    ExecutionSessionPublicationError, StagedEffectPublication, StructuralPublicationStats,
 };
 #[cfg(feature = "prepared-prefix")]
 pub use replay::PrefixReader;

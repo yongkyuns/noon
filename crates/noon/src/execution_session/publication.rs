@@ -167,7 +167,7 @@ pub struct StructuralPublicationStats {
 /// A borrowed effective runtime value and the exact context that published it.
 /// Active drivers can make this value differ from authored/base state.
 #[derive(Clone, Copy, Debug)]
-pub struct EffectiveSemanticObject<'a> {
+pub(crate) struct EffectiveSemanticObject<'a> {
     pub object: &'a FrameObjectState,
     pub publication: PublicationContext,
     authored_content_layout_applicable: bool,
@@ -979,7 +979,7 @@ impl ExecutionSession {
 
     /// Query a live semantic object through its originating store in indexed time.
     /// Both provenance and scene revision must match this published session.
-    pub fn effective_semantic_object(
+    pub(crate) fn effective_semantic_object(
         &self,
         store: &SemanticStore,
         node: SemanticNodeId,
