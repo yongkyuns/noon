@@ -931,13 +931,7 @@ impl Context {
         let value = self
             .scene
             .effective_camera_profile(&target.handle)
-            .map_err(|error| {
-                if running {
-                    engine_error(noon::LiveSessionError::from(error))
-                } else {
-                    engine_error(error)
-                }
-            })?;
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))?;
         Ok(noon::integration::spatial_input::camera_profile_values(
             value.0,
         ))

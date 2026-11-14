@@ -1458,7 +1458,7 @@ impl ExecutionSession {
     }
 
     /// Effective unwrapped profile and clipping planes from the same frame epoch.
-    pub fn effective_camera_profile(
+    pub(crate) fn effective_camera_profile(
         &self,
         object: SemanticNodeId,
     ) -> Option<(noon_core::ManimCamera3DProfile, f64, f64)> {

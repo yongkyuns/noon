@@ -45,6 +45,7 @@ impl Scene {
     ) -> Result<(ManimCamera3DProfile, f64, f64), AuthoringError> {
         self.require_object(camera)?;
         if let Some(execution) = self.running_execution() {
+            execution.require_published_store(&self.integration_store().borrow())?;
             return execution
                 .effective_camera_profile(camera.node_id())
                 .ok_or(AuthoringError::NonFiniteObjectState);
@@ -221,6 +222,40 @@ mod tests {
             store.semantic_animation_state(animation.node_id()).unwrap().intent(),
             SemanticAnimationIntent::CameraProfileTo { target, profile: actual }
                 if *target == camera.node_id() && *actual == endpoint
+        ));
+    }
+
+    #[test]
+    fn camera_profile_rejects_a_stale_running_publication() {
+        let mut scene = Scene::new();
+        let camera = scene.camera_3d_profile(profile(), 0.1, 100.0).unwrap();
+        let marker = scene.circle(0.5).unwrap();
+        scene.add(&marker).unwrap();
+        let execution = scene.into_execution().unwrap();
+
+        assert_eq!(
+            execution.scene().effective_camera_profile(&camera).unwrap(),
+            (profile(), 0.1, 100.0)
+        );
+        // A low-level authored edit makes this runtime's revision stale.
+        let mut external = SemanticMutationTransaction::new();
+        external.set_property(
+            marker.node_id(),
+            noon_core::SemanticObjectProperty::RotationZ,
+            0.5,
+        );
+        external
+            .apply(&mut execution.scene().integration_store().borrow_mut())
+            .unwrap();
+        let error = execution
+            .scene()
+            .effective_camera_profile(&camera)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            AuthoringError::ExecutionPublication(
+                crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+            )
         ));
     }
 

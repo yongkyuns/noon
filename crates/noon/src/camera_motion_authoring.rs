@@ -140,22 +140,11 @@ fn scene_profile(
     scene: &Scene,
     camera: &Mobject,
 ) -> Result<(noon_core::ManimCamera3DProfile, f64, f64, f64), AuthoringError> {
-    if let Some(execution) = scene.running_execution() {
-        let (profile, near, far) = execution
-            .effective_camera_profile(camera.node_id())
-            .ok_or(AuthoringError::NonFiniteObjectState)?;
-        Ok((profile, near, far, execution.effective_time()))
-    } else {
-        let state = camera.state()?;
-        let profile = state
-            .camera_profile()
-            .ok_or(AuthoringError::NonFiniteObjectState)?;
-        let (near, far) = match state.camera_projection() {
-            Some(noon_core::SemanticProjection3D::Perspective { near, far, .. }) => (near, far),
-            _ => return Err(AuthoringError::NonFiniteObjectState),
-        };
-        Ok((profile, near, far, scene.time()))
-    }
+    let (profile, near, far) = scene.effective_camera_profile(camera)?;
+    let time = scene
+        .running_execution()
+        .map_or_else(|| scene.time(), |execution| execution.effective_time());
+    Ok((profile, near, far, time))
 }
 
 impl Scene {
@@ -352,13 +341,7 @@ mod tests {
                     .owned_live()
                     .advance_segment_to(segment, time)
                     .unwrap();
-                samples.push((
-                    time,
-                    scene
-                        .owned_execution()
-                        .effective_camera_profile(camera.node_id())
-                        .unwrap(),
-                ));
+                samples.push((time, scene.effective_camera_profile(&camera).unwrap()));
             }
             {
                 scene.owned_live().complete_segment(segment).unwrap();
@@ -382,26 +365,14 @@ mod tests {
                         .owned_live()
                         .advance_segment_to(segment, time)
                         .unwrap();
-                    samples.push((
-                        time,
-                        scene
-                            .owned_execution()
-                            .effective_camera_profile(camera.node_id())
-                            .unwrap(),
-                    ));
+                    samples.push((time, scene.effective_camera_profile(&camera).unwrap()));
                 }
                 scene.owned_live().complete_segment(segment).unwrap();
                 let mut live = scene.owned_live();
                 let hold = live.wait_segment(1.0).unwrap();
                 live.advance_segment_to(hold, 3.0).unwrap();
                 live.complete_segment(hold).unwrap();
-                samples.push((
-                    3.0,
-                    scene
-                        .owned_execution()
-                        .effective_camera_profile(camera.node_id())
-                        .unwrap(),
-                ));
+                samples.push((3.0, scene.effective_camera_profile(&camera).unwrap()));
             }
             scene.owned_execution_mut().seal_replay().unwrap();
             let authored = camera.state().unwrap();
@@ -411,10 +382,7 @@ mod tests {
             for &(time, expected) in samples.iter().rev().chain(samples.iter()) {
                 scene.owned_execution_mut().seek(time).unwrap();
                 assert_eq!(
-                    scene
-                        .owned_execution()
-                        .effective_camera_profile(camera.node_id())
-                        .unwrap(),
+                    scene.effective_camera_profile(&camera).unwrap(),
                     expected,
                     "illusion={illusion} at t={time}"
                 );

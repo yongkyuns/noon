@@ -50,13 +50,9 @@ impl CanonicalAuthoringScene {
             object,
             "effective camera profile is owned by the transferred execution session",
         )?;
-        scene.effective_camera_profile(object).map_err(|error| {
-            if running {
-                noon::LiveSessionError::from(error).into()
-            } else {
-                error.into()
-            }
-        })
+        scene
+            .effective_camera_profile(object)
+            .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, running))
     }
 
     pub(crate) fn set_camera_profile(

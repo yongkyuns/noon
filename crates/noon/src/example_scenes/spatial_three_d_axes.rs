@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn configured_axes_and_coordinate_point_share_the_finite_camera_track() {
-        let (scene, axes, point, camera, _) = scene().unwrap();
+        let (scene, axes, point, camera, movement) = scene().unwrap();
         let frame = axes.authored_frame().unwrap();
         let point_state = point.state().unwrap();
         let expected = frame.c2p(2.0, -1.0, 1.5).unwrap();
@@ -212,19 +212,16 @@ mod tests {
             .unwrap()
             .len();
         assert_eq!(x_tick_count, 12, "tipless X axis keeps both endpoint ticks");
-        let mut session = session().unwrap();
+        assert!(scene.integration_store().borrow().text_resources().len() >= 3);
+        let mut session = scene.into_execution().unwrap();
+        session.live().play_animation(&movement).unwrap();
         assert_eq!(session.session().frame().objects.len(), 98);
         for (time, expected_profile) in [(0.0, start_profile()), (1.0, end_profile())] {
             session.session_mut().advance_to(time).unwrap();
             assert_eq!(
-                session
-                    .session()
-                    .effective_camera_profile(camera.node_id())
-                    .unwrap()
-                    .0,
+                session.scene().effective_camera_profile(&camera).unwrap().0,
                 expected_profile
             );
         }
-        assert!(scene.integration_store().borrow().text_resources().len() >= 3);
     }
 }
