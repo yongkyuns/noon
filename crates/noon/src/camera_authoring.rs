@@ -104,29 +104,32 @@ impl Scene {
         })
     }
 
-    /// Build an ordinary detached camera-frame target from a pure auto-frame fit.
+    /// Publish a detached camera-frame target using the authored auto-frame fit.
     pub fn camera_auto_frame_target(
-        &self,
+        &mut self,
         frame: &Mobject,
         objects: &[&Mobject],
         aspect: f64,
         margin: f64,
     ) -> Result<Mobject, AuthoringError> {
-        if !std::rc::Rc::ptr_eq(self.integration_store(), frame.integration_store()) {
-            return Err(AuthoringError::ForeignStore);
-        }
+        self.require_object(frame)?;
         let state = frame.state()?;
-        if state.role() != noon_core::SemanticObjectRole::Camera2D {
+        if state.role() != SemanticObjectRole::Camera2D {
             return Err(AuthoringError::InvalidCameraAutoFrame(
                 "target requires the Scene camera frame",
             ));
         }
         let fit = self.camera_auto_frame(objects, aspect, margin)?;
-        let mut target = frame.target_editor()?;
-        target.set_translation(fit.center.0, fit.center.1)?;
         let scale = fit.height / f64::from(DEFAULT_FRAME_HEIGHT);
-        target.set_scale(scale, scale)?;
-        Ok(target)
+        let mut transform = state.transform;
+        (transform.translation.x, transform.translation.y) = fit.center;
+        transform.scale.x = scale;
+        transform.scale.y = scale;
+
+        let (mut transaction, copy) = crate::family_copy::prepare_authored_copy(frame.into(), &[])?;
+        transaction.set_object_transform(copy.root_token(), transform);
+        let result = self.apply_semantic_transaction(transaction)?;
+        Ok(copy.resolve(&result, Mobject::from_node)?.root().clone())
     }
 
     /// Create and attach the one ordinary semantic object that defines this scene's 2D camera.
