@@ -305,7 +305,6 @@ class ManimArrowFacadeTests(unittest.TestCase):
             else:
                 raise AssertionError("missing live Arrow host unexpectedly succeeded")
             assert calls == before_missing_live_host
-            arrows._shared._live_constructor_context = lambda kind="primitive", **kwargs: None
 
             # Unsupported ManimCE semantic breadth rejects rather than being approximated.
             before = list(calls)

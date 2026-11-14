@@ -6,7 +6,7 @@ from _manim_semantic_handles import (
     _attach_shared_family,
     _family_wrapper_key,
     _handle_for,
-    _live_constructor_context,
+    _path_authoring_context,
 )
 
 try:
@@ -45,7 +45,7 @@ class Matrix(_compat.VGroup):
     def __init__(self, matrix, **kwargs):
         if _create_matrix is None:
             raise RuntimeError("Matrix requires Noon's shared Rust authoring runtime")
-        context = _live_constructor_context("Matrix", allow_unstarted=True)
+        context = _path_authoring_context()
         self._initialize_matrix(
             engine_call(_create_matrix, _matrix_rows(matrix, str), *_matrix_options(kwargs), context), context
         )
@@ -99,7 +99,7 @@ class IntegerMatrix(Matrix):
     def __init__(self, matrix, **kwargs):
         if _create_integer is None:
             raise RuntimeError("IntegerMatrix requires Noon's shared Rust authoring runtime")
-        context = _live_constructor_context("IntegerMatrix", allow_unstarted=True)
+        context = _path_authoring_context()
         self._initialize_matrix(
             engine_call(_create_integer, _matrix_rows(matrix, float), *_matrix_options(kwargs), context), context
         )
@@ -109,7 +109,7 @@ class DecimalMatrix(Matrix):
     def __init__(self, matrix, **kwargs):
         if _create_decimal is None:
             raise RuntimeError("DecimalMatrix requires Noon's shared Rust authoring runtime")
-        context = _live_constructor_context("DecimalMatrix", allow_unstarted=True)
+        context = _path_authoring_context()
         self._initialize_matrix(
             engine_call(_create_decimal, _matrix_rows(matrix, float), *_matrix_options(kwargs), context), context
         )
@@ -121,7 +121,7 @@ class MobjectMatrix(Matrix):
             raise RuntimeError("MobjectMatrix requires Noon's shared Rust authoring runtime")
         source_rows = [list(row) for row in matrix]
         supplied = _matrix_rows(source_rows, self._mobject_handle)
-        context = _live_constructor_context("MobjectMatrix", allow_unstarted=True)
+        context = _path_authoring_context()
         self._initialize_matrix(
             engine_call(_create_mobject_matrix, supplied, *_matrix_options(kwargs), context), context
         )

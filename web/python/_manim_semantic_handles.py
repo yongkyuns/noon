@@ -131,7 +131,7 @@ def _typed_manim_observation(
     """
     if handle_method == "pathQuery" and _is_shared_family(value):
         family = value._semantic_family_handle
-        context = _live_mutation_context(value) or _live_constructor_context()
+        context = _path_authoring_context(value)
         if context is not None:
             return engine_call(context.queryFamilyOwnPath, family)
         return engine_call(family.pathQuery)
@@ -348,36 +348,6 @@ def _path_authoring_context(*operands):
         return context
     from _manim_scene import _context
     return _context(scene)
-
-
-def _live_constructor_context(kind: str = "primitive", *, allow_unstarted: bool = False):
-    """Return the one retained context that may publish a new Mobject.
-
-    Before an ordinary segment starts there is no live session to protect, so
-    the normal constructor keeps the initial authoring route. Once a session
-    exists, direct authoring-store insertion would advance the revision outside
-    its published mutation transaction.
-    """
-    # Without the authoring-scope module there cannot be an active Scene
-    # continuation. Standalone primitive authoring need not initialize it.
-    reactive = sys.modules.get("_manim_reactive")
-    if reactive is None:
-        return None
-    scene = reactive._current_authoring_scene()
-    context = getattr(scene, "_canonical_authoring_context", None)
-    if context is None and allow_unstarted and scene is not None:
-        from _manim_scene import _context
-        context = _context(scene)
-    if context is None:
-        return None
-    ownership = str(engine_call(context.liveExecutionOwnership))
-    if ownership in {"active", "returned"} or (allow_unstarted and ownership == "none"):
-        return context
-    if ownership == "transferred":
-        raise RuntimeError(
-            f"live {kind} construction is unavailable while execution is transferred"
-        )
-    return None
 
 
 def _vector_path_options(path: dict[str, Any]):
@@ -3514,7 +3484,10 @@ def _group_target_context(value: object, *, include_setup=False) -> object | Non
     if not contexts:
         # Detached families may lack owner markers. Source execution supplies
         # the current Scene when the requested operation accepts that phase.
-        return _path_authoring_context(value) if include_setup else _live_constructor_context()
+        context = _path_authoring_context(value)
+        if include_setup or context is None or engine_call(context.requiresLiveMutationRouting):
+            return context
+        return None
     context = contexts[0]
     if any(candidate is not context for candidate in contexts[1:]):
         raise RuntimeError("Group target members belong to different canonical contexts")

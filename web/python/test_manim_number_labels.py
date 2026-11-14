@@ -52,7 +52,6 @@ class NumericLabelAdapterTests(unittest.TestCase):
         patch.object(labels._plot, '_coordinate_options', SimpleNamespace(numberLabels=self.make)).start()
         patch.object(labels._plot, '_to_js', side_effect=list).start()
         patch.object(labels._plot, '_outside_callback').start()
-        patch.object(labels._shared, '_live_constructor_context', return_value=None).start()
         patch.object(labels, 'engine_call', side_effect=lambda fn, *args: fn(*args)).start()
         self.wrapped = patch.object(labels, '_family', side_effect=lambda handle, *args: handle).start()
         patch.object(labels._shared, '_family_wrapper_key', side_effect=id).start()

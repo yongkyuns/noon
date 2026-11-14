@@ -17,7 +17,7 @@ class FamilyMembershipOrderTests(unittest.TestCase):
             requiresLiveMutationRouting=Mock(return_value=True),
         )
         group._canonical_live_target_context = context
-        with patch.object(handles, "_live_constructor_context", side_effect=AssertionError("unexpected fallback")):
+        with patch.object(handles, "_path_authoring_context", side_effect=AssertionError("unexpected fallback")):
             for ownership in ["active", "returned", "transferred"]:
                 with self.subTest(ownership=ownership):
                     context.liveExecutionOwnership.return_value = ownership
@@ -30,10 +30,10 @@ class FamilyMembershipOrderTests(unittest.TestCase):
         group._semantic_member_wrappers = {}
         context = SimpleNamespace(requiresLiveMutationRouting=Mock(return_value=False))
         group._canonical_live_target_context = context
-        with patch.object(handles, "_live_constructor_context", return_value=None) as constructor:
+        with patch.object(handles, "_path_authoring_context", return_value=None) as constructor:
             self.assertIsNone(handles._group_target_context(group))
         context.requiresLiveMutationRouting.assert_called_once_with()
-        constructor.assert_called_once_with()
+        constructor.assert_called_once_with(group)
 
     def test_mutations_update_identity_references_without_querying_sibling_order(self):
         a = identity_only_wrapper(compat.Mobject)

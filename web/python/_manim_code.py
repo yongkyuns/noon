@@ -6,7 +6,7 @@ from pathlib import Path
 from _noon_errors import engine_call
 import noon as _base
 import _manim_compat as _compat
-from _manim_semantic_handles import _attach_shared_family, _live_constructor_context
+from _manim_semantic_handles import _attach_shared_family, _path_authoring_context
 from _manim_typst import NativeFontFace, Text
 
 try:
@@ -108,7 +108,7 @@ class Code(_compat.VGroup):
         fill = panel["fill_color"]
         if fill is not None:
             fill = _compat._as_color("fill_color", fill)
-        context = _live_constructor_context("Code", allow_unstarted=True)
+        context = _path_authoring_context()
         options = engine_call(_new_code_options, language, source_path, formatter_style,
                               tab_width, add_line_numbers, line_numbers_from, background)
         try:
