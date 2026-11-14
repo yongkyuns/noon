@@ -7,8 +7,8 @@ use super::Scene;
 use crate::execution_session::ExecutionSession;
 use crate::{
     integration::{NativePointerInputPublication, NativePointerInputToken},
-    ExecutionSessionInputError, ExecutionSessionPublicationError, LiveSession,
-    TranslationDragError, TranslationDragReceipt,
+    ExecutionSessionCallbackError, ExecutionSessionInputError, ExecutionSessionPublicationError,
+    LiveSession, TranslationDragError, TranslationDragReceipt,
 };
 use noon_core::{NativePointerInput, SemanticNodeId, SemanticStore};
 use std::{cell::RefCell, rc::Rc};
@@ -112,6 +112,53 @@ pub mod host_execution {
     pub use super::SceneEvaluationError;
     use super::*;
     pub use crate::execution_session::ExecutionSession;
+
+    /// Admission failures for handing a completed source to a native viewer.
+    #[derive(Debug)]
+    pub enum NativeViewerError {
+        NoExecution,
+        InteractiveCallbacks,
+        HistoryRequired,
+        Replay(noon_runtime::ReplayError),
+        Publication(ExecutionSessionPublicationError),
+        Seek(ExecutionSessionInputError),
+    }
+
+    impl std::fmt::Display for NativeViewerError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::NoExecution => formatter.write_str("no execution session"),
+                Self::InteractiveCallbacks => formatter.write_str(
+                    "native translation drag requires completed source without required callbacks",
+                ),
+                Self::HistoryRequired => formatter
+                    .write_str("native preview requires finite playback or retained history"),
+                Self::Replay(error) => error.fmt(formatter),
+                Self::Publication(error) => error.fmt(formatter),
+                Self::Seek(error) => error.fmt(formatter),
+            }
+        }
+    }
+
+    impl std::error::Error for NativeViewerError {}
+
+    /// Failure to interrupt a pending callback or retire input while closing a source.
+    #[derive(Debug)]
+    pub enum SceneRetirementError {
+        Callback(ExecutionSessionCallbackError),
+        Input(ExecutionSessionInputError),
+    }
+
+    impl std::fmt::Display for SceneRetirementError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Callback(error) => error.fmt(formatter),
+                Self::Input(error) => error.fmt(formatter),
+            }
+        }
+    }
+
+    impl std::error::Error for SceneRetirementError {}
 
     /// Adopt an existing semantic family as an integration scene's canonical root.
     ///
@@ -275,11 +322,49 @@ pub mod host_execution {
         }
     }
 
-    /// Retire input-owned state before discarding execution. Keep the authored
-    /// Scene so existing handles retain their semantic identity.
-    pub fn retire(scene: &mut Scene) -> Result<(), ExecutionSessionInputError> {
+    /// Transfer the installed execution to the native viewer at its initial
+    /// replay frame or its interactive endpoint. Admission failures retain the
+    /// source with its caller.
+    pub fn take_for_native_viewer(scene: &mut Scene) -> Result<SceneExecution, NativeViewerError> {
+        let session = scene
+            .execution
+            .as_mut()
+            .ok_or(NativeViewerError::NoExecution)?;
+        session
+            .require_scene_owner(&scene.store.borrow(), scene.root)
+            .map_err(NativeViewerError::Publication)?;
+        if session.has_translation_drag_targets() {
+            if session.has_required_callbacks() || session.pending_callback_token().is_some() {
+                return Err(NativeViewerError::InteractiveCallbacks);
+            }
+            session.discard_replay_retention();
+        } else {
+            if session.replay_scope_active() {
+                session
+                    .seal_replay_for_viewer()
+                    .map_err(NativeViewerError::Replay)?;
+            } else if !session.supports_immutable_playback() {
+                return Err(NativeViewerError::HistoryRequired);
+            }
+            scene.seek_execution(0.0).map_err(NativeViewerError::Seek)?;
+        }
+        Ok(SceneExecution {
+            scene: std::mem::take(scene),
+        })
+    }
+
+    /// Interrupt pending callback work and retire input before discarding
+    /// execution. Existing authored handles retain their semantic identities.
+    pub fn retire(scene: &mut Scene) -> Result<(), SceneRetirementError> {
         if let Some(session) = scene.execution.as_mut() {
-            session.retire_interactions_for_source_replacement(&mut scene.store.borrow_mut())?;
+            if let Some(token) = session.pending_callback_token() {
+                session
+                    .interrupt_required_callback_phase(token)
+                    .map_err(SceneRetirementError::Callback)?;
+            }
+            session
+                .retire_interactions_for_source_replacement(&mut scene.store.borrow_mut())
+                .map_err(SceneRetirementError::Input)?;
         }
         scene.execution = None;
         Ok(())
@@ -376,6 +461,64 @@ mod tests {
     use noon_core::{
         NativeInputModifiers, NativePointerId, NativePointerInputKind, NativePointerPosition, Vec2,
     };
+
+    #[test]
+    fn native_viewer_rejection_preserves_source_and_success_moves_exact_runtime() {
+        let mut scene = Scene::new();
+        let mut object = scene.circle(0.5).unwrap();
+        scene.add(&object).unwrap();
+        let store = Rc::clone(scene.integration_store());
+
+        assert!(matches!(
+            host_execution::take_for_native_viewer(&mut scene),
+            Err(host_execution::NativeViewerError::NoExecution)
+        ));
+        let mut session = scene.execution_session().unwrap();
+        session.begin_replay_retention(Default::default()).unwrap();
+        let runtime = session.runtime_identity();
+        scene.install_execution(session);
+        object.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
+        assert!(matches!(
+            host_execution::take_for_native_viewer(&mut scene),
+            Err(host_execution::NativeViewerError::Publication(
+                ExecutionSessionPublicationError::StaleSceneRevision { .. }
+            ))
+        ));
+        assert!(Rc::ptr_eq(scene.integration_store(), &store));
+        assert_eq!(scene.owned_execution().runtime_identity(), runtime);
+        assert!(!scene.owned_execution().replay_is_sealed());
+
+        host_execution::retire(&mut scene).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.begin_replay_retention(Default::default()).unwrap();
+        session.advance_to(0.5).unwrap();
+        let runtime = session.runtime_identity();
+        scene.install_execution(session);
+        let viewer = host_execution::take_for_native_viewer(&mut scene).unwrap();
+        assert!(scene.running_execution().is_none());
+        assert!(Rc::ptr_eq(viewer.scene().integration_store(), &store));
+        assert_eq!(viewer.session().runtime_identity(), runtime);
+        assert_eq!(viewer.session().replay_end_time(), Some(0.5));
+        assert_eq!(viewer.session().effective_time(), 0.0);
+    }
+
+    #[test]
+    fn source_retirement_interrupts_pending_callback_without_publishing_its_sample() {
+        let mut scene = Scene::new();
+        let object = scene.circle(0.5).unwrap();
+        scene.add(&object).unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session
+            .begin_required_callback_phase(0.25, [object.node_id()])
+            .unwrap();
+        scene.install_execution(session);
+        let revision = scene.revision();
+        host_execution::retire(&mut scene).unwrap();
+        assert!(scene.running_execution().is_none());
+        assert_eq!(scene.revision(), revision);
+        scene.authored(&object).unwrap();
+        host_execution::retire(&mut scene).unwrap();
+    }
 
     #[test]
     fn retiring_consumed_scene_cleans_temporary_glow_retained_by_external_handles() {

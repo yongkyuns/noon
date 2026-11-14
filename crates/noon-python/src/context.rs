@@ -347,45 +347,22 @@ impl Context {
             let session = self.bootstrap()?;
             self.attach_session(session)?;
         }
-        let session = scene_execution::session_mut(&mut self.scene)
-            .expect("viewer bootstrap installed execution");
-        let interactive = session.has_translation_drag_targets();
-        if interactive {
-            if session.has_required_callbacks() || session.pending_callback_token().is_some() {
-                return Err(engine_error(
-                    "native translation drag requires completed source without required callbacks",
-                ));
-            }
-            session.discard_replay_retention();
-        } else if session.replay_scope_active() {
-            session.seal_replay_for_viewer().map_err(|error| {
-                engine_error(noon::integration::AuthoringFailure::new(
-                    "unsupported_operation",
-                    "python.preview_history",
-                    error,
-                ))
-            })?;
-        } else if !session.supports_immutable_playback() {
-            return Err(engine_error(
-                "prepare the source with retain_history=True before native preview",
-            ));
-        }
-        // Transfer the exact arena/session pair at the authored frontier. Only
-        // then select history; no source rerun, scene clone or relowering.
-        let scene = std::mem::take(&mut self.scene);
+        let execution = scene_execution::take_for_native_viewer(&mut self.scene).map_err(
+            |error| match error {
+                scene_execution::NativeViewerError::HistoryRequired => engine_error(
+                    "prepare the source with retain_history=True before native preview",
+                ),
+                scene_execution::NativeViewerError::Replay(error) => engine_error(
+                    AuthoringFailure::new("unsupported_operation", "python.preview_history", error),
+                ),
+                error => engine_error(error.to_string()),
+            },
+        )?;
         #[cfg(feature = "capture")]
         {
             self.effect_preparer = None;
         }
         self.terminal = true;
-        let mut execution = scene
-            .into_execution()
-            .map_err(|e| engine_error(e.to_string()))?;
-        if !interactive {
-            execution
-                .seek(0.0)
-                .map_err(|e| engine_error(e.to_string()))?;
-        }
         Ok(execution)
     }
 
@@ -5046,14 +5023,10 @@ impl Context {
         if self.terminal {
             return Ok(());
         }
-        if let Some(session) = scene_execution::session_mut(&mut self.scene) {
-            if let Some(token) = session.pending_callback_token() {
-                session
-                    .interrupt_required_callback_phase(token)
-                    .map_err(engine_error)?;
-            }
-        }
-        scene_execution::retire(&mut self.scene).map_err(|e| engine_error(e.to_string()))?;
+        scene_execution::retire(&mut self.scene).map_err(|error| match error {
+            scene_execution::SceneRetirementError::Callback(error) => engine_error(error),
+            error => engine_error(error.to_string()),
+        })?;
         #[cfg(feature = "capture")]
         {
             self.effect_preparer = None;
