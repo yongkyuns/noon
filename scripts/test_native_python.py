@@ -164,6 +164,27 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    def test_mesh_creation_and_world_edits_share_the_scene_during_playback(self):
+        source = """from noon import *
+class Demo(ThreeDScene):
+    async def construct(self):
+        mesh = Mesh3D.sphere(radius=0.25, resolution=(8, 6)).shift((-2, 0, 0))
+        self.add(mesh)
+        await self.wait(0.125)
+        surface = Surface(
+            lambda u, v: (u, v, 0.2 * u * v), u_range=(-1, 1),
+            v_range=(-1, 1), resolution=(2, 2),
+        )
+        surface.shift((1.5, 0, 0))
+        assert abs(surface.get_center()[0] - 1.5) < 1e-5
+        mesh.shift((1, 0, 0))
+        assert abs(mesh.get_center()[0] + 1) < 1e-5
+        self.add(surface)
+        await self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_detached_coordinate_frames_and_plot_during_playback(self):
         source = """from noon import *
 class Demo(Scene):

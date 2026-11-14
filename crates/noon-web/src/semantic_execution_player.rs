@@ -14,8 +14,6 @@ mod prepared;
 pub(crate) use prepared::PreparedPrefixAdvance;
 #[cfg(any(target_arch = "wasm32", test))]
 mod provisional_geometry;
-#[cfg(any(target_arch = "wasm32", test))]
-mod spatial;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::browser_pointer_input::BrowserPointerBinding;

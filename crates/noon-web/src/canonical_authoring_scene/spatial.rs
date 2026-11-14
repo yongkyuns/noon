@@ -1,6 +1,7 @@
-//! Canonical scene spatial creation and live/cold mutation ownership.
+//! Canonical Scene bindings for spatial authoring and host camera registration.
 
-use super::{CanonicalAuthoringScene, PlayerOwnership};
+use super::CanonicalAuthoringScene;
+use crate::AuthoringFailure;
 use noon::{Color, SemanticCamera3D, WorldAffineEdit};
 use noon_core::SemanticVec3;
 use std::rc::Rc;
@@ -12,20 +13,10 @@ impl CanonicalAuthoringScene {
         colors: [Color; 2],
         opacity: f64,
     ) -> Result<(), crate::authoring_error::AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self
-                .scene
-                .set_surface_checkerboard(surface, colors, opacity)
-                .map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .set_surface_checkerboard(surface, colors, opacity)
-                .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, true)),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .set_surface_checkerboard(surface, colors, opacity)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -48,17 +39,16 @@ impl CanonicalAuthoringScene {
         &mut self,
         options: noon::MeshOptions,
     ) -> Result<noon::Mobject, crate::authoring_error::AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self.scene.mesh(options).map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .mesh(options)
-                .map_err(|error| noon::LiveSessionError::from(error).into()),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .mesh(options)
+            .map_err(|error| {
+                if running {
+                    noon::LiveSessionError::from(error).into()
+                } else {
+                    error.into()
+                }
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -67,20 +57,16 @@ impl CanonicalAuthoringScene {
         options: Vec<noon::MeshOptions>,
         paths: Vec<noon::SpatialPathOptions>,
     ) -> Result<noon::MobjectFamily, crate::authoring_error::AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self
-                .scene
-                .mesh_family_with_paths(options, paths)
-                .map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .mesh_family_with_paths(options, paths)
-                .map_err(|error| noon::LiveSessionError::from(error).into()),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .mesh_family_with_paths(options, paths)
+            .map_err(|error| {
+                if running {
+                    noon::LiveSessionError::from(error).into()
+                } else {
+                    error.into()
+                }
+            })
     }
 
     pub(crate) fn create_camera_3d(
@@ -128,16 +114,17 @@ impl CanonicalAuthoringScene {
         object
             .validate()
             .map_err(crate::authoring_error::AuthoringFailure::from)?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => object.world_transform().map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
+        if self.player_ownership.is_transferred() {
+            return Err(
+                "effective world state is owned by the transferred execution session".into(),
+            );
+        }
+        if self.player_ownership.is_unstarted() {
+            object.world_transform().map_err(Into::into)
+        } else {
+            self.local_authoring_scene()?
                 .effective_world_transform(object)
-                .map_err(|error| noon::LiveSessionError::from(error).into()),
-            PlayerOwnership::Transferred(_) => {
-                Err("effective world state is owned by the transferred execution session".into())
-            }
+                .map_err(|error| noon::LiveSessionError::from(error).into())
         }
     }
 
@@ -151,17 +138,21 @@ impl CanonicalAuthoringScene {
         object
             .validate()
             .map_err(crate::authoring_error::AuthoringFailure::from)?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => object.world_center().map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .effective_world_center(object)
-                .map_err(|error| noon::LiveSessionError::from(error).into()),
-            PlayerOwnership::Transferred(_) => {
-                Err("effective world state is owned by the transferred execution session".into())
-            }
+        let running = self.requires_live_mutation_routing();
+        if self.player_ownership.is_transferred() {
+            return Err(
+                "effective world state is owned by the transferred execution session".into(),
+            );
         }
+        self.local_authoring_scene()?
+            .effective_world_center(object)
+            .map_err(|error| {
+                if running {
+                    noon::LiveSessionError::from(error).into()
+                } else {
+                    error.into()
+                }
+            })
     }
 
     pub(crate) fn effective_world_family_center(
@@ -171,17 +162,21 @@ impl CanonicalAuthoringScene {
         if !Rc::ptr_eq(self.scene.integration_store(), family.integration_store()) {
             return Err(noon::AuthoringError::ForeignStore.into());
         }
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => family.world_center().map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .effective_world_family_center(family)
-                .map_err(|error| noon::LiveSessionError::from(error).into()),
-            PlayerOwnership::Transferred(_) => {
-                Err("effective world state is owned by the transferred execution session".into())
-            }
+        let running = self.requires_live_mutation_routing();
+        if self.player_ownership.is_transferred() {
+            return Err(
+                "effective world state is owned by the transferred execution session".into(),
+            );
         }
+        self.local_authoring_scene()?
+            .effective_world_family_center(family)
+            .map_err(|error| {
+                if running {
+                    noon::LiveSessionError::from(error).into()
+                } else {
+                    error.into()
+                }
+            })
     }
 
     pub(crate) fn set_world_transform(
@@ -195,20 +190,10 @@ impl CanonicalAuthoringScene {
         object
             .validate()
             .map_err(crate::authoring_error::AuthoringFailure::from)?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self
-                .scene
-                .set_world_transform(object, transform)
-                .map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .set_world_transform(object, transform)
-                .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, true)),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .set_world_transform(object, transform)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -229,15 +214,10 @@ impl CanonicalAuthoringScene {
             noon::MobjectTarget::Family(family) => family.validate(),
         }
         .map_err(crate::authoring_error::AuthoringFailure::from)?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self.scene.world_affine(target, edit).map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.world_affine(target, edit)
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .world_affine(target, edit)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 }
 
