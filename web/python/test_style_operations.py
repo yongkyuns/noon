@@ -538,6 +538,8 @@ class StyleOperationsTests(unittest.TestCase):
 
         obj = identity_only_wrapper(compat.VMobject)
         detached = SimpleNamespace(setStrokeCap=Mock(), strokeCap="square")
+        obj._semantic_handle = detached
+        obj._semantic_handle_fresh = True
         with patch.object(handles, "_paint_authoring_target", return_value=(detached, None, "")):
             self.assertIs(obj.set_cap_style(cap.SQUARE), obj)
             self.assertIs(obj.cap_style, cap.SQUARE)
@@ -550,6 +552,11 @@ class StyleOperationsTests(unittest.TestCase):
         live_context = SimpleNamespace(
             setStrokeCap=Mock(), queryMobjectStrokeCap=Mock(return_value="butt")
         )
+        obj._canonical_live_target_context = live_context
+        self.assertIs(obj.cap_style, cap.SQUARE)
+        live_context.queryMobjectStrokeCap.assert_not_called()
+        obj._scene = SimpleNamespace(_canonical_authoring_context=live_context)
+        obj._object = object()
         with patch.object(handles, "_paint_authoring_target", return_value=(detached, live_context, "")):
             self.assertIs(obj.set_cap_style(cap.BUTT), obj)
             self.assertIs(obj.cap_style, cap.BUTT)
@@ -560,6 +567,7 @@ class StyleOperationsTests(unittest.TestCase):
         family_handle = SimpleNamespace(
             setStrokeCap=Mock(), ownStrokeCap=Mock(return_value="butt")
         )
+        family._semantic_family_handle = family_handle
         with patch.object(handles, "_paint_authoring_target", return_value=(family_handle, None, "Family")):
             self.assertIs(family.set_cap_style(cap.BUTT), family)
             self.assertIs(family.cap_style, cap.BUTT)

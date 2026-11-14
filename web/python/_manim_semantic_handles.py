@@ -2028,16 +2028,14 @@ def _set_cap_style(self, cap_style):
 
 
 def _get_cap_style(self):
-    target, context, suffix = _paint_authoring_target(self)
-    if target is None:
+    if _is_shared_family(self):
+        cap = engine_call(self._semantic_family_handle.ownStrokeCap)
+    elif _handle_for(self) is None:
         raise RuntimeError("cap styles require the shared Rust authoring host")
-    if suffix == "Family":
-        cap = engine_call(target.ownStrokeCap)
-    elif context is None:
-        # wasm-bindgen exposes strokeCap as a JavaScript property getter.
-        cap = target.strokeCap
     else:
-        cap = engine_call(context.queryMobjectStrokeCap, target)
+        cap = _typed_manim_observation(
+            self, "strokeCap", "queryMobjectStrokeCap", handle_property=True
+        )
     return getattr(_base.CapStyleType, str(cap).upper())
 
 

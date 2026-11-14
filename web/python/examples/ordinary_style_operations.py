@@ -14,6 +14,8 @@ class StyleOperations(Scene):
         family.match_style(palette)
         family.set_sheen_direction([1, 0])
         assert list(a.get_sheen_direction()) == [1, 0]
+        line = Line().set_cap_style(CapStyleType.ROUND)
+        assert line.cap_style is CapStyleType.ROUND
         self.add(family, c)
         c.match_style(a)
         c.set_background_stroke(color="#0000FF", width=2, opacity=0.25)
@@ -24,6 +26,12 @@ class StyleOperations(Scene):
         family.set_style(fill_color="#FF8000")
         family.set_fill().set_stroke()
         await self.wait(0.1)
+        late_line = Line().set_cap_style(CapStyleType.SQUARE)
+        assert late_line.cap_style is CapStyleType.SQUARE
+        self.add(late_line)
+        assert late_line.cap_style is CapStyleType.SQUARE
+        self.remove(late_line)
+        assert late_line.cap_style is CapStyleType.SQUARE
         c.set_background_stroke(color="#FF0000", width=4, opacity=0.75)
         assert c.get_stroke_color(background=True) == Color(1, 0, 0)
         assert abs(c.get_stroke_width(background=True) - 4) < 1e-6
