@@ -147,7 +147,6 @@ def number_mobjects(axis, values, *, attach, config, excluding=None):
         handle = (engine_call(axis_handle.numberLabelFamily, *args) if context is None else
                   engine_call(context.createNumberLineTextLabels, axis_handle, *args))
         labels = _family(handle, size, color)
-        _bind_label_family(axis, labels, context)
     else:
         if _line_decimal_labels is None:
             options.free()
@@ -163,6 +162,7 @@ def number_mobjects(axis, values, *, attach, config, excluding=None):
         labels = _decimal_family(handle, color)
     if attach:
         _remember(axis, labels)
+    _bind_label_family(axis, labels, context)
     return labels
 
 

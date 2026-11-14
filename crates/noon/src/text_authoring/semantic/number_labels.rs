@@ -153,11 +153,11 @@ fn publish(
     };
     let result: SemanticMutationTransactionResult = if let Some(scene) = scene {
         scene.require_resource_admission()?;
-        scene.with_publication(|store, publish| {
-            store.with_glyph_text_resources(inputs, |store, handles| {
+        scene.with_semantic_publication(|store, publish| {
+            Ok(store.with_glyph_text_resources(inputs, |store, handles| {
                 Ok::<_, Error>(publish(store, stage(handles))?)
-            })
-        })?
+            }))
+        })??
     } else {
         store
             .borrow_mut()

@@ -355,19 +355,6 @@ impl Scene {
             ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
         ) -> Result<T, AuthoringError>,
     ) -> Result<T, AuthoringError> {
-        self.with_publication(operation)
-    }
-
-    pub(crate) fn with_publication<T>(
-        &mut self,
-        operation: impl FnOnce(
-            &mut SemanticStore,
-            &mut dyn FnMut(
-                &mut SemanticStore,
-                SemanticMutationTransaction,
-            ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
-        ) -> T,
-    ) -> T {
         let root = self.root;
         let store_rc = Rc::clone(&self.store);
         if let Some(execution) = self.execution.as_mut() {

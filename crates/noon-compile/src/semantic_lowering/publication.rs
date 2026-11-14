@@ -50,11 +50,6 @@ pub enum SemanticPublicationLoweringError {
     UnsupportedReactiveMembership {
         object: SemanticTransactionNodeRef,
     },
-    /// A transaction-local text object has no stable semantic identity through
-    /// which its pre-owned resource dependencies can be attributed.
-    UnsupportedTextMembership {
-        object: SemanticTransactionNodeRef,
-    },
     UnsupportedCameraMembership {
         object: SemanticTransactionNodeRef,
     },
@@ -115,10 +110,6 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
             Self::UnsupportedReactiveMembership { object } => write!(
                 f,
                 "semantic object {object:?} has reactive bindings that require incremental reactive lowering"
-            ),
-            Self::UnsupportedTextMembership { object } => write!(
-                f,
-                "transaction-local text object {object:?} requires a pre-owned semantic resource scope"
             ),
             Self::UnsupportedCameraMembership { object } => write!(
                 f,
@@ -1450,30 +1441,20 @@ fn lower_prepared_entry(
         return Err(SemanticPublicationLoweringError::UnsupportedReactiveMembership { object });
     }
     let (content, text_bounds) = match state.content {
-        SemanticObjectContent::Geometry(content) => lower_content(
-            semantic_id,
-            SemanticObjectContent::Geometry(content),
-            Some(prepared.store()),
-            resource_additions,
-        )
-        .map_err(|error| SemanticPublicationLoweringError::PreparedContent { object, error })?,
+        content @ (SemanticObjectContent::Geometry(_) | SemanticObjectContent::Text(_)) => {
+            lower_content(
+                semantic_id,
+                content,
+                Some(prepared.store()),
+                resource_additions,
+            )
+            .map_err(|error| SemanticPublicationLoweringError::PreparedContent { object, error })?
+        }
         SemanticObjectContent::Image(image) => {
             let content = resource_additions
                 .capture_image(prepared.store(), image)
                 .map_err(SemanticPublicationLoweringError::Resource)?;
             (content.into(), None)
-        }
-        SemanticObjectContent::Text(text) => {
-            let node = object
-                .existing()
-                .ok_or(SemanticPublicationLoweringError::UnsupportedTextMembership { object })?;
-            lower_content(
-                node,
-                SemanticObjectContent::Text(text),
-                Some(prepared.store()),
-                resource_additions,
-            )
-            .map_err(|error| SemanticPublicationLoweringError::PreparedContent { object, error })?
         }
     };
     let lowered = super::projection::lower_object_state(semantic_id, &state, prepared.store())
