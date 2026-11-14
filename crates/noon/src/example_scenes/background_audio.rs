@@ -125,16 +125,18 @@ fn scene_with_music(resource: AudioResource) -> Result<(Scene, DeclaredAnimation
     let result = transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .map_err(|error| error.to_string())?;
-    let animation = scene.declare_animation(
-        SemanticAnimationIntent::Composition {
-            kind: SemanticAnimationCompositionKind::Parallel,
-            children: tracks
-                .into_iter()
-                .map(|token| result.resolve(token).expect("committed authored track"))
-                .collect(),
-        },
-        AnimationOptions::new(),
-    )?;
+    let animation = scene
+        .declare_animation(
+            SemanticAnimationIntent::Composition {
+                kind: SemanticAnimationCompositionKind::Parallel,
+                children: tracks
+                    .into_iter()
+                    .map(|token| result.resolve(token).expect("committed authored track"))
+                    .collect(),
+            },
+            AnimationOptions::new(),
+        )
+        .map_err(|error| error.to_string())?;
 
     scene
         .audio(

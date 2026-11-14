@@ -15,7 +15,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .run_time(2.0)
         .rate_func(RateFunction::Linear);
     let first = scene.declare_transform_to(&circle, &first_target, options)?;
-    let second = scene.declare_transform_to(&circle, &second_target, options)?;
     let mut session = scene.into_execution()?;
     let segment = session.live().play_animation(&first)?;
     session.live().advance_segment_to(segment, 1.0)?;
@@ -49,7 +48,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         session.scene().effective(&circle)?.transform.translation,
         Vec2::new(3.0, -2.0)
     );
-    // Activation reads the edited effective value, not the declaration-time base.
+    let second = session
+        .scene_mut()
+        .declare_transform_to(&circle, &second_target, options)?;
+    // Activation reads the current effective source.
     let segment = session.live().play_animation(&second)?;
     session
         .live()

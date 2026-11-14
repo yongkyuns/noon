@@ -233,7 +233,7 @@ fn scene_owned_membership_publishes_running_edits_and_rejects_stale_state_atomic
 
 #[test]
 fn initial_animation_root_rejects_foreign_and_stale_declaration_handles() {
-    fn root(scene: &Scene) -> crate::DeclaredAnimation {
+    fn root(scene: &mut Scene) -> crate::DeclaredAnimation {
         scene
             .declare_animation(
                 noon_core::SemanticAnimationIntent::Wait,
@@ -241,10 +241,10 @@ fn initial_animation_root_rejects_foreign_and_stale_declaration_handles() {
             )
             .unwrap()
     }
-    let local = Scene::new();
-    let foreign = Scene::new();
-    let local_root = root(&local);
-    let foreign_root = root(&foreign);
+    let mut local = Scene::new();
+    let mut foreign = Scene::new();
+    let local_root = root(&mut local);
+    let foreign_root = root(&mut foreign);
     assert_eq!(
         local_root.node_id(),
         foreign_root.node_id(),

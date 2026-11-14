@@ -308,7 +308,7 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
-    /// Declare an activatable shared world-transform intent before execution.
+    /// Publish an activatable world-transform declaration on the Scene.
     #[wasm_bindgen(js_name = declareWorldTransform)]
     pub fn declare_world_transform(
         &mut self,

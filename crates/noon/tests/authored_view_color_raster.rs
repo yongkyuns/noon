@@ -315,7 +315,7 @@ fn qualify_material(retained: bool, visible: bool, strength: f64, sample: Option
         for path in [false, true] {
             for reverse in [false, true] {
                 for clear in [[0.0; 4], [0.125, 0.0625, 0.03125, 1.0]] {
-                    let (scene, camera, mut material) = scene(path, paint, reverse);
+                    let (mut scene, camera, mut material) = scene(path, paint, reverse);
                     material
                         .set_emission(if sample.is_some() { 0.0 } else { emission })
                         .unwrap();

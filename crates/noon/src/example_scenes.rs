@@ -616,14 +616,6 @@ pub fn live_affine_completion() -> Result<crate::SceneExecution, Box<dyn Error>>
     )?;
     let mut second_target = circle.target_editor()?;
     second_target.set_translation(5.0, -2.0)?;
-    let second = scene.declare_transform_to(
-        &circle,
-        &second_target,
-        AnimationOptions::new()
-            .run_time(2.0)
-            .rate_func(RateFunction::Linear),
-    )?;
-
     let mut session = scene.into_execution()?;
     {
         let first_segment = session.live().play_animation(&first)?;
@@ -659,6 +651,13 @@ pub fn live_affine_completion() -> Result<crate::SceneExecution, Box<dyn Error>>
         let edited_authored = session.scene().authored(&circle)?.transform.translation;
         assert_eq!((edited_authored.x, edited_authored.y), (3.0, -2.0));
 
+        let second = session.scene_mut().declare_transform_to(
+            &circle,
+            &second_target,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )?;
         let second_segment = session.live().play_animation(&second)?;
         session
             .live()

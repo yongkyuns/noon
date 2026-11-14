@@ -165,6 +165,8 @@ pub enum AuthoringError {
     InvalidCameraAutoFrame(&'static str),
     /// A camera-motion input or sampled endpoint is not representable.
     InvalidCameraMotionInput(&'static str),
+    /// A declaration's endpoint or options violate its animation profile.
+    InvalidAnimationDeclaration(&'static str),
     /// A second camera-motion interval cannot begin while the camera has an open owner.
     CameraMotionAlreadyActive,
     /// A committed creation did not resolve its prepared local token.
@@ -407,6 +409,7 @@ impl std::fmt::Display for AuthoringError {
                 f.write_str("geometry, transform, and style must be finite")
             }
             Self::InvalidCameraMotionInput(message) => f.write_str(message),
+            Self::InvalidAnimationDeclaration(message) => f.write_str(message),
             Self::CameraMotionAlreadyActive => {
                 f.write_str("camera already has an open rotation; stop it before beginning another")
             }

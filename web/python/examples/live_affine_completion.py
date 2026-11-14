@@ -5,6 +5,7 @@ segment. Python observes effective values and invokes shared operations only.
 """
 
 from noon import Circle, Scene, linear
+from _noon_errors import NoonPendingError
 
 
 class LiveAffineCompletion(Scene):
@@ -17,12 +18,14 @@ class LiveAffineCompletion(Scene):
         first = self.declare_live_transform_to(
             circle, first_target, run_time=2.0, rate_func=linear
         )
-        second = self.declare_live_transform_to(
-            circle, second_target, run_time=2.0, rate_func=linear
-        )
-
         live = self.live_execution()
         first_end = live.play(first)
+        try:
+            self.declare_live_transform_to(circle, second_target, run_time=2.0, rate_func=linear)
+        except NoonPendingError:
+            pass
+        else:
+            raise AssertionError("a pending segment must exclude new animation declarations")
         assert not live.advance_to(first_end)
         live.complete()
         assert live.effective_center(circle) == (2.0, -2.0)
@@ -33,6 +36,9 @@ class LiveAffineCompletion(Scene):
         live.complete()
         assert live.effective_center(circle) == (3.0, -2.0)
 
+        second = self.declare_live_transform_to(
+            circle, second_target, run_time=2.0, rate_func=linear
+        )
         second_end = live.play(second)
         assert not live.advance_to(second_end - 1.0)
         assert live.effective_center(circle) == (4.0, -2.0)

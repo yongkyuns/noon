@@ -1,10 +1,9 @@
 //! Shared native camera-profile authoring through semantic transactions and tracks.
 
 use noon_core::{
-    AnimationOptions, ManimCamera3DProfile, SemanticMutationImpact, SemanticMutationTransaction,
-    SemanticObjectRole, SemanticObjectState, SemanticProjection3D, StoredGeometry,
+    AnimationOptions, ManimCamera3DProfile, SemanticMutationTransaction, SemanticObjectRole,
+    SemanticObjectState, SemanticProjection3D, StoredGeometry,
 };
-use std::rc::Rc;
 
 use crate::{AuthoringError, DeclaredAnimation, Mobject, Scene};
 
@@ -107,47 +106,38 @@ impl Scene {
         self.set_camera_profile(camera, profile)
     }
 
-    /// Declare an ordinary camera-profile animation before lowering the scene.
+    /// Declare an ordinary camera-profile animation on this Scene.
     pub fn declare_camera_profile_move(
-        &self,
+        &mut self,
         camera: &Mobject,
         profile: ManimCamera3DProfile,
         options: AnimationOptions,
-    ) -> Result<DeclaredAnimation, String> {
-        self.require_object(camera)
-            .map_err(|error| error.to_string())?;
-        if self.running_execution().is_some() {
-            return Err(
-                "camera profile tracks require unstarted execution; use a live composition".into(),
-            );
-        }
-        let state = camera.state().map_err(|error| error.to_string())?;
+    ) -> Result<DeclaredAnimation, AuthoringError> {
+        self.require_object(camera)?;
+        let state = camera.state()?;
         let (near, far) = match state.camera_projection() {
             Some(SemanticProjection3D::Perspective { near, far, .. }) => (near, far),
-            _ => return Err("camera profile tracks require a perspective Camera3D".into()),
+            _ => {
+                return Err(AuthoringError::InvalidAnimationDeclaration(
+                    "camera profile tracks require a perspective Camera3D",
+                ))
+            }
         };
         if state.role() != SemanticObjectRole::Camera3D
             || state.camera_profile().is_none()
             || profile.camera(near, far).is_none()
         {
-            return Err("camera profile endpoint is invalid for this camera".into());
+            return Err(AuthoringError::InvalidAnimationDeclaration(
+                "camera profile endpoint is invalid for this camera",
+            ));
         }
-        let mut transaction = SemanticMutationTransaction::new();
-        let local = transaction.create_camera_profile_animation(camera.node_id(), profile, options);
-        let result = transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map_err(|error| error.to_string())?;
-        let node = result
-            .resolve(local)
-            .ok_or_else(|| "camera profile declaration was not resolved".to_owned())?;
-        debug_assert!(result
-            .impacts()
-            .iter()
-            .any(|impact| matches!(impact, SemanticMutationImpact::AnimationAdded { .. })));
-        Ok(DeclaredAnimation::new(
-            Rc::clone(self.integration_store()),
-            node,
-        ))
+        self.declare_animation(
+            noon_core::SemanticAnimationIntent::CameraProfileTo {
+                target: camera.node_id(),
+                profile,
+            },
+            options,
+        )
     }
 }
 

@@ -108,7 +108,7 @@ fn copied_target_intent_only_write_has_one_coherent_publication_without_render_d
 #[test]
 fn copied_motion_and_radius_target_preserves_later_intensity_during_parallel_pulse() {
     for pulse_first in [false, true] {
-        let (scene, source) = fixture();
+        let (mut scene, source) = fixture();
         let mut target = source.target_editor().unwrap();
         target.shift(2.0, 0.0).unwrap();
         target

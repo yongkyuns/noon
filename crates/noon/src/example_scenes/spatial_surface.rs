@@ -53,7 +53,7 @@ fn author_surface(material: SemanticSpatialMaterial) -> Result<(Scene, crate::Mo
 
 /// Author the ordinary world-rotation intent on the shared surface profile.
 pub fn scene() -> Result<(Scene, crate::Mobject, DeclaredAnimation), String> {
-    let (scene, surface) = author_surface(SemanticSpatialMaterial::Unlit)?;
+    let (mut scene, surface) = author_surface(SemanticSpatialMaterial::Unlit)?;
     let rotation = SemanticRotation3D::from_axis_angle(SemanticVec3::new(0.0, 0.0, 1.0), 0.6)
         .ok_or("invalid spatial-surface target rotation")?;
     let target = SemanticWorldTransform3D::new(

@@ -2672,7 +2672,7 @@ fn public_shadow_pixels_offset_animation_hard_shadow_and_retirement() {
                     EffectOffset::Scene(v.map(|c| c / 10.0))
                 }
             };
-            let (scene, mut source, _) = blur_fixture(profile, false, opacity, pixels);
+            let (mut scene, mut source, _) = blur_fixture(profile, false, opacity, pixels);
             source
                 .add_effect(
                     Shadow::new(

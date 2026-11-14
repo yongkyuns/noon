@@ -47,13 +47,15 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     target
         .rotate(std::f64::consts::FRAC_PI_2)
         .map_err(|error| error.to_string())?;
-    let rotation = scene.declare_transform_to(
-        &rectangle,
-        &target,
-        AnimationOptions::new()
-            .run_time(1.0)
-            .rate_func(RateFunction::Linear),
-    )?;
+    let rotation = scene
+        .declare_transform_to(
+            &rectangle,
+            &target,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .map_err(|error| error.to_string())?;
     let mut execution = scene.into_execution().map_err(|e| e.to_string())?;
     let mut live = execution.live();
     let segment = live.play_animation(&rotation).map_err(|e| e.to_string())?;

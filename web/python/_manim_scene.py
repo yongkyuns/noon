@@ -3595,7 +3595,7 @@ class LiveExecution:
         return _base.Vec2(float(translation[0]), float(translation[1]))
 
     def play(self, animation: "LiveAnimation") -> float:
-        """Activate one declaration that was authored before this session began."""
+        """Activate an animation declaration on this Scene."""
         if not isinstance(animation, LiveAnimation) or animation._scene is not self._scene:
             raise ValueError("live animation must belong to this Scene")
         return float(self._context.livePlayAnimation(animation._handle))
@@ -3655,14 +3655,14 @@ def _declare_live_transform_to(
     run_time: float = 1.0,
     rate_func: object = "smooth",
 ) -> LiveAnimation:
-    """Declare a replayable affine TransformTo before lowering a live session.
+    """Publish a replayable affine TransformTo on this Scene.
 
     ``target`` is an ordinary detached Mobject handle in the same Rust store,
     usually built with ``source.copy()`` and transformed before this call. This
     wrapper declares no scheduler and does not create animation meaning during
     ``LiveExecution.play``.
     """
-    context = execution_context(self)
+    context = _context(self)
     if not isinstance(source, _base.Mobject) or source._scene is not self:
         raise ValueError("live animation source must belong to this Scene")
     if not isinstance(target, _base.Mobject) or target._scene is not None:
@@ -3673,11 +3673,13 @@ def _declare_live_transform_to(
         raise ValueError("live animation requires typed semantic Mobject handles")
     return LiveAnimation(
         self,
-        context.declareLiveTransformTo(
+        engine_call(
+            context.declareLiveTransformTo,
             source_handle,
             target_handle,
             float(run_time),
             _live_rate_function_id(rate_func),
+            operation="Scene.declare_live_transform_to",
         ),
     )
 

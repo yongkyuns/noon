@@ -127,13 +127,15 @@ pub fn session(
     let committed = transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .map_err(|error| error.to_string())?;
-    let root = scene.declare_animation(
-        SemanticAnimationIntent::Composition {
-            kind: SemanticAnimationCompositionKind::Parallel,
-            children: vec![committed.resolve(track).expect("committed position track")],
-        },
-        AnimationOptions::new(),
-    )?;
+    let root = scene
+        .declare_animation(
+            SemanticAnimationIntent::Composition {
+                kind: SemanticAnimationCompositionKind::Parallel,
+                children: vec![committed.resolve(track).expect("committed position track")],
+            },
+            AnimationOptions::new(),
+        )
+        .map_err(|error| error.to_string())?;
     scene.into_execution_with_animation_root(&root)
 }
 

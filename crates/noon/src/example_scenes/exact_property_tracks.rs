@@ -70,15 +70,17 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     let result = transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .map_err(|error| error.to_string())?;
-    let root = scene.declare_animation(
-        SemanticAnimationIntent::Composition {
-            kind: SemanticAnimationCompositionKind::Parallel,
-            children: [position, opacity, rotation]
-                .map(|token| result.resolve(token).expect("committed track"))
-                .to_vec(),
-        },
-        AnimationOptions::new(),
-    )?;
+    let root = scene
+        .declare_animation(
+            SemanticAnimationIntent::Composition {
+                kind: SemanticAnimationCompositionKind::Parallel,
+                children: [position, opacity, rotation]
+                    .map(|token| result.resolve(token).expect("committed track"))
+                    .to_vec(),
+            },
+            AnimationOptions::new(),
+        )
+        .map_err(|error| error.to_string())?;
     scene.into_execution_with_animation_root(&root)
 }
 

@@ -34,7 +34,7 @@ pub fn session(active: usize, property: Property, duration: f64) -> Result<Scene
     if !duration.is_finite() || duration < 10.0 {
         return Err("G4 duration must be finite and at least 10 seconds".into());
     }
-    let (scene, objects) = grid(active)?;
+    let (mut scene, objects) = grid(active)?;
     let options = AnimationOptions::new()
         .run_time(duration)
         .rate_func(RateFunction::Linear);
@@ -47,15 +47,22 @@ pub fn session(active: usize, property: Property, duration: f64) -> Result<Scene
                 Property::Radius => EffectUpdate::default().radius(Pixels(6.0)),
             })
             .map_err(message)?;
-        children.push(scene.declare_transform_to(dot, &target, options)?.node_id());
+        children.push(
+            scene
+                .declare_transform_to(dot, &target, options)
+                .map_err(|error| error.to_string())?
+                .node_id(),
+        );
     }
-    let root = scene.declare_animation(
-        noon_core::SemanticAnimationIntent::Composition {
-            kind: SemanticAnimationCompositionKind::Parallel,
-            children,
-        },
-        AnimationOptions::new(),
-    )?;
+    let root = scene
+        .declare_animation(
+            noon_core::SemanticAnimationIntent::Composition {
+                kind: SemanticAnimationCompositionKind::Parallel,
+                children,
+            },
+            AnimationOptions::new(),
+        )
+        .map_err(|error| error.to_string())?;
     scene.into_execution_with_animation_root(&root)
 }
 

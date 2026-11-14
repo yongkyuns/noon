@@ -391,10 +391,10 @@ aliased family-arrangement example runs as one sequential source on native and
 direct Rust/WASM hosts.
 
 `play` and `wait` yield the existing `LiveProgram` completion/publication boundary.
-An owned `AnimationRequest` retains handles and requested edits, then captures
-effective state when play admits it. It allocates no semantic target or animation
-identity while being constructed. The shared composition transaction stages and
-publishes those identities atomically at admission.
+An owned `AnimationRequest` retains handles and requested edits. Play captures
+effective state and publishes any needed identities atomically at admission.
+`Scene::declare_animation` publishes a persistent declaration in setup or
+between segments. Activating that declaration is a separate execution operation.
 
 ### `ExecutionSession`
 

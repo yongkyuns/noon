@@ -65,7 +65,7 @@ fn supported_bootstrap_keeps_identity_and_clean_publications() {
 
 #[test]
 fn predeclared_motion_and_glow_complete_through_public_scene() {
-    let (scene, source) = fixture(true);
+    let (mut scene, source) = fixture(true);
     let old = definition(&source);
     let mut target = source.target_editor().unwrap();
     target.shift(2.0, 0.0).unwrap();
@@ -262,7 +262,7 @@ fn detached_unsupported_target_is_inert_until_membership_admission() {
 
 #[test]
 fn public_replay_restores_original_attachment_after_completed_motion_and_removal() {
-    let (scene, source) = fixture(true);
+    let (mut scene, source) = fixture(true);
     let original = definition(&source);
     let original_id = source.get_effect("glow").unwrap().node_id();
     let mut target = source.target_editor().unwrap();
@@ -310,7 +310,7 @@ fn returning_and_reversed_rates_reconcile_exact_public_endpoints() {
         (RateFunction::ThereAndBack, false),
         (RateFunction::Linear, true),
     ] {
-        let (scene, source) = fixture(true);
+        let (mut scene, source) = fixture(true);
         let original = definition(&source);
         let mut target = source.target_editor().unwrap();
         target
@@ -340,7 +340,7 @@ fn returning_and_reversed_rates_reconcile_exact_public_endpoints() {
 
 #[test]
 fn pending_segment_keeps_the_existing_publication_barrier() {
-    let (scene, source) = fixture(true);
+    let (mut scene, source) = fixture(true);
     let mut target = source.target_editor().unwrap();
     target
         .set_glow(EffectUpdate::default().intensity(1.4))
@@ -669,7 +669,7 @@ fn ordinary_composition_rejects_stacked_absent_glow_without_any_publication() {
 
 fn immutable_glow_execution(rate: RateFunction) -> (crate::SceneExecution, Mobject) {
     use noon_core::SemanticAnimationIntent;
-    let (scene, source) = fixture(true);
+    let (mut scene, source) = fixture(true);
     let mut target = source.target_editor().unwrap();
     target.shift(2.0, 0.0).unwrap();
     target
@@ -745,7 +745,7 @@ fn initial_glow_targets_admit_immutable_seek_with_exact_endpoints_and_authored_s
 fn initial_effect_targets_allow_disjoint_channels_and_reject_conflicts_without_mutation() {
     use noon_core::SemanticAnimationIntent;
     for conflicting in [false, true] {
-        let (scene, source) = fixture(true);
+        let (mut scene, source) = fixture(true);
         let mut first = source.target_editor().unwrap();
         first
             .set_glow(EffectUpdate::default().intensity(1.4))
@@ -808,7 +808,7 @@ fn initial_affine_target_rejects_overlapping_exact_tracks_in_either_child_order(
         SemanticObjectTrackValues, TrackTiming,
     };
     for (reversed, start) in [(false, 0.0), (true, 0.0), (false, 2.0), (true, 2.0)] {
-        let (scene, source) = fixture(true);
+        let (mut scene, source) = fixture(true);
         let mut target = source.target_editor().unwrap();
         target.shift(2.0, 0.0).unwrap();
         let affine = scene

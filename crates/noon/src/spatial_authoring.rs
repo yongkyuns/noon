@@ -900,43 +900,33 @@ impl Scene {
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
-    /// Declare shared world-transform-to intent before execution bootstrap.
+    /// Declare shared world-transform-to intent on this Scene.
     /// Activation captures the then-current effective pose through the ordinary
     /// LiveSession animation path.
     pub fn declare_world_transform(
-        &self,
+        &mut self,
         object: &Mobject,
         target: SemanticWorldTransform3D,
         options: noon_core::AnimationOptions,
-    ) -> Result<DeclaredAnimation, String> {
-        self.require_object(object)
-            .map_err(|error| error.to_string())?;
-        if self.running_execution().is_some() {
-            return Err(
-                "world track declaration requires unstarted execution; use a live composition"
-                    .into(),
-            );
-        }
+    ) -> Result<DeclaredAnimation, AuthoringError> {
+        self.require_object(object)?;
         if options.lag_ratio.is_some()
             || options.path_arc.is_some()
             || options.reverse_rate_function.is_some()
             || options.remover.is_some()
             || options.introducer.is_some()
         {
-            return Err("world tracks support duration and rate function options".into());
+            return Err(AuthoringError::InvalidAnimationDeclaration(
+                "world tracks support duration and rate function options",
+            ));
         }
-        let mut transaction = SemanticMutationTransaction::new();
-        let animation =
-            transaction.create_world_transform_animation(object.node_id(), target, options);
-        let node = transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map_err(|error| error.to_string())?
-            .resolve(animation)
-            .ok_or_else(|| "world track declaration was not resolved".to_owned())?;
-        Ok(DeclaredAnimation::new(
-            Rc::clone(self.integration_store()),
-            node,
-        ))
+        self.declare_animation(
+            noon_core::SemanticAnimationIntent::WorldTransformTo {
+                target: object.node_id(),
+                transform: target,
+            },
+            options,
+        )
     }
 }
 

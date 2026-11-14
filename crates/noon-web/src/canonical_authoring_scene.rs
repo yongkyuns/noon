@@ -2081,18 +2081,18 @@ impl CanonicalAuthoringScene {
             .and_then(crate::SemanticExecutionPlayer::live_handoff_duration)
     }
 
-    /// Add replayable animation meaning before a live session is created.
+    /// Publish replayable animation meaning on the current Scene.
     #[cfg(any(target_arch = "wasm32", test))]
     fn declare_live_transform_to(
-        &self,
+        &mut self,
         source: &noon::Mobject,
         target: &noon::Mobject,
         options: noon_core::AnimationOptions,
-    ) -> Result<noon::DeclaredAnimation, String> {
-        if !self.player_ownership.is_unstarted() {
-            return Err("declare live animations before beginning execution".into());
-        }
-        self.scene.declare_transform_to(source, target, options)
+    ) -> Result<noon::DeclaredAnimation, AuthoringFailure> {
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .declare_transform_to(source, target, options)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

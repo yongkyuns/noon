@@ -81,7 +81,7 @@ fn finish(scene: &Scene, session: &mut ExecutionSession, segment: ExecutionSegme
 
 #[test]
 fn glow_pulse_predeclared_activation_captures_later_live_baseline() {
-    let (scene, object) = fixture(true);
+    let (mut scene, object) = fixture(true);
     let animation = scene.declare_glow_pulse(&object, 2.0, options()).unwrap();
     let id = object.get_effect("glow").unwrap().node_id();
     let mut session = scene.into_execution().unwrap();
@@ -105,7 +105,7 @@ fn glow_pulse_predeclared_activation_captures_later_live_baseline() {
 
 #[test]
 fn glow_pulse_predeclared_absence_enrolls_only_at_activation_and_replays_cleanup() {
-    let (scene, object) = fixture(false);
+    let (mut scene, object) = fixture(false);
     let animation = scene.declare_glow_pulse(&object, 2.0, options()).unwrap();
     assert!(object.get_effect("glow").is_err());
     let mut session = scene.execution_session().unwrap();
@@ -137,7 +137,7 @@ fn glow_pulse_predeclared_absence_enrolls_only_at_activation_and_replays_cleanup
 
 #[test]
 fn glow_pulse_repeated_predeclared_activation_never_rebinds_a_stale_attachment() {
-    let (scene, object) = fixture(false);
+    let (mut scene, object) = fixture(false);
     let animation = scene.declare_glow_pulse(&object, 2.0, options()).unwrap();
     let mut session = scene.into_execution().unwrap();
     let first = session.live().play_animation(&animation).unwrap();

@@ -157,7 +157,7 @@ fn authored_camera_bloom_animation_seek_removal_matches_independent_pixels() {
     assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
     eprintln!("authored camera Bloom adapter: {:?}", adapter.get_info());
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
-    let (scene, mut camera, _) = super::scene(false, false, false);
+    let (mut scene, mut camera, _) = super::scene(false, false, false);
     camera
         .set_view_color_profile(ViewColorProfile::LinearHdr)
         .unwrap();

@@ -126,9 +126,10 @@ pub async fn create_direct_glow_churn_renderer(
 pub async fn create_direct_retained_locality_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-    let (scene, objects) = noon::example_scenes::retained_locality::scene().map_err(js_error)?;
+    let (mut scene, objects) =
+        noon::example_scenes::retained_locality::scene().map_err(js_error)?;
     let animation = noon::example_scenes::retained_locality::target_animation_with_duration(
-        &scene,
+        &mut scene,
         &objects[noon::example_scenes::retained_locality::TARGET_INDEX],
         10.0,
     )

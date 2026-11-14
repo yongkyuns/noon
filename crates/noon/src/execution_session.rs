@@ -3201,7 +3201,9 @@ impl ExecutionSession {
             } => {
                 let options =
                     crate::animation_authoring::normalized_passing_flash_options(*options)
-                        .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
+                        .map_err(|error| {
+                            ExecutionSessionAnimationError::InvalidComposition(error.into())
+                        })?;
                 if self.require_uncreate_target(store, root, *target)? {
                     admit(*target, admitted)?;
                 }

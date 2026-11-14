@@ -1,11 +1,9 @@
 //! Replayable semantic animation declarations.
 //!
-//! A declaration is authored into the same semantic store as its objects before
-//! an execution session is lowered.  It is deliberately not a runtime command:
-//! [`crate::LiveSession`] activates the existing declaration against one already
-//! published session and returns that session's continuation segment.
+//! Scene publishes declarations into the same semantic store as their targets.
+//! [`crate::LiveSession`] activates a declaration and returns the continuation segment.
 
-use crate::Mobject;
+use crate::{AuthoringError, Mobject};
 use noon_core::{
     AnimationOptions, SemanticAnimationIntent, SemanticAnimationState, SemanticMutationTransaction,
     SemanticNodeId, SemanticNodeKind, SemanticStore,
@@ -14,9 +12,7 @@ use std::{cell::RefCell, rc::Rc};
 
 /// Store-scoped handle for one authored semantic animation declaration.
 ///
-/// The declaration stays ordinary replayable scene meaning. It neither owns a
-/// session nor removes itself after a live run; lifecycle/reconciliation of
-/// completed declarations belongs to the future continuation contract.
+/// A declaration stays available for future activation after a segment completes.
 #[derive(Clone, Debug)]
 pub struct DeclaredAnimation {
     store: Rc<RefCell<SemanticStore>>,
@@ -59,25 +55,19 @@ impl DeclaredAnimation {
 }
 
 impl crate::Scene {
-    /// Declare an animation before lowering an execution session.
-    ///
-    /// This is an authored transaction, so invalid references/options fail
-    /// before the declaration receives an identity. Calling this after a
-    /// session is lowered intentionally requires a future atomic
-    /// declaration-and-publication operation.
+    /// Publish an animation declaration during setup or at an authoring
+    /// boundary. Playback starts separately when the declaration is activated.
     pub fn declare_animation(
-        &self,
+        &mut self,
         intent: SemanticAnimationIntent,
         options: AnimationOptions,
-    ) -> Result<DeclaredAnimation, String> {
+    ) -> Result<DeclaredAnimation, AuthoringError> {
         let mut transaction = SemanticMutationTransaction::new();
         let token = transaction.create_animation(SemanticAnimationState::new(intent, options));
-        let result = transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map_err(|error| error.to_string())?;
-        let Some(animation) = result.resolve(token) else {
-            return Err("animation declaration did not produce one animation identity".into());
-        };
+        let animation = self
+            .apply_semantic_transaction(transaction)?
+            .resolve(token)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(token))?;
         Ok(DeclaredAnimation::new(
             Rc::clone(self.integration_store()),
             animation,
@@ -86,15 +76,13 @@ impl crate::Scene {
 
     /// Declare a shared affine transform between two store-scoped mobjects.
     pub fn declare_transform_to(
-        &self,
+        &mut self,
         source: &Mobject,
         target: &Mobject,
         options: AnimationOptions,
-    ) -> Result<DeclaredAnimation, String> {
-        self.require_object(source)
-            .map_err(|error| error.to_string())?;
-        self.require_object(target)
-            .map_err(|error| error.to_string())?;
+    ) -> Result<DeclaredAnimation, AuthoringError> {
+        self.require_object(source)?;
+        self.require_object(target)?;
         self.declare_animation(
             SemanticAnimationIntent::TransformTo {
                 target: source.node_id(),
@@ -109,15 +97,13 @@ impl crate::Scene {
 
     /// Declare exact bounds-center motion over a retained static path.
     pub fn declare_move_along_path(
-        &self,
+        &mut self,
         target: &Mobject,
         path: &Mobject,
         options: AnimationOptions,
-    ) -> Result<DeclaredAnimation, String> {
-        self.require_object(target)
-            .map_err(|error| error.to_string())?;
-        self.require_object(path)
-            .map_err(|error| error.to_string())?;
+    ) -> Result<DeclaredAnimation, AuthoringError> {
+        self.require_object(target)?;
+        self.require_object(path)?;
         self.declare_animation(
             SemanticAnimationIntent::MoveAlongPath {
                 target: target.node_id(),
@@ -130,13 +116,12 @@ impl crate::Scene {
     /// Declare a replayable intensity pulse. Activation captures the effective glow;
     /// an absent canonical attachment is enrolled neutrally by the live session.
     pub fn declare_glow_pulse(
-        &self,
+        &mut self,
         target: &Mobject,
         intensity: f64,
         options: AnimationOptions,
-    ) -> Result<DeclaredAnimation, String> {
-        self.require_object(target)
-            .map_err(|error| error.to_string())?;
+    ) -> Result<DeclaredAnimation, AuthoringError> {
+        self.require_object(target)?;
         self.declare_animation(
             SemanticAnimationIntent::GlowPulse {
                 target: target.node_id(),
@@ -148,16 +133,14 @@ impl crate::Scene {
 
     /// Declare a replayable visibility gesture without enrolling a mask yet.
     pub fn declare_dissolve<'a>(
-        &self,
+        &mut self,
         target: impl Into<crate::MobjectTarget<'a>>,
         direction: noon_core::DissolveDirection,
         style: noon_core::DissolveStyle,
         options: AnimationOptions,
-    ) -> Result<DeclaredAnimation, String> {
+    ) -> Result<DeclaredAnimation, AuthoringError> {
         let target = target.into();
-        target
-            .require_store(self.integration_store())
-            .map_err(|error| error.to_string())?;
+        target.require_store(self.integration_store())?;
         self.declare_animation(
             SemanticAnimationIntent::Dissolve {
                 target: target.node_id(),
@@ -170,14 +153,14 @@ impl crate::Scene {
 
     /// Declare one transient flash over an exact analytic Line.
     pub fn declare_passing_flash(
-        &self,
+        &mut self,
         target: &Mobject,
         time_width: f64,
         options: AnimationOptions,
-    ) -> Result<DeclaredAnimation, String> {
-        self.require_object(target)
-            .map_err(|error| error.to_string())?;
-        let options = normalized_passing_flash_options(options)?;
+    ) -> Result<DeclaredAnimation, AuthoringError> {
+        self.require_object(target)?;
+        let options = normalized_passing_flash_options(options)
+            .map_err(AuthoringError::InvalidAnimationDeclaration)?;
         self.declare_animation(
             SemanticAnimationIntent::PassingFlash {
                 target: target.node_id(),
@@ -190,17 +173,14 @@ impl crate::Scene {
 
 pub(crate) fn normalized_passing_flash_options(
     options: AnimationOptions,
-) -> Result<AnimationOptions, String> {
+) -> Result<AnimationOptions, &'static str> {
     if options.introducer == Some(false)
         || options.remover == Some(false)
         || options.reverse_rate_function == Some(true)
         || options.lag_ratio.is_some_and(|value| value != 0.0)
         || options.path_arc.is_some_and(|value| value != 0.0)
     {
-        return Err(
-            "PassingFlash has fixed transient membership and does not support lag, path arcs, or rate reversal"
-                .into(),
-        );
+        return Err("PassingFlash has fixed transient membership and does not support lag, path arcs, or rate reversal");
     }
     Ok(options.introducer(true).remover(true))
 }
@@ -209,6 +189,59 @@ pub(crate) fn normalized_passing_flash_options(
 mod tests {
     use super::*;
     use noon_core::{RateFunction, SemanticVec3, Vec2};
+
+    #[test]
+    fn declaration_publishes_without_activating_and_rejects_a_pending_segment_atomically() {
+        let mut scene = crate::Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        let target = scene.circle(1.0).unwrap();
+        scene.set_translation(&target, 4.0, 0.0).unwrap();
+        scene.add(&circle).unwrap();
+        let mut execution = scene.into_execution().unwrap();
+        let options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear);
+        let animation = execution
+            .scene_mut()
+            .declare_transform_to(&circle, &target, options)
+            .unwrap();
+        assert_eq!(execution.session().frame().time, 0.0);
+        assert_eq!(
+            execution
+                .scene()
+                .effective(&circle)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::ZERO,
+        );
+        let segment = execution.live().play_animation(&animation).unwrap();
+        let publication = execution.session().publication_context();
+        let revision = execution.scene().revision();
+        let count = execution.scene().integration_store().borrow().len();
+        assert!(matches!(
+            execution
+                .scene_mut()
+                .declare_transform_to(&circle, &target, options),
+            Err(AuthoringError::ExecutionPublication(
+                crate::ExecutionSessionPublicationError::SegmentCompletionPending
+            )),
+        ));
+        assert_eq!(execution.scene().revision(), revision);
+        assert_eq!(execution.scene().integration_store().borrow().len(), count);
+        assert_eq!(execution.session().publication_context(), publication);
+        execution.live().advance_segment_to(segment, 2.0).unwrap();
+        execution.live().complete_segment(segment).unwrap();
+        assert_eq!(
+            execution
+                .scene()
+                .effective(&circle)
+                .unwrap()
+                .transform
+                .translation,
+            Vec2::new(4.0, 0.0),
+        );
+    }
 
     #[test]
     fn declared_transform_is_replayable_and_live_queries_observe_its_effective_state() {

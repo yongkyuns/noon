@@ -377,6 +377,11 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::InvalidCameraMotionInput(_) => {
                 Self::new("invalid_input", "camera.invalid_motion", message)
             }
+            AuthoringError::InvalidAnimationDeclaration(_) => Self::new(
+                "invalid_input",
+                "authoring.invalid_animation_declaration",
+                message,
+            ),
             AuthoringError::CameraMotionAlreadyActive => {
                 Self::new("lifecycle", "camera.motion_active", message)
             }

@@ -4917,7 +4917,7 @@ impl Context {
     }
     #[pyo3(name = "declareLiveTransformTo")]
     fn declare_transform(
-        &self,
+        &mut self,
         source: &MobjectHandle,
         target: &MobjectHandle,
         duration: f64,
@@ -4926,11 +4926,7 @@ impl Context {
         self.available()?;
         self.same_store(source)?;
         self.same_store(target)?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "declare live animations before beginning execution",
-            ));
-        }
+        let running = self.has_execution();
         self.scene
             .declare_transform_to(
                 &source.handle,
@@ -4940,7 +4936,7 @@ impl Context {
                     .rate_func(crate::composition::rate(easing)?),
             )
             .map(|value| crate::composition::DeclaredAnimation { value })
-            .map_err(engine_error)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "beginLiveExecution")]
     fn begin_live_execution(&mut self, duration: f64) -> PyResult<()> {

@@ -168,19 +168,18 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn declare_camera_profile_move(
-        &self,
+        &mut self,
         object: &noon::Mobject,
         profile: noon_core::ManimCamera3DProfile,
         options: noon_core::AnimationOptions,
-    ) -> Result<noon::DeclaredAnimation, String> {
-        if !self.player_ownership.is_unstarted() {
-            return Err(
-                "declare camera profile tracks before execution starts; use a live composition"
-                    .into(),
-            );
-        }
-        self.scene
+    ) -> Result<noon::DeclaredAnimation, crate::AuthoringFailure> {
+        let (scene, running) = self.camera_scene_mut(
+            object,
+            "live execution session is running in the semantic engine",
+        )?;
+        scene
             .declare_camera_profile_move(object, profile, options)
+            .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

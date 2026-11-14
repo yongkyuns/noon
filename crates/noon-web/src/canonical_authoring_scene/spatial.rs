@@ -21,18 +21,15 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn declare_world_transform(
-        &self,
+        &mut self,
         object: &noon::Mobject,
         transform: noon::SemanticWorldTransform3D,
         options: noon_core::AnimationOptions,
-    ) -> Result<noon::DeclaredAnimation, String> {
-        if !self.player_ownership.is_unstarted() {
-            return Err(
-                "declare live animations before beginning execution; use a live composition".into(),
-            );
-        }
-        self.scene
+    ) -> Result<noon::DeclaredAnimation, AuthoringFailure> {
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
             .declare_world_transform(object, transform, options)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     pub(crate) fn create_mesh(
@@ -276,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn world_declarations_cannot_bypass_an_active_owner() {
+    fn world_declarations_publish_to_the_active_scene() {
         let mut context = CanonicalAuthoringScene::default();
         context
             .create_camera_3d(ObjectId::new(1), camera())
@@ -293,15 +290,19 @@ mod tests {
         context.live_player(1.0).unwrap();
         let revision = context.scene.revision();
         let nodes = context.scene.integration_store().borrow().len();
-        assert!(context
+        context
             .declare_world_transform(
                 &mesh,
                 SemanticWorldTransform3D::IDENTITY,
-                noon_core::AnimationOptions::new()
+                noon_core::AnimationOptions::new(),
             )
-            .is_err());
-        assert_eq!(context.scene.revision(), revision);
-        assert_eq!(context.scene.integration_store().borrow().len(), nodes);
+            .unwrap();
+        assert_ne!(context.scene.revision(), revision);
+        assert_eq!(context.scene.integration_store().borrow().len(), nodes + 1);
+        assert_eq!(
+            context.effective_world_transform(&mesh).unwrap(),
+            SemanticWorldTransform3D::IDENTITY,
+        );
     }
 
     #[test]
