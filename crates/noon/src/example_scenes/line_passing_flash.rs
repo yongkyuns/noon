@@ -3,8 +3,8 @@
 use std::rc::Rc;
 
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, ManimGeometryOptions,
-    Mobject, RateFunction, Scene,
+    AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
+    ManimGeometryOptions, Mobject, RateFunction, Scene,
 };
 
 pub struct LinePassingFlash {
@@ -35,12 +35,15 @@ impl LiveContinuation for LinePassingFlash {
             1 => {
                 let segment = scene
                     .live()
-                    .declare_and_activate_passing_flash(
-                        &self.line,
-                        0.25,
-                        AnimationOptions::new()
-                            .run_time(2.0)
-                            .rate_func(RateFunction::Linear),
+                    .declare_and_activate_composition(
+                        &AnimationCompositionRequest::PassingFlash {
+                            target: &self.line,
+                            time_width: 0.25,
+                            options: AnimationOptions::new()
+                                .run_time(2.0)
+                                .rate_func(RateFunction::Linear),
+                        },
+                        AnimationOptions::new(),
                     )
                     .map_err(|error| error.to_string())?;
                 if !scene
@@ -284,8 +287,8 @@ pub fn train_playback() -> Result<crate::SceneExecution, String> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveProgramStatus,
-        Mobject, RustHostCallbackTable, Scene,
+        AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation,
+        LiveProgram, LiveProgramStatus, Mobject, RustHostCallbackTable, Scene,
     };
 
     fn admit_completion<C>(
@@ -371,10 +374,13 @@ mod tests {
             self.activated = true;
             scene
                 .live()
-                .declare_and_activate_passing_flash(
-                    &self.line,
-                    0.25,
-                    AnimationOptions::new().run_time(1.0),
+                .declare_and_activate_composition(
+                    &AnimationCompositionRequest::PassingFlash {
+                        target: &self.line,
+                        time_width: 0.25,
+                        options: AnimationOptions::new().run_time(1.0),
+                    },
+                    AnimationOptions::new(),
                 )
                 .map(ContinuationStep::Await)
                 .map_err(|error| error.to_string())
