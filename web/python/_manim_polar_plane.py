@@ -91,7 +91,7 @@ class PolarPlane(_plot.Axes):
     def y_axis(self): return self.submobjects[3]
 
     def _polar_frame(self):
-        context = _plot._coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        context = _plot._coordinate_context(self, self.x_axis.shaft, self.y_axis.shaft)
         if context is not None:
             return engine_call(context.queryPolarPlaneFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.polarPlaneFrame)

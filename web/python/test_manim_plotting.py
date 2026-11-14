@@ -1071,16 +1071,16 @@ class PlottingAdapterTests(unittest.TestCase):
         publish.assert_not_called()
 
     def test_mixed_execution_contexts_are_rejected(self):
-        with patch.object(plotting._shared, "_live_mutation_context", side_effect=[object(), object()]):
+        with patch.object(plotting._shared, "_object_authoring_context", side_effect=[object(), object()]):
             with self.assertRaisesRegex(RuntimeError, "different execution contexts"):
-                plotting._coordinate_context([object(), object()])
+                plotting._coordinate_context(object(), object())
 
     def test_callback_overlay_reads_fail_before_unpinned_observation(self):
         token = _ACTIVE_CANONICAL_CONTEXT.set(object())
         try:
-            with patch.object(plotting._shared, "_live_mutation_context") as observe:
+            with patch.object(plotting._shared, "_object_authoring_context") as observe:
                 with self.assertRaisesRegex(NotImplementedError, "pinned coordinate reads"):
-                    plotting._coordinate_context([object()])
+                    plotting._coordinate_context(object())
                 observe.assert_not_called()
         finally:
             _ACTIVE_CANONICAL_CONTEXT.reset(token)

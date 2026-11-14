@@ -109,19 +109,13 @@ class LiveCoordinateAdapterTests(TestCase):
         line = plotting.NumberLine((0, 2, 1), numbers_to_exclude=(0, 2))
         self.assertEqual(line.numbers_to_exclude, [0, 2])
 
-    def test_late_queries_require_binding_but_never_choose_authored_fallback(self):
-        shaft=object()
-        with patch.object(plotting._shared, "_live_mutation_context", return_value=None), \
-             patch.object(plotting._shared, "_live_constructor_context", return_value=self.context) as owner, \
-             patch.object(plotting._shared, "_is_bound", return_value=False) as bound:
-            with self.assertRaisesRegex(NotImplementedError, "add live coordinates"):
-                plotting._coordinate_context([shaft])
-            bound.return_value=True
-            self.assertIs(plotting._coordinate_context([shaft]), self.context)
-            owner.return_value=None
-            bound.return_value=False
-            self.assertIsNone(plotting._coordinate_context([shaft]))
-
+    def test_late_detached_queries_use_the_owning_scene(self):
+        coordinates, shaft = object(), object()
+        with patch.object(plotting._shared, "_object_authoring_context", return_value=None):
+            self.assertIs(plotting._coordinate_context(coordinates, shaft), self.context)
+            self.resolve.assert_called_once_with()
+            self.resolve.return_value = None
+            self.assertIsNone(plotting._coordinate_context(coordinates, shaft))
 
     def _plotted_graph(self, axes, callback):
         frame = Mock()
