@@ -60,6 +60,14 @@ impl MobjectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[pyo3(name = "shapeMatcherBounds")]
+    fn shape_matcher_bounds(&self) -> PyResult<[f64; 4]> {
+        noon::MobjectTarget::from(&self.handle)
+            .shape_matcher_bounds()
+            .map(crate::geometry::bounds_coordinates)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "beginUnderline")]
     fn begin_underline(&self, buff: f64) -> PyResult<crate::geometry::GeometryOptions> {
         self.handle

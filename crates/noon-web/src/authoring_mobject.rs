@@ -121,7 +121,6 @@ mod wasm {
     use std::{cell::RefCell, rc::Rc};
 
     use noon::{FamilyLayout, FamilyLayoutTarget};
-    use noon_core::Bounds2D64;
     use wasm_bindgen::prelude::*;
 
     use super::{Mobject, SemanticNodeId, SemanticStore};
@@ -964,14 +963,6 @@ mod wasm {
     #[wasm_bindgen]
     pub struct WasmAuthoringFamilyLayout {
         layout: FamilyLayout,
-    }
-
-    impl WasmAuthoringFamilyLayout {
-        pub(crate) fn bounds(&self) -> Bounds2D64 {
-            self.layout
-                .bounds()
-                .unwrap_or_else(|| Bounds2D64::point(0.0, 0.0))
-        }
     }
 
     #[wasm_bindgen]

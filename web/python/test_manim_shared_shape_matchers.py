@@ -149,30 +149,11 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                     translation["y"] += float(y)
                     self._sync()
 
-                def beginSurroundingRectangle(self, buff_x, buff_y, corner_radius):
-                    calls.append(("leaf-surround", float(buff_x), float(buff_y), float(corner_radius)))
-                    return matcher_options(
-                        self.centerX,
-                        self.centerY,
-                        self.width + 2.0 * float(buff_x),
-                        self.height + 2.0 * float(buff_y),
-                    )
-
-                def beginBackgroundRectangle(self, buff_x, buff_y, corner_radius, fill_opacity):
-                    calls.append(("leaf-background", float(buff_x), float(buff_y), float(corner_radius)))
-                    return matcher_options(
-                        self.centerX,
-                        self.centerY,
-                        self.width + 2.0 * float(buff_x),
-                        self.height + 2.0 * float(buff_y),
-                        background=True,
-                        fill_opacity=float(fill_opacity),
-                    )
-
-                def beginCrossLine(self, index, scale_factor):
-                    calls.append(("leaf-cross", int(index), float(scale_factor)))
-                    return cross_line_options(
-                        self.centerX, self.centerY, self.width, self.height, index, scale_factor
+                def shapeMatcherBounds(self):
+                    calls.append(("leaf-bounds",))
+                    return (
+                        self.centerX - self.width / 2, self.centerY - self.height / 2,
+                        self.centerX + self.width / 2, self.centerY + self.height / 2,
                     )
 
                 def setStrokeWidth(self, value):
@@ -234,26 +215,9 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                     _, min_y, _, max_y = self._bounds()
                     return max_y - min_y
 
-                def beginSurroundingRectangle(self, buff_x, buff_y, corner_radius):
-                    calls.append(("family-surround", len(self.members), float(corner_radius)))
-                    return matcher_options(
-                        self.centerX, self.centerY,
-                        self.width + 2.0 * float(buff_x), self.height + 2.0 * float(buff_y)
-                    )
-
-                def beginBackgroundRectangle(self, buff_x, buff_y, corner_radius, fill_opacity):
-                    calls.append(("family-background", len(self.members), float(corner_radius)))
-                    return matcher_options(
-                        self.centerX, self.centerY,
-                        self.width + 2.0 * float(buff_x), self.height + 2.0 * float(buff_y),
-                        background=True, fill_opacity=float(fill_opacity)
-                    )
-
-                def beginCrossLine(self, index, scale_factor):
-                    calls.append(("family-cross", len(self.members), int(index), float(scale_factor)))
-                    return cross_line_options(
-                        self.centerX, self.centerY, self.width, self.height, index, scale_factor
-                    )
+                def shapeMatcherBounds(self):
+                    calls.append(("family-bounds", len(self.members)))
+                    return self._bounds()
 
             class FakeFamilyHandle:
                 def __init__(self, store):
@@ -261,6 +225,9 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
                     self.identity = store.allocate()
                     store.entities[self.identity] = self
                     self.members = []
+
+                def shapeMatcherBounds(self):
+                    return self.layout().shapeMatcherBounds()
 
                 def layout(self):
                     return FakeLayoutObservation([self.store.entities[key] for key in self.members])
@@ -291,9 +258,23 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             store = FakeStore()
             import _typed_geometry_test_support as _geometry_test
             _geometry_test.install_module_bridge(handles, store.createMobject)
-            _geometry_test.FakeGeometryOptions.crossLine = staticmethod(
-                lambda index, scale: cross_line_options(0.0, 0.0, 2.0, 2.0, index, scale)
-            )
+            def from_bounds(bounds, buff_x, buff_y, corner_radius, opacity=None):
+                x1, y1, x2, y2 = bounds
+                return matcher_options(
+                    (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1 + 2 * buff_x, y2 - y1 + 2 * buff_y,
+                    background=opacity is not None, fill_opacity=opacity or 0.0,
+                )
+
+            def from_cross_bounds(bounds, scale):
+                x1, y1, x2, y2 = bounds if bounds is not None else (-1, -1, 1, 1)
+                return [
+                    cross_line_options((x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1, index, scale)
+                    for index in range(2)
+                ]
+
+            _geometry_test.FakeGeometryOptions.surroundingRectangle = staticmethod(from_bounds)
+            _geometry_test.FakeGeometryOptions.backgroundRectangle = staticmethod(from_bounds)
+            _geometry_test.FakeGeometryOptions.crossLines = staticmethod(from_cross_bounds)
             import _typed_family_test_support as _family_test
             _family_test.install_bridge(handles, store.createFamily, FakeFamilyHandle, FakeHandle)
 
@@ -309,7 +290,7 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             leaf = Rectangle(width=4.0, height=2.0)
             surround = SurroundingRectangle(leaf, buff=(0.25, 0.5), color=BLUE)
             assert isinstance(surround, Rectangle)
-            assert calls[0][:3] == ("leaf-surround", 0.25, 0.5)
+            assert calls[0] == ("leaf-bounds",)
             assert abs(surround.width - 4.5) < 1e-9
             assert abs(surround.height - 3.0) < 1e-9
 
@@ -317,13 +298,13 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             right = Rectangle(width=4.0, height=1.0).shift((3.0, 2.0, 0.0))
             family = VGroup(left, right)
             grouped = SurroundingRectangle(family, buff=(0.25, 0.5))
-            assert calls[-1][0] == "family-surround"
+            assert calls[-1][0] == "family-bounds"
             assert calls[-1][1] == 2
             assert abs(grouped.width - 8.5) < 1e-9
             assert abs(grouped.height - 4.5) < 1e-9
 
             background = BackgroundRectangle(family, fill_opacity=0.6)
-            assert calls[-1][0] == "family-background"
+            assert calls[-1][0] == "family-bounds"
             assert abs(background.get_fill_opacity() - 0.6) < 1e-9
             assert abs(background.get_stroke_opacity()) < 1e-9
             assert background.style["stroke_width"] == 0.0
@@ -339,11 +320,11 @@ class ManimSharedShapeMatcherTests(unittest.TestCase):
             assert all(abs(member.style["stroke_width"] - 0.06) < 1e-9 for member in default_cross)
 
             leaf_cross = Cross(leaf, scale_factor=1.5)
-            assert calls[-2:] == [("leaf-cross", 0, 1.5), ("leaf-cross", 1, 1.5)]
+            assert calls[-1] == ("leaf-bounds",)
             assert len(leaf_cross) == 2
 
             family_cross = Cross(family, scale_factor=0.5)
-            assert calls[-2:] == [("family-cross", 2, 0, 0.5), ("family-cross", 2, 1, 0.5)]
+            assert calls[-1] == ("family-bounds", 2)
             assert len(family_cross) == 2
 
             family._semantic_family_handle = None
