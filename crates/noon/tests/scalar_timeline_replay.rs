@@ -197,17 +197,25 @@ fn scalar_extensions_obey_shared_budgets_without_breaking_first_execution() {
             payloads: 0,
         },
     ] {
-        let (mut store, tracker, _) = fixture();
-        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
-        session.begin_replay_retention(limits).unwrap();
-        let segment = session
-            .declare_and_activate_value_tracker(&mut store, tracker, 2.0, 2.0, RateFunction::Linear)
+        let (mut execution, tracker, _) = scene_fixture();
+        execution
+            .session_mut()
+            .begin_replay_retention(limits)
             .unwrap();
-        session
+        let segment = execution
+            .live()
+            .declare_and_activate_value_tracker(&tracker, 2.0, 2.0, RateFunction::Linear)
+            .unwrap();
+        execution
+            .live()
             .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        session.complete_segment(&mut store, segment).unwrap();
-        assert_eq!(scalar(&session, tracker), 2.0);
+        execution.live().complete_segment(segment).unwrap();
+        assert_eq!(
+            execution.scene().value_tracker_value(&tracker).unwrap(),
+            2.0
+        );
+        let session = execution.session_mut();
         assert_eq!(session.seal_replay(), Err(ReplayError::RetentionLimit));
         assert_eq!(session.replay_stats().revisions_retained, 0);
         session.discard_replay_retention();

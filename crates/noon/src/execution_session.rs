@@ -86,7 +86,7 @@ use noon_core::{
     SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticFamilyTransformMode,
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,
     SemanticNodeId, SemanticScalarSignalQueryError, SemanticSceneOperationError, SemanticStore,
-    SemanticTransactionNodeRef, TimelineError, TrackDefinition, TrackId, TrackTiming,
+    SemanticTransactionNodeRef, TimelineError, TrackDefinition, TrackId,
 };
 use noon_runtime::{
     DerivedDisplayAnimationPlan, DerivedDisplayObject, EvaluationError, ExecutionSpatialIndex,
@@ -2018,103 +2018,6 @@ impl ExecutionSession {
             self.publication_context().scene_revision()
         );
         Ok(())
-    }
-
-    /// Atomically append and activate one scalar ValueTracker timeline interval.
-    ///
-    /// The semantic track, derived schedule entry, revision publication, and
-    /// completion token become visible together. The first live slice admits only
-    /// entries beginning at the current frame and rejects event interleaving.
-    pub fn declare_and_activate_value_tracker(
-        &mut self,
-        store: &mut SemanticStore,
-        signal: SemanticNodeId,
-        target: f64,
-        duration: f64,
-        rate_func: RateFunction,
-    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
-        self.require_animation_declaration_context(store)?;
-        let start_time = self.runtime.frame().time;
-        let from = store.semantic_input_scalar_value_at(signal, start_time)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_scalar_signal_track(
-            signal,
-            from,
-            target,
-            TrackTiming::new(start_time, duration, rate_func),
-        );
-        let prepared = transaction.prepare(store).map_err(|error| {
-            ExecutionSessionAnimationError::AuthoredPublication(
-                ExecutionSessionPublicationError::Semantic(error),
-            )
-        })?;
-        let entry =
-            lower_prepared_scalar_signal_timeline_entry(&prepared, &self.reactive_projection)?;
-        let noon_compile::CompiledScalarSignalTimelineEntry::Track(track) = &entry else {
-            unreachable!("tracker activation prepared one scalar track")
-        };
-        let track_from = track.from();
-        let runtime_endpoint = track.to();
-        let effective = self.effective_signal_value(signal).cloned();
-        if effective != Some(ReactiveValue::Scalar(track_from)) {
-            return Err(ExecutionSessionAnimationError::ScalarEffectiveValue {
-                signal,
-                authored: track_from,
-                effective,
-            });
-        }
-        let schedule = self
-            .signal_timeline
-            .prepare_append_batch([entry], start_time)?;
-        let mut segment = ExecutionSegment::from_duration(start_time, duration)?;
-        let runtime_publication = self
-            .runtime
-            .prepare_scalar_timeline_plan_change(
-                self.publication_context(),
-                prepared.proposed_scene_revision(),
-                &schedule,
-            )
-            .map_err(|error| {
-                ExecutionSessionAnimationError::AuthoredPublication(
-                    ExecutionSessionPublicationError::Runtime(error),
-                )
-            })?;
-        let raw_sequence = self
-            .next_segment_sequence
-            .ok_or(ExecutionSessionAnimationError::SegmentSequenceExhausted)?;
-        let next_segment_sequence = raw_sequence.checked_add(1);
-        let token = ExecutionSegmentToken::new(
-            self.runtime.runtime_identity(),
-            ExecutionSegmentSequence::new(raw_sequence),
-        );
-
-        let (_result, store) = prepared.commit_with_store();
-        self.commit_scalar_timeline_append(schedule);
-        self.runtime
-            .apply_prepared_authored_plan_change(runtime_publication)
-            .expect("scalar authored plan publication was preflighted under exclusive ownership");
-        self.next_segment_sequence = next_segment_sequence;
-        segment = segment.with_completion_token(token);
-        self.pending_segment_completion = Some(PendingSegmentCompletion::new(
-            token,
-            segment.end_time(),
-            store.scene_revision(),
-            PendingSegmentCompletionKind {
-                lifecycle_root: None,
-                lifecycle_removals: Vec::new(),
-                family_transform: None,
-                family_colors: Vec::new(),
-                family_styles: Vec::new(),
-                object_entries: Vec::new(),
-                scalar_entries: vec![ScalarSegmentCompletionEntry {
-                    signal,
-                    authored_endpoint: target,
-                    runtime_endpoint,
-                    end_time: segment.end_time(),
-                }],
-            },
-        ));
-        Ok(segment)
     }
 
     /// Persist one scalar input value at the current live authored time.
@@ -5343,7 +5246,7 @@ mod tests {
         AnimationOptions, NativeEventOccurrence, NativeEventSource, NativeInputRuntimeError,
         NativeInputValue, NativeStateSource, RateFunction, SemanticMutationTransaction,
         SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticSignalExpr,
-        SemanticSignalValue, SemanticVec3, StoredGeometry, TrackTiming, Vec2,
+        SemanticVec3, StoredGeometry, TrackTiming, Vec2,
     };
     use noon_runtime::TimelineWakeState;
 
@@ -6179,61 +6082,58 @@ mod tests {
 
     #[test]
     fn live_scalar_completion_releases_ownership_and_preserves_history_locally() {
-        let mut store = SemanticStore::new();
-        let driven =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.0,
-            }));
-        let unrelated =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 2.0,
-            }));
-        store.attach_to_scene(driven).unwrap();
-        store.attach_to_scene(unrelated).unwrap();
-        let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
-        let position = store
-            .insert_semantic_derived_signal(SemanticSignalExpr::Add(
-                Box::new(SemanticSignalExpr::Constant(SemanticSignalValue::Vec3(
-                    SemanticVec3::new(-2.0, 0.0, 0.0),
-                ))),
-                Box::new(SemanticSignalExpr::Mul(
-                    Box::new(SemanticSignalExpr::signal(tracker)),
-                    Box::new(SemanticSignalExpr::Constant(SemanticSignalValue::Vec3(
-                        SemanticVec3::new(1.0, 0.0, 0.0),
-                    ))),
-                )),
-            ))
+        let mut scene = crate::Scene::new();
+        let driven = scene.circle(1.0).unwrap();
+        let unrelated = scene.circle(2.0).unwrap();
+        scene.add(&driven).unwrap();
+        scene.add(&unrelated).unwrap();
+        let tracker = scene.value_tracker(0.0).unwrap();
+        let position = scene
+            .position_from_tracker(
+                &tracker,
+                SemanticVec3::new(1.0, 0.0, 0.0),
+                SemanticVec3::new(-2.0, 0.0, 0.0),
+            )
             .unwrap();
-        store
-            .bind_semantic_signal(position, driven, SemanticObjectProperty::Translation)
-            .unwrap();
-        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        scene.bind_position(&driven, &position).unwrap();
+        let store = scene.integration_store();
+        let signal = tracker.node_id();
+        let mut session = scene.execution_session().unwrap();
         session.take_frame_changes();
 
-        let revision = store.scene_revision();
+        let revision = store.borrow().scene_revision();
         let publication = session.publication_context();
-        let segment = session
-            .declare_and_activate_value_tracker(&mut store, tracker, 2.0, 2.0, RateFunction::Linear)
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_value_tracker(&tracker, 2.0, 2.0, RateFunction::Linear)
             .unwrap();
-        assert_eq!(store.scene_revision(), revision.checked_next().unwrap());
         assert_eq!(
-            session.publication_context().scene_revision(),
-            store.scene_revision()
+            store.borrow().scene_revision(),
+            revision.checked_next().unwrap()
         );
         assert_eq!(
+            session.publication_context().scene_revision(),
+            store.borrow().scene_revision()
+        );
+        // A scoped scalar appends to the live schedule without relowering the scene.
+        assert_eq!(
             session.publication_context().execution_revision(),
-            publication.execution_revision().checked_next().unwrap()
+            publication.execution_revision()
+        );
+        assert_eq!(
+            session.publication_context().frame_epoch(),
+            publication.frame_epoch().checked_next().unwrap()
         );
         assert_eq!(session.signal_timeline.entry_count(), 1);
         assert_eq!(session.signal_timeline.event_count(), 2);
         assert_eq!(
-            session.set_reactive_input(tracker, 9.0_f32),
-            Err(ExecutionSessionInputError::TimelineOwnedSignal { signal: tracker })
+            session.set_reactive_input(signal, 9.0_f32),
+            Err(ExecutionSessionInputError::TimelineOwnedSignal { signal })
         );
 
         session.advance_segment_to(segment, 1.0).unwrap();
         assert_eq!(
-            session.effective_signal_value(tracker),
+            session.effective_signal_value(signal),
             Some(&ReactiveValue::Scalar(1.0))
         );
         assert_eq!(
@@ -6242,23 +6142,29 @@ mod tests {
         );
         session.seek(0.5).unwrap();
         assert_eq!(
-            session.effective_signal_value(tracker),
+            session.effective_signal_value(signal),
             Some(&ReactiveValue::Scalar(0.5))
         );
         session.advance_segment_to(segment, 2.0).unwrap();
         session.take_frame_changes();
-        session.complete_segment(&mut store, segment).unwrap();
+        scene.live(&mut session).complete_segment(segment).unwrap();
         assert_eq!(session.signal_timeline.entry_count(), 2);
         assert_eq!(session.signal_timeline.event_count(), 3);
-        assert_eq!(store.semantic_input_scalar_value_at(tracker, 1.0), Ok(1.0));
-        assert_eq!(store.semantic_input_scalar_value_at(tracker, 2.0), Ok(2.0));
+        assert_eq!(
+            store.borrow().semantic_input_scalar_value_at(signal, 1.0),
+            Ok(1.0)
+        );
+        assert_eq!(
+            store.borrow().semantic_input_scalar_value_at(signal, 2.0),
+            Ok(2.0)
+        );
 
         let unrelated_before = session.frame().objects[1].clone();
         session
-            .set_scalar_signal_value(&mut store, tracker, 3.0)
+            .set_scalar_signal_value(&mut store.borrow_mut(), signal, 3.0)
             .unwrap();
         assert_eq!(
-            session.effective_signal_value(tracker),
+            session.effective_signal_value(signal),
             Some(&ReactiveValue::Scalar(3.0))
         );
         assert_eq!(
@@ -6270,63 +6176,71 @@ mod tests {
 
         session.seek(1.0).unwrap();
         assert_eq!(
-            session.effective_signal_value(tracker),
+            session.effective_signal_value(signal),
             Some(&ReactiveValue::Scalar(1.0))
         );
         assert_eq!(
-            session.set_reactive_input(tracker, 9.0_f32),
-            Err(ExecutionSessionInputError::TimelineOwnedSignal { signal: tracker })
+            session.set_reactive_input(signal, 9.0_f32),
+            Err(ExecutionSessionInputError::TimelineOwnedSignal { signal })
         );
         session.advance_to(2.5).unwrap();
         assert_eq!(
-            session.effective_signal_value(tracker),
+            session.effective_signal_value(signal),
             Some(&ReactiveValue::Scalar(3.0))
         );
-        let second = session
-            .declare_and_activate_value_tracker(&mut store, tracker, 5.0, 1.0, RateFunction::Linear)
+        let second = scene
+            .live(&mut session)
+            .declare_and_activate_value_tracker(&tracker, 5.0, 1.0, RateFunction::Linear)
             .unwrap();
         session.advance_segment_to(second, 3.5).unwrap();
-        session.complete_segment(&mut store, second).unwrap();
-        assert_eq!(store.semantic_input_scalar_value_at(tracker, 1.0), Ok(1.0));
-        assert_eq!(store.semantic_input_scalar_value_at(tracker, 2.5), Ok(3.0));
-        assert_eq!(store.semantic_input_scalar_value_at(tracker, 3.0), Ok(4.0));
-        assert_eq!(store.semantic_input_scalar_value_at(tracker, 3.5), Ok(5.0));
+        scene.live(&mut session).complete_segment(second).unwrap();
+        assert_eq!(
+            store.borrow().semantic_input_scalar_value_at(signal, 1.0),
+            Ok(1.0)
+        );
+        assert_eq!(
+            store.borrow().semantic_input_scalar_value_at(signal, 2.5),
+            Ok(3.0)
+        );
+        assert_eq!(
+            store.borrow().semantic_input_scalar_value_at(signal, 3.0),
+            Ok(4.0)
+        );
+        assert_eq!(
+            store.borrow().semantic_input_scalar_value_at(signal, 3.5),
+            Ok(5.0)
+        );
     }
 
     #[test]
     fn live_scalar_lowering_failure_leaves_semantic_runtime_and_schedule_unchanged() {
-        let mut store = SemanticStore::new();
-        let object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.0,
-            }));
-        store.attach_to_scene(object).unwrap();
-        let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
-        store
-            .bind_semantic_signal(tracker, object, SemanticObjectProperty::RotationZ)
-            .unwrap();
-        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
-        let revision = store.scene_revision();
+        let mut scene = crate::Scene::new();
+        let object = scene.circle(1.0).unwrap();
+        scene.add(&object).unwrap();
+        let tracker = scene.value_tracker(0.0).unwrap();
+        scene.bind_rotation(&object, &tracker).unwrap();
+        let store = scene.integration_store();
+        let signal = tracker.node_id();
+        let mut session = scene.execution_session().unwrap();
+        let revision = store.borrow().scene_revision();
         let publication = session.publication_context();
         let frame = session.frame().clone();
 
-        assert_eq!(
-            session.declare_and_activate_value_tracker(
-                &mut store,
-                tracker,
-                f64::MAX,
-                1.0,
-                RateFunction::Linear,
-            ),
-            Err(ExecutionSessionAnimationError::PreparedScalarTimeline(
-                PreparedScalarSignalTimelineError::Lowering(
-                    noon_compile::SemanticReactiveLoweringError::SignalValueOutOfRange {
-                        signal: tracker,
-                    },
+        assert!(matches!(
+            scene
+                .live(&mut session)
+                .declare_and_activate_value_tracker(&tracker, f64::MAX, 1.0, RateFunction::Linear),
+            Err(crate::LiveSessionError::Activation(
+                ExecutionSessionAnimationError::PreparedScalarTimeline(
+                    PreparedScalarSignalTimelineError::Lowering(
+                        noon_compile::SemanticReactiveLoweringError::SignalValueOutOfRange {
+                            signal: rejected,
+                        },
+                    ),
                 ),
-            )),
-        );
-        assert_eq!(store.scene_revision(), revision);
+            )) if rejected == signal
+        ));
+        assert_eq!(store.borrow().scene_revision(), revision);
         assert_eq!(session.publication_context(), publication);
         assert_eq!(session.frame(), &frame);
         assert_eq!(session.signal_timeline.entry_count(), 0);
@@ -6335,54 +6249,64 @@ mod tests {
 
     #[test]
     fn first_positive_time_hold_preserves_initial_history_and_same_time_track_order() {
-        let mut store = SemanticStore::new();
-        let object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.0,
-            }));
-        store.attach_to_scene(object).unwrap();
-        let tracker = store.insert_semantic_input_signal(0.0_f64).unwrap();
-        store
-            .bind_semantic_signal(tracker, object, SemanticObjectProperty::RotationZ)
-            .unwrap();
-        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
+        let mut scene = crate::Scene::new();
+        let object = scene.circle(1.0).unwrap();
+        scene.add(&object).unwrap();
+        let tracker = scene.value_tracker(0.0).unwrap();
+        scene.bind_rotation(&object, &tracker).unwrap();
+        let store = scene.integration_store();
+        let signal = tracker.node_id();
+        let mut session = scene.execution_session().unwrap();
         session.advance_to(1.0).unwrap();
         session
-            .set_scalar_signal_value(&mut store, tracker, 3.0)
+            .set_scalar_signal_value(&mut store.borrow_mut(), signal, 3.0)
             .unwrap();
-        assert_eq!(store.semantic_input_scalar_value_at(tracker, 0.0), Ok(0.0));
-        assert_eq!(store.semantic_input_scalar_value_at(tracker, 1.0), Ok(3.0));
+        assert_eq!(
+            store.borrow().semantic_input_scalar_value_at(signal, 0.0),
+            Ok(0.0)
+        );
+        assert_eq!(
+            store.borrow().semantic_input_scalar_value_at(signal, 1.0),
+            Ok(3.0)
+        );
 
         session.seek(0.0).unwrap();
         assert_eq!(
-            session.effective_signal_value(tracker),
+            session.effective_signal_value(signal),
             Some(&ReactiveValue::Scalar(0.0))
         );
         session.advance_to(1.0).unwrap();
         assert_eq!(
-            session.effective_signal_value(tracker),
+            session.effective_signal_value(signal),
             Some(&ReactiveValue::Scalar(3.0))
         );
 
-        let fresh = ExecutionSession::from_semantic_store(&store).unwrap();
+        let fresh = scene.execution_session().unwrap();
         assert_eq!(fresh.frame().time, 0.0);
         assert_eq!(
-            fresh.effective_signal_value(tracker),
+            fresh.effective_signal_value(signal),
             Some(&ReactiveValue::Scalar(0.0))
         );
 
-        let segment = session
-            .declare_and_activate_value_tracker(&mut store, tracker, 5.0, 1.0, RateFunction::Linear)
+        let segment = scene
+            .live(&mut session)
+            .declare_and_activate_value_tracker(&tracker, 5.0, 1.0, RateFunction::Linear)
             .unwrap();
-        assert_eq!(store.semantic_input_scalar_value_at(tracker, 1.0), Ok(3.0));
         assert_eq!(
-            session.effective_signal_value(tracker),
+            store.borrow().semantic_input_scalar_value_at(signal, 1.0),
+            Ok(3.0)
+        );
+        assert_eq!(
+            session.effective_signal_value(signal),
             Some(&ReactiveValue::Scalar(3.0))
         );
         session.advance_segment_to(segment, 1.5).unwrap();
-        assert_eq!(store.semantic_input_scalar_value_at(tracker, 1.5), Ok(4.0));
         assert_eq!(
-            session.effective_signal_value(tracker),
+            store.borrow().semantic_input_scalar_value_at(signal, 1.5),
+            Ok(4.0)
+        );
+        assert_eq!(
+            session.effective_signal_value(signal),
             Some(&ReactiveValue::Scalar(4.0))
         );
     }
