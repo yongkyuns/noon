@@ -14,6 +14,9 @@ on:
       - 'web/python/**'
       - 'web/index.html'
       - 'web/main.js'
+      - 'web/authoring-render-controller.js'
+      - 'web/execution-worker-client.js'
+      - 'web/runtime-build-verifier.js'
       - 'web/python-editor*.js'
       - 'web/live-authoring-bootstrap.js'
       - 'web/playground-run-request-router.js'
@@ -52,8 +55,8 @@ jobs:
           node --check scripts/project-site-design-smoke.mjs
           node --check scripts/project-site-native-replay.mjs
       # The public Pages site ships release + wasm-opt, not the development
-      # package. Four concurrent Python+render WASM contexts exceed Firefox's
-      # executable-code memory budget when built at dev -O0 (~221 MiB).
+      # package. Keep concurrent Python contexts within Firefox's executable
+      # memory budget, and share the compiled renderer across the live embeds.
       # Qualify the same optimized executable configuration users will receive.
       - name: Use repository-pinned Rust and WASM target
         run: |

@@ -20,9 +20,10 @@ const BOOTSTRAP_QUEUE_LIMIT = 1;
 
 let wasmInitializationPromise = null;
 
-function initializeWasmModule() {
+function initializeWasmModule(wasmModule) {
   if (wasmInitializationPromise === null) {
-    const initialization = Promise.resolve().then(() => init());
+    const initialization = Promise.resolve().then(() =>
+      wasmModule === undefined ? init() : init({ module_or_path: wasmModule }));
     const sharedInitialization = initialization.catch((error) => {
       if (wasmInitializationPromise === sharedInitialization) {
         wasmInitializationPromise = null;
@@ -224,7 +225,7 @@ export function createAuthoringRenderController(host) {
     width = normalizedDimension(message.width ?? canvas.width);
     height = normalizedDimension(message.height ?? canvas.height);
     transportMode = message.transportMode;
-    await initializeWasmModule();
+    await initializeWasmModule(message.wasmModule);
     if (stopped) return false;
     canvas.addEventListener("webglcontextrestored", wakeAfterWebGlContextRestored);
     canvas.addEventListener("webglcontextlost", suspendForWebGlContextLoss);
