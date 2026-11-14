@@ -206,13 +206,11 @@ impl crate::Scene {
         admission: A,
     ) -> Result<crate::Mobject, TextAuthoringError> {
         let store_rc = std::rc::Rc::clone(self.integration_store());
-        let result = self
-            .with_semantic_publication(|store, publish| {
-                Ok(admission.publish(store, |store, transaction| {
-                    publish(store, transaction).map_err(TextAuthoringError::Semantic)
-                }))
+        let result = self.with_semantic_publication(|store, publish| {
+            admission.publish(store, |store, transaction| {
+                publish(store, transaction).map_err(TextAuthoringError::Semantic)
             })
-            .map_err(TextAuthoringError::Semantic)??;
+        })?;
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("one text admission creates one detached semantic node")
         };

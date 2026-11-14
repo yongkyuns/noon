@@ -366,10 +366,10 @@ impl Scene {
         )?;
         let parent = attach.then(|| line.family().node_id().into());
         let (_, root) = self.with_semantic_publication(|store, publish| {
-            Ok(prepared.publish(store, parent, |store, transaction| {
+            prepared.publish(store, parent, |store, transaction| {
                 publish(store, transaction).map_err(TextAuthoringError::Semantic)
-            }))
-        })??;
+            })
+        })?;
         Ok(MobjectFamily::from_node(
             Rc::clone(self.integration_store()),
             root,
@@ -399,7 +399,7 @@ impl Scene {
             options[1],
         )?;
         let (_, [x_root, y_root]) = self.with_semantic_publication(|store, publish| {
-            Ok(PreparedDecimalLabels::publish_pair(
+            PreparedDecimalLabels::publish_pair(
                 store,
                 x_labels,
                 x.family().node_id().into(),
@@ -408,8 +408,8 @@ impl Scene {
                 |store, transaction| {
                     publish(store, transaction).map_err(TextAuthoringError::Semantic)
                 },
-            ))
-        })??;
+            )
+        })?;
         let store = self.integration_store();
         Ok([
             MobjectFamily::from_node(Rc::clone(store), x_root)?,

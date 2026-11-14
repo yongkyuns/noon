@@ -263,15 +263,15 @@ impl Scene {
                 .map_err(Into::into)
         })?;
         let (_, node) = self.with_semantic_publication(|store, publish| {
-            Ok(prepared.publish_into(
+            prepared.publish_into(
                 store,
                 None,
                 SemanticMutationTransaction::new(),
                 |store, transaction| {
                     publish(store, transaction).map_err(TextAuthoringError::Semantic)
                 },
-            ))
-        })??;
+            )
+        })?;
         MobjectFamily::from_node(store, node).map_err(Into::into)
     }
 }

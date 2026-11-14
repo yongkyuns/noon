@@ -222,7 +222,7 @@ where
             all_vertices,
             existing_edges,
         );
-        Ok((publish(store, transaction)?, staged))
+        Ok::<_, AuthoringError>((publish(store, transaction)?, staged))
     })?;
     let mut mutation = GraphMutationResult::default();
     for (key, id, token) in staged {
@@ -399,7 +399,7 @@ where
                 vertices,
                 existing.chain(added),
             );
-            Ok((publish(store, transaction)?, staged))
+            Ok::<_, AuthoringError>((publish(store, transaction)?, staged))
         })
     })?;
     let mut mutation = GraphMutationResult::default();
@@ -555,7 +555,7 @@ where
                 remaining_vertices,
                 remaining_edges,
             );
-            Ok((
+            Ok::<_, AuthoringError>((
                 publish(store, transaction)?,
                 removed_vertices.clone(),
                 removed_edges.clone(),

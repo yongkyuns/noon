@@ -35,7 +35,7 @@ impl Publisher<'_> {
                 })
                 .map_err(Into::into),
             Self::Scene(scene) => scene
-                .with_semantic_publication(|store, publish| Ok(prepared.publish(store, publish)))?
+                .with_semantic_publication(|store, publish| prepared.publish(store, publish))
                 .map_err(Into::into),
         }
     }

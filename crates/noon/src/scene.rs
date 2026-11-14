@@ -212,27 +212,11 @@ impl Scene {
         &mut self,
         options: crate::ManimArrowOptions,
     ) -> Result<crate::ManimArrow, crate::AuthoringError> {
-        let Some(execution) = self.execution.as_mut() else {
-            return crate::ManimArrow::create(Rc::clone(&self.store), options);
-        };
-        let store_rc = Rc::clone(&self.store);
-        let root = self.root;
-        {
-            let store = store_rc.borrow();
-            execution
-                .require_resource_creation_at_root(&store, root)
-                .map_err(AuthoringError::from)?;
-        }
-        let committed = crate::arrow_authoring::publish_arrow_options(
-            options,
-            &mut store_rc.borrow_mut(),
-            |store, transaction| {
-                execution
-                    .apply_semantic_transaction_at_root(store, root, transaction)
-                    .map_err(AuthoringError::from)
-            },
-        )?;
-        crate::ManimArrow::from_committed(store_rc, committed)
+        self.require_resource_admission()?;
+        let committed = self.with_semantic_publication(|store, publish| {
+            crate::arrow_authoring::publish_arrow_options(options, store, publish)
+        })?;
+        crate::ManimArrow::from_committed(Rc::clone(&self.store), committed)
     }
 
     pub fn root(&self) -> SemanticNodeId {
@@ -396,25 +380,20 @@ impl Scene {
                 &mut SemanticStore,
                 SemanticMutationTransaction,
             ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
-        ) -> Result<T, AuthoringError>,
-    ) -> Result<T, AuthoringError> {
+        ) -> T,
+    ) -> T {
         let root = self.root;
-        let store_rc = Rc::clone(&self.store);
-        if let Some(execution) = self.execution.as_mut() {
-            let mut store = store_rc.borrow_mut();
-            let mut publish =
-                |store: &mut SemanticStore, transaction: SemanticMutationTransaction| {
-                    execution
-                        .apply_semantic_transaction_at_root(store, root, transaction)
-                        .map_err(AuthoringError::from)
-                };
-            return operation(&mut store, &mut publish);
-        }
-
-        let mut store = store_rc.borrow_mut();
-        let mut publish = |store: &mut SemanticStore, transaction: SemanticMutationTransaction| {
-            transaction.apply(store).map_err(AuthoringError::from)
-        };
+        let mut store = self.store.borrow_mut();
+        let mut publish =
+            |store: &mut SemanticStore, transaction: SemanticMutationTransaction| match self
+                .execution
+                .as_mut()
+            {
+                Some(execution) => execution
+                    .apply_semantic_transaction_at_root(store, root, transaction)
+                    .map_err(AuthoringError::from),
+                None => transaction.apply(store).map_err(AuthoringError::from),
+            };
         operation(&mut store, &mut publish)
     }
 
@@ -1206,13 +1185,12 @@ impl Scene {
         use crate::TextAuthoringError;
         self.require_resource_admission()
             .map_err(TextAuthoringError::Semantic)?;
-        let (result, family, members, source, parts, _) = self
-            .with_semantic_publication(|store, publish| {
-                Ok(admission.publish_parts(store, |store, transaction| {
+        let (result, family, members, source, parts, _) =
+            self.with_semantic_publication(|store, publish| {
+                admission.publish_parts(store, |store, transaction| {
                     publish(store, transaction).map_err(TextAuthoringError::Semantic)
-                }))
-            })
-            .map_err(TextAuthoringError::Semantic)??;
+                })
+            })?;
         crate::latex_authoring::finish_latex_parts(
             Rc::clone(&self.store),
             &result,
@@ -1230,13 +1208,11 @@ impl Scene {
         use crate::TextAuthoringError;
         self.require_resource_admission()
             .map_err(TextAuthoringError::Semantic)?;
-        let result = self
-            .with_semantic_publication(|store, publish| {
-                Ok(admission.publish(store, |store, transaction| {
-                    publish(store, transaction).map_err(TextAuthoringError::Semantic)
-                }))
+        let result = self.with_semantic_publication(|store, publish| {
+            admission.publish(store, |store, transaction| {
+                publish(store, transaction).map_err(TextAuthoringError::Semantic)
             })
-            .map_err(TextAuthoringError::Semantic)??;
+        })?;
         let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("one LaTeX admission creates one detached semantic node")
         };

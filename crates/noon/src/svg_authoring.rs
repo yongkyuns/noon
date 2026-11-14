@@ -443,8 +443,8 @@ impl Scene {
         self.require_resource_admission()?;
         let prepared = prepare_styled_svg(source, options, style)?;
         let family = self.with_semantic_publication(|store, publish| {
-            Ok(publish_svg(store, prepared, import_key, publish))
-        })??;
+            publish_svg(store, prepared, import_key, publish)
+        })?;
         MobjectFamily::from_node(Rc::clone(self.integration_store()), family).map_err(Into::into)
     }
 }

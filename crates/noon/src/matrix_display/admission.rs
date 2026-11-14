@@ -86,8 +86,7 @@ impl MatrixPublisher<'_> {
                 operation(&mut store, &mut publish).map_err(Into::into)
             }
             Self::Scene(scene) => scene
-                .with_semantic_publication(|store, publish| Ok(operation(store, publish)))
-                .map_err(MatrixAuthoringError::Semantic)?
+                .with_semantic_publication(operation)
                 .map_err(MatrixAuthoringError::Text),
         }
     }
