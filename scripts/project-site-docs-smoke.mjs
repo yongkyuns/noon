@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
-import { qualifyPreviewShell } from "./project-site-preview-shell.mjs";
+import { qualifyPreviewShell, installLayoutPlaceholder } from "./project-site-preview-shell.mjs";
 import { assertDocumentWidth, qualifyLongProse } from "./project-site-layout.mjs";
 
 const pages = JSON.parse(await readFile(new URL("./site/navigation.json", import.meta.url), "utf8")).map(page => page.slug);
@@ -33,6 +33,7 @@ export async function qualifyDocumentation(browser, base, output) {
   for (const colorScheme of ["light", "dark"]) {
     for (const width of [1440, 768, 390, 320]) {
       const context = await browser.newContext({ colorScheme, viewport: { width, height: 1000 } });
+      await installLayoutPlaceholder(context);
       // Full-editor links are tested as destinations, not additional runtime owners.
       await context.route("**/playground.html?**", route => route.fulfill({
         contentType: "text/html", body: "<!doctype html><title>Layout test placeholder</title>",
@@ -53,7 +54,8 @@ export async function qualifyDocumentation(browser, base, output) {
           await page.goto(url.href);
           await page.waitForFunction(() => { return document.documentElement.dataset.theme && document.querySelector("[data-theme-choice]"); });
           assert.equal(await page.locator("h1").count(), 1, `${id}: one title`);
-          assert.equal(await page.locator("iframe").count(), 0, `${id}: no runtime context before activation`);
+          await page.waitForFunction(() => document.querySelectorAll('iframe').length === document.querySelectorAll('[data-demo]').length);
+          assert.equal(await page.locator('iframe').count(), await page.locator('[data-demo]').count(), `${id}: live surfaces mount automatically`);
           await assertDocumentWidth(page, `${id}-${colorScheme}-${width}`, output);
           if (id === "architecture") await qualifyLongProse(page, `long-prose-${colorScheme}-${width}`, output);
           if (id !== "search") assert.equal(await page.locator('.docs-sidebar a[aria-current="page"]').getAttribute("href"), `${id === "python-Scene" ? "api" : id}.html`);

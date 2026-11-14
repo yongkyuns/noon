@@ -1,80 +1,124 @@
-// Documentation-level resource ownership only. Playback semantics stay in main.js
-// and the canonical WASM runtime. Exactly one iframe can be active per page.
-export function installPreviews(documentLike = document, windowLike = window) {
+// Touch devices run one live playground at a time to bound the cost of
+// independent Python and renderer instances. The gallery still owns execution.
+export function installPreviews(documentLike = document, windowLike = window,
+  embedUrl = new URL('../embed.html', import.meta.url)) {
+  const records = new Set();
+  const playOnDemand = windowLike.matchMedia('(pointer: coarse)').matches;
   let active = null;
-  const cleanups = [];
-  const setStatus = (card, text) => { card.querySelector('[data-demo-status]').textContent = text; };
-  const close = (reason = 'Preview closed. Open it to start again.', returnFocus = false) => {
-    if (!active) return;
-    const { card, frame, timer } = active;
-    active = null;
-    windowLike.clearTimeout(timer);
-    // Retiring the browsing context invokes the canonical playground pagehide
-    // cleanup; detached contexts cannot remain hidden background previews.
-    frame.remove();
-    card.querySelector('[data-demo-close]').hidden = true;
-    card.querySelector('[data-demo-open]').hidden = false;
-    card.querySelector('.demo-poster').hidden = false;
-    card.removeAttribute('data-preview-active');
-    setStatus(card, reason);
-    if (returnFocus) card.querySelector('[data-demo-open]').focus();
+  let disposed = false;
+  const unmount = record => {
+    windowLike.clearTimeout(record.timer);
+    record.frame?.remove();
+    record.frame = null;
+  };
+  const showPreview = record => {
+    unmount(record);
+    record.card.dataset.liveState = 'idle';
+    record.card.dataset.embedView = 'view';
+    record.thumbnail.hidden = false;
+    record.status.hidden = true;
+    record.retry.textContent = 'Play scene';
+    record.retry.hidden = false;
+  };
+  const fail = (record, text) => {
+    unmount(record);
+    if (active === record) active = null;
+    if (record.thumbnail) record.thumbnail.hidden = false;
+    record.card.dataset.liveState = 'error';
+    record.status.textContent = text;
+    record.status.hidden = false;
+    record.retry.textContent = 'Retry';
+    record.retry.hidden = false;
+  };
+  const mount = record => {
+    if (disposed) return;
+    unmount(record);
+    let url;
+    try { url = new URL(record.card.dataset.frameSrc, windowLike.location.href); }
+    catch { fail(record, 'Invalid scene address.'); return; }
+    if (url.origin !== windowLike.location.origin || url.pathname !== embedUrl.pathname ||
+        url.searchParams.get('example') !== record.card.dataset.demo ||
+        url.searchParams.get('catalog') !== 'showcase') {
+      fail(record, 'Invalid scene address.');
+      return;
+    }
+    if (playOnDemand) {
+      if (active && active !== record) showPreview(active);
+      active = record;
+      record.thumbnail.hidden = true;
+    }
+    const frame = documentLike.createElement('iframe');
+    frame.title = `${record.card.dataset.demo} — live scene and editable code`;
+    frame.referrerPolicy = 'same-origin';
+    frame.loading = 'eager';
+    frame.setAttribute('allow', 'fullscreen');
+    frame.src = url.href;
+    frame.addEventListener('error', () => {
+      if (record.frame === frame) fail(record, 'The live scene could not load.');
+    });
+    record.frame = frame;
+    record.card.dataset.liveState = 'loading';
+    record.card.dataset.embedView = 'view';
+    record.retry.hidden = true;
+    record.status.hidden = false;
+    record.status.textContent = 'Loading live scene…';
+    record.timer = windowLike.setTimeout(() => {
+      if (record.frame === frame && frame.dataset.shellReady !== 'true') {
+        fail(record, 'The live scene did not respond.');
+      }
+    }, 30000);
+    record.surface.append(frame);
   };
   const onMessage = event => {
-    if (!active || event.origin !== windowLike.location.origin || event.source !== active.frame.contentWindow) return;
-    if (event.data?.type !== 'noon-docs-preview-shell-ready') return;
-    windowLike.clearTimeout(active.timer);
-    setStatus(active.card, 'Preview opened. Press Run to execute this scene.');
-    active.frame.dataset.shellReady = 'true';
+    if (event.origin !== windowLike.location.origin || event.data?.type !== 'noon-site-embed-state') return;
+    const record = [...records].find(item => item.frame?.contentWindow === event.source);
+    if (!record || !['view', 'code'].includes(event.data.view) ||
+        !['loading', 'ready', 'error'].includes(event.data.state)) return;
+    windowLike.clearTimeout(record.timer);
+    record.frame.dataset.shellReady = 'true';
+    record.card.dataset.embedView = event.data.view;
+    record.card.dataset.liveState = event.data.state;
+    // The child shows runtime progress/errors, including editable Python errors.
+    // The parent's message is only for a failure to load the child document.
+    record.status.hidden = true;
+    record.retry.hidden = true;
   };
-  for (const card of documentLike.querySelectorAll('[data-demo]')) {
-    const openButton = card.querySelector('[data-demo-open]');
-    const closeButton = card.querySelector('[data-demo-close]');
-    const open = () => {
-      close('Closed because another preview was opened.');
-      const url = new URL(card.dataset.frameSrc, windowLike.location.href);
-      const siteRoot = new URL('../../', windowLike.location.href);
-      const expectedPath = new URL('embed.html', siteRoot).pathname;
-      if (url.origin !== windowLike.location.origin || url.pathname !== expectedPath ||
-          url.searchParams.get('example') !== card.dataset.demo) {
-        setStatus(card, 'This preview URL is not valid. Use the full editor link.');
-        return;
-      }
-      const frame = documentLike.createElement('iframe');
-      frame.title = `${card.dataset.demo} — interactive Noon preview`;
-      frame.referrerPolicy = 'same-origin';
-      frame.setAttribute('allow', 'fullscreen');
-      frame.src = url.href;
-      frame.addEventListener('error', () => {
-        if (active?.frame === frame) close('The preview could not load. Retry or open the full editor.');
-      });
-      openButton.hidden = true;
-      closeButton.hidden = false;
-      card.querySelector('.demo-poster').hidden = true;
-      card.dataset.previewActive = 'true';
-      setStatus(card, 'Opening the preview interface. The runtime starts only after Run.');
-      const timer = windowLike.setTimeout(() => {
-        if (active?.frame === frame && frame.dataset.shellReady !== 'true') {
-          close('The preview interface did not respond. Retry or open the full editor.');
-        }
-      }, 30000);
-      active = { card, frame, timer };
-      card.querySelector('[data-demo-frame]').append(frame);
-      closeButton.focus();
-    };
-    const closeSelected = () => { if (active?.card === card) close(undefined, true); };
-    openButton.addEventListener('click', open);
-    closeButton.addEventListener('click', closeSelected);
-    cleanups.push(() => { openButton.removeEventListener('click', open); closeButton.removeEventListener('click', closeSelected); });
-  }
-  const visibility = () => { if (documentLike.hidden) close('Preview released while the page was hidden. Reopen to start again.'); };
-  const pagehide = () => close('Preview released during navigation.');
-  windowLike.addEventListener('message', onMessage);
-  windowLike.addEventListener('pagehide', pagehide);
-  documentLike.addEventListener('visibilitychange', visibility);
-  return () => {
-    close(); cleanups.forEach(fn => fn());
+  const dispose = () => {
+    disposed = true;
+    for (const record of records) {
+      unmount(record);
+      record.retry.removeEventListener('click', record.onRetry);
+    }
+    records.clear();
+    active = null;
     windowLike.removeEventListener('message', onMessage);
-    windowLike.removeEventListener('pagehide', pagehide);
-    documentLike.removeEventListener('visibilitychange', visibility);
+    windowLike.removeEventListener('pagehide', onPageHide);
   };
+  const onPageHide = event => {
+    // Preserve drafts and the editor DOM through back/forward cache. The child
+    // gallery retires its workers on pagehide and resumes on pageshow.
+    if (!event.persisted) dispose();
+  };
+  windowLike.addEventListener('message', onMessage);
+  windowLike.addEventListener('pagehide', onPageHide);
+  for (const card of documentLike.querySelectorAll('[data-demo]')) {
+    const record = { card, frame: null, timer: null,
+      surface: card.querySelector('[data-demo-frame]'), thumbnail: null,
+      status: card.querySelector('[data-demo-status]'), retry: card.querySelector('[data-demo-retry]') };
+    record.onRetry = () => mount(record);
+    record.retry.addEventListener('click', record.onRetry);
+    records.add(record);
+    if (playOnDemand) {
+      const thumbnail = documentLike.createElement('img');
+      thumbnail.alt = '';
+      thumbnail.loading = 'lazy';
+      thumbnail.src = new URL(`../thumbnails/showcase/${encodeURIComponent(card.dataset.demo)}.png`, import.meta.url).href;
+      record.thumbnail = thumbnail;
+      record.surface.append(thumbnail);
+      showPreview(record);
+    } else {
+      mount(record);
+    }
+  }
+  return dispose;
 }

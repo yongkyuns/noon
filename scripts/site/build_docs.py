@@ -20,6 +20,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 import mistune
 from python_reference import PythonReference
+from presentation import render_shell, code_block, learning_cards
 
 SCRIPT = Path(__file__).resolve().parent
 REPOSITORY = 'https://github.com/yongkyuns/noon'
@@ -119,8 +120,7 @@ class SiteMarkdown(mistune.HTMLRenderer):
 
     def block_code(self, code, info=None):
         language = (info or '').split()[0] if info else ''
-        # Highlighting is optional; escaped source is the authority.
-        return f'<pre tabindex="0"><code class="language-{E(language)}">{E(code)}</code></pre>\n'
+        return code_block(code, language)
 
 
 class Links(HTMLParser):
@@ -140,18 +140,18 @@ class Links(HTMLParser):
 
 
 def build_embed(root: Path, site: Path):
-    """Reuse the original shell, main.js and its teardown; no editor bootstrap."""
+    """Reuse the gallery shell, editor, automatic startup and hot reload."""
     markup = (root / 'web/index.html').read_text(encoding='utf-8')
     bootstrap = '<script type="module" src="./python-editor-bootstrap.js"></script>'
     main = '<script type="module" src="./main.js"></script>'
     if (markup.count(bootstrap) != 1 or markup.count(main) != 1 or
             markup.count('</head>') != 1 or markup.count('<html lang="en">') != 1):
         raise ValueError('Unexpected playground shell: re-review embed generation')
-    markup = markup.replace(bootstrap, '')
     markup = markup.replace('<html lang="en">', '<html lang="en" data-noon-embed="true">', 1)
     markup = markup.replace('</head>', '<script src="./site/theme-init.js"></script><link rel="stylesheet" href="./site/embed.css"></head>', 1)
-    # A classic script runs after the DOM is parsed, before the module initializes.
-    markup = markup.replace(main, '<script src="./site/embed-host.js"></script>\n' + main +
+    # Configure presentation/auto-run before the unchanged gallery bootstrap.
+    markup = markup.replace(bootstrap, '<script type="module" src="./site/embed-host.js"></script>\n' + bootstrap, 1)
+    markup = markup.replace(main, main +
         '<script type="module">import {installTheme} from "./site/theme.js"; installTheme();</script>', 1)
     (site / 'embed.html').write_text(markup, encoding='utf-8')
 
@@ -196,25 +196,21 @@ class Builder:
         if identifier not in self.selected or identifier == 'showcase-triangle-light':
             raise ValueError(f'Unselected documentation demo: {identifier}')
         entry = self.examples[identifier]
-        full = f'../../playground.html?catalog=showcase&amp;example={identifier}'
         frame = f'../../embed.html?catalog=showcase&amp;example={identifier}'
-        image = '../../' + entry['thumbnail']
         return f'''<figure class="demo-card" data-demo="{identifier}" data-frame-src="{frame}">
-<img class="demo-poster" src="{E(image)}" alt="Captured frame: {E(entry['title'])}" loading="lazy" width="960" height="540">
-<div class="demo-actions"><button type="button" data-demo-open>Open interactive preview</button>
-<button type="button" data-demo-close hidden>Close preview</button><a href="{full}">Open full editor</a>
-<a href="../../{E(entry['path'])}">Python source</a></div>
-<div data-demo-frame></div><figcaption data-demo-status role="status">Captured poster. No runtime loaded.</figcaption>
-<noscript><p>JavaScript is disabled. Open the full editor to run this example.</p></noscript></figure>'''
+<div data-demo-frame></div><p data-demo-status role="status">Loading live scene…</p>
+<button type="button" data-demo-retry hidden>Retry</button>
+<noscript><p>JavaScript is required for this live scene. <a href="../../{E(entry['path'])}">Read Python source</a>.</p></noscript></figure>'''
 
     def api_index(self):
         rows = []
         for item in self.api['entries']:
             name = item['name']
-            rows.append(f'<tr><td><a href="python-{quote(name)}.html"><code>{E(name)}</code></a></td><td>{item["kind"]}</td><td><code>{E(item["module"])}</code></td></tr>')
+            rows.append(f'<tr data-api-entry><td><a href="python-{quote(name)}.html"><code>{E(name)}</code></a></td><td>{item["kind"]}</td><td><code>{E(item["module"])}</code></td></tr>')
         unresolved = ''.join(f'<li><code>{E(n["name"])}</code>: {E(n["reason"])}</li>' for n in self.api['unresolved'])
         return f'''<p>{self.api['resolved_count']} of {self.api['export_count']} explicit exports resolved to local source. <a href="python-coverage.json">Machine-readable coverage</a>.</p>
-<table><thead><tr><th>Export</th><th>Kind</th><th>Source module</th></tr></thead><tbody>{''.join(rows)}</tbody></table>
+<div class="api-filter"><label for="api-filter">Find a symbol</label><input id="api-filter" type="search" data-api-filter placeholder="Scene, Circle, Transform…" aria-controls="python-symbols"></div><p class="api-filter-status" data-api-filter-status role="status"></p>
+<table id="python-symbols" class="api-table"><thead><tr><th>Export</th><th>Kind</th><th>Source module</th></tr></thead><tbody>{''.join(rows)}</tbody></table>
 <details><summary>External or dynamic exports ({len(self.api['unresolved'])})</summary><ul>{unresolved}</ul></details>'''
 
     def document(self, entry):
@@ -226,49 +222,21 @@ class Builder:
         demos = re.findall(r'<!-- noon:demo ([\w-]+) -->', text)
         for identifier in demos:
             text = text.replace(f'<!-- noon:demo {identifier} -->', f'NOONDEMO{identifier}END')
+        paths = re.findall(r'<!-- noon:paths ([a-z]+) -->', text)
+        for kind in paths:
+            text = text.replace(f'<!-- noon:paths {kind} -->', f'NOONPATHS{kind}END')
         text = text.replace('<!-- noon:python-index -->', 'NOONPYTHONINDEXEND')
         destination = self.out / (entry['slug'] + '.html')
         content, headings = self.markdown(text, source, destination)
         for identifier in demos:
             content = content.replace(f'<p>NOONDEMO{identifier}END</p>', self.demo(identifier))
         content = content.replace('<p>NOONPYTHONINDEXEND</p>', self.api_index())
+        for kind in paths:
+            content = content.replace(f'<p>NOONPATHS{kind}END</p>', learning_cards(kind))
         self.write_page(entry['slug'], entry['title'], content, headings, entry['source'])
 
     def shell(self, key, title, content, headings, source):
-        current = 'api' if key.startswith('python-') else key
-        nav, group = [], None
-        for item in self.navigation:
-            if item['group'] != group:
-                group = item['group']
-                nav.append(f'<p class="nav-group">{E(group)}</p>')
-            active = ' aria-current="page"' if item['slug'] == current else ''
-            nav.append(f'<a href="{item["slug"]}.html"{active}>{E(item["title"])}</a>')
-        toc = ''.join(f'<a href="#{E(identifier)}" class="toc-level-{level}">{E(label)}</a>'
-                      for level, identifier, label in headings if 1 < level <= 3)
-        previous_next = ''
-        keys = [n['slug'] for n in self.navigation]
-        if key in keys:
-            i = keys.index(key)
-            adjacent = [(i-1, 'Previous'), (i+1, 'Next')]
-            previous_next = '<nav class="reading-order" aria-label="Reading order">' + ''.join(
-                f'<a rel="{"prev" if index < i else "next"}" href="{self.navigation[index]["slug"]}.html"><span>{label}</span>{E(self.navigation[index]["title"])}</a>'
-                for index, label in adjacent if 0 <= index < len(keys)) + '</nav>'
-        source_url = self.source_link(source) if source else f'{REPOSITORY}/tree/{self.revision}'
-        return f'''<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light dark"><meta name="description" content="{E(title)} — Noon documentation for source revision {self.revision[:7]}.">
-<title>{E(title)} — Noon</title><script src="../theme-init.js"></script><link rel="stylesheet" href="../docs.css">
-<script type="module" src="../docs.js"></script></head><body>
-<a class="skip-link" href="#main">Skip to content</a>
-<header class="site-header"><a class="wordmark" href="../../index.html" aria-label="Noon home">noon<span>.</span></a>
-<nav aria-label="Main navigation"><a href="index.html">Docs</a><a href="examples.html">Examples</a><a href="api.html">API</a><a href="architecture.html">Architecture</a><a href="../../playground.html?catalog=showcase">Playground</a></nav>
-<label class="theme-label">Theme<select data-theme-choice aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></header>
-<div class="docs-shell"><aside class="docs-sidebar"><details open class="docs-navigation"><summary>Documentation navigation</summary>
-<form action="search.html" role="search"><label for="docs-search">Find a topic or API</label><div class="search-box"><input id="docs-search" name="q" type="search" placeholder="Search documentation"><button>Search</button></div></form>
-<nav aria-label="Documentation">{''.join(nav)}</nav></details></aside>
-<main id="main" class="docs-content"><nav class="breadcrumb" aria-label="Breadcrumb"><a href="../../index.html">Noon</a><span>/</span><a href="index.html">Documentation</a><span>/</span><span aria-current="page">{E(title)}</span></nav>
-{'<details class="page-contents" open><summary>On this page</summary><nav aria-label="On this page">'+toc+'</nav></details>' if toc else ''}
-{content}{previous_next}<footer class="source-note">Built from <code>{self.revision[:12]}</code> · <a href="{source_url}">View source</a> · <a href="#main">Back to top</a></footer></main></div></body></html>'''
+        return render_shell(self, key, title, content, headings, source)
 
     def write_page(self, key, title, content, headings, source=None):
         destination = self.out / (key + '.html')
@@ -284,7 +252,7 @@ class Builder:
         doc = '<pre class="docstring">' + E(member['doc']) + '</pre>' if member['doc'] else '<p>No docstring declared here. Consult the source and host reference.</p>'
         source = self.source_link(f'web/python/{member["module"]}.py', member['line'])
         decorators = '<p>Decorators: <code>' + E(', '.join(member['decorators'])) + '</code></p>' if member['decorators'] else ''
-        return f'''<pre tabindex="0"><code>{E(member['signature'])}</code></pre>{decorators}
+        return f'''{code_block(member['signature'], 'python')}{decorators}
 <table><thead><tr><th>Parameter</th><th>Kind</th><th>Annotation</th><th>Default</th></tr></thead><tbody>{params}</tbody></table>
 <p>Return annotation: <code>{E(member['returns'] or 'Not annotated')}</code></p>{doc}<p><a href="{source}">Source declaration</a></p>'''
 
@@ -327,8 +295,8 @@ class Builder:
     def search_page(self):
         # All topics are present without JS; JS progressively filters this index.
         records = list(self.search)
-        rows = ''.join(f'<li data-search-item data-search-text="{E((r["title"]+" "+r["text"])[:18000])}"><a href="{E(r["url"])}">{E(r["title"])}</a></li>' for r in records)
-        content = '<h1 id="search">Documentation index</h1><p>Search by topic or symbol. With JavaScript disabled, use your browser’s Find command on this complete index.</p><p data-search-status role="status"></p><ul class="topic-index">'+rows+'</ul>'
+        rows = ''.join(f'<li data-search-item data-search-text="{E((r["title"]+" "+r["text"])[:3000])}"><a href="{E(r["url"])}">{E(r["title"])}</a><small>{E(r["text"][:160])}</small></li>' for r in records)
+        content = '<h1 id="search">Documentation index</h1><p>Search by topic or symbol. With JavaScript disabled, use your browser’s Find command on this complete index.</p><form action="search.html" class="search-form" role="search"><label class="sr-only" for="search-query">Search documentation</label><input id="search-query" name="q" type="search" placeholder="Search a topic, task, or API symbol"><button>Search</button></form><p data-search-status role="status"></p><ul class="topic-index">'+rows+'</ul>'
         self.write_page('search', 'Documentation index', content, [], 'scripts/site/navigation.json')
         (self.out / 'search-index.json').write_text(json.dumps(records, ensure_ascii=False) + '\n')
 

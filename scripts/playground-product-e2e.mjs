@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
 import pngjs from "pngjs";
-import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts,
+  freshProductRunSettled } from "./playground-product-fps.mjs";
 import { packageSizes } from "../.github/ci/wasm-build.mjs";
 import { captureAttemptedPage } from "./playground-browser-failure-evidence.mjs";
 import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
@@ -139,15 +140,12 @@ async function waitForServer() {
   throw new Error(`product E2E server did not start: ${lastError}\n${serverOutput}`);
 }
 
-async function waitForApplied(page) {
-  await page.waitForFunction(
-    () => {
-      const patch = document.querySelector("#patch-status");
-      return patch?.dataset.state === "applied" || patch?.dataset.state === "error";
-    },
-    null,
-    { timeout: 30_000 },
-  );
+async function waitForApplied(page, previousGeneration) {
+  // A new explicit Run can race the previous run's still-applied patch DOM.
+  // Wait for the exact new generation's terminal patch, not a stale one;
+  // retain the original 30s deadline and genuine source-completion gates.
+  await page.waitForFunction(freshProductRunSettled, { previousGeneration, allowLegacyBaseline },
+    { timeout: 30_000 });
   const state = await page.evaluate(() => ({
     patchState: document.querySelector("#patch-status")?.dataset.state ?? null,
     patchText:
@@ -203,10 +201,13 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
     }
   })();
   try {
+    const previousGeneration = await page.evaluate(
+      () => window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? 0,
+    );
     await page.locator("#replace-scene").click();
     // Run may replace its canvas during startup; the preview frame is stable.
     await page.locator(".canvas-frame").scrollIntoViewIfNeeded();
-    const state = await waitForApplied(page);
+    const state = await waitForApplied(page, previousGeneration);
     // Elapsed time wraps at the configured loop, so it is not a durable
     // completion signal. Wait for the same run's source cleanup and final
     // profile disposition, including one actual loop before accepting a

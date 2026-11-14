@@ -1,4 +1,6 @@
 import { installTheme } from "./theme.js";
+import { installPreviews } from "./preview.js";
+import { installDocumentationUI } from "./documentation-ui.js";
 // Existing shared links used the playground at the project root. A query means
 // "open the playground"; section anchors without a query remain on the website.
 export function playgroundRedirect(locationLike) {
@@ -16,11 +18,7 @@ if (typeof window !== "undefined") {
     const target = playgroundRedirect(window.location);
     if (target) window.location.replace(target);
   }
-  // No autoplay: clips start only after an explicit gesture, including when the
-  // visitor prefers reduced motion. Native controls work without JavaScript.
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) document.querySelectorAll("video").forEach(video => video.pause());
-  });
+
 }
 
-if (typeof document !== "undefined") installTheme();
+if (typeof document !== "undefined") { installTheme(); installPreviews(); installDocumentationUI(); }
