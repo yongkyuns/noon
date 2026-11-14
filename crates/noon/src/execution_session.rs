@@ -2162,58 +2162,6 @@ impl ExecutionSession {
         )
     }
 
-    /// Keep the direct transform convenience as a composition declaration; it owns no separate
-    /// lowering or activation path.
-    pub fn declare_and_activate_transform_composition(
-        &mut self,
-        store: &mut SemanticStore,
-        kind: SemanticAnimationCompositionKind,
-        children: &[(SemanticNodeId, SemanticNodeId, AnimationOptions)],
-        composition_options: AnimationOptions,
-        play_options: AnimationOptions,
-    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
-        let children = children
-            .iter()
-            .map(
-                |(source, target_state, options)| SemanticCompositionRequest::TransformTo {
-                    source: *source,
-                    target_state: *target_state,
-                    interpolation: noon_core::SemanticTransformInterpolation::Affine,
-                    complete_priority: false,
-                    options: *options,
-                },
-            )
-            .collect();
-        let request = SemanticCompositionRequest::Composition {
-            kind,
-            children,
-            options: composition_options,
-        };
-        // Transform-only callers operate on currently mounted sources, so no admission root is
-        // available through this low-level convenience. The public live facade uses the recursive
-        // root-aware entrypoint below.
-        self.declare_and_activate_composition_without_admission(store, &request, play_options)
-    }
-
-    fn declare_and_activate_composition_without_admission(
-        &mut self,
-        store: &mut SemanticStore,
-        request: &SemanticCompositionRequest,
-        play_options: AnimationOptions,
-    ) -> Result<ExecutionSegment, ExecutionSessionAnimationError> {
-        self.require_animation_declaration_context(store)?;
-        let mut declaration = SemanticMutationTransaction::new();
-        let animation =
-            self.stage_composition_request_without_admission(store, request, &mut declaration)?;
-        self.declare_and_activate_prepared_animation(
-            store,
-            declaration,
-            animation,
-            play_options,
-            None,
-        )
-    }
-
     fn stage_composition_request(
         &self,
         store: &SemanticStore,
@@ -3313,79 +3261,6 @@ impl ExecutionSession {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(declaration.create_animation_composition(*kind, children, *options))
             }
-        }
-    }
-
-    fn stage_composition_request_without_admission(
-        &self,
-        store: &SemanticStore,
-        request: &SemanticCompositionRequest,
-        declaration: &mut SemanticMutationTransaction,
-    ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
-        match request {
-            SemanticCompositionRequest::TransformTo { source, target_state, interpolation, complete_priority, options } => {
-                if !self.reachability.is_object_reachable(*source) {
-                    return Err(ExecutionSessionAnimationError::CreateTarget { target: *source, error: ExecutionSessionCreateError::TargetIsNotDetached });
-                }
-                self.stage_neutral_glow_attachment(store, declaration, *source, *target_state)?;
-                let target_state = self.stage_animation_target_state(store, declaration, *target_state)?;
-                Ok(declaration.create_transform_animation_with_interpolation(*source, target_state, *interpolation, *complete_priority, *options))
-            }
-            SemanticCompositionRequest::MethodTarget { source, target_state, interpolation, options } => {
-                if !self.reachability.is_object_reachable(*source) {
-                    return Err(ExecutionSessionAnimationError::CreateTarget { target: *source, error: ExecutionSessionCreateError::TargetIsNotDetached });
-                }
-                self.stage_owned_method_target(store, declaration, *source, target_state, *interpolation, *options)
-            }
-            SemanticCompositionRequest::MoveAlongPath { target, path, options } => {
-                if !self.reachability.is_object_reachable(*target)
-                    || !self.reachability.is_object_reachable(*path)
-                {
-                    return Err(ExecutionSessionAnimationError::CreateTarget {
-                        target: *target,
-                        error: ExecutionSessionCreateError::TargetIsNotDetached,
-                    });
-                }
-                Ok(declaration.create_move_along_path_animation(*target, *path, *options))
-            }
-            SemanticCompositionRequest::GlowPulse { target, intensity, options } => {
-                self.stage_glow_pulse_leaf(*target, *intensity, *options, declaration)
-            }
-            SemanticCompositionRequest::Dissolve { target, direction, style, options } => {
-                if !self.reachability.is_reachable(*target) || options.remover.unwrap_or(*direction == noon_core::DissolveDirection::Out) {
-                    return Err(ExecutionSessionAnimationError::InvalidComposition("Dissolve lifecycle requires a scene root".into()));
-                }
-                Ok(declaration.create_dissolve_animation(*target, *direction, *style, *options))
-            }
-            SemanticCompositionRequest::WorldTransform { target, transform, options } => {
-                if !self.reachability.is_object_reachable(*target) {
-                    return Err(ExecutionSessionAnimationError::CreateTarget { target: *target, error: ExecutionSessionCreateError::TargetIsNotDetached });
-                }
-                Ok(declaration.create_world_transform_animation(*target, *transform, *options))
-            }
-            SemanticCompositionRequest::CameraProfile { target, profile, options } => {
-                if !self.reachability.is_object_reachable(*target) {
-                    return Err(ExecutionSessionAnimationError::CreateTarget { target: *target, error: ExecutionSessionCreateError::TargetIsNotDetached });
-                }
-                Ok(declaration.create_camera_profile_animation(*target, *profile, *options))
-            }
-            SemanticCompositionRequest::Rotate { target, angle, hold_origin, options } => {
-                if !self.reachability.is_object_reachable(*target) {
-                    return Err(ExecutionSessionAnimationError::CreateTarget { target: *target, error: ExecutionSessionCreateError::TargetIsNotDetached });
-                }
-                Ok(declaration.create_rotate_animation_with_origin_constraint(*target, *angle, *hold_origin, *options))
-            }
-            SemanticCompositionRequest::ValueTracker { signal, target, options } => {
-                Ok(declaration.create_scalar_animation(*signal, *target, *options))
-            }
-            SemanticCompositionRequest::Wait { duration } => Ok(declaration.create_wait_animation(*duration)),
-            SemanticCompositionRequest::Composition { kind, children, options } => {
-                let children = children.iter().map(|child| self.stage_composition_request_without_admission(store, child, declaration)).collect::<Result<Vec<_>, _>>()?;
-                Ok(declaration.create_animation_composition(*kind, children, *options))
-            }
-            _ => Err(ExecutionSessionAnimationError::InvalidComposition(
-                "this direct convenience accepts only transform, rotate, wait, and nested composition leaves".into(),
-            )),
         }
     }
 
