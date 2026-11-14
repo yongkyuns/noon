@@ -3314,6 +3314,7 @@ fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
     let resolved_path = player
         .take_committed_callback_provisional(token, retained_path)
         .unwrap();
+    let path = noon::Mobject::from_node(scene.integration_store().clone(), resolved_path).unwrap();
     {
         let store = scene.integration_store().borrow();
         assert_eq!(store.geometry_resources().len(), 1);
@@ -3325,12 +3326,15 @@ fn callback_provisional_geometry_stays_phase_local_until_the_shared_commit() {
         else {
             panic!("retained path must publish its resource");
         };
-        assert!(store.geometry_resources().get(handle).is_some());
-        assert!(player
-            .source
-            .session()
-            .effective_semantic_object(&store, resolved_path)
-            .is_ok());
+        let Some(noon_core::GeometryResource::VectorPath(retained)) =
+            store.geometry_resources().get(handle)
+        else {
+            panic!("the authored geometry handle must resolve to a retained path");
+        };
+        assert_eq!(
+            player.scene().effective_content(&path).unwrap().geometry(),
+            Some(&noon_core::GeometryRef::VectorPath(retained.clone()))
+        );
     }
     let resolved = player
         .take_committed_callback_provisional(token, local)

@@ -809,9 +809,8 @@ mod tests {
                 let target = scene.target_editor(&self.0[0])?;
                 scene.set_translation(&target, 1.0, 0.0)?;
                 let definition = target.get_effect("stripes")?.authored_definition()?;
-                let detached = scene
-                    .live()
-                    .prepare_effect_attachments([(&target, definition, "detached")])?;
+                let detached =
+                    scene.prepare_effect_attachments([(&target, definition, "detached")])?;
                 assert!(
                     detached.programs().is_empty(),
                     "detached authoring needs no GPU work"
@@ -831,15 +830,13 @@ mod tests {
             ));
             self.1 = true;
             Ok(ContinuationStep::Publish(
-                scene
-                    .live()
-                    .prepare_effect_attachments(self.0.iter().map(|object| {
-                        (
-                            object,
-                            ShaderEffect::new(material.clone()).into(),
-                            "stripes",
-                        )
-                    }))?,
+                scene.prepare_effect_attachments(self.0.iter().map(|object| {
+                    (
+                        object,
+                        ShaderEffect::new(material.clone()).into(),
+                        "stripes",
+                    )
+                }))?,
             ))
         }
     }

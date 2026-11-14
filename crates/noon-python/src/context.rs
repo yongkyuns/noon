@@ -527,11 +527,23 @@ impl Context {
     ) -> PyResult<crate::effects::StagedEffectPublication> {
         self.available()?;
         let members = batch.add_targets()?;
-        let pending = self.with_live(|live| {
-            live.prepare_family_membership(owner, &members, true)
+        let pending = self.with_effect_preparation(|scene| {
+            scene
+                .prepare_family_addition(owner, &members)
                 .map(|(pending, _)| pending)
         })?;
         self.staged(pending, batch.bindings.clone())
+    }
+
+    fn with_effect_preparation<T>(
+        &mut self,
+        prepare: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
+    ) -> PyResult<T> {
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        prepare(&mut self.scene)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
     }
 
     fn observe_points<'a, T>(
@@ -3626,7 +3638,8 @@ impl Context {
                 Err(noon::AuthoringError::ExecutionPublication(
                     noon::ExecutionSessionPublicationError::ExternalEffectPreparationRequired,
                 )) => {
-                    let pending = self.with_live(|live| live.prepare_membership(request))?;
+                    let pending =
+                        self.with_effect_preparation(|scene| scene.prepare_membership(request))?;
                     return self.staged(pending, batch.bindings.clone()).map(Some);
                 }
                 Err(error) => {
@@ -4754,8 +4767,8 @@ impl Context {
     ) -> PyResult<crate::effects::StagedEffectPublication> {
         self.available()?;
         self.same_store(target)?;
-        let pending = self.with_live(|live| {
-            live.prepare_effect_attachments([(&target.handle, definition.definition(), name)])
+        let pending = self.with_effect_preparation(|scene| {
+            scene.prepare_effect_attachments([(&target.handle, definition.definition(), name)])
         })?;
         self.staged(pending, Vec::new())
     }
@@ -4786,8 +4799,8 @@ impl Context {
     ) -> PyResult<crate::effects::StagedEffectPublication> {
         self.available()?;
         self.same_family_store(target)?;
-        let pending = self.with_live(|live| {
-            live.prepare_effect_attachments([(&target.family, definition.definition(), name)])
+        let pending = self.with_effect_preparation(|scene| {
+            scene.prepare_effect_attachments([(&target.family, definition.definition(), name)])
         })?;
         self.staged(pending, Vec::new())
     }

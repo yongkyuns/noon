@@ -71,6 +71,7 @@ fn live_group_attachment_nested_containment_detach_and_reattach_share_execution_
         1
     );
     let inner_effect = attach(session.scene_mut(), &inner);
+    let inner_handle = inner.get_effect("soften").unwrap();
     assert_eq!(
         plan(session.session(), inner.node_id()).parent_scope(),
         Some(outer_object)
@@ -87,6 +88,14 @@ fn live_group_attachment_nested_containment_detach_and_reattach_share_execution_
     let mut update = SemanticMutationTransaction::new();
     update.update_effect(inner_effect, EffectUpdate::default().radius(Pixels(3.0)));
     scene_execution::publish(session.scene_mut(), update).unwrap();
+    assert_eq!(
+        session
+            .scene()
+            .effective_effect(&inner_handle)
+            .unwrap()
+            .radius(),
+        Some(Pixels(3.0).into())
+    );
     assert_eq!(
         session
             .session()

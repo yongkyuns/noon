@@ -18,7 +18,10 @@ impl SemanticExecutionPlayer {
         definition: EffectDefinition,
         name: &str,
     ) -> Result<noon::StagedEffectPublication, AuthoringFailure> {
-        self.with_live_session(|live| live.prepare_effect_attachments([(object, definition, name)]))
+        self.source
+            .scene_mut()
+            .prepare_effect_attachments([(object, definition, name)])
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -28,10 +31,11 @@ impl SemanticExecutionPlayer {
         members: &[MobjectTarget<'_>],
     ) -> Result<noon::StagedEffectPublication, AuthoringFailure> {
         self.require_completed_live_segment()?;
-        self.with_live_session(|live| {
-            live.prepare_family_membership(family, members, true)
-                .map(|(pending, _)| pending)
-        })
+        self.source
+            .scene_mut()
+            .prepare_family_addition(family, members)
+            .map(|(pending, _)| pending)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
     #[cfg(target_arch = "wasm32")]
