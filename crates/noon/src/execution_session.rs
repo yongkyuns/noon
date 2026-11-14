@@ -2123,12 +2123,12 @@ impl ExecutionSession {
     /// group, evaluates its dirty reactive closure, and publishes all three
     /// layers under one revision transition. Active segment ownership and native
     /// source ownership are rejected during preflight.
-    pub fn set_scalar_signal_value(
+    pub(crate) fn set_scalar_signal_value(
         &mut self,
         store: &mut SemanticStore,
         signal: SemanticNodeId,
         value: f64,
-    ) -> Result<&FrameState, ExecutionSessionAnimationError> {
+    ) -> Result<(), ExecutionSessionAnimationError> {
         self.require_animation_declaration_context(store)?;
         if self.signal_timeline.owns(signal) {
             return Err(ExecutionSessionAnimationError::TimelineOwnedSignal { signal });
@@ -2169,7 +2169,7 @@ impl ExecutionSession {
             store.scene_revision(),
             self.publication_context().scene_revision()
         );
-        Ok(self.runtime.frame())
+        Ok(())
     }
 
     /// Atomically declare and activate one recursive semantic composition.
