@@ -1,10 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
-
 use noon::{Mobject, Scene, Text};
 use noon_core::{
     AnimationOptions, Camera2DState, NativeEventSource, NativeInputValue, NativeStateSource,
-    RateFunction, SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticStore,
-    SemanticVec3, StoredGeometry, Vec2,
+    RateFunction, Vec2, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH,
 };
 use wasm_bindgen::prelude::*;
 use web_sys::OffscreenCanvas;
@@ -516,54 +513,42 @@ pub async fn create_direct_single_typst_canvas_renderer(
 pub async fn create_direct_execution_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-    let store = Rc::new(RefCell::new(SemanticStore::new()));
-    let scene = noon::Scene::with_integration_store(Rc::clone(&store));
-    let root = scene.root();
-    let animation = {
-        let mut store = store.borrow_mut();
-        let opacity = store
-            .insert_semantic_input_signal(0.65_f64)
-            .map_err(js_error)?;
-        let object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.5,
-            }));
-        store
-            .add_semantic_family_member(root, object)
-            .map_err(js_error)?;
-        store
-            .bind_semantic_signal(opacity, object, SemanticObjectProperty::ObjectOpacity)
-            .map_err(js_error)?;
-
-        let mut target_state = store
-            .semantic_object_state_checked(object)
-            .map_err(js_error)?
-            .clone();
-        target_state.transform.translation = SemanticVec3::new(2.0, 0.0, 0.0);
-        let target = store.insert_semantic_object(target_state);
-        let animation = store
-            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
-            .map_err(js_error)?;
-
-        let mut camera_state = SemanticObjectState::new(StoredGeometry::Rectangle {
-            size: Vec2::new(12.0, 6.0),
-        });
-        camera_state.transform.translation = SemanticVec3::new(2.0, -1.0, 0.0);
-        camera_state.set_role(SemanticObjectRole::Camera2D);
-        let camera = store.insert_semantic_object(camera_state);
-        store
-            .add_semantic_family_member(root, camera)
-            .map_err(js_error)?;
-        animation
-    };
-
-    let mut label = Mobject::from_text(Rc::clone(&store), Text::new("Noon").with_font_size(48.0))
+    let mut scene = Scene::new();
+    let camera = scene.camera_frame().map_err(js_error)?;
+    scene
+        .set_scale(
+            &camera,
+            12.0 / f64::from(DEFAULT_FRAME_WIDTH),
+            6.0 / f64::from(DEFAULT_FRAME_HEIGHT),
+        )
         .map_err(js_error)?;
-    label.shift(1.0, 0.0).map_err(js_error)?;
-    store
-        .borrow_mut()
-        .add_semantic_family_member(root, label.node_id())
+    scene
+        .set_translation(&camera, 2.0, -1.0)
         .map_err(js_error)?;
+
+    let mut circle = scene.circle(1.5).map_err(js_error)?;
+    circle.set_fill(1.0, 1.0, 1.0, 1.0).map_err(js_error)?;
+    circle.disable_stroke().map_err(js_error)?;
+    scene.add(&circle).map_err(js_error)?;
+    let opacity = scene.value_tracker(0.65).map_err(js_error)?;
+    scene.bind_opacity(&circle, &opacity).map_err(js_error)?;
+    let target = scene.target_editor(&circle).map_err(js_error)?;
+    scene.set_translation(&target, 2.0, 0.0).map_err(js_error)?;
+    let animation = scene
+        .declare_transform_to(
+            &circle,
+            &target,
+            AnimationOptions::new()
+                .run_time(0.1)
+                .rate_func(RateFunction::Linear),
+        )
+        .map_err(js_error)?;
+
+    let label = scene
+        .text(Text::new("Noon").with_font_size(48.0))
+        .map_err(js_error)?;
+    scene.set_translation(&label, 1.0, 0.0).map_err(js_error)?;
+    scene.add(&label).map_err(js_error)?;
 
     let mut execution = scene.into_execution().map_err(js_error)?;
     let resolved_camera = execution.session().camera().map_err(js_error)?;
@@ -578,15 +563,8 @@ pub async fn create_direct_execution_smoke_renderer(
         ));
     }
     execution
-        .with_store_and_session(|store, session| {
-            session.activate_animation_segment(
-                store,
-                animation,
-                AnimationOptions::new()
-                    .run_time(0.1)
-                    .rate_func(RateFunction::Linear),
-            )
-        })
+        .live()
+        .play_animation(&animation)
         .map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, execution).await
 }

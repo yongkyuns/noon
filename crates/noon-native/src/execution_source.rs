@@ -307,15 +307,13 @@ impl NativeExecutionSource for StaticExecutionSource {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, NativeHostError> {
-        self.session.with_store_and_session(|store, session| {
-            session
-                .submit_translation_drag_input(store, token, input)
-                .map(|receipt| receipt.input)
-                .map_err(|error| match error {
-                    TranslationDragError::Input(error) => NativeHostError::Input(error),
-                    error => NativeHostError::TranslationDrag(error),
-                })
-        })
+        self.session
+            .submit_translation_drag_input(token, input)
+            .map(|receipt| receipt.input)
+            .map_err(|error| match error {
+                TranslationDragError::Input(error) => NativeHostError::Input(error),
+                error => NativeHostError::TranslationDrag(error),
+            })
     }
 
     fn set_native_state_input(

@@ -2888,10 +2888,7 @@ impl SemanticExecutionPlayer {
         let Some(undo) = self.translation_drag_undo.as_ref() else {
             return false;
         };
-        undo.is_current(
-            self.source.session(),
-            &self.source.scene().integration_store().borrow(),
-        )
+        undo.is_current(self.source.scene())
     }
 
     /// Apply the one retained drag receipt through its guarded semantic transaction.
@@ -2906,10 +2903,7 @@ impl SemanticExecutionPlayer {
             .translation_drag_undo
             .take()
             .ok_or_else(|| "there is no translation drag to undo".to_owned())?;
-        match self
-            .source
-            .with_store_and_session(|store, session| undo.undo(session, store))
-        {
+        match undo.undo(self.source.scene_mut()) {
             Ok(()) => Ok(true),
             Err(noon::TranslationDragError::StaleUndo) => Ok(false),
             Err(error) => Err(error.to_string()),

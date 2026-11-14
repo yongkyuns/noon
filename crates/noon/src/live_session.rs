@@ -11,16 +11,14 @@ use crate::{EffectiveMobjectState, LayoutTarget};
 
 #[cfg(test)]
 use crate::effective_capture::target_style_from_effective;
-use crate::execution_session::NativePointerInputToken;
 use crate::{
     DeclaredAnimation, EffectiveMobjectLayout, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError, Mobject,
-    MobjectFamily, MobjectTarget, SceneMembershipRequest, TranslationDragError,
-    TranslationDragReceipt, ValueTracker,
+    MobjectFamily, MobjectTarget, SceneMembershipRequest, TranslationDragError, ValueTracker,
 };
 use noon_core::{
-    AnimationOptions, Bounds2D64, Color, NativePointerInput, SemanticAffineLifecycleDirection,
+    AnimationOptions, Bounds2D64, Color, SemanticAffineLifecycleDirection,
     SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticFadeDirection,
     SemanticMutationTransaction, SemanticNodeId, SemanticObjectState, SemanticStore,
     SemanticSubsetDisplayMode, SemanticVec3,
@@ -509,22 +507,6 @@ impl<'a> LiveSession<'a> {
         }
         self.session
             .set_translation_drag_targets(nodes)
-            .map_err(LiveSessionError::TranslationDrag)
-    }
-
-    /// Deliver one normalized native pointer occurrence through the shared
-    /// drag policy and ordinary native-input publication path.
-    ///
-    /// Non-captured occurrences retain normal pointer/hover/click behavior;
-    /// a captured primary drag alone acquires the scoped Position lease.
-    pub fn submit_translation_drag_input(
-        &mut self,
-        token: &NativePointerInputToken,
-        input: NativePointerInput,
-    ) -> Result<TranslationDragReceipt, LiveSessionError> {
-        let mut store = self.store.borrow_mut();
-        self.session
-            .submit_translation_drag_input(&mut store, token, input)
             .map_err(LiveSessionError::TranslationDrag)
     }
 
