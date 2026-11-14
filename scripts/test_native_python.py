@@ -1105,9 +1105,11 @@ class Demo(SpatialScene):
         surface = Mesh3D.parametric(sample, u_range=(-1.5, 1.5), v_range=(-1.5, 1.5),
                                     resolution=(2, 2), color=Color(0.2, 0.3, 0.4), point_lit=True)
         light = self.point_light(position=(4, -3, 6), intensity=0.3)
+        assert tuple(light.world_transform[:3]) == (4.0, -3.0, 6.0)
         self.add(surface, light)
         self.play(WorldTransformTo(light, translation=(-3, 3, 4)), run_time=1, rate_func=linear)
         assert tuple(light.get_center()) == (-3.0, 3.0, 4.0)
+        assert tuple(light.world_transform[:3]) == (-3.0, 3.0, 4.0)
 """
         context = {"samples": 0}
         view = prepare_view(asyncio.run(run_source(source, context, retain_history=True)))

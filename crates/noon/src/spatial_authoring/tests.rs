@@ -845,6 +845,7 @@ fn world_center_uses_transformed_local_bounds_for_offset_meshes() {
     )
     .unwrap();
     scene.set_world_transform(&object, world).unwrap();
+    assert_eq!(scene.world_transform(&object).unwrap(), world);
     scene.add(&object).unwrap();
     assert_vec3_near(
         object.world_center().unwrap(),
@@ -885,6 +886,10 @@ fn world_center_uses_transformed_local_bounds_for_offset_meshes() {
     session.advance_to(1.0).unwrap();
     scene.install_execution(session);
     assert_vec3_near(
+        scene.world_transform(&object).unwrap().translation,
+        SemanticVec3::new(-1.0, 3.5, 5.0),
+    );
+    assert_vec3_near(
         scene.effective_world_center(&object).unwrap(),
         SemanticVec3::new(-2.0, 25.5, 6.0),
     );
@@ -919,6 +924,11 @@ fn world_center_handles_native_cylinder_camera_light_and_detached_live_mesh() {
 
     scene.install_execution(scene.execution_session().unwrap());
     let detached = scene.mesh(offset_mesh()).unwrap();
+    assert_eq!(
+        scene.world_transform(&detached).unwrap().translation,
+        SemanticVec3::ZERO
+    );
+    assert!(scene.effective_world_transform(&detached).is_err());
     assert_eq!(
         scene.effective_world_center(&detached).unwrap(),
         SemanticVec3::new(11.0, 1.0, 1.0)
@@ -955,6 +965,10 @@ fn world_center_rejects_foreign_and_stale_handles() {
     let second = Scene::new();
     let object = first.mesh(offset_mesh()).unwrap();
     assert!(matches!(
+        second.world_transform(&object),
+        Err(AuthoringError::ForeignStore)
+    ));
+    assert!(matches!(
         second.effective_world_center(&object),
         Err(AuthoringError::ForeignStore)
     ));
@@ -965,6 +979,7 @@ fn world_center_rejects_foreign_and_stale_handles() {
         .apply(&mut first.integration_store().borrow_mut())
         .unwrap();
     assert!(stale.world_center().is_err());
+    assert!(first.world_transform(&stale).is_err());
 
     let mut running = Scene::new();
     let detached = running.mesh(offset_mesh()).unwrap();
@@ -976,6 +991,7 @@ fn world_center_rejects_foreign_and_stale_handles() {
     external
         .apply(&mut running.integration_store().borrow_mut())
         .unwrap();
+    assert!(running.world_transform(&detached).is_err());
     assert!(running.effective_world_center(&detached).is_err());
 }
 

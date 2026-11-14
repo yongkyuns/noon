@@ -540,6 +540,23 @@ impl Scene {
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
+    /// Read the current pose. Detached objects use their authored pose after
+    /// checking the Scene's ownership and execution provenance.
+    pub fn world_transform(
+        &self,
+        object: &Mobject,
+    ) -> Result<SemanticWorldTransform3D, AuthoringError> {
+        self.require_object(object)?;
+        match self.running_execution() {
+            Some(session) => effective_world_or_authored(
+                session,
+                &self.integration_store().borrow(),
+                object.node_id(),
+            ),
+            None => object.world_transform(),
+        }
+    }
+
     /// Read current published pose without substituting authored base state.
     pub fn effective_world_transform(
         &self,
@@ -560,20 +577,11 @@ impl Scene {
     /// the authored pose is the effective pose; detached live objects fall
     /// back to their authored pose after session provenance has been checked.
     pub fn effective_world_center(&self, object: &Mobject) -> Result<SemanticVec3, AuthoringError> {
-        self.require_object(object)?;
-        let state = object.state()?;
-        let world = match self.running_execution() {
-            Some(session) => effective_world_or_authored(
-                session,
-                &self.integration_store().borrow(),
-                object.node_id(),
-            )?,
-            None => object.world_transform()?,
-        };
+        let world = self.world_transform(object)?;
         crate::world_affine::world_bounds_center(
             &self.integration_store().borrow(),
             object.node_id(),
-            &state,
+            &object.state()?,
             world,
         )
     }
@@ -1034,7 +1042,7 @@ impl Mobject {
     }
 }
 
-pub(crate) fn effective_world(
+fn effective_world(
     session: &crate::ExecutionSession,
     store: &noon_core::SemanticStore,
     node: noon_core::SemanticNodeId,

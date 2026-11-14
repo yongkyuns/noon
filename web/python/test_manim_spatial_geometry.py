@@ -301,11 +301,10 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             with self.subTest(property=name), self.assertRaises(AttributeError):
                 getattr(surface, name)
 
-    def test_surface_checkerboard_uses_canonical_owner_when_live(self):
+    def test_surface_checkerboard_uses_canonical_owner_during_setup(self):
         import _noon_spatial as native
         context = Mock()
-        context.liveExecutionOwnership.return_value = "active"
-        context.requiresLiveMutationRouting.return_value = True
+        context.requiresLiveMutationRouting.return_value = False
         handle = _family_handle()
         surface = _family_surface(handle)
         surface.submobjects[0]._scene = SimpleNamespace(
@@ -316,6 +315,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         context.setSurfaceCheckerboard.assert_called_once()
         self.assertIs(context.setSurfaceCheckerboard.call_args.args[0], handle)
         handle.setFillByCheckerboard.assert_not_called()
+        context.requiresLiveMutationRouting.assert_not_called()
 
     def test_explicit_unshaded_tipless_surface_keeps_the_single_mesh_path(self):
         callback = lambda u, v: (u, v, 0)

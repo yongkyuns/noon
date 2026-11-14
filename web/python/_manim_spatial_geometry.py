@@ -19,7 +19,7 @@ from _noon_errors import engine_call
 from _manim_semantic_handles import (
     _attach_shared_family, _attach_shared_handle,
     _group_target_context, _initialize_shared_wrapper,
-    _path_authoring_context, _live_mutation_context,
+    _path_authoring_context,
 )
 
 _DEFAULT_CHECKERBOARD = (_base.BLUE_D, _base.BLUE_E)
@@ -308,7 +308,7 @@ class Surface(_Mesh3D, _compat.Group):
         family = getattr(self, "_semantic_family_handle", None)
         if family is None:
             raise NotImplementedError("single-mesh Surface does not support family checkerboard edits")
-        context = _group_target_context(self)
+        context = _group_target_context(self, include_setup=True)
         if context is None:
             engine_call(family.setFillByCheckerboard, first, second, opacity)
         else:

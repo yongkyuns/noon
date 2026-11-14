@@ -119,13 +119,16 @@ impl CanonicalAuthoringScene {
                 "effective world state is owned by the transferred execution session".into(),
             );
         }
-        if self.player_ownership.is_unstarted() {
-            object.world_transform().map_err(Into::into)
-        } else {
-            self.local_authoring_scene()?
-                .effective_world_transform(object)
-                .map_err(|error| noon::LiveSessionError::from(error).into())
-        }
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .world_transform(object)
+            .map_err(|error| {
+                if running {
+                    noon::LiveSessionError::from(error).into()
+                } else {
+                    error.into()
+                }
+            })
     }
 
     pub(crate) fn effective_world_center(

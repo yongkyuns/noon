@@ -292,27 +292,28 @@ class SpatialFacadeTests(unittest.TestCase):
         with self.assertRaisesRegex(NotImplementedError, "WorldTransformTo"):
             mesh.animate
 
-    def test_world_center_uses_typed_authored_and_effective_center_queries(self):
+    def test_world_center_uses_scene_when_owned_and_handle_when_standalone(self):
         mesh = object.__new__(spatial.Mesh3D)
         handle = Mock()
         handle.worldCenter.return_value = [1.25, -2.5, 3.75]
         context = Mock()
         context.effectiveWorldCenter.return_value = [4.0, 5.0, 6.0]
         with patch.object(spatial, "_handle_for", return_value=handle), \
-             patch.object(spatial, "_live_mutation_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             self.assertEqual(mesh.get_center(), (1.25, -2.5, 3.75))
         handle.worldCenter.assert_called_once_with()
-        with patch.object(spatial, "_handle_for", return_value=handle), \
-             patch.object(spatial, "_live_mutation_context", return_value=context):
+        mesh._canonical_live_target_context = context
+        with patch.object(spatial, "_handle_for", return_value=handle):
             self.assertEqual(mesh.get_center(), (4.0, 5.0, 6.0))
         context.effectiveWorldCenter.assert_called_once_with(handle)
+        context.requiresLiveMutationRouting.assert_not_called()
 
     def test_world_move_to_offsets_from_geometry_center(self):
         mesh = object.__new__(spatial.Mesh3D)
         handle = Mock()
         handle.worldCenter.return_value = [10.0, -3.0, 2.0]
         with patch.object(spatial, "_handle_for", return_value=handle), \
-             patch.object(spatial, "_live_mutation_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             self.assertIs(mesh.move_to((1, 2, 3)), mesh)
         handle.shiftWorld.assert_called_once_with(-9.0, 5.0, 1.0)
 
@@ -323,7 +324,7 @@ class SpatialFacadeTests(unittest.TestCase):
         handle = Mock()
         handle.worldCenter.return_value = [0.0, 0.0, 0.0]
         with patch.object(spatial, "_handle_for", return_value=handle), \
-             patch.object(spatial, "_live_mutation_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             self.assertIs(light.move_to(3 * IN), light)
         handle.shiftWorld.assert_called_once_with(0.0, 0.0, -3.0)
 
@@ -351,7 +352,7 @@ class SpatialFacadeTests(unittest.TestCase):
         mesh = object.__new__(spatial.Mesh3D)
         handle = Mock()
         with patch.object(spatial, "_handle_for", return_value=handle), \
-             patch.object(spatial, "_live_mutation_context", return_value=None), \
+             patch.object(spatial, "_path_authoring_context", return_value=None), \
              patch.object(spatial, "_bulk", side_effect=tuple):
             self.assertIs(mesh.rotate(0.75, axis=(1, 0, 0)), mesh)
         handle.rotateWorld.assert_called_once_with(1.0, 0.0, 0.0, 0.75, ())

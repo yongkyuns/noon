@@ -872,14 +872,17 @@ impl Context {
     fn world_transform(&mut self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
         self.require_active()?;
         self.same_store(target)?;
-        let value = if self.has_execution() {
-            self.scene
-                .effective_world_transform(&target.handle)
-                .map_err(noon::LiveSessionError::from)
-                .map_err(engine_error)
-        } else {
-            target.handle.world_transform().map_err(engine_error)
-        }?;
+        let running = self.has_execution();
+        let value = self
+            .scene
+            .world_transform(&target.handle)
+            .map_err(|error| {
+                if running {
+                    engine_error(noon::LiveSessionError::from(error))
+                } else {
+                    engine_error(error)
+                }
+            })?;
         Ok(noon::integration::spatial_input::transform_values(value))
     }
     #[pyo3(name = "effectiveWorldCenter")]
