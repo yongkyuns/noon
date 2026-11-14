@@ -7,68 +7,25 @@
 //! reconciliation remains owned by `ExecutionSession::complete_segment`.
 
 #[cfg(test)]
-use crate::LayoutTarget;
+use crate::{EffectiveMobjectState, LayoutTarget};
 
 #[cfg(test)]
 use crate::effective_capture::target_style_from_effective;
 use crate::execution_session::NativePointerInputToken;
 use crate::{
-    DeclaredAnimation, ExecutionSegment, ExecutionSegmentAdvanceError,
+    DeclaredAnimation, EffectiveMobjectLayout, ExecutionSegment, ExecutionSegmentAdvanceError,
     ExecutionSegmentCompletionError, ExecutionSegmentError, ExecutionSegmentState,
     ExecutionSession, ExecutionSessionAnimationError, ExecutionSessionPublicationError, Mobject,
     MobjectFamily, MobjectTarget, SceneMembershipRequest, TranslationDragError,
     TranslationDragReceipt, ValueTracker,
 };
 use noon_core::{
-    AnimationOptions, Bounds2D64, Color, NativePointerInput, PublicationContext,
-    SemanticAffineLifecycleDirection, SemanticAffineLifecycleEndpoint,
-    SemanticAnimationCompositionKind, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticNodeId, SemanticObjectState, SemanticStore, SemanticSubsetDisplayMode, SemanticVec3,
-    Style, Transform2D,
+    AnimationOptions, Bounds2D64, Color, NativePointerInput, SemanticAffineLifecycleDirection,
+    SemanticAffineLifecycleEndpoint, SemanticAnimationCompositionKind, SemanticFadeDirection,
+    SemanticMutationTransaction, SemanticNodeId, SemanticObjectState, SemanticStore,
+    SemanticSubsetDisplayMode, SemanticVec3,
 };
 use std::{cell::RefCell, rc::Rc};
-
-/// An owned observation of one effective runtime object at one publication.
-///
-/// The clone makes the observation safe to retain after the next live mutation;
-/// it is an observation, not another runtime authority.
-#[derive(Clone, Debug, PartialEq)]
-pub struct EffectiveMobjectState {
-    /// Continuous fill definition, when present. `style.fill` then carries only
-    /// the independent fill-opacity multiplier in its alpha component.
-    pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
-    pub z_index: f64,
-    pub transform: Transform2D,
-    pub style: Style,
-    pub appearance: f32,
-    pub publication: PublicationContext,
-}
-
-impl EffectiveMobjectState {
-    /// Current fill alpha, excluding the separate object-composite multiplier.
-    pub fn fill_opacity(&self) -> f64 {
-        self.style.fill.map_or(0.0, |color| f64::from(color.alpha))
-    }
-
-    /// Current stroke alpha, excluding the separate object-composite multiplier.
-    pub fn stroke_opacity(&self) -> f64 {
-        self.style
-            .stroke
-            .map_or(0.0, |color| f64::from(color.alpha))
-    }
-}
-
-/// One object's exact layout observation at a coherent runtime publication.
-///
-/// These bounds retain authored layout semantics and therefore exclude the
-/// renderer's conservative stroke expansion used for visibility indexing.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct EffectiveMobjectLayout {
-    pub center: (f64, f64),
-    pub width: f64,
-    pub height: f64,
-    pub publication: PublicationContext,
-}
 
 /// Activation-relative endpoint for one shared affine appearance lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq)]
