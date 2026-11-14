@@ -7,8 +7,8 @@ use noon::integration::{
     SemanticSceneOperationError, SemanticStoreError,
 };
 use noon::{
-    AnimationOptions, AuthoringError, ExecutionSessionPublicationError, LiveSessionError,
-    MobjectTarget, RateFunction, Scene, SceneRevision, SemanticNodeId, Vec2,
+    AnimationOptions, AuthoringError, ExecutionSessionPublicationError, MobjectTarget,
+    RateFunction, Scene, SceneRevision, SemanticNodeId, Vec2,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
