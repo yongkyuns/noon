@@ -111,19 +111,15 @@ def _outside_callback():
         )
 
 
-def _coordinate_context(shafts):
+def _coordinate_context(owner, *shafts):
     _outside_callback()
-    contexts = [context for shaft in shafts
-                if (context := _shared._live_mutation_context(shaft)) is not None]
-    if contexts and any(context is not contexts[0] for context in contexts[1:]):
-        raise RuntimeError("coordinate shafts belong to different execution contexts")
-    context = contexts[0] if contexts else _shared._live_constructor_context("coordinate query")
-    if context is not None and not all(_shared._is_bound(shaft) for shaft in shafts):
-        raise NotImplementedError(
-            "add live coordinates to the Scene before querying or plotting; "
-            "detached live coordinate reads are not yet exposed by the Python context"
-        )
-    return context
+    contexts = [context for target in (owner, *shafts)
+                if (context := _shared._object_authoring_context(target)) is not None]
+    if contexts:
+        if any(context is not contexts[0] for context in contexts[1:]):
+            raise RuntimeError("coordinate shafts belong to different execution contexts")
+        return contexts[0]
+    return _shared._path_authoring_context()
 
 
 def _family(wrapper, handle, members):
@@ -623,7 +619,7 @@ class NumberLine(_compat.Group):
         self._tip = value
 
     def _coordinate_frame(self):
-        context = _coordinate_context([self.shaft])
+        context = _coordinate_context(self, self.shaft)
         if context is not None:
             return engine_call(context.queryNumberLineFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.numberLineFrame)
@@ -1017,7 +1013,7 @@ class Axes(_compat.Group):
 
     def _coordinate_frame(self):
         # Observe only two shaft identities, not every tick/label in the family.
-        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        context = _coordinate_context(self, self.x_axis.shaft, self.y_axis.shaft)
         if context is not None:
             return engine_call(context.queryAxesFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.axesFrame)
@@ -1440,7 +1436,7 @@ class ThreeDAxes(_compat.Group):
 
     def _coordinate_frame(self):
         shafts = [self.x_axis.shaft, self.y_axis.shaft, self.z_axis.shaft]
-        context = _coordinate_context(shafts)
+        context = _coordinate_context(self, *shafts)
         if context is not None:
             return engine_call(context.queryThreeDAxesFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.threeDAxesFrame)

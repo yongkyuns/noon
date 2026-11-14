@@ -19,17 +19,7 @@ impl CanonicalAuthoringScene {
         &self,
         line: &noon::ManimNumberLine,
     ) -> Result<noon::NumberLineFrame, AuthoringFailure> {
-        let shaft = line
-            .shaft()
-            .map_err(crate::plot_error::coordinate_failure)?;
-        let scene = self.coordinate_scene()?;
-        if !std::rc::Rc::ptr_eq(scene.integration_store(), shaft.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        if !self.identities.contains_key(&shaft.node_id()) {
-            return Err("mobject is not bound to this canonical Scene".into());
-        }
-        scene
+        self.coordinate_scene()?
             .number_line_frame(line)
             .map_err(crate::plot_error::coordinate_failure)
     }
@@ -171,7 +161,8 @@ mod tests {
                 };
                 let line = context.scene.number_line(&options).unwrap();
                 let shaft = line.shaft().unwrap();
-                assert!(context.number_line_frame(&line).is_err(), "unbound shaft");
+                let detached = context.number_line_frame(&line).unwrap();
+                near(detached.number_to_point(first).unwrap(), [-1.0, 0.0]);
                 context.bind_mobject(ObjectId::new(0), &shaft).unwrap();
                 context.scene.add_many(&[line.family().into()]).unwrap();
                 let frame = context.number_line_frame(&line).unwrap();

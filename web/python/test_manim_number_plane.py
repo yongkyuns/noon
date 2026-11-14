@@ -350,7 +350,7 @@ class NumberPlaneAdapterTests(TestCase):
             [(False, []), (True, [])],
         )
 
-    def test_query_routes_through_plane_frame_with_only_two_axis_shafts(self):
+    def test_query_reuses_scene_owner_and_both_shaft_contexts(self):
         plane = self.construct()
         plane.x_axis.shaft = object()
         plane.y_axis.shaft = object()
@@ -359,7 +359,7 @@ class NumberPlaneAdapterTests(TestCase):
         ) as coordinate_context:
             plane._coordinate_frame()
         coordinate_context.assert_called_once_with(
-            [plane.x_axis.shaft, plane.y_axis.shaft]
+            plane, plane.x_axis.shaft, plane.y_axis.shaft
         )
         self.context.queryNumberPlaneFrame.assert_called_once_with(
             plane._semantic_family_handle

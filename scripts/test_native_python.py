@@ -164,6 +164,29 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    def test_detached_coordinate_frames_and_plot_during_playback(self):
+        source = """from noon import *
+class Demo(Scene):
+    async def construct(self):
+        axis = NumberLine((0, 2, 1), length=4)
+        assert abs(axis.n2p(2)[0] - 2) < 1e-5
+        self.add(Circle(0.25))
+        await self.wait(0.125)
+        axes = Axes((0, 2, 1), (0, 2, 1), x_length=4, y_length=4)
+        axes.shift(RIGHT)
+        graph = axes.plot(lambda x: x / 2, (0, 2, 0.25))
+        origin = axes.c2p(0, 0)
+        assert abs(axes.c2p(2, 0)[0] - origin[0] - 4) < 1e-5
+        assert abs(axes.x_axis.n2p(0)[0] - origin[0]) < 1e-5
+        polar = PolarPlane(radius_max=2)
+        point = polar.polar_to_point(1, 0)
+        assert abs(polar.point_to_polar(point)[0] - 1) < 1e-5
+        self.add(axes, graph, polar)
+        await self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_shape_matchers_capture_current_family_bounds(self):
         source = """from noon import *
 class Demo(Scene):

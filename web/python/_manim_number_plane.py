@@ -250,7 +250,7 @@ class NumberPlane(_plot.Axes):
         return self.submobjects[3]
 
     def _coordinate_frame(self):
-        context = _plot._coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        context = _plot._coordinate_context(self, self.x_axis.shaft, self.y_axis.shaft)
         if context is not None:
             return engine_call(context.queryNumberPlaneFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.numberPlaneFrame)
