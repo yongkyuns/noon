@@ -1992,7 +1992,7 @@ def _on_click(self: _base.Scene, target: object, animation: object) -> _base.Sce
         raise NotImplementedError("Scene.on_click requires a shared semantic handle")
     if animation is None:
         engine_call(
-            _context(self).liveClearClickAction,
+            _context(self).clearClickAction,
             target._semantic_handle,
             operation="Scene.on_click",
         )
@@ -2000,13 +2000,13 @@ def _on_click(self: _base.Scene, target: object, animation: object) -> _base.Sce
     if isinstance(animation, GlowPulse):
         if _canonical_glow_pulse_animation(self, animation) is not target:
             raise ValueError("Scene.on_click requires GlowPulse on the same single target")
-        method = _context(self).liveBindClickGlowPulse
+        method = _context(self).bindClickGlowPulse
         parameters = _glow_pulse_parameters(animation, {})
     elif isinstance(animation, _animate.Indicate):
         animated, family = _canonical_indicate_animation(self, animation)
         if family or animated is not target:
             raise ValueError("Scene.on_click requires Indicate on the same single target")
-        method = _context(self).liveBindClickIndicate
+        method = _context(self).bindClickIndicate
         parameters = _indicate_parameters(animation, {})
     else:
         raise NotImplementedError("Scene.on_click supports Indicate(target), GlowPulse(target), or None")

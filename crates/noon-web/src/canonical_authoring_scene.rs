@@ -10274,9 +10274,9 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = liveBindClickIndicate)]
+        #[wasm_bindgen(js_name = bindClickIndicate)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_bind_click_indicate(
+        pub fn bind_click_indicate(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             scale_factor: f64,
@@ -10311,8 +10311,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveBindClickGlowPulse)]
-        pub fn live_bind_click_glow_pulse(
+        #[wasm_bindgen(js_name = bindClickGlowPulse)]
+        pub fn bind_click_glow_pulse(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             intensity: f64,
@@ -10337,8 +10337,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveClearClickAction)]
-        pub fn live_clear_click_action(
+        #[wasm_bindgen(js_name = clearClickAction)]
+        pub fn clear_click_action(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
