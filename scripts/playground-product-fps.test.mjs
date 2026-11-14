@@ -2,7 +2,85 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts,
+  freshProductRunSettled } from "./playground-product-fps.mjs";
+
+test("product Run waits for its own generation, not the previous applied patch", () => {
+  let runGeneration = 4, patchGeneration = "4", patchState = "applied", runInFlight = false;
+  let statusState = "ready";
+  const browser = {
+    __noonExampleGallery: {generationDiagnostics: {get runGeneration() { return runGeneration; }},
+      get runInFlight() { return runInFlight; }},
+    document: {querySelector(selector) {
+      if (selector === "#patch-status") return {dataset: {
+        get state() { return patchState; },
+        get runGeneration() { return patchGeneration; },
+      }};
+      if (selector === "#status") return {dataset: {get state() { return statusState; }}};
+      return null;
+    }},
+  };
+  assert.equal(freshProductRunSettled(4, browser), false);
+  runGeneration = 5; runInFlight = true;
+  assert.equal(freshProductRunSettled(4, browser), false, "old applied patch cannot admit the new Run");
+  patchGeneration = "5"; patchState = "running";
+  assert.equal(freshProductRunSettled(4, browser), false);
+  patchState = "applied";
+  assert.equal(freshProductRunSettled(4, browser), true,
+    "the correct new patch is observable while the source continuation is still active");
+  patchState = "error";
+  assert.equal(freshProductRunSettled(4, browser), true,
+    "a true same-generation source error must remain visible");
+  patchState = "running"; statusState = "error"; runInFlight = false;
+  assert.equal(freshProductRunSettled(4, browser), true,
+    "startup failure before patch identity is still reported");
+});
+
+test("baseline applied status requires a completed new source run and exact example identity", () => {
+  let runGeneration = 7, inFlight = true, finished = null;
+  let patchState = "applied", patchGeneration = "6", selectedExampleId = "showcase-first-scene";
+  let runExampleId = "showcase-first-scene";
+  const browser = {
+    __noonExampleGallery: {
+      generationDiagnostics: {get runGeneration() { return runGeneration; }},
+      get runInFlight() { return inFlight; },
+      get selectedExampleId() { return selectedExampleId; },
+      runPhaseMetrics: {
+        get runGeneration() { return runGeneration; },
+        get exampleId() { return runExampleId; },
+        get sourceRunCompletedAtMs() { return finished; },
+      },
+    },
+    document: {querySelector(selector) {
+      if (selector === "#patch-status") return {dataset: {
+        get state() { return patchState; },
+        get runGeneration() { return patchGeneration; },
+        exampleId: "showcase-first-scene",
+      }};
+      if (selector === "#status") return {dataset: {state:"ready"}};
+      return null;
+    }},
+  };
+  const baseline = {previousGeneration: 6, allowLegacyBaseline: true};
+  const candidate = {previousGeneration: 6, allowLegacyBaseline: false};
+  assert.equal(freshProductRunSettled(baseline, browser), false, "old applied status cannot pass during new source");
+  inFlight = false;
+  assert.equal(freshProductRunSettled(baseline, browser), false, "no completion proof");
+  finished = 1234;
+  assert.equal(freshProductRunSettled(candidate, browser), false, "candidate cannot use legacy admission");
+  assert.equal(freshProductRunSettled(baseline, browser), true, "baseline's new completed run is accepted");
+  runExampleId = "different-example";
+  assert.equal(freshProductRunSettled(baseline, browser), false, "mismatched source identity");
+  runExampleId = selectedExampleId;
+  patchState = "running";
+  assert.equal(freshProductRunSettled(baseline, browser), false, "no running patch accepted");
+  patchState = "applied";
+  runGeneration = 6;
+  assert.equal(freshProductRunSettled(baseline, browser), false, "old generation cannot pass");
+  runGeneration = 7;
+  patchGeneration = "7";
+  assert.equal(freshProductRunSettled(candidate, browser), true, "normal current run keeps strict receipt");
+});
 
 function sample({
   now = 0,

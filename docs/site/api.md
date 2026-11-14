@@ -1,27 +1,45 @@
 # API reference
 
-This build contains two different source-backed references: compiler-generated
-Rust documentation, and a static index of the Python facade's explicit exports.
-The revision and extraction coverage are recorded with the site.
+Look up a symbol after learning the basic scene model. Python declarations and
+Rustdoc are generated from the same source revision as this website.
+
+## Choose a reference
+
+| You are writing | Reference | Learn the model |
+| --- | --- | --- |
+| Python, in a browser or natively | [Python symbols](#python) | [Python walkthrough](python.html) |
+| Rust | [Generated Rust API](rust/noon/index.html) | [Rust walkthrough](rust.html) |
+| A native viewer | [Native host API](rust/noon_native/index.html) | [Rust library details](native-rust.html) |
+| A native export tool | [Export host API](rust/noon_export/index.html) | [Exporting visuals](export.html) |
+
+## Common starting points
+
+[Scene](python-Scene.html) · [Mobject](python-Mobject.html) ·
+[Circle](python-Circle.html) · [Square](python-Square.html) ·
+[VGroup](python-VGroup.html) · [Text](python-Text.html) ·
+[Create](python-Create.html) · [Transform](python-Transform.html)
 
 ## Rust
 
-[Open the generated Rust API](rust/noon/index.html). Rustdoc supplies the actual
-public signatures, traits, types and docstrings for this checkout's default
-feature profile. A back-link on each generated page returns to this documentation.
-For complete applications and host usage, see [Rust library details](native-rust.html)
-and [native export details](export-details.html).
+[Open generated Rustdoc](rust/noon/index.html) for public signatures, traits,
+types and docstrings in this checkout's default feature profile. Each generated
+page has a link back to this documentation. Host-specific setup is covered in
+[the implementation reference](reference.html), not inferred from a symbol name.
 
 ## Python
 
-The index below resolves `noon.__all__`, `_PUBLIC_EXPORTS`, and local aliases
-without importing the runtime. Each callable page includes its declared signature,
-parameter kinds/defaults/annotations, return annotation, docstring and source link.
-Class pages list their declared methods and bases.
-
-This is source-derived documentation, not an execution test. Dynamically attached
-or inherited members are not silently treated as absent: the page identifies its
-coverage, and unresolved external/runtime exports are listed explicitly.
-A symbol's presence does not establish every native/browser feature combination.
+Search below by class, function, constant, or source module. Each callable page
+lists its declared signature, defaults, annotations, documentation and source.
+Class pages identify bases and list declared members.
 
 <!-- noon:python-index -->
+
+## Coverage and host support
+
+The index resolves `noon.__all__`, `_PUBLIC_EXPORTS`, and local aliases without
+importing the runtime. Inherited or dynamically attached members are not expanded;
+unresolved external/runtime exports are listed explicitly. Presence in this
+reference is not a claim that every host and feature combination is supported.
+
+For behavior and restrictions, start with [scene authoring](guide.html),
+[playback](playback.html), or the [host references](reference.html).

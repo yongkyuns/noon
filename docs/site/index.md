@@ -1,38 +1,34 @@
-# Documentation
+# Noon documentation
 
-Noon is an experimental animation engine with Rust and Python authoring. Start
-with a runnable scene, learn the authoring model, then use the API and architecture
-references when you need detail. These pages are built from the same checkout as
-the website; the revision is shown below every page.
+These docs cover writing and running scenes in Python and Rust. The browser
+tutorial shows how to edit an example and how Noon handles source errors.
 
-## Choose a starting point
+<!-- noon:paths start -->
 
-| You want to… | Start here |
-| --- | --- |
-| Try an editable scene without installing anything | [Browser quick start](getting-started.html#browser) |
-| Author in Python and run a native window | [Python walkthrough](python.html) |
-| Write ordinary Rust functions and run them natively | [Rust walkthrough](rust.html) |
-| Save PNG frames or an MP4 | [Exporting visuals](export.html) |
-| Find a class, method, or parameter | [API reference](api.html) |
-| Understand what the Rust engine owns | [Architecture](architecture.html) |
+## Tutorials and guides
 
-## Read the guides in order
+1. **[Getting started](getting-started.html).** Run a scene and change its
+   appearance and timing.
+2. **[Scenes and animation](guide.html).** Arrange and group objects, then animate
+   them in parallel or in sequence.
+3. **[Installation](installation.html).** Use the browser playground or build
+   native Python and Rust from a source checkout.
+4. **[Export](export.html).** Save a finite scene as frames or video.
 
-After [getting started](getting-started.html), read the language walkthrough and
-[scene authoring](guide.html). [Playback and interaction](playback.html) explains
-why live input, callbacks, and finite replay have different capabilities.
-[Examples](examples.html) pairs an interactive preview with editable source.
+## Reference
 
-## Reference versus support
+<!-- noon:paths reference -->
 
-A symbol appearing in the API reference means it is exported in this checkout;
-it does **not** by itself establish support in every host or every combination.
-Native Rust, native CPython, and browser Python have different integration
-boundaries. Consult the host notes and runnable examples. ManimCE semantics are a
-useful point of reference for supported features, not a strict compatibility
-promise or a long-term constraint.
+[Playback and interaction](playback.html) explains the capabilities of live and
+replayable scenes. [Troubleshooting](troubleshooting.html) helps with blank output,
+source errors, native builds, and export failures.
 
-Detailed references live on this website too: the
-[implementation reference](reference.html), [browser integration](web-runtime.html),
-[native Python details](native-python.html), [Rust library details](native-rust.html),
-and [type map](internals.html) are rendered from their canonical repository sources.
+## Current status
+
+Noon is experimental. Python runs in the browser and natively. Rust has native
+and WebAssembly paths. Feature coverage differs between hosts. The API reference
+lists the declarations in this source revision.
+
+ManimCE is the reference for supported Python authoring behavior and visuals.
+See the [implementation reference](reference.html) for host coverage. Each page
+links to its source and records the revision it was built from.

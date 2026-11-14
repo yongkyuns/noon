@@ -1044,6 +1044,22 @@ impl GpuRenderer {
         self.spatial.reset_publication_context();
     }
 
+    /// Retire scene-specific GPU bindings without recompiling immutable
+    /// shader pipelines on the same device. Called between retained sessions
+    /// after candidate geometry residency has been validated and uploaded.
+    pub fn reset_retained_source_state(&mut self, device: &wgpu::Device) {
+        self.spatial = mesh::SpatialGpuState::default();
+        self.reset_retained_effect_publication();
+        self.fill_paints = None;
+        self.images = None;
+        self.derived_display = DerivedDisplayGpu::new(device);
+        self.inset_views.clear();
+        self.inset_targets.clear();
+        self.inset_camera_buffers.clear();
+        self.inset_camera_bind_groups.clear();
+        self.inset_camera_by_display.clear();
+    }
+
     pub fn set_viewport(
         &mut self,
         device: &wgpu::Device,
