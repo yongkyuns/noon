@@ -570,7 +570,6 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         circle._noon_updaters = [registration.callback]
         circle._noon_updater_registrations = [registration]
         circle._noon_updater_registration_history = [registration]
-        self.assertIsNone(semantic_handles._live_mutation_context(circle))
         copied = semantic_handles._copy_mobject(circle)
         self.assertIs(copied._semantic_handle, target_handle)
         self.assertFalse(hasattr(copied, "_noon_updaters"))

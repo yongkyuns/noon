@@ -308,7 +308,7 @@ class Surface(_Mesh3D, _compat.Group):
         family = getattr(self, "_semantic_family_handle", None)
         if family is None:
             raise NotImplementedError("single-mesh Surface does not support family checkerboard edits")
-        context = _group_target_context(self, include_setup=True)
+        context = _group_target_context(self)
         if context is None:
             engine_call(family.setFillByCheckerboard, first, second, opacity)
         else:

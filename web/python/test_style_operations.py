@@ -715,10 +715,10 @@ class StyleOperationsTests(unittest.TestCase):
         bridge, context = Mock(), Mock()
         for live in [None, context]:
             with patch.object(handles, '_handle_for', return_value=bridge), \
-                 patch.object(handles, '_live_mutation_context', return_value=live):
+                 patch.object(handles, '_path_authoring_context', return_value=live):
                 self.assertIs(handles._set_fill(obj), obj)
                 self.assertIs(handles._set_stroke(obj), obj)
         bridge.disableFill.assert_not_called()
         bridge.disableStroke.assert_not_called()
-        context.liveDisableFill.assert_not_called()
-        context.liveDisableStroke.assert_not_called()
+        context.disableFill.assert_not_called()
+        context.disableStroke.assert_not_called()

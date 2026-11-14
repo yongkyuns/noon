@@ -17,7 +17,7 @@ class SharedFamilyAffineTests(unittest.TestCase):
                 family._semantic_family_handle.memberKeys.return_value = []
                 family.get_center = Mock(side_effect=AssertionError("Python must not resolve family pivots"))
                 context = Mock() if live else None
-                with patch.object(handles, "_group_live_layout_context", return_value=context):
+                with patch.object(handles, "_group_layout_context", return_value=context):
                     self.assertIs(family.scale((2, 3)), family)
                     self.assertIs(family.rotate(0.5, about_edge=(1, -1)), family)
                     self.assertIs(family.rotate(0.25, about_point=(4, 5)), family)

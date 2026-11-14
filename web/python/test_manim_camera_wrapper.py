@@ -13,15 +13,13 @@ class MovingCameraWrapperTests(unittest.TestCase):
         from _typed_geometry_test_support import identity_only_wrapper
         frame = identity_only_wrapper(camera._CameraFrame)
         handle = Mock()
-        for live in (False, True):
-            context = Mock() if live else None
-            with patch.object(camera._semantic_handles, "_handle_for", return_value=handle), \
-                 patch.object(camera._semantic_handles, "_live_mutation_context", return_value=context):
-                self.assertIs(frame.set_view_color_profile("linear_hdr"), frame)
-            if live:
-                context.setViewColorProfile.assert_called_once_with(handle, "linear_hdr")
-            else:
-                handle.setViewColorProfile.assert_called_once_with("linear_hdr")
+        context = Mock()
+        frame._canonical_live_target_context = context
+        with patch.object(camera._semantic_handles, "_handle_for", return_value=handle):
+            self.assertIs(frame.set_view_color_profile("linear_hdr"), frame)
+        context.setViewColorProfile.assert_called_once_with(handle, "linear_hdr")
+        context.requiresLiveMutationRouting.assert_not_called()
+        handle.setViewColorProfile.assert_not_called()
         self.assertNotIn("color_profile", frame.__dict__)
         with self.assertRaises(TypeError):
             frame.set_view_color_profile(True)

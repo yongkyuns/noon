@@ -364,7 +364,7 @@ class ManimSharedFamilyIdentityTests(unittest.TestCase):
         anchor = SimpleNamespace(free=Mock())
         context = SimpleNamespace(queryFamilyLayout=Mock(return_value=layout),
                                   queryLayoutDimensionLength=Mock(side_effect=lambda handle, dim: (99, 13)[dim]))
-        with patch.object(handles, "_group_live_layout_context", return_value=context), \
+        with patch.object(handles, "_group_layout_context", return_value=context), \
              patch.object(handles, "_layout_anchor", return_value=anchor):
             self.assertEqual(family.get_center(), compat._base.Vec2(7, -2))
             self.assertEqual((family.width, family.height), (99, 13))

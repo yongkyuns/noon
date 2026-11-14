@@ -300,7 +300,7 @@ class Arrow(_compat.Group):
             raise NotImplementedError(
                 f"Arrow.scale pivot option(s) are not yet shared Rust semantics: {unknown}"
             )
-        context = _shared._group_live_layout_context(self, include_setup=True)
+        context = _shared._group_layout_context(self)
         handle = getattr(self, "_semantic_arrow_handle", None)
         if handle is None:
             raise RuntimeError("Arrow.scale requires the shared Rust authoring host")

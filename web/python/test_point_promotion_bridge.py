@@ -70,7 +70,7 @@ class PointPromotionBridgeTests(unittest.TestCase):
                     self.assertEqual(source._semantic_member_wrappers, {'2:0': child, '3:0': clone})
                     self.assertEqual(scope.wrappers, {'2:0': child})
                     self.assertIsNot(scope.wrappers, source._semantic_member_wrappers)
-                    owner.assert_called_once_with(source, include_setup=True)
+                    owner.assert_called_once_with(source)
                     batch.assert_called_once_with(context, 'add', (source, child))
                     if with_scene:
                         method = context.promoteFamilyOwnPoints if family else context.promoteMobjectOwnPoints

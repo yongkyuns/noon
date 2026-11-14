@@ -39,7 +39,7 @@ class ManimMobjectDepthTests(unittest.TestCase):
         group._semantic_family_handle = object()
         self.anchor.dimensionLength = lambda dim: 6.25
         with patch.object(semantic, "_layout_anchor", return_value=self.anchor), \
-             patch.object(semantic, "_group_live_layout_context", return_value=None):
+             patch.object(semantic, "_group_layout_context", return_value=None):
             self.assertEqual(group.depth, 6.25)
             self.assertIs(group.scale_to_fit_depth(7.), group)
         self.assertEqual(self.calls, [("fit", (7., 2, False, 0., 0., 0., False))])

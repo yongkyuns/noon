@@ -105,7 +105,7 @@ class _WorldMobject(_base.Mobject):
         if handle is None:
             raise NotImplementedError("world edits require an ordinary typed authoring context")
         if family is not None:
-            context = _group_target_context(self, include_setup=True)
+            context = _group_target_context(self)
             if context is None:
                 if authored == "rotateWorld":
                     args = (args[3], _bulk(args[:3]), *args[4:])

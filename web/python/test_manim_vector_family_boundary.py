@@ -115,7 +115,7 @@ class VectorFamilyBoundaryTests(unittest.TestCase):
         root, _ = self.family()
         context = Mock()
         context.queryFamilyVectorBoundaryPoints3D.return_value = [1., 2.]
-        with patch.object(handles, '_group_live_layout_context', return_value=context):
+        with patch.object(handles, '_group_layout_context', return_value=context):
             self.assertEqual(handles._vector_boundary_points_observation(root), [1., 2.])
             context.queryFamilyVectorBoundaryPoints3D.side_effect = RuntimeError('stale publication')
             with self.assertRaisesRegex(Exception, 'stale publication'):

@@ -104,18 +104,6 @@ def _object_authoring_context(value: object):
     return getattr(getattr(value, "_scene", None), "_canonical_authoring_context", None)
 
 
-def _live_mutation_context(value: object):
-    """Find the context that owns an existing or transferred player."""
-    context = _object_authoring_context(value)
-    if context is None:
-        return None
-    # Returning the player keeps its runtime alive for the next source operation.
-    # Mutations and target creation must publish through that same session too.
-    # A transferred runtime retains this context so its typed call rejects before
-    # changing the shared store while another endpoint owns the player.
-    return context if engine_call(context.requiresLiveMutationRouting) else None
-
-
 def _typed_manim_observation(
     value: object,
     handle_method: str,
@@ -813,11 +801,11 @@ def _content_critical_point_3d(value: _base.Mobject, direction):
     """Forward opaque-content XYZ queries without constructing point geometry."""
     coordinates = _compat._manim_point3(direction)
     family = _is_shared_family(value)
-    # Resolve the callback/live guard before creating an owned observation.
+    # Check callback and Scene ownership before creating the layout anchor.
     if family:
-        context = _group_live_layout_context(value) or _object_authoring_context(value)
+        context = _group_layout_context(value)
     else:
-        context = _bound_query_context(value) or _live_mutation_context(value)
+        context = _bound_query_context(value) or _path_authoring_context(value)
     if family:
         handle = value._semantic_family_handle
         anchor = engine_call(handle.layoutAnchor, _semantic_member_index(None))
@@ -836,7 +824,7 @@ def _content_critical_point_3d(value: _base.Mobject, direction):
 def _layout_dimension(self: _base.Mobject, dimension: int) -> float:
     """Read Rust content extents without asking for vector boundary anchors."""
     if _is_shared_family(self):
-        context = _group_live_layout_context(self) or _object_authoring_context(self)
+        context = _group_layout_context(self)
         anchor = _layout_anchor(self)
         if anchor is None:
             raise RuntimeError("family layout requires a current shared Rust semantic handle")
@@ -1216,8 +1204,8 @@ def _become(
         source = self._semantic_family_handle
         target = mobject._semantic_family_handle
         flags = (bool(match_height), bool(match_width), bool(match_center), bool(stretch))
-        context = (_group_target_context(self, include_setup=True)
-                   or _group_target_context(mobject, include_setup=True))
+        context = (_group_target_context(self)
+                   or _group_target_context(mobject))
         if context is None:
             engine_call(source.becomeFamily, target, *flags)
         else:
@@ -1276,7 +1264,7 @@ def _replacement_anchors(self, mobject, dimension):
         raise RuntimeError("replacement requires a shared Rust target layout")
     if context is None:
         if _is_shared_family(mobject):
-            context = _group_live_layout_context(mobject)
+            context = _group_layout_context(mobject)
         context = context or _object_authoring_context(mobject)
     return source, target, context
 
@@ -1611,7 +1599,7 @@ def _paint_call(handle, context, method, *arguments):
 
 def _paint_authoring_target(value):
     if _is_shared_family(value):
-        context = _object_authoring_context(value) or _group_target_context(value, include_setup=True)
+        context = _object_authoring_context(value) or _group_target_context(value)
         return value._semantic_family_handle, context, "Family"
     return _handle_for(value), _path_authoring_context(value), ""
 
@@ -2480,7 +2468,7 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
     from _manim_path_editing import _raw_point3
     offset = _raw_point3(direction)
     arguments = offset if offset[2] != 0.0 else offset[:2]
-    context = _group_target_context(self, include_setup=True)
+    context = _group_target_context(self)
     if context is not None:
         try:
             engine_call(context.shiftFamily, self._semantic_family_handle, *arguments)
@@ -2494,7 +2482,7 @@ def _group_shift(self: _compat.Group, direction: object) -> _compat.Group:
     return self
 
 
-def _group_live_layout_context(value: _compat.Group, *, include_setup=False):
+def _group_layout_context(value: _compat.Group):
     # Callback registration does not invalidate the coherent live publication.
     # Family observations inside an ordered overlay need shared phase-local
     # aggregation; neither the authored state nor the last publication suffices.
@@ -2503,8 +2491,7 @@ def _group_live_layout_context(value: _compat.Group, *, include_setup=False):
     leaves = _compat._leaf_mobjects(value)
     if any(_canonical_phase_context(leaf) is not None for leaf in leaves):
         raise NotImplementedError("family layout is unsupported during an active callback phase")
-    context = (_group_target_context(value, include_setup=True) if include_setup
-               else _group_target_context(value))
+    context = _group_target_context(value)
     if context is None:
         return None
     for leaf in leaves:
@@ -2515,7 +2502,7 @@ def _group_live_layout_context(value: _compat.Group, *, include_setup=False):
 
 
 def _layout_authoring_context(value, *targets):
-    context = _group_live_layout_context(value, include_setup=True) if _is_shared_family(value) else None
+    context = _group_layout_context(value) if _is_shared_family(value) else None
     return context or _path_authoring_context(value, *targets)
 
 
@@ -2654,7 +2641,7 @@ def _group_arrange(
 
 
 def _group_layout_observation(value: _compat.Group):
-    context = _group_live_layout_context(value)
+    context = _group_layout_context(value)
     if context is not None:
         return engine_call(context.queryFamilyLayout, value._semantic_family_handle)
     layout = _shared_family_layout(value)
@@ -2735,7 +2722,7 @@ def _point_query_observation(value: _base.Mobject, operation: str, *arguments):
     handle_method = operation[0].lower() + operation[1:]
     if _is_shared_family(value):
         family = value._semantic_family_handle
-        context = _group_live_layout_context(value, include_setup=True)
+        context = _group_layout_context(value)
         if context is not None:
             return engine_call(
                 getattr(context, f"queryFamily{operation}"),
@@ -3463,16 +3450,16 @@ def _group_remove(self: _compat.Group, *mobjects: object) -> _compat.Group:
     return self
 
 
-def _group_target_context(value: object, *, include_setup=False) -> object | None:
+def _group_target_context(value: object) -> object | None:
+    """Find one Scene for a family and check its member ownership."""
     contexts: list[object] = []
     seen: set[int] = set()
-    resolve = _object_authoring_context if include_setup else _live_mutation_context
 
     def collect(member: object) -> None:
         if id(member) in seen:
             return
         seen.add(id(member))
-        context = resolve(member)
+        context = _object_authoring_context(member)
         if context is not None:
             contexts.append(context)
         if _is_shared_family(member):
@@ -3482,12 +3469,7 @@ def _group_target_context(value: object, *, include_setup=False) -> object | Non
 
     collect(value)
     if not contexts:
-        # Detached families may lack owner markers. Source execution supplies
-        # the current Scene when the requested operation accepts that phase.
-        context = _path_authoring_context(value)
-        if include_setup or context is None or engine_call(context.requiresLiveMutationRouting):
-            return context
-        return None
+        return _path_authoring_context(value)
     context = contexts[0]
     if any(candidate is not context for candidate in contexts[1:]):
         raise RuntimeError("Group target members belong to different canonical contexts")
@@ -3497,7 +3479,7 @@ def _group_target_context(value: object, *, include_setup=False) -> object | Non
 def _group_copy_operation(
     self: _base.Mobject, *, cyclic_replace: bool, promote_own_points: bool = False
 ) -> _base.Mobject:
-    context = _group_target_context(self, include_setup=True)
+    context = _group_target_context(self)
 
     def excluded_fields(value):
         excluded = {

@@ -16,7 +16,7 @@ class SharedFamilyGridTests(unittest.TestCase):
                 family._semantic_family_handle = Mock()
                 context = Mock() if live else None
                 family.get_center = Mock(side_effect=AssertionError("Rust owns grid bounds"))
-                with patch.object(handles, "_group_live_layout_context", return_value=context):
+                with patch.object(handles, "_group_layout_context", return_value=context):
                     self.assertIs(family.arrange_in_grid(rows=2, buff=(0.5, 0.25)), family)
                 family._semantic_family_handle.gridOptions.assert_called_once_with(2, None, 0.5, 0.25)
                 options = family._semantic_family_handle.gridOptions.return_value
@@ -40,7 +40,7 @@ class SharedFamilyGridTests(unittest.TestCase):
     def test_rich_options_only_coerce_and_forward_to_one_shared_transaction(self):
         family = identity_only_wrapper(compat.VGroup, submobjects=[])
         family._semantic_family_handle = Mock()
-        with patch.object(handles, "_group_live_layout_context", return_value=None):
+        with patch.object(handles, "_group_layout_context", return_value=None):
             family.arrange_in_grid(cell_alignment=(-1, 1), row_alignments="ud",
                                    col_alignments="lr", row_heights=(v for v in (1, None)),
                                    col_widths=[None, 2], flow_order="dr")

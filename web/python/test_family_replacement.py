@@ -21,7 +21,7 @@ class FamilyReplacementTests(unittest.TestCase):
     def test_detached_families_use_one_shared_transaction(self):
         with patch.object(semantic, "_dimension_fit_source", return_value=(self.source_anchor, None)), \
              patch.object(semantic, "_layout_anchor", return_value=self.target_anchor), \
-             patch.object(semantic, "_group_live_layout_context", return_value=None), \
+             patch.object(semantic, "_group_layout_context", return_value=None), \
              patch.object(semantic, "_path_authoring_context", return_value=None):
             self.assertIs(self.source.replace(self.target, dim_to_match=1, stretch=True), self.source)
         self.assertEqual(self.calls, [(self.target_anchor, 1, True)])
@@ -31,7 +31,7 @@ class FamilyReplacementTests(unittest.TestCase):
         for source_context in (context, None):
             with patch.object(semantic, "_dimension_fit_source", return_value=(self.source_anchor, source_context)), \
                  patch.object(semantic, "_layout_anchor", return_value=self.target_anchor), \
-                 patch.object(semantic, "_group_live_layout_context", return_value=context):
+                 patch.object(semantic, "_group_layout_context", return_value=context):
                 self.assertIs(self.source.replace(self.target), self.source)
         self.assertEqual(self.calls, [(self.source_anchor, self.target_anchor, 0, False)] * 2)
 

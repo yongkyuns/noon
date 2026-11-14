@@ -2292,7 +2292,7 @@ def _apply_matrix_target(target: object, animation: object) -> None:
             "ApplyMatrix requires a typed semantic Mobject or family"
         )
     context = (
-        _semantic_handles._group_target_context(target, include_setup=True)
+        _semantic_handles._group_target_context(target)
         if is_family
         else _semantic_handles._path_authoring_context(target)
     )

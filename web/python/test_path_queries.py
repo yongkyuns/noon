@@ -660,7 +660,7 @@ class PathQueryTests(unittest.TestCase):
         context.queryFamilyPointArray.return_value = coordinates
         with patch.object(
             semantic_handles,
-            "_group_live_layout_context",
+            "_group_layout_context",
             return_value=context,
         ):
             self.assertIs(semantic_handles._point_array_observation(value), coordinates)
@@ -670,7 +670,7 @@ class PathQueryTests(unittest.TestCase):
         family.pointArray.return_value = coordinates
         with patch.object(
             semantic_handles,
-            "_group_live_layout_context",
+            "_group_layout_context",
             return_value=None,
         ):
             self.assertIs(semantic_handles._point_array_observation(value), coordinates)
@@ -698,7 +698,7 @@ class PathQueryTests(unittest.TestCase):
         context.queryFamilyExtremumAlongDim.return_value = 4.0
         with patch.object(
             semantic_handles,
-            "_group_live_layout_context",
+            "_group_layout_context",
             return_value=context,
         ):
             self.assertEqual(semantic_handles._extremum_along_dim_observation(value, 1, 1.0), 4.0)
@@ -708,7 +708,7 @@ class PathQueryTests(unittest.TestCase):
         family.extremumAlongDim.return_value = 2.0
         with patch.object(
             semantic_handles,
-            "_group_live_layout_context",
+            "_group_layout_context",
             return_value=None,
         ):
             self.assertEqual(semantic_handles._extremum_along_dim_observation(value, 0, -1.0), 2.0)
@@ -724,7 +724,7 @@ class PathQueryTests(unittest.TestCase):
         context.queryFamilyLengthOverDim.return_value = 5.0
         with patch.object(
             semantic_handles,
-            "_group_live_layout_context",
+            "_group_layout_context",
             return_value=context,
         ):
             self.assertEqual(

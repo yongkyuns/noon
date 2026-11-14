@@ -31,7 +31,7 @@ class ShapeMatcherObservationTests(unittest.TestCase):
         target = object.__new__(geometry._compat.VGroup)
         target._semantic_family_handle = Mock()
         context = SimpleNamespace(familyShapeMatcherBounds=Mock())
-        with patch.object(geometry._shared, "_group_live_layout_context", return_value=context):
+        with patch.object(geometry._shared, "_group_layout_context", return_value=context):
             self.assertEqual(geometry._shape_matcher_bounds(target), (context.familyShapeMatcherBounds.return_value, context))
         context.familyShapeMatcherBounds.assert_called_once_with(target._semantic_family_handle)
         target._semantic_family_handle.shapeMatcherBounds.assert_not_called()

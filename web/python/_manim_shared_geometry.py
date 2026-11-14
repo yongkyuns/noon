@@ -237,7 +237,7 @@ def _shape_matcher_bounds(target: object):
         if not _shared._is_shared_family(target):
             raise NotImplementedError("shape matcher Group/VGroup targets require shared semantic family bounds")
         handle = target._semantic_family_handle
-        context = _shared._group_live_layout_context(target, include_setup=True)
+        context = _shared._group_layout_context(target)
         read = handle.shapeMatcherBounds if context is None else context.familyShapeMatcherBounds
     else:
         handle = _shared._handle_for(target)
