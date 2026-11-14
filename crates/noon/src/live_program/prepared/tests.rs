@@ -37,7 +37,7 @@ impl LiveContinuation for Script {
             0 => Ok(ContinuationStep::Await(scene.live().wait_segment(1.0)?)),
             1 => {
                 if self.animate {
-                    let target = scene.live().target_editor(&self.target)?;
+                    let target = scene.target_editor(&self.target)?;
                     scene.live().set_translation(&target, 2.0, 0.0)?;
                     Ok(ContinuationStep::Await(
                         scene.live().declare_and_activate_transform_to(

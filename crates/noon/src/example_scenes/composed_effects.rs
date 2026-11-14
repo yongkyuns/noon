@@ -21,25 +21,29 @@ fn message(error: impl std::fmt::Display) -> String {
 impl LiveContinuation for ComposedEffects {
     type Error = String;
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         if self.animated && self.stage == 1 {
-            let reference = live.copy_family(&self.reference).map_err(message)?;
-            let inner = live.copy_family(&self.inner).map_err(message)?;
-            let outer = live.copy_family(&self.outer).map_err(message)?;
+            let reference = scene.copy_family(&self.reference).map_err(message)?;
+            let inner = scene.copy_family(&self.inner).map_err(message)?;
+            let outer = scene.copy_family(&self.outer).map_err(message)?;
             for family in [reference.root(), inner.root()] {
-                live.set_effect(
-                    family,
-                    "soften",
-                    EffectUpdate::default().radius(Pixels(4.0)),
-                )
-                .map_err(message)?;
+                scene
+                    .live()
+                    .set_effect(
+                        family,
+                        "soften",
+                        EffectUpdate::default().radius(Pixels(4.0)),
+                    )
+                    .map_err(message)?;
             }
-            live.set_glow(outer.root(), EffectUpdate::default().intensity(0.6))
+            scene
+                .live()
+                .set_glow(outer.root(), EffectUpdate::default().intensity(0.6))
                 .map_err(message)?;
             let options = AnimationOptions::new()
                 .run_time(1.0)
                 .rate_func(RateFunction::Linear);
-            let segment = live
+            let segment = scene
+                .live()
                 .declare_and_activate_animation_composition(
                     SemanticAnimationCompositionKind::Parallel,
                     &[
@@ -68,7 +72,8 @@ impl LiveContinuation for ComposedEffects {
         }
         if self.animated && self.stage == 2 {
             self.stage += 1;
-            return live
+            return scene
+                .live()
                 .wait_segment(0.5)
                 .map(ContinuationStep::Await)
                 .map_err(message);
@@ -82,27 +87,36 @@ impl LiveContinuation for ComposedEffects {
             0 => {}
             1 => {
                 for family in [&self.reference, &self.inner] {
-                    live.set_effect(
-                        family,
-                        "soften",
-                        EffectUpdate::default().radius(Pixels(4.0)),
-                    )
-                    .map_err(message)?;
+                    scene
+                        .live()
+                        .set_effect(
+                            family,
+                            "soften",
+                            EffectUpdate::default().radius(Pixels(4.0)),
+                        )
+                        .map_err(message)?;
                 }
-                live.set_glow(&self.outer, EffectUpdate::default().intensity(0.6))
+                scene
+                    .live()
+                    .set_glow(&self.outer, EffectUpdate::default().intensity(0.6))
                     .map_err(message)?;
             }
             2 => {
                 for family in [&self.reference, &self.inner] {
-                    live.remove_effect(family, "soften").map_err(message)?;
+                    scene
+                        .live()
+                        .remove_effect(family, "soften")
+                        .map_err(message)?;
                 }
             }
-            3 => live.remove_glow(&self.outer).map_err(message)?,
+            3 => scene.live().remove_glow(&self.outer).map_err(message)?,
             4 => return Ok(ContinuationStep::Finished),
             _ => return Err("composed example resumed after completion".into()),
         }
         self.stage += 1;
-        live.wait_segment(0.5)
+        scene
+            .live()
+            .wait_segment(0.5)
             .map(ContinuationStep::Await)
             .map_err(message)
     }

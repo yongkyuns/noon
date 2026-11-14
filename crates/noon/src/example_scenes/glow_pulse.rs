@@ -24,21 +24,28 @@ impl LiveContinuation for GlowPulseScene {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let segment = match self.stage {
-            0 => live.wait_segment(0.5),
+            0 => scene.live().wait_segment(0.5),
             1 => {
-                let target = live.target_editor(&self.persistent).map_err(message)?;
-                live.set_glow(&target, EffectUpdate::default().intensity(1.2))
+                let target = scene.target_editor(&self.persistent).map_err(message)?;
+                scene
+                    .live()
+                    .set_glow(&target, EffectUpdate::default().intensity(1.2))
                     .map_err(message)?;
-                live.declare_and_activate_transform_to(&self.persistent, &target, linear(0.5))
+                scene.live().declare_and_activate_transform_to(
+                    &self.persistent,
+                    &target,
+                    linear(0.5),
+                )
             }
             2 => {
-                let target = live.target_editor(&self.persistent).map_err(message)?;
-                live.shift(&target, 0.0, 0.4).map_err(message)?;
-                live.set_glow(&target, EffectUpdate::default().radius(Pixels(12.0)))
+                let target = scene.target_editor(&self.persistent).map_err(message)?;
+                scene.live().shift(&target, 0.0, 0.4).map_err(message)?;
+                scene
+                    .live()
+                    .set_glow(&target, EffectUpdate::default().radius(Pixels(12.0)))
                     .map_err(message)?;
-                live.declare_and_activate_animation_composition(
+                scene.live().declare_and_activate_animation_composition(
                     SemanticAnimationCompositionKind::Parallel,
                     &[
                         Request::GlowPulse {
@@ -62,10 +69,12 @@ impl LiveContinuation for GlowPulseScene {
             }
             // The left restores its activation-time 1.2, keeping motion/radius.
             // The right's temporary binding retires at this play's completion.
-            3 => live.wait_segment(0.4),
-            4 => live.declare_and_activate_glow_pulse(&self.temporary, 1.5, linear(0.5)),
-            5 | 7 => live.wait_segment(0.25),
-            6 => live.declare_and_activate_glow_pulse(
+            3 => scene.live().wait_segment(0.4),
+            4 => scene
+                .live()
+                .declare_and_activate_glow_pulse(&self.temporary, 1.5, linear(0.5)),
+            5 | 7 => scene.live().wait_segment(0.25),
+            6 => scene.live().declare_and_activate_glow_pulse(
                 &self.temporary,
                 1.5,
                 linear(0.5).reverse_rate_function(true),

@@ -3417,9 +3417,11 @@ impl CanonicalAuthoringScene {
         source.validate().map_err(AuthoringFailure::from)?;
         match &mut self.player_ownership {
             PlayerOwnership::Unstarted => source.target_editor().map_err(AuthoringFailure::from),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_target_editor(source)
-            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
+                .active_live_player()?
+                .scene_mut()
+                .target_editor(source)
+                .map_err(AuthoringFailure::from),
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }
@@ -9251,7 +9253,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_copy_family(
+                .scene_mut()
+                .copy_family_with_references(
                     &source,
                     &references.copy_references().map_err(typed_js_error)?,
                 )
@@ -9269,7 +9272,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_cyclic_replace_target(
+                .scene_mut()
+                .cyclic_replace_target_with_references(
                     &source,
                     &references.copy_references().map_err(typed_js_error)?,
                 )
@@ -11414,7 +11418,8 @@ mod wasm {
             self.inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_copy_mobject_family(
+                .scene_mut()
+                .copy_mobject_with_references(
                     source.semantic_mobject(),
                     &references.copy_references().map_err(typed_js_error)?,
                 )
@@ -14018,7 +14023,8 @@ mod tests {
         let copied = context
             .active_live_player()
             .unwrap()
-            .live_copy_family(&pair, &[])
+            .scene_mut()
+            .copy_family(&pair)
             .unwrap();
         let left_target = copied.mobject(&left).unwrap();
         let right_target = copied.mobject(&right).unwrap();

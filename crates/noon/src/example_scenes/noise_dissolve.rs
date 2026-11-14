@@ -16,19 +16,20 @@ fn message(error: impl std::fmt::Display) -> String {
 impl LiveContinuation for ComposedMask {
     type Error = String;
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let segment = match self.stage {
-            0 | 2 | 4 => live.wait_segment(0.5),
+            0 | 2 | 4 => scene.live().wait_segment(0.5),
             1 | 3 => {
-                let target = live.copy_family(&self.source).map_err(message)?;
+                let target = scene.copy_family(&self.source).map_err(message)?;
                 let update = if self.stage == 1 {
                     EffectUpdate::default().progress(1.0)
                 } else {
                     EffectUpdate::default().progress(0.0).softness(0.4)
                 };
-                live.set_effect(target.root(), "mask", update)
+                scene
+                    .live()
+                    .set_effect(target.root(), "mask", update)
                     .map_err(message)?;
-                live.declare_and_activate_composition(
+                scene.live().declare_and_activate_composition(
                     &AnimationCompositionRequest::FamilyMethodTargetTo {
                         source: &self.source,
                         target_state: target.root(),
@@ -40,17 +41,22 @@ impl LiveContinuation for ComposedMask {
                 )
             }
             5 => {
-                live.set_effect(
-                    &self.source,
-                    "mask",
-                    EffectUpdate::default().seed(u32::MAX).progress(0.5),
-                )
-                .map_err(message)?;
-                live.wait_segment(0.5)
+                scene
+                    .live()
+                    .set_effect(
+                        &self.source,
+                        "mask",
+                        EffectUpdate::default().seed(u32::MAX).progress(0.5),
+                    )
+                    .map_err(message)?;
+                scene.live().wait_segment(0.5)
             }
             6 => {
-                live.remove_effect(&self.source, "mask").map_err(message)?;
-                live.wait_segment(0.5)
+                scene
+                    .live()
+                    .remove_effect(&self.source, "mask")
+                    .map_err(message)?;
+                scene.live().wait_segment(0.5)
             }
             7 => return Ok(ContinuationStep::Finished),
             _ => return Err("composed mask resumed after completion".into()),

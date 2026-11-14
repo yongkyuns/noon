@@ -18,8 +18,8 @@ impl LiveContinuation for CameraBloom {
             0 | 2 => scene.live().wait_segment(0.5).map_err(message)?,
             1 | 3 => {
                 let bright = self.stage == 1;
-                let panel = scene.live().target_editor(&self.panel).map_err(message)?;
-                let camera = scene.live().target_editor(&self.camera).map_err(message)?;
+                let panel = scene.target_editor(&self.panel).map_err(message)?;
+                let camera = scene.target_editor(&self.camera).map_err(message)?;
                 scene
                     .set_emission(&panel, if bright { 7.0 } else { 0.0 })
                     .map_err(message)?;

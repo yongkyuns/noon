@@ -337,7 +337,7 @@ mod tests {
                 EffectUpdate::default().radius(noon::effects::Pixels(4.0)),
             )
             .unwrap();
-        let copied = player.live_copy_family(&family, &[]).unwrap();
+        let copied = player.scene_mut().copy_family(&family).unwrap();
         let independent = copied.root().get_effect("soften").unwrap();
         assert_ne!(independent.node_id(), original.node_id());
         assert_eq!(
@@ -470,7 +470,7 @@ mod playback_tests {
             serde_json::from_str(&player.initial_delta_json().unwrap()).unwrap();
         assert_eq!(initial.objects.len(), 1);
         assert_eq!(initial.objects[0].effects[0].attachment, original.node_id());
-        let target = player.live_target_editor(&source).unwrap();
+        let target = player.scene_mut().target_editor(&source).unwrap();
         assert_ne!(
             target.get_effect("glow").unwrap().node_id(),
             original.node_id()

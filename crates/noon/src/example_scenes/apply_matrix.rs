@@ -15,7 +15,6 @@ impl LiveContinuation for ApplyMatrix {
         match self.stage {
             0 => {
                 let target = scene
-                    .live()
                     .target_editor(&self.square)
                     .map_err(|e| e.to_string())?;
                 scene
@@ -37,7 +36,6 @@ impl LiveContinuation for ApplyMatrix {
             }
             1 => {
                 let target = scene
-                    .live()
                     .target_editor(&self.square)
                     .map_err(|e| e.to_string())?;
                 scene
