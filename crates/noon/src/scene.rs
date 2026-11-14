@@ -63,6 +63,35 @@ pub struct EffectiveMobjectLayout {
     pub publication: PublicationContext,
 }
 
+/// The center and dimensions of a Scene layout observation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MobjectLayout {
+    pub center: (f64, f64),
+    pub width: f64,
+    pub height: f64,
+}
+
+impl From<EffectiveMobjectLayout> for MobjectLayout {
+    fn from(layout: EffectiveMobjectLayout) -> Self {
+        Self {
+            center: layout.center,
+            width: layout.width,
+            height: layout.height,
+        }
+    }
+}
+
+/// Select the center of an authored object layout.
+///
+/// During execution the current publication supplies the semantic center.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthoredLayoutCenter {
+    /// Use the semantic content boundary, including vector path anchors.
+    Boundary,
+    /// Use the midpoint of the dimension bounds, including cubic handles.
+    Bounds,
+}
+
 /// Presentation/export intent attached to one authored section boundary.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SectionType {

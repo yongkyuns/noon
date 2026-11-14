@@ -963,34 +963,15 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_observation<T, E: Into<AuthoringFailure>>(
-        &self,
-        handle: &noon::Mobject,
-        authored: impl FnOnce(&noon::Mobject) -> Result<T, E>,
-        effective: impl FnOnce(&noon::Scene, &noon::Mobject) -> Result<T, AuthoringFailure>,
-    ) -> Result<T, AuthoringFailure> {
-        if let Some(scene) = self.mobject_observation_scene(handle)? {
-            return effective(scene, handle);
-        }
-        authored(handle).map_err(Into::into)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_layout(
         &self,
         handle: &noon::Mobject,
-    ) -> Result<(f64, f64, f64, f64), AuthoringFailure> {
-        self.mobject_observation(handle, authored_mobject_layout, |scene, handle| {
-            let observed = scene
-                .effective_layout(handle)
-                .map_err(running_scene_error)?;
-            Ok((
-                observed.center.0,
-                observed.center.1,
-                observed.width,
-                observed.height,
-            ))
-        })
+    ) -> Result<noon::MobjectLayout, AuthoringFailure> {
+        self.observe_mobject_query(
+            self.mobject_observation_scene(handle)?,
+            handle,
+            |scene, handle| scene.layout(handle, noon::AuthoredLayoutCenter::Bounds),
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -999,13 +980,32 @@ impl CanonicalAuthoringScene {
         handle: &noon::Mobject,
         dimension: noon::LayoutDimension,
     ) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::LayoutAnchor::from(handle).dimension_length(dimension),
-            |scene, handle| {
-                layout_dimension_length(scene, &noon::LayoutAnchor::from(handle), dimension, true)
-            },
+        let running = self.mobject_observation_scene(handle)?;
+        layout_dimension_length(
+            running.unwrap_or(&self.scene),
+            &noon::LayoutAnchor::from(handle),
+            dimension,
+            running.is_some(),
         )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_layout(
+        &self,
+        family: &noon::MobjectFamily,
+    ) -> Result<noon::MobjectLayout, AuthoringFailure> {
+        // Family layout has always required a locally retained publication.
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let player = self
+            .player_ownership
+            .local()
+            .ok_or("begin live execution before reading or mutating it")?;
+        player
+            .scene()
+            .family_layout(family)
+            .map_err(running_placement_error)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3871,22 +3871,6 @@ fn layout_dimension_length(
         })
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
-fn authored_mobject_layout(
-    handle: &noon::Mobject,
-) -> Result<(f64, f64, f64, f64), noon::AuthoringError> {
-    let Some(bounds) = handle.layout_bounds()? else {
-        let (center_x, center_y) = handle.center()?;
-        return Ok((center_x, center_y, 0.0, 0.0));
-    };
-    Ok((
-        (bounds.min_x + bounds.max_x) * 0.5,
-        (bounds.min_y + bounds.max_y) * 0.5,
-        bounds.width(),
-        bounds.height(),
-    ))
-}
-
 #[cfg(target_arch = "wasm32")]
 fn checked_f32(name: &str, value: f64) -> Result<f32, String> {
     if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
@@ -4479,6 +4463,17 @@ mod wasm {
     pub struct WasmTrackerPositionHandle {
         position: noon::TrackerPosition,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
+    impl From<noon::MobjectLayout> for WasmMobjectLayoutObservation {
+        fn from(layout: noon::MobjectLayout) -> Self {
+            Self {
+                center_x: layout.center.0,
+                center_y: layout.center.1,
+                width: layout.width,
+                height: layout.height,
+            }
+        }
     }
 
     #[wasm_bindgen]
@@ -7608,16 +7603,10 @@ mod wasm {
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<WasmMobjectLayoutObservation, JsValue> {
-            let (center_x, center_y, width, height) = self
-                .inner
+            self.inner
                 .mobject_layout(handle.semantic_mobject())
-                .map_err(typed_js_error)?;
-            Ok(WasmMobjectLayoutObservation {
-                center_x,
-                center_y,
-                width,
-                height,
-            })
+                .map(Into::into)
+                .map_err(typed_js_error)
         }
 
         /// Observe only the owned root without capturing descendant membership.
@@ -7632,27 +7621,16 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        /// Read a family through the same live session that owns its effective leaves.
+        /// Observe a family's layout from the locally retained publication.
         #[wasm_bindgen(js_name = queryFamilyLayout)]
         pub fn query_family_layout(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
         ) -> Result<WasmMobjectLayoutObservation, JsValue> {
-            let family = handle.semantic_family()?;
-            let layout = self
-                .inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene()
-                .effective_family_layout(&family)
-                .map_err(running_placement_error)
-                .map_err(typed_js_error)?;
-            Ok(WasmMobjectLayoutObservation {
-                center_x: layout.center.0,
-                center_y: layout.center.1,
-                width: layout.width,
-                height: layout.height,
-            })
+            self.inner
+                .family_layout(&handle.semantic_family()?)
+                .map(Into::into)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = queryFamilyAllPoints)]
@@ -15519,6 +15497,11 @@ mod tests {
         let circle = context.scene.circle(1.0).unwrap();
         let mut target = circle.target_editor().unwrap();
         target.set_translation(4.0, -2.0).unwrap();
+        let family = context.scene.family(&[(&circle).into()]).unwrap();
+        assert_eq!(
+            context.family_layout(&family).unwrap_err().message,
+            "begin live execution before reading or mutating it"
+        );
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
         let animation = context
             .declare_live_transform_to(
@@ -15532,7 +15515,11 @@ mod tests {
 
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
-            (0.0, 0.0, 2.0, 2.0)
+            noon::MobjectLayout {
+                center: (0.0, 0.0),
+                width: 2.0,
+                height: 2.0
+            }
         );
         {
             let player = context.live_player(2.0).unwrap();
@@ -15541,10 +15528,22 @@ mod tests {
         }
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
-            (2.0, -1.0, 2.0, 2.0)
+            noon::MobjectLayout {
+                center: (2.0, -1.0),
+                width: 2.0,
+                height: 2.0
+            }
+        );
+        assert_eq!(
+            context.family_layout(&family).unwrap(),
+            context.mobject_layout(&circle).unwrap()
         );
 
         let player = context.take_execution_player(2.0, 17).unwrap();
+        assert_eq!(
+            context.family_layout(&family).unwrap_err().message,
+            "live execution session is running in the semantic engine"
+        );
         {
             let error = context.mobject_layout(&circle).unwrap_err();
             assert_eq!(
@@ -15557,9 +15556,14 @@ mod tests {
             );
         }
         context.return_execution_player(player).unwrap();
+        assert_eq!(context.family_layout(&family).unwrap().center, (2.0, -1.0));
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
-            (2.0, -1.0, 2.0, 2.0)
+            noon::MobjectLayout {
+                center: (2.0, -1.0),
+                width: 2.0,
+                height: 2.0
+            }
         );
     }
 
@@ -15871,7 +15875,11 @@ mod tests {
         // or treating the dormant returned runtime as active live authority.
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
-            (3.0, -1.0, 4.0, 1.0)
+            noon::MobjectLayout {
+                center: (3.0, -1.0),
+                width: 4.0,
+                height: 1.0
+            }
         );
         assert!(context.player_ownership.local().is_some());
 
@@ -16184,7 +16192,11 @@ mod tests {
         assert_eq!(context.live_execution_ownership(), "returned");
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
-            (2.0, -1.0, f64::from(0.8_f32), f64::from(0.8_f32))
+            noon::MobjectLayout {
+                center: (2.0, -1.0),
+                width: f64::from(0.8_f32),
+                height: f64::from(0.8_f32)
+            }
         );
 
         let next_target = context.target_editor(&circle).unwrap();

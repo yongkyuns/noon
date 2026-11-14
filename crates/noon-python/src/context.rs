@@ -3888,36 +3888,25 @@ impl Context {
     ) -> PyResult<LayoutObservation> {
         self.require_active()?;
         self.same_family_store(target)?;
-        if self.has_execution() {
-            self.scene
-                .effective_family_layout(&target.family)
-                .map_err(|error| engine_error(noon::LiveSessionError::from(error)))
-                .map(LayoutObservation::from_effective)
-        } else {
-            let layout = target.family.layout().map_err(engine_error)?;
-            Ok(LayoutObservation {
-                center: layout.center(),
-                width: layout.width(),
-                height: layout.height(),
+        self.scene
+            .family_layout(&target.family)
+            .map(Into::into)
+            .map_err(|error| {
+                if self.has_execution() {
+                    engine_error(noon::LiveSessionError::from(error))
+                } else {
+                    engine_error(error)
+                }
             })
-        }
     }
     #[pyo3(name = "queryMobjectLayout")]
     fn layout(&mut self, target: &MobjectHandle) -> PyResult<LayoutObservation> {
         self.require_active()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            self.scene
-                .effective_layout(&target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
-                .map(LayoutObservation::from_effective)
-        } else {
-            Ok(LayoutObservation {
-                center: target.handle.center().map_err(engine_error)?,
-                width: target.handle.width().map_err(engine_error)?,
-                height: target.handle.height().map_err(engine_error)?,
-            })
-        }
+        self.observe_mobject(target, |scene, object| {
+            scene.layout(object, noon::AuthoredLayoutCenter::Boundary)
+        })
+        .map(Into::into)
     }
     #[pyo3(name = "targetEditor")]
     fn target(&mut self, source: &MobjectHandle) -> PyResult<MobjectHandle> {

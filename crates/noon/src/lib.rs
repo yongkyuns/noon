@@ -470,8 +470,9 @@ pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use sample_space::{SampleSpace, SampleSpaceError, SampleSpaceOptions};
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
 pub use scene::{
-    EffectiveMobjectLayout, EffectiveMobjectState, Scene, SceneExecution, SceneExecutionError,
-    SceneSection, SceneSectionNavigation, SectionNavigation, SectionType,
+    AuthoredLayoutCenter, EffectiveMobjectLayout, EffectiveMobjectState, MobjectLayout, Scene,
+    SceneExecution, SceneExecutionError, SceneSection, SceneSectionNavigation, SectionNavigation,
+    SectionType,
 };
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
