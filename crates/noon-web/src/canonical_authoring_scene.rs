@@ -1661,7 +1661,7 @@ impl CanonicalAuthoringScene {
     ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
         self.local_authoring_scene()?
             .underline_options(handle, buff)
-            .map_err(AuthoringFailure::from_scene_capture)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -7833,7 +7833,7 @@ mod wasm {
                     &operands.objects,
                 )
                 .map(crate::WasmManimGeometryOptions::from_options)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
+                .map_err(|error| typed_js_error(AuthoringFailure::from(error)))
         }
 
         #[wasm_bindgen(js_name = beginUnderline)]

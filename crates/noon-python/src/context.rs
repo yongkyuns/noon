@@ -1815,7 +1815,7 @@ impl Context {
         self.scene
             .boolean_geometry_options(crate::geometry::boolean_operation(name)?, &operands.0)
             .map(crate::geometry::GeometryOptions::from_options)
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
+            .map_err(engine_error)
     }
 
     #[pyo3(name = "beginUnderline")]
@@ -1828,7 +1828,7 @@ impl Context {
         self.scene
             .underline_options(&target.handle, buff)
             .map(crate::geometry::GeometryOptions::from_options)
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
+            .map_err(engine_error)
     }
 
     #[pyo3(name = "prepareTangentLine")]
