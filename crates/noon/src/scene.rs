@@ -569,6 +569,17 @@ impl Scene {
         )]))
         .map(|_| ())
     }
+
+    /// Capture one object's world-space path. A running Scene reads the
+    /// current Runtime publication, including animation and reveal.
+    pub fn path_query(&self, object: &Mobject) -> Result<crate::PathQuery, AuthoringError> {
+        if let Some(execution) = self.running_execution() {
+            return crate::path_queries::effective_path_query(&self.store, execution, object);
+        }
+        MobjectTarget::from(object).require_store(&self.store)?;
+        object.path_query()
+    }
+
     /// Capture exact current path controls and transform from one coherent
     /// Runtime publication. Cold Scenes fail explicitly rather than falling back
     /// to authored geometry.

@@ -3062,24 +3062,22 @@ impl Context {
 
     #[pyo3(name = "queryMobjectPointArray")]
     fn object_point_array(&self, target: &MobjectHandle) -> PyResult<(Vec<f64>, Vec<usize>)> {
-        self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::point_array,
-            Scene::effective_point_array,
-        )
-        .map(crate::path_input::point_array)
+        self.require_active()?;
+        self.scene
+            .point_array((&target.handle).into())
+            .map(crate::path_input::point_array)
+            .map_err(engine_error)
     }
     #[pyo3(name = "queryFamilyPointArray")]
     fn family_point_array(
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<(Vec<f64>, Vec<usize>)> {
-        self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::point_array,
-            Scene::effective_point_array,
-        )
-        .map(crate::path_input::point_array)
+        self.require_active()?;
+        self.scene
+            .point_array((&target.family).into())
+            .map(crate::path_input::point_array)
+            .map_err(engine_error)
     }
 
     #[pyo3(name="setFillImage",signature=(target,paint,opacity))]
@@ -3713,12 +3711,8 @@ impl Context {
         if !self.bound_ids.contains(&target.handle.node_id()) {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
-        let query = if self.has_execution() {
-            self.scene.effective_path_query(&target.handle)
-        } else {
-            target.handle.path_query()
-        };
-        query
+        self.scene
+            .path_query(&target.handle)
             .map(crate::path_query::PathQuery::new)
             .map_err(engine_error)
     }
@@ -4095,13 +4089,8 @@ impl Context {
         target: &crate::family::FamilyHandle,
     ) -> PyResult<crate::path_query::PathQuery> {
         self.require_active()?;
-        self.same_family_store(target)?;
-        let value = if self.has_execution() {
-            self.scene.effective_family_own_path_query(&target.family)
-        } else {
-            target.family.own_path_query()
-        };
-        value
+        self.scene
+            .family_own_path_query(&target.family)
             .map(crate::path_query::PathQuery::new)
             .map_err(engine_error)
     }

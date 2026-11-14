@@ -163,7 +163,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             crate::LayoutDimension::Width,
             crate::ManimRotationPivot::Center,
         )?;
-        let start = rectangle.path_query()?.start()?;
+        let start = scene.path_query(&rectangle)?.start()?;
         let end = target.path_query()?.start()?;
         let animation = scene.declare_transform_to(
             &rectangle,
@@ -175,7 +175,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         let mut running = scene.into_execution()?;
         let segment = running.live().play_animation(&animation)?;
         running.live().advance_segment_to(segment, 0.5)?;
-        let captured = running.scene().effective_path_query(&rectangle)?;
+        let captured = running.scene().path_query(&rectangle)?;
         assert_eq!(
             running
                 .scene()

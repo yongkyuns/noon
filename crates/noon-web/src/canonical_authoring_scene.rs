@@ -943,15 +943,13 @@ impl CanonicalAuthoringScene {
         !self.player_ownership.is_unstarted()
     }
 
-    /// Route bound observations through the single owner of current execution.
-    /// Detached handles are queried directly by their language wrapper.
+    /// Check that this bound object can be observed in the current owner.
+    /// Detached objects are handled by their language wrapper.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_observation<T, E: Into<AuthoringFailure>>(
+    fn mobject_observation_scene(
         &self,
         handle: &noon::Mobject,
-        authored: impl FnOnce(&noon::Mobject) -> Result<T, E>,
-        effective: impl FnOnce(&noon::Scene, &noon::Mobject) -> Result<T, AuthoringFailure>,
-    ) -> Result<T, AuthoringFailure> {
+    ) -> Result<Option<&noon::Scene>, AuthoringFailure> {
         let scene = self.effective_observation_scene()?;
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
             return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
@@ -961,7 +959,17 @@ impl CanonicalAuthoringScene {
         if !self.identities.contains_key(&handle.node_id()) {
             return Err("mobject is not bound to this canonical Scene".into());
         }
-        if let Some(scene) = scene {
+        Ok(scene)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn mobject_observation<T, E: Into<AuthoringFailure>>(
+        &self,
+        handle: &noon::Mobject,
+        authored: impl FnOnce(&noon::Mobject) -> Result<T, E>,
+        effective: impl FnOnce(&noon::Scene, &noon::Mobject) -> Result<T, AuthoringFailure>,
+    ) -> Result<T, AuthoringFailure> {
+        if let Some(scene) = self.mobject_observation_scene(handle)? {
             return effective(scene, handle);
         }
         authored(handle).map_err(Into::into)
@@ -1002,18 +1010,18 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_point_count(&self, handle: &noon::Mobject) -> Result<usize, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::get_num_points, |scene, handle| {
-            scene.own_point_count(handle.into()).map_err(Into::into)
-        })
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .own_point_count(handle.into())
+            .map_err(Into::into)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn family_point_count(&self, family: &noon::MobjectFamily) -> Result<usize, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.get_num_points(),
-            |scene, target| scene.own_point_count(target).map_err(Into::into),
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .own_point_count(family.into())
+            .map_err(Into::into)
     }
 
     /// Observe one family's own root through the current execution owner.
@@ -1022,15 +1030,10 @@ impl CanonicalAuthoringScene {
         &self,
         family: &noon::MobjectFamily,
     ) -> Result<noon::PathQuery, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |_| family.own_path_query(),
-            |scene, _| {
-                scene
-                    .effective_family_own_path_query(family)
-                    .map_err(Into::into)
-            },
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .family_own_path_query(family)
+            .map_err(Into::into)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1038,9 +1041,10 @@ impl CanonicalAuthoringScene {
         &self,
         handle: &noon::Mobject,
     ) -> Result<noon::PathQuery, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::path_query, |scene, handle| {
-            scene.effective_path_query(handle).map_err(Into::into)
-        })
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .path_query(handle)
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1091,20 +1095,30 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_point_array(
         &self,
         handle: &noon::Mobject,
     ) -> Result<noon::PointArrayObservation, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).point_array(),
-            |scene, handle| {
-                scene
-                    .effective_point_array(handle.into())
-                    .map_err(running_placement_error)
-            },
-        )
+        self.point_array(self.mobject_observation_scene(handle)?, handle.into())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn point_array(
+        &self,
+        running: Option<&noon::Scene>,
+        target: noon::MobjectTarget<'_>,
+    ) -> Result<noon::PointArrayObservation, AuthoringFailure> {
+        running
+            .unwrap_or(&self.scene)
+            .point_array(target)
+            .map_err(|error| {
+                if running.is_some() {
+                    running_placement_error(error)
+                } else {
+                    error.into()
+                }
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1311,20 +1325,15 @@ impl CanonicalAuthoringScene {
         )
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn family_point_array(
         &self,
         family: &noon::MobjectFamily,
     ) -> Result<noon::PointArrayObservation, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.point_array(),
-            |scene, target| {
-                scene
-                    .effective_point_array(target)
-                    .map_err(running_placement_error)
-            },
-        )
+        let running = self.effective_observation_scene()?;
+        let target = noon::MobjectTarget::from(family);
+        target.require_store(self.scene.integration_store())?;
+        self.point_array(running, target)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -12992,7 +13001,9 @@ mod tests {
         assert!(context.family_point_count(&foreign).is_err());
         assert_eq!(context.family_point_count(&empty).unwrap(), 0);
         assert_eq!(context.family_point_count(&owned).unwrap(), 4);
+        let array = context.family_point_array(&owned).unwrap();
         context.live_player(1.0).unwrap();
+        assert_eq!(context.family_point_array(&owned).unwrap(), array);
         assert_eq!(context.family_point_count(&empty).unwrap(), 0);
         assert_eq!(context.family_point_count(&owned).unwrap(), 4);
         assert!(context
@@ -13014,7 +13025,9 @@ mod tests {
         assert!(context.family_point_count(&owned).is_err());
         assert!(context.family_own_path_query(&empty).is_err());
         assert!(context.family_own_path_query(&owned).is_err());
+        assert!(context.family_point_array(&owned).is_err());
         context.return_execution_player(transferred).unwrap();
+        assert_eq!(context.family_point_array(&owned).unwrap(), array);
         assert_eq!(context.family_point_count(&owned).unwrap(), 4);
         assert_eq!(
             context
@@ -15723,6 +15736,9 @@ mod tests {
         assert!(context.mobject_stroke_opacity(&line).is_err());
         context.bind_mobject(ObjectId::new(0), &line).unwrap();
         assert_eq!(context.mobject_point_count(&line).unwrap(), 4);
+        let authored_array = context.mobject_point_array(&line).unwrap();
+        let authored_path = context.mobject_path_query(&line).unwrap();
+        assert_eq!(authored_path.start().unwrap(), (-1.0, 0.0));
         let mut target = line.target_editor().unwrap();
         target.set_translation(4.0, -2.0).unwrap();
         target.set_stroke_color(1.0, 0.0, 0.0, 1.0).unwrap();
@@ -15755,6 +15771,10 @@ mod tests {
         let path = context.mobject_path_query(&line).unwrap();
         assert_eq!(path.start().unwrap(), observed.start);
         assert_eq!(path.end().unwrap(), observed.end);
+        let array = context.mobject_point_array(&line).unwrap();
+        assert_eq!(array.points(), path.points_3d().unwrap());
+        assert_eq!(array.shape(), authored_array.shape());
+        assert_ne!(array.points(), authored_array.points());
         assert_eq!(
             context.mobject_point_count(&line).unwrap(),
             path.point_count()
