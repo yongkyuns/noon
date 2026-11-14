@@ -268,7 +268,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             _canonical_authoring_context=context,
         )
         with patch.object(native, "_bulk", side_effect=lambda values: tuple(values)), \
-             patch.object(semantic, "_live_constructor_context", return_value=None):
+             patch.object(semantic, "_path_authoring_context", return_value=None):
             surface.shift((1, 2, 3))
             surface.rotate(0.5, axis=(0, 0, 1), about_point=(1, 2, 3))
             surface.scale(2, about_point=(1, 2, 3))
