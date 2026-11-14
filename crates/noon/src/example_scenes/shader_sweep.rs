@@ -139,7 +139,6 @@ impl LiveContinuation for ShaderSweep {
                         .set_rotation(target, if outward { 0.35 } else { 0.0 })
                         .map_err(message)?;
                     scene
-                        .live()
                         .set_effect(
                             target,
                             "stripes",
@@ -171,10 +170,7 @@ impl LiveContinuation for ShaderSweep {
             }
             5 if self.retire => {
                 for panel in &self.panels {
-                    scene
-                        .live()
-                        .remove_effect(panel, "stripes")
-                        .map_err(message)?;
+                    scene.remove_effect(panel, "stripes").map_err(message)?;
                 }
                 scene.live().wait_segment(0.5)
             }

@@ -27,7 +27,6 @@ impl LiveContinuation for ComposedEffects {
             let outer = scene.copy_family(&self.outer).map_err(message)?;
             for family in [reference.root(), inner.root()] {
                 scene
-                    .live()
                     .set_effect(
                         family,
                         "soften",
@@ -36,7 +35,6 @@ impl LiveContinuation for ComposedEffects {
                     .map_err(message)?;
             }
             scene
-                .live()
                 .set_glow(outer.root(), EffectUpdate::default().intensity(0.6))
                 .map_err(message)?;
             let options = AnimationOptions::new()
@@ -88,7 +86,6 @@ impl LiveContinuation for ComposedEffects {
             1 => {
                 for family in [&self.reference, &self.inner] {
                     scene
-                        .live()
                         .set_effect(
                             family,
                             "soften",
@@ -97,19 +94,15 @@ impl LiveContinuation for ComposedEffects {
                         .map_err(message)?;
                 }
                 scene
-                    .live()
                     .set_glow(&self.outer, EffectUpdate::default().intensity(0.6))
                     .map_err(message)?;
             }
             2 => {
                 for family in [&self.reference, &self.inner] {
-                    scene
-                        .live()
-                        .remove_effect(family, "soften")
-                        .map_err(message)?;
+                    scene.remove_effect(family, "soften").map_err(message)?;
                 }
             }
-            3 => scene.live().remove_glow(&self.outer).map_err(message)?,
+            3 => scene.remove_glow(&self.outer).map_err(message)?,
             4 => return Ok(ContinuationStep::Finished),
             _ => return Err("composed example resumed after completion".into()),
         }

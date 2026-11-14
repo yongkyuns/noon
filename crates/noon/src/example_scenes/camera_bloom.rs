@@ -24,7 +24,6 @@ impl LiveContinuation for CameraBloom {
                     .set_emission(&panel, if bright { 7.0 } else { 0.0 })
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         &camera,
                         "bloom",

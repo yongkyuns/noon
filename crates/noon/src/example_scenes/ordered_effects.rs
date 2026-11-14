@@ -31,7 +31,6 @@ impl LiveContinuation for OrderedEffects {
                 scene.live().shift(&first, 0.0, 0.4).map_err(message)?;
                 scene.live().shift(&reference, 0.0, 0.4).map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         &first,
                         "soften",
@@ -39,7 +38,6 @@ impl LiveContinuation for OrderedEffects {
                     )
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         &finish,
                         "finish",
@@ -71,16 +69,13 @@ impl LiveContinuation for OrderedEffects {
                 scene.live().shift(&reference, 0.0, -0.4).map_err(message)?;
                 for name in ["soften", "finish"] {
                     scene
-                        .live()
                         .set_effect(&target, name, EffectUpdate::default().radius(Pixels(0.0)))
                         .map_err(message)?;
                 }
                 scene
-                    .live()
                     .set_effect(&target, "glow", EffectUpdate::default().intensity(0.0))
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         &target,
                         "depth",
@@ -104,10 +99,7 @@ impl LiveContinuation for OrderedEffects {
             }
             5 => {
                 for name in ["soften", "glow", "depth", "finish"] {
-                    scene
-                        .live()
-                        .remove_effect(&self.source, name)
-                        .map_err(message)?;
+                    scene.remove_effect(&self.source, name).map_err(message)?;
                 }
                 scene.live().wait_segment(0.5)
             }

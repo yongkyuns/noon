@@ -28,7 +28,6 @@ impl LiveContinuation for ImageShadow {
                     .rotate(&target, std::f64::consts::PI / 12.0)
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         &target,
                         "depth",
@@ -51,7 +50,6 @@ impl LiveContinuation for ImageShadow {
                     .rotate(&target, -std::f64::consts::PI / 12.0)
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         &target,
                         "depth",
@@ -67,10 +65,7 @@ impl LiveContinuation for ImageShadow {
             }
             5 => {
                 // Removing a neutral shadow preserves the same ordinary image.
-                scene
-                    .live()
-                    .remove_effect(&self.image, "depth")
-                    .map_err(message)?;
+                scene.remove_effect(&self.image, "depth").map_err(message)?;
                 scene.live().wait_segment(0.75)
             }
             6 => return Ok(ContinuationStep::Finished),

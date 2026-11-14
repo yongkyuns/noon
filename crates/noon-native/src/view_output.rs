@@ -340,7 +340,7 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
                 threshold = 0.0;
                 intensity = 3.0;
                 execution
-                    .live()
+                    .scene_mut()
                     .set_effect(
                         &camera,
                         "bloom",
@@ -354,14 +354,17 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
             4 => {
                 intensity = 0.0;
                 execution
-                    .live()
+                    .scene_mut()
                     .set_effect(&camera, "bloom", EffectUpdate::default().intensity(0.0))
                     .unwrap();
             }
             5 => {
                 sigma = 0.0;
                 threshold = 1.0;
-                execution.live().remove_effect(&camera, "bloom").unwrap();
+                execution
+                    .scene_mut()
+                    .remove_effect(&camera, "bloom")
+                    .unwrap();
             }
             6 => execution
                 .scene_mut()
@@ -376,7 +379,7 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
                 threshold = 0.25;
                 intensity = 1.0;
                 execution
-                    .live()
+                    .scene_mut()
                     .add_effect(
                         &camera,
                         Bloom::new(
@@ -603,7 +606,9 @@ fn native_hdr_view_matches_capture_keeps_overlay_outside_bloom_and_recovers() {
         std::fs::write(root.join("report.json"),serde_json::to_vec_pretty(
         &serde_json::json!({"cases":cases,"maximum_error":maximum,"maximum_float_error":maximum_float})).unwrap()).unwrap();
     }
-    eprintln!("native HDR view: 13 phases, native/capture equivalence, overlay negative, resize, target/device recreation; display max={maximum}, float max={maximum_float}");
+    eprintln!(
+        "native HDR view: 13 phases, native/capture equivalence, overlay negative, resize, target/device recreation; display max={maximum}, float max={maximum_float}"
+    );
 }
 
 struct BloomAnimation {

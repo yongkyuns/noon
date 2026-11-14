@@ -33,7 +33,6 @@ impl LiveContinuation for GlassLens {
                     .shift_family(target.root(), dx, 0.0)
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_effect(
                         target.root(),
                         "glass",
@@ -52,15 +51,11 @@ impl LiveContinuation for GlassLens {
                 )
             }
             5 => {
-                scene
-                    .live()
-                    .remove_effect(&self.card, "glass")
-                    .map_err(message)?;
+                scene.remove_effect(&self.card, "glass").map_err(message)?;
                 scene.live().wait_segment(0.5)
             }
             6 => {
                 scene
-                    .live()
                     .add_effect(
                         &self.card,
                         BackdropBlur::new(EffectUpdate::default().radius(Pixels(12.0)))

@@ -15,19 +15,19 @@ impl LiveContinuation for GlowChurnScene {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let duration = match self.stage {
             0 => 1.0 / 60.0,
             1..=20 => {
                 for dot in &self.dots {
                     if self.stage % 2 == 1 {
-                        live.set_glow(
-                            dot,
-                            EffectUpdate::default().radius(Pixels(3.0)).intensity(1.0),
-                        )
-                        .map_err(message)?;
+                        scene
+                            .set_glow(
+                                dot,
+                                EffectUpdate::default().radius(Pixels(3.0)).intensity(1.0),
+                            )
+                            .map_err(message)?;
                     } else {
-                        live.remove_glow(dot).map_err(message)?;
+                        scene.remove_glow(dot).map_err(message)?;
                     }
                 }
                 26.0 / 60.0
@@ -36,7 +36,7 @@ impl LiveContinuation for GlowChurnScene {
             22 => return Ok(ContinuationStep::Finished),
             _ => return Err("glow churn resumed after completion".into()),
         };
-        let segment = live.wait_segment(duration).map_err(message)?;
+        let segment = scene.live().wait_segment(duration).map_err(message)?;
         self.last_boundary = segment.end_time();
         self.stage += 1;
         Ok(ContinuationStep::Await(segment))

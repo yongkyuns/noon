@@ -255,13 +255,12 @@ fn late_image_creation_replacement_and_reentry_keep_immutable_versions() {
         let publication = reader.take_renderer_publication();
         let pixels = publication.raster_image_resources().get(handle).unwrap();
         assert_eq!(pixels.width(), 2);
-        assert!(publication
-            .painter_order()
-            .iter()
-            .any(|&i| publication.frame().objects[i as usize]
+        assert!(publication.painter_order().iter().any(|&i| {
+            publication.frame().objects[i as usize]
                 .content
                 .image()
-                .is_some_and(|image| image.resource() == handle)));
+                .is_some_and(|image| image.resource() == handle)
+        }));
     }
     reader.seek(3.5).unwrap();
     assert_eq!(reader.take_renderer_publication().painter_order().len(), 1);
@@ -366,7 +365,9 @@ fn lifecycle_resource_pixels_match_source_after_appends_drop_and_renderer_recrea
             fresh.capture(&reader.take_renderer_publication()),
             expected[1].1
         );
-        eprintln!("PREFIX_LIFECYCLE_RASTER: 35 historical comparisons passed across late image creation, replacement, removal, reentry, producer destruction, fresh renderer");
+        eprintln!(
+            "PREFIX_LIFECYCLE_RASTER: 35 historical comparisons passed across late image creation, replacement, removal, reentry, producer destruction, fresh renderer"
+        );
     });
 }
 
@@ -488,7 +489,9 @@ fn terminal_endpoint_image_pixels_match_source_after_drop_and_renderer_recreatio
             raster.capture(&reader.take_renderer_publication()),
             endpoint
         );
-        eprintln!("PREFIX_TERMINAL_RASTER: exact endpoint, unchanged append, rewind, source destruction, clean/sparse cold recovery, visible projection, zero-upload warm reuse");
+        eprintln!(
+            "PREFIX_TERMINAL_RASTER: exact endpoint, unchanged append, rewind, source destruction, clean/sparse cold recovery, visible projection, zero-upload warm reuse"
+        );
     });
 }
 
@@ -645,11 +648,13 @@ fn pointer_driven_prefix_effect_pixels_restore_after_terminal_delivery_and_sourc
         );
         let mut fresh = raster_support::Raster::new().await;
         assert_eq!(fresh.capture(&reader.take_renderer_publication()), baseline);
-        eprintln!("PREFIX_POINTER_RASTER: {changed} changed midpoint pixels; exact restoration after terminal adoption, source drop, final advance and renderer recreation");
+        eprintln!(
+            "PREFIX_POINTER_RASTER: {changed} changed midpoint pixels; exact restoration after terminal adoption, source drop, final advance and renderer recreation"
+        );
     });
 }
 
-fn single_glow_prefix_history() -> (ExecutionSession, PrefixReader) {
+fn single_glow_prefix_history() -> (noon::SceneExecution, PrefixReader) {
     use noon::effects::{EffectUpdate, Pixels};
     use noon::Color;
     let mut scene = Scene::new();
@@ -657,20 +662,21 @@ fn single_glow_prefix_history() -> (ExecutionSession, PrefixReader) {
     anchor.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
     anchor.disable_stroke().unwrap();
     scene.add(&anchor).unwrap();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene.into_execution().unwrap();
     source
+        .session_mut()
         .begin_replay_retention(ReplayLimits {
             revisions: 32,
             payloads: 256,
         })
         .unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(1.0).unwrap();
-    let (mut publisher, mut reader) = source.create_prepared_prefix(boundary).unwrap();
+    let boundary = source.session_mut().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(1.0).unwrap();
+    let (mut publisher, mut reader) = source.session().create_prepared_prefix(boundary).unwrap();
     reader.seek(0.5).unwrap();
     let baseline = reader.frame().clone();
-    scene
-        .live(&mut source)
+    source
+        .scene_mut()
         .set_glow(
             &anchor,
             EffectUpdate::default()
@@ -679,9 +685,10 @@ fn single_glow_prefix_history() -> (ExecutionSession, PrefixReader) {
                 .intensity(0.6),
         )
         .unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(2.0).unwrap();
+    let boundary = source.session_mut().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(2.0).unwrap();
     let batch = source
+        .session()
         .publish_prepared_prefix(boundary, &mut publisher)
         .unwrap();
     assert_eq!(
@@ -696,8 +703,8 @@ fn single_glow_prefix_history() -> (ExecutionSession, PrefixReader) {
         "adopting a future Glow cannot change the current picture"
     );
 
-    scene
-        .live(&mut source)
+    source
+        .scene_mut()
         .set_glow(
             &anchor,
             EffectUpdate::default()
@@ -705,13 +712,19 @@ fn single_glow_prefix_history() -> (ExecutionSession, PrefixReader) {
                 .radius(Pixels(6.0)),
         )
         .unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(boundary.end_time()).unwrap();
-    scene.live(&mut source).remove_glow(&anchor).unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(boundary.end_time()).unwrap();
-    scene
-        .live(&mut source)
+    let boundary = source.session_mut().wait_segment(1.0).unwrap();
+    source
+        .session_mut()
+        .advance_to(boundary.end_time())
+        .unwrap();
+    source.scene_mut().remove_glow(&anchor).unwrap();
+    let boundary = source.session_mut().wait_segment(1.0).unwrap();
+    source
+        .session_mut()
+        .advance_to(boundary.end_time())
+        .unwrap();
+    source
+        .scene_mut()
         .set_glow(
             &anchor,
             EffectUpdate::default()
@@ -720,20 +733,25 @@ fn single_glow_prefix_history() -> (ExecutionSession, PrefixReader) {
                 .intensity(1.2),
         )
         .unwrap();
-    let boundary = source.wait_segment(1.0).unwrap();
-    source.advance_to(boundary.end_time()).unwrap();
+    let boundary = source.session_mut().wait_segment(1.0).unwrap();
+    source
+        .session_mut()
+        .advance_to(boundary.end_time())
+        .unwrap();
     // One suffix contains several different historical values for the same row.
     reader
         .append(
             source
+                .session()
                 .publish_prepared_prefix(boundary, &mut publisher)
                 .unwrap(),
         )
         .unwrap();
-    source.seal_replay().unwrap();
+    source.session_mut().seal_replay().unwrap();
     reader
         .append(
             source
+                .session()
                 .finish_prepared_prefix(boundary, &mut publisher)
                 .unwrap(),
         )
@@ -750,10 +768,10 @@ fn single_glow_edits_retain_exact_prefix_history_after_source_drop() {
         reader.seek(time).unwrap();
         assert_eq!(
             reader.frame(),
-            source.frame(),
+            source.session().frame(),
             "full historical frame at {time}"
         );
-        frames.push((time, source.frame().clone()));
+        frames.push((time, source.session().frame().clone()));
     }
     drop(source);
     for (time, expected) in frames.iter().rev() {
@@ -777,7 +795,7 @@ fn single_glow_prefix_pixels_match_live_history_after_source_drop() {
             source.seek(time).unwrap();
             expected.push((
                 time,
-                raster.capture_effects(&source.take_renderer_publication()),
+                raster.capture_effects(&source.session_mut().take_renderer_publication()),
             ));
         }
         assert!(

@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (composition, path_glow, formula_glow) = {
         let target = session.scene_mut().target_editor(&dot)?;
         session.live().shift(&target, 2.0, 0.0)?;
-        session.live().set_glow(
+        session.scene_mut().set_glow(
             &target,
             EffectUpdate::default()
                 .color(Color::BLUE)
@@ -76,12 +76,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(session.live().effective_layout(&dot)?.center.0, 2.0);
 
         let path_target = session.scene_mut().target_editor(&path)?;
-        session.live().set_glow(
+        session.scene_mut().set_glow(
             &path_target,
             EffectUpdate::default().intensity(1.8).radius(Pixels(10.0)),
         )?;
         let formula_target = session.scene_mut().target_editor(&formula)?;
-        session.live().set_glow(
+        session.scene_mut().set_glow(
             &formula_target,
             EffectUpdate::default().intensity(1.4).color(Color::BLUE),
         )?;
@@ -143,7 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let neutral = session.scene_mut().target_editor(&dot)?;
     session
-        .live()
+        .scene_mut()
         .set_glow(&neutral, EffectUpdate::default().intensity(0.0))?;
     let fade = session.live().declare_and_activate_transform_to(
         &dot,
@@ -156,7 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     session.live().complete_segment(fade)?;
     let complete = (original.authored_definition()?).as_glow().unwrap();
     assert_eq!(complete.intensity(), 0.0);
-    session.live().remove_glow(&dot)?;
+    session.scene_mut().remove_glow(&dot)?;
     assert!(original.authored_definition().is_err());
     let wait = session.live().wait_segment(0.25)?;
     session.live().advance_segment_to(wait, 3.25)?;

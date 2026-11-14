@@ -65,7 +65,7 @@ fn editorial_backdrop_prefix_preserves_group_resources_and_radius_history() {
     let movement = {
         let target = source.scene_mut().copy_family(&card).unwrap();
         source
-            .live()
+            .scene_mut()
             .set_effect(
                 target.root(),
                 "glass",

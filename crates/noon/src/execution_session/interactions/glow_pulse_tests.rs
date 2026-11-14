@@ -1,13 +1,12 @@
 use crate::{
     effects::{EffectRadius, EffectUpdate, Glow, Pixels},
     integration::{NativeInputModifiers, NativePointerInputKind, NativePointerPosition},
-    AnimationOptions, Color, ExecutionSession, ExecutionSessionInputError, Mobject, Scene,
+    AnimationOptions, Color, ExecutionSessionInputError, Mobject, Scene, SceneExecution,
 };
 use noon_core::{NativePointerId, NativePointerInput, SemanticNodeId, Vec2};
 
 struct Fixture {
-    scene: Scene,
-    session: ExecutionSession,
+    execution: SceneExecution,
     targets: [Mobject; 2],
 }
 
@@ -38,8 +37,9 @@ impl Fixture {
                 .unwrap();
             scene.on_click(target, Some(&pulse)).unwrap();
         }
-        let mut session = scene.execution_session().unwrap();
-        session
+        let mut execution = scene.into_execution().unwrap();
+        execution
+            .session_mut()
             .configure_native_pointer_input(
                 NativePointerId {
                     source: 81,
@@ -48,10 +48,9 @@ impl Fixture {
                 1,
             )
             .unwrap();
-        session.take_frame_changes();
+        execution.session_mut().take_frame_changes();
         Self {
-            scene,
-            session,
+            execution,
             targets: [first, second],
         }
     }
@@ -62,7 +61,11 @@ impl Fixture {
         target: usize,
         press: bool,
     ) -> Result<(), ExecutionSessionInputError> {
-        let token = self.session.native_pointer_input_token().unwrap();
+        let token = self
+            .execution
+            .session()
+            .native_pointer_input_token()
+            .unwrap();
         let position = NativePointerPosition::new(
             Vec2::new(target as f32 * 4.0, 0.0),
             Vec2::new(300.0 + target as f32 * 100.0, 150.0),
@@ -86,12 +89,8 @@ impl Fixture {
             NativeInputModifiers::default(),
             kind,
         );
-        self.session
-            .submit_native_pointer_input(
-                &mut self.scene.integration_store().borrow_mut(),
-                &token,
-                input,
-            )
+        self.execution
+            .submit_native_pointer_input(&token, input)
             .map(|_| ())
     }
 
@@ -101,13 +100,12 @@ impl Fixture {
     }
 
     fn tick(&mut self, time: f64) {
-        self.session
-            .advance_interactions(&mut self.scene.integration_store().borrow_mut(), time)
-            .unwrap();
+        self.execution.advance_interactions(time).unwrap();
     }
 
     fn effect(&self, target: usize) -> Option<SemanticNodeId> {
-        self.scene
+        self.execution
+            .scene()
             .integration_store()
             .borrow()
             .effect_by_name(self.targets[target].node_id(), "glow")
@@ -116,10 +114,12 @@ impl Fixture {
 
     fn glow(&self, target: usize) -> Option<Glow> {
         let object = self
-            .session
+            .execution
+            .session()
             .execution_object_id(self.targets[target].node_id())
             .unwrap();
-        self.session
+        self.execution
+            .session()
             .frame()
             .objects
             .iter()
@@ -135,8 +135,8 @@ impl Fixture {
     }
 
     fn update(&mut self, target: usize, update: EffectUpdate) {
-        self.scene
-            .live(&mut self.session)
+        self.execution
+            .scene_mut()
             .set_glow(&self.targets[target], update)
             .unwrap();
     }
@@ -153,34 +153,35 @@ fn click_pulse_rejects_non_glow_attachments_without_publishing_or_acknowledging_
         noon_core::EffectDefinition::Shadow(crate::effects::Shadow::default()),
     ] {
         let mut f = Fixture::new(None);
-        f.scene
-            .live(&mut f.session)
+        f.execution
+            .scene_mut()
             .add_effect(&f.targets[0], definition.clone(), "glow")
             .unwrap();
         let attachment = f.effect(0).unwrap();
         f.send(1, 0, true).unwrap();
-        let context = f.session.publication_context();
-        let frame = f.session.frame().clone();
-        let revision = f.scene.revision();
+        let context = f.execution.session().publication_context();
+        let frame = f.execution.session().frame().clone();
+        let revision = f.execution.scene().revision();
         assert!(matches!(
             f.send(2, 0, false),
             Err(ExecutionSessionInputError::Interaction(_))
         ));
-        assert_eq!(f.session.publication_context(), context);
-        assert_eq!(f.session.frame(), &frame);
-        assert_eq!(f.scene.revision(), revision);
+        assert_eq!(f.execution.session().publication_context(), context);
+        assert_eq!(f.execution.session().frame(), &frame);
+        assert_eq!(f.execution.scene().revision(), revision);
         assert_eq!(f.effect(0), Some(attachment));
         assert_eq!(
-            f.scene
+            f.execution
+                .scene()
                 .get_effect(&f.targets[0], "glow")
                 .unwrap()
                 .authored_definition()
                 .unwrap(),
             definition
         );
-        assert!(!f.session.interactions_active());
-        f.scene
-            .live(&mut f.session)
+        assert!(!f.execution.session().interactions_active());
+        f.execution
+            .scene_mut()
             .on_click(&f.targets[0], None)
             .unwrap();
         // The rejected release is still the next admitted input occurrence.
@@ -207,57 +208,69 @@ fn click_pulse_preserves_gradient_paint_in_both_attachment_lifetimes() {
             persistent.then(|| EffectUpdate::default().intensity(0.35)),
             |first| first.set_fill_gradient(gradient, Some(0.6)).unwrap(),
         );
-        let paint = Arc::clone(f.session.frame().objects[0].fill_paint.as_ref().unwrap());
-        let style = f.session.frame().objects[0].style;
+        let paint = Arc::clone(
+            f.execution.session().frame().objects[0]
+                .fill_paint
+                .as_ref()
+                .unwrap(),
+        );
+        let style = f.execution.session().frame().objects[0].style;
         let original = f.glow(0);
         let attachment = f.effect(0);
         f.click(1, 0);
         for time in [10.0, 10.5, 11.0] {
             f.tick(time);
-            let row = &f.session.frame().objects[0];
+            let row = &f.execution.session().frame().objects[0];
             assert!(Arc::ptr_eq(row.fill_paint.as_ref().unwrap(), &paint));
             assert_eq!(row.style, style);
-            assert_eq!(f.session.frame().time, 0.0);
+            assert_eq!(f.execution.session().frame().time, 0.0);
             if time == 10.5 {
                 close(f.glow(0).unwrap().intensity(), 2.0);
             }
         }
         assert_eq!(f.glow(0), original);
         assert_eq!(f.effect(0), attachment);
-        assert!(!f.session.interactions_active());
+        assert!(!f.execution.session().interactions_active());
     }
 }
 
 #[test]
 fn click_glow_pulse_absent_attachment_enrolls_neutrally_and_retires_exactly() {
     let mut f = Fixture::new(None);
-    let original = f.session.frame().objects.clone();
-    let nodes = f.scene.integration_store().borrow().len();
+    let original = f.execution.session().frame().objects.clone();
+    let nodes = f.execution.scene().integration_store().borrow().len();
     assert_eq!(f.effect(0), None);
-    assert!(!f.session.has_replay_timeline_work());
+    assert!(!f.execution.session().has_replay_timeline_work());
     f.click(1, 0);
     let temporary = f
         .effect(0)
         .expect("admitted click enrolls one neutral attachment");
-    assert_eq!(f.scene.integration_store().borrow().len(), nodes + 1);
+    assert_eq!(
+        f.execution.scene().integration_store().borrow().len(),
+        nodes + 1
+    );
     assert_eq!(f.glow(0).unwrap().intensity(), 0.0);
-    assert!(f.session.interactions_active());
+    assert!(f.execution.session().interactions_active());
     f.tick(1.0);
     f.tick(1.5);
     close(f.glow(0).unwrap().intensity(), 2.0);
-    assert_eq!(f.session.frame().time, 0.0);
+    assert_eq!(f.execution.session().frame().time, 0.0);
     f.tick(2.0);
-    assert!(!f.session.interactions_active());
+    assert!(!f.execution.session().interactions_active());
     assert_eq!(f.effect(0), None);
     assert!(f
-        .scene
+        .execution
+        .scene()
         .integration_store()
         .borrow()
         .node(temporary)
         .is_none());
-    assert_eq!(f.scene.integration_store().borrow().len(), nodes);
-    assert_eq!(f.session.frame().objects, original);
-    assert!(!f.session.has_replay_timeline_work());
+    assert_eq!(
+        f.execution.scene().integration_store().borrow().len(),
+        nodes
+    );
+    assert_eq!(f.execution.session().frame().objects, original);
+    assert!(!f.execution.session().has_replay_timeline_work());
 }
 
 #[test]
@@ -279,8 +292,8 @@ fn click_glow_pulse_captures_the_persistent_value_at_activation() {
     f.tick(11.0);
     assert_eq!(f.effect(0), Some(original));
     assert_eq!(f.glow(0), Some(baseline));
-    assert!(!f.session.interactions_active());
-    assert_eq!(f.session.frame().time, 0.0);
+    assert!(!f.execution.session().interactions_active());
+    assert_eq!(f.execution.session().frame().time, 0.0);
 }
 
 #[test]
@@ -305,10 +318,10 @@ fn click_glow_pulses_ignore_active_repeats_and_finish_independently() {
         "repeat must not extend the first deadline"
     );
     assert_eq!(f.effect(1), Some(second));
-    assert!(f.session.interactions_active());
+    assert!(f.execution.session().interactions_active());
     f.tick(2.25);
     assert_eq!(f.effect(1), None);
-    assert!(!f.session.interactions_active());
+    assert!(!f.execution.session().interactions_active());
     f.click(7, 0);
     assert_ne!(
         f.effect(0),
@@ -328,8 +341,8 @@ fn click_glow_pulse_linear_and_reversed_timing_restore_at_the_endpoint() {
     ] {
         let mut f = Fixture::new(Some(EffectUpdate::default().intensity(0.5)));
         let attachment = f.effect(0);
-        f.scene
-            .live(&mut f.session)
+        f.execution
+            .scene_mut()
             .on_click_glow_pulse(
                 &f.targets[0],
                 2.0,
@@ -343,9 +356,9 @@ fn click_glow_pulse_linear_and_reversed_timing_restore_at_the_endpoint() {
             f.tick(time);
             close(f.glow(0).unwrap().intensity(), intensity);
             assert_eq!(f.effect(0), attachment);
-            assert_eq!(f.session.frame().time, 0.0);
+            assert_eq!(f.execution.session().frame().time, 0.0);
         }
-        assert!(!f.session.interactions_active());
+        assert!(!f.execution.session().interactions_active());
     }
 }
 
@@ -359,14 +372,14 @@ fn value_equal_radius_edit_adopts_a_temporary_click_attachment_without_stopping_
     let radius = f.glow(0).unwrap().radius();
     f.update(0, EffectUpdate::default().radius(radius));
     assert_eq!(f.effect(0), Some(attachment));
-    assert!(f.session.interactions_active());
+    assert!(f.execution.session().interactions_active());
     f.tick(1.5);
     close(f.glow(0).unwrap().intensity(), 2.0);
     f.tick(2.0);
     assert_eq!(f.effect(0), Some(attachment));
     assert_eq!(f.glow(0).unwrap().intensity(), 0.0);
     assert_eq!(f.glow(0).unwrap().radius(), radius);
-    assert!(!f.session.interactions_active());
+    assert!(!f.execution.session().interactions_active());
 }
 
 #[test]
@@ -417,7 +430,7 @@ fn explicit_intensity_write_adopts_and_supersedes_click_ownership_even_when_valu
         f.tick(2.0);
         assert_eq!(f.effect(0), Some(attachment));
         close(f.glow(0).unwrap().intensity(), intensity);
-        assert!(!f.session.interactions_active());
+        assert!(!f.execution.session().interactions_active());
     }
 }
 
@@ -428,35 +441,37 @@ fn click_glow_pulse_failed_seek_is_atomic_and_successful_seek_retires_the_tempor
     let attachment = f.effect(0).unwrap();
     f.tick(1.0);
     f.tick(1.5);
-    let frame = f.session.frame().clone();
-    let revision = f.scene.revision();
-    let token = f.session.native_pointer_input_token().unwrap();
+    let frame = f.execution.session().frame().clone();
+    let revision = f.execution.scene().revision();
+    let token = f.execution.session().native_pointer_input_token().unwrap();
     assert!(
-        f.session.seek(0.0).is_err(),
+        f.execution.session_mut().seek(0.0).is_err(),
         "raw seek cannot bypass temporary attachment retirement"
     );
-    assert_eq!(f.session.frame(), &frame);
-    assert_eq!(f.scene.revision(), revision);
-    assert_eq!(f.session.native_pointer_input_token().unwrap(), token);
+    assert_eq!(f.execution.session().frame(), &frame);
+    assert_eq!(f.execution.scene().revision(), revision);
+    assert_eq!(
+        f.execution.session().native_pointer_input_token().unwrap(),
+        token
+    );
     assert_eq!(f.effect(0), Some(attachment));
-    assert!(f.session.interactions_active());
-    assert!(f
-        .session
-        .seek_with_store(&mut f.scene.integration_store().borrow_mut(), f64::NAN)
-        .is_err());
-    assert_eq!(f.session.frame(), &frame);
-    assert_eq!(f.scene.revision(), revision);
-    assert_eq!(f.session.native_pointer_input_token().unwrap(), token);
+    assert!(f.execution.session().interactions_active());
+    assert!(f.execution.seek(f64::NAN).is_err());
+    assert_eq!(f.execution.session().frame(), &frame);
+    assert_eq!(f.execution.scene().revision(), revision);
+    assert_eq!(
+        f.execution.session().native_pointer_input_token().unwrap(),
+        token
+    );
     assert_eq!(f.effect(0), Some(attachment));
-    assert!(f.session.interactions_active());
-    f.session
-        .seek_with_store(&mut f.scene.integration_store().borrow_mut(), 0.0)
-        .unwrap();
+    assert!(f.execution.session().interactions_active());
+    f.execution.seek(0.0).unwrap();
     assert_eq!(f.effect(0), None);
     assert_eq!(f.glow(0), None);
-    assert!(!f.session.interactions_active());
+    assert!(!f.execution.session().interactions_active());
     assert!(f
-        .scene
+        .execution
+        .scene()
         .integration_store()
         .borrow()
         .node(attachment)
@@ -468,8 +483,8 @@ fn foreign_semantic_store_cannot_publish_click_input_or_advance_a_persistent_pul
     let mut f = Fixture::new(Some(EffectUpdate::default().intensity(0.5)));
     let mut foreign = noon_core::SemanticStore::new();
     let foreign_revision = foreign.scene_revision();
-    let revision = f.scene.revision();
-    let token = f.session.native_pointer_input_token().unwrap();
+    let revision = f.execution.scene().revision();
+    let token = f.execution.session().native_pointer_input_token().unwrap();
     let position = NativePointerPosition::new(Vec2::ZERO, Vec2::new(300.0, 150.0)).unwrap();
     let input = NativePointerInput::new(
         1,
@@ -481,30 +496,38 @@ fn foreign_semantic_store_cannot_publish_click_input_or_advance_a_persistent_pul
             button: 0,
         },
     );
-    let frame = f.session.frame().clone();
+    let frame = f.execution.session().frame().clone();
     assert!(f
-        .session
+        .execution
+        .session_mut()
         .submit_native_pointer_input(&mut foreign, &token, input)
         .is_err());
-    assert_eq!(f.session.frame(), &frame);
-    assert_eq!(f.scene.revision(), revision);
+    assert_eq!(f.execution.session().frame(), &frame);
+    assert_eq!(f.execution.scene().revision(), revision);
     assert_eq!(foreign.scene_revision(), foreign_revision);
-    assert_eq!(f.session.native_pointer_input_token().unwrap(), token);
-    assert!(!f.session.interactions_active());
+    assert_eq!(
+        f.execution.session().native_pointer_input_token().unwrap(),
+        token
+    );
+    assert!(!f.execution.session().interactions_active());
 
     // The same input sequence remains available, and the foreign capability
     // cannot advance even a pulse that needs no attachment retirement.
     f.click(1, 0);
     f.tick(1.0);
     f.tick(1.25);
-    let frame = f.session.frame().clone();
+    let frame = f.execution.session().frame().clone();
     let attachment = f.effect(0);
-    assert!(f.session.advance_interactions(&mut foreign, 1.5).is_err());
-    assert_eq!(f.session.frame(), &frame);
-    assert_eq!(f.scene.revision(), revision);
+    assert!(f
+        .execution
+        .session_mut()
+        .advance_interactions(&mut foreign, 1.5)
+        .is_err());
+    assert_eq!(f.execution.session().frame(), &frame);
+    assert_eq!(f.execution.scene().revision(), revision);
     assert_eq!(foreign.scene_revision(), foreign_revision);
     assert_eq!(f.effect(0), attachment);
-    assert!(f.session.interactions_active());
+    assert!(f.execution.session().interactions_active());
     f.tick(1.5);
     close(f.glow(0).unwrap().intensity(), 2.0);
     f.tick(2.0);
@@ -516,16 +539,19 @@ fn foreign_semantic_store_cannot_publish_click_input_or_advance_a_persistent_pul
 fn rejected_click_input_never_enrolls_and_retired_handles_cannot_mutate_a_new_generation() {
     let mut f = Fixture::new(None);
     f.send(1, 0, true).unwrap();
-    let frame = f.session.frame().clone();
-    let revision = f.scene.revision();
-    let nodes = f.scene.integration_store().borrow().len();
+    let frame = f.execution.session().frame().clone();
+    let revision = f.execution.scene().revision();
+    let nodes = f.execution.scene().integration_store().borrow().len();
     assert!(
         f.send(1, 0, false).is_err(),
         "replayed release is rejected before enrollment"
     );
-    assert_eq!(f.session.frame(), &frame);
-    assert_eq!(f.scene.revision(), revision);
-    assert_eq!(f.scene.integration_store().borrow().len(), nodes);
+    assert_eq!(f.execution.session().frame(), &frame);
+    assert_eq!(f.execution.scene().revision(), revision);
+    assert_eq!(
+        f.execution.scene().integration_store().borrow().len(),
+        nodes
+    );
     assert_eq!(f.effect(0), None);
     f.send(2, 0, false).unwrap();
     let stale = f.targets[0].get_effect("glow").unwrap();
@@ -535,17 +561,17 @@ fn rejected_click_input_never_enrolls_and_retired_handles_cannot_mutate_a_new_ge
     f.click(3, 0);
     let current = f.effect(0).unwrap();
     assert_ne!(current, stale.node_id());
-    let revision = f.scene.revision();
+    let revision = f.execution.scene().revision();
     assert!(f
-        .scene
-        .live(&mut f.session)
+        .execution
+        .scene_mut()
         .set_effect(
             &f.targets[0],
             &stale,
             EffectUpdate::default().intensity(4.0)
         )
         .is_err());
-    assert_eq!(f.scene.revision(), revision);
+    assert_eq!(f.execution.scene().revision(), revision);
     assert_eq!(f.effect(0), Some(current));
     assert_eq!(f.glow(0).unwrap().intensity(), 0.0);
     f.tick(3.0);
@@ -560,23 +586,24 @@ fn invalid_persistent_edit_does_not_adopt_the_temporary_click_attachment() {
     let attachment = f.effect(0).unwrap();
     f.tick(1.0);
     f.tick(1.5);
-    let frame = f.session.frame().clone();
-    let revision = f.scene.revision();
+    let frame = f.execution.session().frame().clone();
+    let revision = f.execution.scene().revision();
     assert!(f
-        .scene
-        .live(&mut f.session)
+        .execution
+        .scene_mut()
         .set_glow(
             &f.targets[0],
             EffectUpdate::default().radius(Pixels(f64::NAN))
         )
         .is_err());
-    assert_eq!(f.scene.revision(), revision);
-    assert_eq!(f.session.frame(), &frame);
+    assert_eq!(f.execution.scene().revision(), revision);
+    assert_eq!(f.execution.session().frame(), &frame);
     assert_eq!(f.effect(0), Some(attachment));
     f.tick(2.0);
     assert_eq!(f.effect(0), None);
     assert!(f
-        .scene
+        .execution
+        .scene()
         .integration_store()
         .borrow()
         .node(attachment)

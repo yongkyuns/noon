@@ -118,7 +118,6 @@ impl LiveContinuation for FamilyOpacity {
             }
             4 => {
                 scene
-                    .live()
                     .add_effect(
                         &self.group,
                         Blur::new(EffectUpdate::default().radius(Pixels(0.0))).map_err(message)?,
@@ -134,7 +133,6 @@ impl LiveContinuation for FamilyOpacity {
             }
             6 => {
                 scene
-                    .live()
                     .set_effect(
                         &self.group,
                         "soften",
@@ -144,7 +142,6 @@ impl LiveContinuation for FamilyOpacity {
             }
             7 => {
                 scene
-                    .live()
                     .remove_effect(&self.group, "soften")
                     .map_err(message)?;
             }
@@ -181,7 +178,6 @@ impl LiveContinuation for FamilyOpacity {
                     .set_family_object_opacity(&self.parent, 0.6)
                     .map_err(message)?;
                 scene
-                    .live()
                     .add_effect(
                         &self.parent,
                         Glow::new(
@@ -197,10 +193,7 @@ impl LiveContinuation for FamilyOpacity {
                     .map_err(message)?;
             }
             22 => {
-                scene
-                    .live()
-                    .remove_effect(&self.parent, "halo")
-                    .map_err(message)?;
+                scene.remove_effect(&self.parent, "halo").map_err(message)?;
                 scene
                     .live()
                     .set_family_object_opacity(&self.group, 1.0)

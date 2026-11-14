@@ -96,9 +96,9 @@ fn independent_size_channels_seek_complete_and_retire_exact_generations() {
     session.live().complete_segment(segment).unwrap();
     assert!(a.authored_definition().unwrap().is_neutral());
     let saved = session.scene_mut().copy_mobject(&source).unwrap();
-    session.live().remove_effect(&source, &a).unwrap();
+    session.scene_mut().remove_effect(&source, &a).unwrap();
     session
-        .live()
+        .scene_mut()
         .add_effect(&source, Pixelate::default(), "a")
         .unwrap();
     let replacement = source.get_effect("a").unwrap();
@@ -107,7 +107,7 @@ fn independent_size_channels_seek_complete_and_retire_exact_generations() {
     let context = session.session().publication_context();
     let revision = session.scene().revision();
     assert!(session
-        .live()
+        .scene_mut()
         .set_effect(&source, &a, EffectUpdate::default().size(Pixels(3.0)))
         .is_err());
     assert_eq!(session.session().frame(), &before);

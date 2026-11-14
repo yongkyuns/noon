@@ -26,7 +26,6 @@ impl LiveContinuation for ComposedMask {
                     EffectUpdate::default().progress(0.0).softness(0.4)
                 };
                 scene
-                    .live()
                     .set_effect(target.root(), "mask", update)
                     .map_err(message)?;
                 scene.live().declare_and_activate_composition(
@@ -42,7 +41,6 @@ impl LiveContinuation for ComposedMask {
             }
             5 => {
                 scene
-                    .live()
                     .set_effect(
                         &self.source,
                         "mask",
@@ -52,10 +50,7 @@ impl LiveContinuation for ComposedMask {
                 scene.live().wait_segment(0.5)
             }
             6 => {
-                scene
-                    .live()
-                    .remove_effect(&self.source, "mask")
-                    .map_err(message)?;
+                scene.remove_effect(&self.source, "mask").map_err(message)?;
                 scene.live().wait_segment(0.5)
             }
             7 => return Ok(ContinuationStep::Finished),

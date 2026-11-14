@@ -41,26 +41,31 @@ fn copied_target_intent_only_write_has_one_coherent_publication_without_render_d
     scene.add(&target).unwrap();
     let target_effect = target.get_effect("glow").unwrap().node_id();
     let source_effect = source.get_effect("glow").unwrap().node_id();
-    let mut session = scene.execution_session().unwrap();
-    session.take_renderer_publication();
-    let before = session.publication_context();
-    let objects = session.frame().objects.clone();
+    let mut session = scene.into_execution().unwrap();
+    session.session_mut().take_renderer_publication();
+    let before = session.session().publication_context();
+    let objects = session.session().frame().objects.clone();
 
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .set_glow(&target, EffectUpdate::default().intensity(0.4))
         .unwrap();
     assert_eq!(
-        scene.revision(),
+        session.scene().revision(),
         before.scene_revision().checked_next().unwrap()
     );
     assert_eq!(
-        session.publication_context().scene_revision(),
-        scene.revision()
+        session.session().publication_context().scene_revision(),
+        session.scene().revision()
     );
-    assert_eq!(session.frame().objects, objects);
-    assert!(session.take_renderer_publication().changes().is_empty());
-    let copy = scene
+    assert_eq!(session.session().frame().objects, objects);
+    assert!(session
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
+    let copy = session
+        .scene()
         .integration_store()
         .borrow()
         .semantic_effect_state(target_effect)
@@ -71,21 +76,22 @@ fn copied_target_intent_only_write_has_one_coherent_publication_without_render_d
     assert!(copy.writes_parameter(EffectParameter::Intensity));
     assert!(!copy.writes_parameter(EffectParameter::Radius));
 
-    let committed = session.publication_context();
-    scene
-        .live(&mut session)
+    let committed = session.session().publication_context();
+    session
+        .scene_mut()
         .set_glow(&target, EffectUpdate::default().intensity(0.4))
         .unwrap();
-    assert_eq!(session.publication_context(), committed);
+    assert_eq!(session.session().publication_context(), committed);
 
     let mut invalid = SemanticMutationTransaction::new();
     invalid.update_effect(target_effect, EffectUpdate::default().radius(Pixels(3.25)));
     invalid.update_effect(source_effect, EffectUpdate::default().intensity(-1.0));
-    assert!(scene.live(&mut session).apply(invalid).is_err());
-    assert_eq!(session.publication_context(), committed);
-    assert_eq!(session.frame().objects, objects);
+    assert!(session.live().apply(invalid).is_err());
+    assert_eq!(session.session().publication_context(), committed);
+    assert_eq!(session.session().frame().objects, objects);
     assert_eq!(
-        scene
+        session
+            .scene()
             .integration_store()
             .borrow()
             .semantic_effect_state(target_effect)

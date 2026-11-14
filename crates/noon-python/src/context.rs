@@ -405,7 +405,7 @@ impl Context {
             .map_err(engine_error)
     }
 
-    fn edit_live_style(
+    fn edit_live_appearance(
         &mut self,
         edit: impl FnOnce(&mut Scene) -> Result<(), noon::AuthoringError>,
     ) -> PyResult<()> {
@@ -538,7 +538,7 @@ impl Context {
             background_stroke_opacity,
         )
         .map_err(engine_error)?;
-        self.edit_live_style(|scene| scene.set_style(&source.handle, update))
+        self.edit_live_appearance(|scene| scene.set_style(&source.handle, update))
     }
     #[allow(clippy::too_many_arguments)]
     #[pyo3(name="liveSetFamilyStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
@@ -1385,7 +1385,7 @@ impl Context {
     fn emission(&mut self, target: &MobjectHandle, value: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.edit_live_style(|scene| scene.set_emission(&target.handle, value))
+        self.edit_live_appearance(|scene| scene.set_emission(&target.handle, value))
     }
     #[pyo3(name = "liveSetFamilyEmission")]
     fn family_emission(
@@ -1816,14 +1816,14 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| live.set_glow(&target.handle, update.value.clone()))
+        self.edit_live_appearance(|scene| scene.set_glow(&target.handle, update.value.clone()))
     }
 
     #[pyo3(name = "liveRemoveGlow")]
     fn _remove_glow(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| live.remove_glow(&target.handle))
+        self.edit_live_appearance(|scene| scene.remove_glow(&target.handle))
     }
 
     #[pyo3(name = "liveAddEffect")]
@@ -1835,7 +1835,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| live.add_effect(&target.handle, definition.definition(), name))
+        self.edit_live_appearance(|scene| {
+            scene.add_effect(&target.handle, definition.definition(), name)
+        })
     }
 
     #[pyo3(name = "liveSetEffect")]
@@ -1847,7 +1849,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| live.set_effect(&target.handle, name, update.value.clone()))
+        self.edit_live_appearance(|scene| {
+            scene.set_effect(&target.handle, name, update.value.clone())
+        })
     }
 
     #[pyo3(name = "liveSetEffectHandle")]
@@ -1859,14 +1863,16 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| live.set_effect(&target.handle, &handle.handle, update.value.clone()))
+        self.edit_live_appearance(|scene| {
+            scene.set_effect(&target.handle, &handle.handle, update.value.clone())
+        })
     }
 
     #[pyo3(name = "liveRemoveEffect")]
     fn _remove_effect(&mut self, target: &MobjectHandle, name: &str) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| live.remove_effect(&target.handle, name))
+        self.edit_live_appearance(|scene| scene.remove_effect(&target.handle, name))
     }
 
     #[pyo3(name = "liveRemoveEffectHandle")]
@@ -1877,7 +1883,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.with_live(|live| live.remove_effect(&target.handle, &handle.handle))
+        self.edit_live_appearance(|scene| scene.remove_effect(&target.handle, &handle.handle))
     }
 
     #[pyo3(name = "liveSetFamilyGlow")]
@@ -1888,14 +1894,14 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| live.set_glow(&target.family, update.value.clone()))
+        self.edit_live_appearance(|scene| scene.set_glow(&target.family, update.value.clone()))
     }
 
     #[pyo3(name = "liveRemoveFamilyGlow")]
     fn family_remove_glow(&mut self, target: &crate::family::FamilyHandle) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| live.remove_glow(&target.family))
+        self.edit_live_appearance(|scene| scene.remove_glow(&target.family))
     }
 
     #[pyo3(name = "liveAddFamilyEffect")]
@@ -1907,7 +1913,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| live.add_effect(&target.family, definition.definition(), name))
+        self.edit_live_appearance(|scene| {
+            scene.add_effect(&target.family, definition.definition(), name)
+        })
     }
 
     #[pyo3(name = "liveSetFamilyEffect")]
@@ -1919,7 +1927,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| live.set_effect(&target.family, name, update.value.clone()))
+        self.edit_live_appearance(|scene| {
+            scene.set_effect(&target.family, name, update.value.clone())
+        })
     }
 
     #[pyo3(name = "liveSetFamilyEffectHandle")]
@@ -1931,7 +1941,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| live.set_effect(&target.family, &handle.handle, update.value.clone()))
+        self.edit_live_appearance(|scene| {
+            scene.set_effect(&target.family, &handle.handle, update.value.clone())
+        })
     }
 
     #[pyo3(name = "liveRemoveFamilyEffect")]
@@ -1942,7 +1954,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| live.remove_effect(&target.family, name))
+        self.edit_live_appearance(|scene| scene.remove_effect(&target.family, name))
     }
 
     #[pyo3(name = "liveRemoveFamilyEffectHandle")]
@@ -1953,7 +1965,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| live.remove_effect(&target.family, &handle.handle))
+        self.edit_live_appearance(|scene| scene.remove_effect(&target.family, &handle.handle))
     }
 
     #[pyo3(name = "queryLayoutDimensionLength")]
@@ -3073,7 +3085,7 @@ impl Context {
             _ => {
                 return Err(engine_error(
                     "Only call add_smooth_curve_to with 1 or 2 points",
-                ))
+                ));
             }
         };
         self.edit_path(target, |scene, object| {
@@ -3172,7 +3184,7 @@ impl Context {
     #[pyo3(name = "liveSetFill")]
     fn fill(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_live_style(|scene| scene.set_fill_rgb(&target.handle, r, g, b, a))
+        self.edit_live_appearance(|scene| scene.set_fill_rgb(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetFillColor")]
     fn fill_color(
@@ -3184,27 +3196,27 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.edit_live_style(|scene| scene.set_fill_color(&target.handle, r, g, b, a))
+        self.edit_live_appearance(|scene| scene.set_fill_color(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetFillOpacity")]
     fn fill_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_live_style(|scene| scene.set_fill_opacity(&target.handle, a))
+        self.edit_live_appearance(|scene| scene.set_fill_opacity(&target.handle, a))
     }
     #[pyo3(name = "liveSetColor")]
     fn color(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_live_style(|scene| scene.set_color_rgba(&target.handle, r, g, b, a))
+        self.edit_live_appearance(|scene| scene.set_color_rgba(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetOpacity")]
     fn opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_live_style(|scene| scene.set_opacity(&target.handle, a))
+        self.edit_live_appearance(|scene| scene.set_opacity(&target.handle, a))
     }
     #[pyo3(name = "liveSetObjectOpacity")]
     fn object_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_live_style(|scene| scene.set_object_opacity(&target.handle, a))
+        self.edit_live_appearance(|scene| scene.set_object_opacity(&target.handle, a))
     }
     #[pyo3(name = "liveZIndex")]
     fn z_index(&self, target: &LayoutAnchor) -> PyResult<f64> {
@@ -3332,7 +3344,11 @@ impl Context {
             .ok_or_else(|| engine_error("effect publication is consumed"))?;
         if !pending.programs().is_empty() {
             if !self.prepare_shaders {
-                return Err(engine_error(noon::integration::AuthoringFailure::new("unsupported_operation", "shader.device_preparation_required", "live shader publication requires native GPU preparation; enable prepare_shaders")));
+                return Err(engine_error(noon::integration::AuthoringFailure::new(
+                    "unsupported_operation",
+                    "shader.device_preparation_required",
+                    "live shader publication requires native GPU preparation; enable prepare_shaders",
+                )));
             }
             #[cfg(not(feature = "capture"))]
             return Err(engine_error(noon::integration::AuthoringFailure::new(
@@ -3986,7 +4002,7 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.edit_live_style(|scene| scene.set_stroke(&target.handle, r, g, b, a))
+        self.edit_live_appearance(|scene| scene.set_stroke(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetStrokeColor")]
     fn set_stroke_color(
@@ -3998,12 +4014,12 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.edit_live_style(|scene| scene.set_stroke_color(&target.handle, r, g, b, a))
+        self.edit_live_appearance(|scene| scene.set_stroke_color(&target.handle, r, g, b, a))
     }
     #[pyo3(name = "liveSetStrokeOpacity")]
     fn set_stroke_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_live_style(|scene| scene.set_stroke_opacity(&target.handle, a))
+        self.edit_live_appearance(|scene| scene.set_stroke_opacity(&target.handle, a))
     }
     fn metrics(&self) -> (u64, u64, u64) {
         (self.frames, self.segments, self.callback_regions)
