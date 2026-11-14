@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Noon is an experimental animation engine inspired by Manim. A shared Rust engine, with Python and Rust authoring on native and web targets.">
+  <meta name="description" content="Noon is an open-source animation engine written in Rust and inspired by Manim. Write scenes in Python or Rust.">
   <meta name="theme-color" content="#f5f3ed">
-  <meta property="og:title" content="Noon — animated visuals, written in code">
-  <meta property="og:description" content="An experimental Rust animation engine with Python and Rust authoring. Explore real examples and edit them in your browser.">
+  <meta property="og:title" content="Noon — open-source animation engine">
+  <meta property="og:description" content="An experimental animation engine inspired by Manim, with Python and Rust examples and an editable browser playground.">
   <meta property="og:type" content="website">
-  <title>Noon — animated visuals, written in code</title>
+  <title>Noon — open-source animation engine</title>
   <link rel="icon" href="data:,">
   <script src="./site/theme-init.js"></script>
   <link rel="stylesheet" href="./site/site.css">
@@ -25,12 +25,9 @@
   <main id="main">
     <section class="wrap hero" aria-labelledby="intro-title">
       <div class="hero-copy">
-        <p class="eyebrow"><span class="dot" aria-hidden="true"></span> Experimental · Rust + Python</p>
-        <h1 id="intro-title">Animated visuals,<br>written in code.</h1>
-        <p class="lede">An experimental animation engine inspired by Manim. Author in Python or Rust, and bring the result to a native window or the browser.</p>
-        <p class="intro">Built in Rust with performance in mind. For visual explanations, simulations, interactive design, and the ideas in between.</p>
-        <div class="actions"><a class="button" href="./playground.html?catalog=showcase&amp;example=showcase-first-scene">Open the playground <span aria-hidden="true">↗</span></a><a class="button secondary" href="./site/docs/getting-started.html">Make your first scene <span aria-hidden="true">→</span></a></div>
-        <p class="aside">Experimental software. APIs and feature coverage are still changing.</p>
+        <h1 id="intro-title">Noon</h1>
+        <p class="lede">Noon is an experimental, open-source animation engine written in Rust and inspired by Manim. The browser playground runs Python scenes. The repository has examples in Python and Rust that run locally.</p>
+        <div class="actions"><a class="button" href="./playground.html?catalog=showcase&amp;example=showcase-first-scene">Open the playground <span aria-hidden="true">↗</span></a><a class="button secondary" href="./site/docs/getting-started.html">Getting started <span aria-hidden="true">→</span></a></div>
       </div>
       <figure class="featured">
         <div class="demo-card" data-demo="showcase-dynamic-scene" data-frame-src="./embed.html?catalog=showcase&amp;example=showcase-dynamic-scene">
@@ -38,13 +35,12 @@
           <button type="button" data-demo-retry hidden>Retry</button>
           <noscript><p>JavaScript is required for this live scene.</p></noscript>
         </div>
-        <figcaption><span><span class="caption-label">Running live in Noon</span><strong>A field in motion</strong></span><a href="./playground.html?catalog=showcase&amp;example=showcase-dynamic-scene">Edit this scene <span aria-hidden="true">↗</span></a></figcaption>
+        <figcaption><strong>A field in motion</strong><a href="./playground.html?catalog=showcase&amp;example=showcase-dynamic-scene">Open in the playground <span aria-hidden="true">↗</span></a></figcaption>
       </figure>
     </section>
-    <div class="wrap platform-strip" aria-label="Authoring targets"><span>One Rust engine</span><span>Python · native &amp; browser</span><span>Rust · native &amp; WebAssembly</span></div>
     <section class="wrap section" id="examples" aria-labelledby="examples-title">
-      <div class="section-heading"><div><p class="eyebrow">A few things to make</p><h2 id="examples-title">See a scene. Change its code.</h2></div><a class="text-link" href="./playground.html?catalog=showcase">Browse the gallery <span aria-hidden="true">↗</span></a></div>
-      <p class="section-intro">These scenes run live in Noon. Switch to Code to edit a scene; your changes run automatically, just as they do in the playground.</p>
+      <div class="section-heading"><h2 id="examples-title">Live examples</h2><a class="text-link" href="./playground.html?catalog=showcase">Browse the gallery <span aria-hidden="true">↗</span></a></div>
+      <p class="section-intro">Open <strong>Code</strong> to edit a scene’s Python source. Edits run automatically.</p>
       <div class="examples">
         <article class="example">
           <div class="demo-card" data-demo="showcase-first-scene" data-frame-src="./embed.html?catalog=showcase&amp;example=showcase-first-scene">
@@ -52,7 +48,7 @@
           <button type="button" data-demo-retry hidden>Retry</button>
           <noscript><p>JavaScript is required for this live scene.</p></noscript>
         </div>
-          <div class="example-body"><p class="eyebrow">01 / Animation</p><h3><a href="./playground.html?catalog=showcase&amp;example=showcase-first-scene">Your first scene <span aria-hidden="true">↗</span></a></h3><p>Create two objects, arrange them, and give them a little motion.</p><a class="source" href="https://github.com/yongkyuns/noon/blob/master/web/python/examples/showcase_first_scene.py">View Python source</a></div>
+          <div class="example-body"><h3><a href="./playground.html?catalog=showcase&amp;example=showcase-first-scene">Your first scene <span aria-hidden="true">↗</span></a></h3><p>Arrange and animate a circle and a square.</p><a class="source" href="https://github.com/yongkyuns/noon/blob/master/web/python/examples/showcase_first_scene.py">View Python source</a></div>
         </article>
         <article class="example">
           <div class="demo-card" data-demo="showcase-wave-interference" data-frame-src="./embed.html?catalog=showcase&amp;example=showcase-wave-interference">
@@ -60,7 +56,7 @@
           <button type="button" data-demo-retry hidden>Retry</button>
           <noscript><p>JavaScript is required for this live scene.</p></noscript>
         </div>
-          <div class="example-body"><p class="eyebrow">02 / Visual explanation</p><h3><a href="./playground.html?catalog=showcase&amp;example=showcase-wave-interference">Interference is addition <span aria-hidden="true">↗</span></a></h3><p>Add two circular wave fields and change their relative phase.</p><a class="source" href="https://github.com/yongkyuns/noon/blob/master/web/python/examples/showcase_wave_interference.py">View Python source</a></div>
+          <div class="example-body"><h3><a href="./playground.html?catalog=showcase&amp;example=showcase-wave-interference">Interference is addition <span aria-hidden="true">↗</span></a></h3><p>Add two circular wave fields and change their relative phase.</p><a class="source" href="https://github.com/yongkyuns/noon/blob/master/web/python/examples/showcase_wave_interference.py">View Python source</a></div>
         </article>
         <article class="example">
           <div class="demo-card" data-demo="showcase-editorial-cover" data-frame-src="./embed.html?catalog=showcase&amp;example=showcase-editorial-cover">
@@ -68,18 +64,17 @@
           <button type="button" data-demo-retry hidden>Retry</button>
           <noscript><p>JavaScript is required for this live scene.</p></noscript>
         </div>
-          <div class="example-body"><p class="eyebrow">03 / Motion design</p><h3><a href="./playground.html?catalog=showcase&amp;example=showcase-editorial-cover">Make it move <span aria-hidden="true">↗</span></a></h3><p>Combine typography, animated color, procedural grain, and a frosted caption.</p><a class="source" href="https://github.com/yongkyuns/noon/blob/master/web/python/examples/showcase_editorial_cover.py">View Python source</a></div>
+          <div class="example-body"><h3><a href="./playground.html?catalog=showcase&amp;example=showcase-editorial-cover">Make it move <span aria-hidden="true">↗</span></a></h3><p>An animated cover with moving color, procedural grain, and a frosted caption.</p><a class="source" href="https://github.com/yongkyuns/noon/blob/master/web/python/examples/showcase_editorial_cover.py">View Python source</a></div>
         </article>
       </div>
-      <p class="footnote">These live examples are demonstrations, not performance measurements. For input-driven scenes, try <a href="./playground.html?catalog=showcase&amp;example=showcase-pointer-selection">click selection</a> or <a href="./playground.html?catalog=showcase&amp;example=showcase-translation-drag">dragging objects</a> in the gallery.</p>
+      <p class="footnote">The gallery also has examples of <a href="./playground.html?catalog=showcase&amp;example=showcase-pointer-selection">click selection</a> and <a href="./playground.html?catalog=showcase&amp;example=showcase-translation-drag">dragging objects</a>.</p>
     </section>
     <section class="start-section" id="start" aria-labelledby="start-title"><div class="wrap section">
-      <div class="section-heading"><div><p class="eyebrow">Choose your starting point</p><h2 id="start-title">Python or Rust. Native or web.</h2></div></div>
-      <p class="section-intro">Start in the browser, then choose the authoring path that fits your project.</p>
+      <div class="section-heading"><h2 id="start-title">Tutorials and local setup</h2></div>
       <div class="start-paths">
-        <a class="start-path" href="./site/docs/getting-started.html"><span class="path-number">01 / NO INSTALLATION</span><strong>Make your first scene</strong><p>See a live example, switch to Code, and change its color or timing.</p><span class="path-action">Start the tutorial →</span></a>
-        <a class="start-path" href="./site/docs/python.html"><span class="path-number">02 / PYTHON</span><strong>Learn by writing</strong><p>Build scenes with familiar objects, animations, and ordinary Python control flow.</p><span class="path-action">Python walkthrough →</span></a>
-        <a class="start-path" href="./site/docs/rust.html"><span class="path-number">03 / RUST</span><strong>Use the engine directly</strong><p>Author typed scenes, run them natively, and export from the same constructor.</p><span class="path-action">Rust walkthrough →</span></a>
+        <a class="start-path" href="./site/docs/getting-started.html"><strong>Browser tutorial</strong><p>Change the color and timing of an example scene in the browser.</p></a>
+        <a class="start-path" href="./site/docs/python.html"><strong>Python walkthrough</strong><p>Create and group objects, then animate them with Python.</p></a>
+        <a class="start-path" href="./site/docs/rust.html"><strong>Rust walkthrough</strong><p>Write a scene in Rust, open it in a native window, and export it.</p></a>
       </div>
       <div class="local-options">
         <details><summary>Native Python <span>CPython + the Rust engine</span></summary><div class="details-body"><p>From a checkout, with CPython 3.11+ and the repository-pinned Rust toolchain. These commands use a POSIX shell.</p><pre><code>git clone https://github.com/yongkyuns/noon.git
@@ -93,10 +88,10 @@ cargo run -p noon-native --example ordinary_affine_play</code></pre><p><a href="
       </div>
     </div></section>
     <section class="wrap section about" id="about" aria-labelledby="about-title">
-      <div><p class="eyebrow">About the project</p><h2 id="about-title">A shared engine.<br>An evolving project.</h2></div>
-      <div class="about-copy"><h3>Where it started</h3><p>Noon began years ago as a minimal working prototype. It was recently redesigned with AI agents, which now contribute much of the development. It is an ongoing experiment, not a finished product.</p><h3>Its relationship to Manim</h3><p>Noon follows much of <a href="https://www.manim.community/">Manim Community Edition</a>’s authoring semantics and visual behavior for supported features. It is not a drop-in implementation of every Manim API. Compatibility is useful, but it is not a strict long-term constraint; new features may take Noon in different directions.</p><h3>What to expect today</h3><p>Python works in the browser and natively; Rust has native and WebAssembly paths. Feature coverage and playback capabilities differ between hosts. Some callback-driven or interactive scenes have replay restrictions. Start with a runnable example, and consult the reference before depending on a particular feature.</p><p><a href="./site/docs/reference.html">Implementation reference ↗</a> · <a href="./site/docs/architecture.html">Architecture ↗</a> · <a href="https://github.com/yongkyuns/noon/issues">Issues ↗</a></p></div>
+      <h2 id="about-title">About Noon</h2>
+      <div class="about-copy"><h3>Project history</h3><p>Noon started as a small prototype. Recent development has included a redesign with AI coding agents.</p><h3>Manim compatibility</h3><p><a href="https://www.manim.community/">Manim Community Edition</a> is the reference for the Python APIs and visual behavior that Noon supports. The implementation reference describes coverage and limitations by host.</p><h3>Current status</h3><p>APIs are still changing. Playback and feature support differ between native and browser hosts. Some callback-driven and interactive scenes have replay restrictions.</p><p><a href="./site/docs/reference.html">Implementation reference ↗</a> · <a href="./site/docs/architecture.html">Architecture ↗</a> · <a href="https://github.com/yongkyuns/noon/issues">Issues ↗</a></p></div>
     </section>
   </main>
-  <footer class="site-footer"><a class="wordmark" href="./">noon<span aria-hidden="true">.</span></a><p>An experimental animation engine.</p><nav aria-label="Footer"><a href="./site/docs/getting-started.html">Get started</a><a href="./site/docs/architecture.html">Architecture</a><a href="https://github.com/yongkyuns/noon">GitHub ↗</a></nav></footer>
+  <footer class="site-footer"><a class="wordmark" href="./">noon<span aria-hidden="true">.</span></a><nav aria-label="Footer"><a href="./site/docs/getting-started.html">Get started</a><a href="./site/docs/architecture.html">Architecture</a><a href="https://github.com/yongkyuns/noon">GitHub ↗</a></nav></footer>
 </body>
 </html>

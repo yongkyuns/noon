@@ -1,24 +1,21 @@
-# Learn Noon
+# Noon documentation
 
-Make animated visuals with Python or Rust. Start with a live scene in the browser,
-then learn how objects, animation, and authored time fit together.
+These docs cover writing and running scenes in Python and Rust. The browser
+tutorial shows how to edit an example and how Noon handles source errors.
 
 <!-- noon:paths start -->
 
-## A clear path from your first scene
+## Tutorials and guides
 
-1. **[Run and change a scene](getting-started.html).** See the result first. Change
-   its appearance and timing, and learn how to recover from a source error.
-2. **[Learn the building blocks](guide.html).** Understand objects, arrangement,
-   grouping, and the difference between simultaneous and sequential animation.
-3. **[Choose a host](installation.html).** Stay in the browser or use a source
-   checkout for native Python or Rust.
-4. **[Save the result](export.html).** Export a finite scene as frames or video,
-   with the requirements and current limitations made explicit.
+1. **[Getting started](getting-started.html).** Run a scene and change its
+   appearance and timing.
+2. **[Scenes and animation](guide.html).** Arrange and group objects, then animate
+   them in parallel or in sequence.
+3. **[Installation](installation.html).** Use the browser playground or build
+   native Python and Rust from a source checkout.
+4. **[Export](export.html).** Save a finite scene as frames or video.
 
-You do not need to read the engine architecture before making your first scene.
-
-## Find the details when you need them
+## Reference
 
 <!-- noon:paths reference -->
 
@@ -26,14 +23,12 @@ You do not need to read the engine architecture before making your first scene.
 replayable scenes. [Troubleshooting](troubleshooting.html) helps with blank output,
 source errors, native builds, and export failures.
 
-## What to expect
+## Current status
 
-Noon is experimental. Python runs in the browser and natively; Rust has native
+Noon is experimental. Python runs in the browser and natively. Rust has native
 and WebAssembly paths. Feature coverage differs between hosts. The API reference
-shows what is declared in this source revision, not a promise that every feature
-combination works on every host.
+lists the declarations in this source revision.
 
-ManimCE is a useful reference for supported authoring semantics and visuals, not
-an exhaustive compatibility promise. For the precise host boundaries, read the
-[implementation reference](reference.html). Every page links to its source and
-records the revision it was built from.
+ManimCE is the reference for supported Python authoring behavior and visuals.
+See the [implementation reference](reference.html) for host coverage. Each page
+links to its source and records the revision it was built from.

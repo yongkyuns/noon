@@ -29,7 +29,7 @@ try {
     await assertDocumentWidth(page,label,output);
     assert.equal(await page.evaluate(() => [document.body, document.documentElement, document.querySelector('.hero'), document.querySelector('.featured')]
       .every(node => !['hidden','clip'].includes(getComputedStyle(node).overflowX))),true,'do not conceal homepage overflow');
-    assert.equal(await page.locator("h1").textContent(), "Animated visuals,written in code.");
+    assert.equal(await page.locator("h1").textContent(), "Noon");
     assert.equal(await page.locator('video, .demo-poster, [data-demo-open]').count(),0,'homepage shows live surfaces, not captured clips');
     for (const name of ["Native Python", "Native Rust"]) await page.locator("summary").filter({hasText:name}).click();
     assert.equal(await page.locator("details[open]").count(),2);
