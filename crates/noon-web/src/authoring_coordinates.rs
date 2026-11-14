@@ -710,25 +710,18 @@ impl WasmAuthoringFamilyHandle {
         buff: f64,
         fixed_orientation: bool,
     ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
-        // wasm-bindgen cannot represent optional borrowed exported handles.
-        // Inactive arguments alias an active handle; this mask preserves one
-        // typed, atomic call without consuming any caller-owned wrappers.
-        if selected_axes == 0 || selected_axes & !7 != 0 {
-            return Err(js_error("axis labels require a nonempty three-axis mask"));
-        }
         let axes = ManimThreeDAxes::from_family(self.semantic_family()?)
             .map_err(coordinate_failure)
             .map_err(js_error)?;
-        let mut families = Vec::new();
-        for (index, handle) in [(0, x), (1, y), (2, z)] {
-            if selected_axes & (1 << index) != 0 {
-                families.push((index, handle.semantic_family()?));
-            }
-        }
-        let labels = families
-            .iter()
-            .map(|(index, family)| (*index, noon::MobjectTarget::Family(family)))
-            .collect::<Vec<_>>();
+        let labels = noon::integration::three_d_axis_label_targets(
+            [
+                x.semantic_family_ref(),
+                y.semantic_family_ref(),
+                z.semantic_family_ref(),
+            ],
+            selected_axes,
+        )
+        .map_err(js_error)?;
         axes.create_axis_label_targets(&labels, buff, fixed_orientation)
             .map(Self::from_semantic_family)
             .map_err(coordinate_failure)
@@ -819,6 +812,39 @@ impl WasmAuthoringFamilyHandle {
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = createThreeDAxesLabels)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_three_d_axes_labels(
+        &mut self,
+        axes: &WasmAuthoringFamilyHandle,
+        x: &WasmAuthoringFamilyHandle,
+        y: &WasmAuthoringFamilyHandle,
+        z: &WasmAuthoringFamilyHandle,
+        selected_axes: u32,
+        buff: f64,
+        fixed_orientation: bool,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let axes = ManimThreeDAxes::from_family(axes.semantic_family()?)
+            .map_err(coordinate_failure)
+            .map_err(js_error)?;
+        let labels = noon::integration::three_d_axis_label_targets(
+            [
+                x.semantic_family_ref(),
+                y.semantic_family_ref(),
+                z.semantic_family_ref(),
+            ],
+            selected_axes,
+        )
+        .map_err(js_error)?;
+        self.inner
+            .local_authoring_scene()
+            .map_err(js_error)?
+            .three_d_axis_labels(&axes, &labels, buff, fixed_orientation)
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(coordinate_failure)
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = queryNumberLineFrame)]
     pub fn query_number_line_frame(
         &self,

@@ -69,8 +69,9 @@ pub fn scene() -> Result<
     let z_label = scene
         .text(crate::Text::new("z"))
         .map_err(|error| error.to_string())?;
-    let labels = axes
-        .create_axis_label_targets(
+    let labels = scene
+        .three_d_axis_labels(
+            &axes,
             &[
                 (0, crate::MobjectTarget::Object(&x_label)),
                 (1, crate::MobjectTarget::Object(&y_label)),

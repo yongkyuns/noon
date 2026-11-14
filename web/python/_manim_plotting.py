@@ -1370,6 +1370,7 @@ class ThreeDAxes(_compat.Group):
         _family(self, handle, axes)
 
     def _axis_label_family(self, labels, *, buff=0.1, fixed_orientation=False, **kwargs):
+        _outside_callback()
         if kwargs:
             raise NotImplementedError("unsupported ThreeDAxes label option(s): " + ", ".join(sorted(kwargs)))
         if not isinstance(fixed_orientation, bool):
@@ -1388,13 +1389,16 @@ class ThreeDAxes(_compat.Group):
             raise ValueError("at least one ThreeDAxes label is required")
         selected_axes = sum(1 << index for index, handle in enumerate(handles) if handle is not None)
         active_handle = next(handle for handle in handles if handle is not None)
-        family = engine_call(
-            self._semantic_family_handle.threeDAxesLabelFamilies,
-            *(active_handle if handle is None else handle for handle in handles),
-            selected_axes, buff, fixed_orientation,
-        )
-        wrapper = object.__new__(_compat.Group)
-        return _family(wrapper, family, selected)
+        context = _shared._path_authoring_context(self, *selected)
+        args = (*(active_handle if handle is None else handle for handle in handles),
+                selected_axes, buff, fixed_orientation)
+        family = (engine_call(self._semantic_family_handle.threeDAxesLabelFamilies, *args)
+                  if context is None else
+                  engine_call(context.createThreeDAxesLabels, self._semantic_family_handle, *args))
+        wrapper = _family(object.__new__(_compat.Group), family, selected)
+        if context is not None:
+            wrapper._canonical_live_target_context = context
+        return wrapper
 
     def get_x_axis_label(self, label, *, buff=0.1, fixed_orientation=False, **kwargs):
         """Place one existing retained text object at the positive X endpoint."""

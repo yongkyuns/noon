@@ -339,18 +339,35 @@ impl ManimThreeDAxes {
         buff: f64,
         fixed_orientation: bool,
     ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        let (transaction, family) =
+            self.prepare_axis_labels(labels, buff, fixed_orientation, None)?;
+        let store = self.family.integration_store();
+        let result = transaction
+            .apply(&mut store.borrow_mut())
+            .map_err(AuthoringError::from)?;
+        resolve_family(Rc::clone(store), &result, family)
+    }
+
+    fn prepare_axis_labels(
+        &self,
+        labels: &[(usize, crate::MobjectTarget<'_>)],
+        buff: f64,
+        fixed_orientation: bool,
+        execution: Option<&ExecutionSession>,
+    ) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), CoordinateAuthoringError>
+    {
         if labels.is_empty() || !buff.is_finite() || buff < 0.0 {
             return Err(CoordinateAuthoringError::InvalidOptions(
                 "invalid ThreeDAxes labels",
             ));
         }
-        let store = Rc::clone(self.family.integration_store());
+        let store = self.family.integration_store();
         let mut seen = [false; 3];
         let mut all_nodes = std::collections::HashSet::new();
         let mut prepared = Vec::new();
         let mut family_members = Vec::new();
         for &(index, label) in labels {
-            if index > 2 || seen[index] || !Rc::ptr_eq(&store, label.integration_store()) {
+            if index > 2 || seen[index] || !Rc::ptr_eq(store, label.integration_store()) {
                 return Err(CoordinateAuthoringError::InvalidOptions(
                     "invalid ThreeDAxes labels",
                 ));
@@ -386,10 +403,20 @@ impl ManimThreeDAxes {
                 ),
             };
             let axis_family = self.axis(index)?;
-            let (axis_min, axis_max) = crate::world_affine::target_world_bounds(
-                &store,
-                crate::MobjectTarget::Family(axis_family.family()),
-            )?;
+            let axis_target = crate::MobjectTarget::Family(axis_family.family());
+            let (axis_min, axis_max) = if let Some(execution) = execution {
+                crate::world_affine::target_world_bounds_with(
+                    store,
+                    axis_target,
+                    |store, node, _| {
+                        crate::spatial_authoring::effective_world_or_authored(
+                            execution, store, node,
+                        )
+                    },
+                )?
+            } else {
+                crate::world_affine::target_world_bounds(store, axis_target)?
+            };
             let anchor = critical_world_point(axis_min, axis_max, edge);
             let source_corner = layout.critical_point(-direction.x, -direction.y);
             let mut delta = (
@@ -424,7 +451,7 @@ impl ManimThreeDAxes {
                         "ThreeDAxes labels cannot share text leaves",
                     ));
                 }
-                let leaf = Mobject::from_node(Rc::clone(&store), node)?;
+                let leaf = Mobject::from_node(Rc::clone(store), node)?;
                 let state = leaf.state()?;
                 if state.content.text().is_none() {
                     return Err(CoordinateAuthoringError::InvalidOptions(
@@ -495,16 +522,7 @@ impl ManimThreeDAxes {
                     .set_spatial_composition_domain(node, SemanticSpatialCompositionDomain::World);
             }
         }
-        let result = transaction
-            .apply(&mut store.borrow_mut())
-            .map_err(AuthoringError::from)?;
-        MobjectFamily::from_node(
-            store,
-            result
-                .resolve(family_token)
-                .expect("published family token"),
-        )
-        .map_err(Into::into)
+        Ok((transaction, family_token))
     }
 }
 
@@ -541,6 +559,22 @@ impl Scene {
         })?;
         let family = MobjectFamily::from_node(Rc::clone(self.integration_store()), root)?;
         ManimThreeDAxes::from_family(family)
+    }
+
+    /// Place retained ThreeDAxes labels against this Scene's coordinate family.
+    pub fn three_d_axis_labels(
+        &mut self,
+        axes: &ManimThreeDAxes,
+        labels: &[(usize, crate::MobjectTarget<'_>)],
+        buff: f64,
+        fixed_orientation: bool,
+    ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        crate::MobjectTarget::from(axes.family()).require_store(self.integration_store())?;
+        self.require_effective_capture()?;
+        let (transaction, family) =
+            axes.prepare_axis_labels(labels, buff, fixed_orientation, self.running_execution())?;
+        let result = self.apply_semantic_transaction(transaction)?;
+        resolve_family(Rc::clone(self.integration_store()), &result, family)
     }
 
     /// Observe this coordinate family through the Scene in setup or playback.

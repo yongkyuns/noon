@@ -868,7 +868,7 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn local_authoring_scene(&mut self) -> Result<&mut noon::Scene, AuthoringFailure> {
+    pub(crate) fn local_authoring_scene(&mut self) -> Result<&mut noon::Scene, AuthoringFailure> {
         if self.player_ownership.is_unstarted() {
             return Ok(&mut self.scene);
         }

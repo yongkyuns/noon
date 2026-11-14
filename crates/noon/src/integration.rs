@@ -224,8 +224,8 @@ pub use plot_error::{
 };
 mod plot_input;
 pub use plot_input::{
-    data_points as plot_data_points, optional_range as plot_optional_range, PlotSamplingInput,
-    RiemannInput,
+    data_points as plot_data_points, optional_range as plot_optional_range,
+    three_d_axis_label_targets, PlotSamplingInput, RiemannInput,
 };
 
 /// Decode the optional frontend spelling of an existing camera working profile.
