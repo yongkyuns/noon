@@ -24,9 +24,7 @@ impl LiveContinuation for PointPromotion {
             match self.stage {
                 0 => {}
                 1 => {
-                    let before = scene
-                        .effective_point_reduction_tree((&self.left).into())?
-                        .points;
+                    let before = scene.point_reduction_tree((&self.left).into())?.points;
                     let captured = self.left.split_iter()?;
                     let references = [(&self.left_child).into()];
                     let copied = scene.promote_own_points((&self.left).into(), &references)?;
@@ -43,10 +41,7 @@ impl LiveContinuation for PointPromotion {
                         root.node_id()
                     );
                     assert_eq!(root.get_num_points()?, 32);
-                    assert_eq!(
-                        scene.effective_point_reduction_tree((&root).into())?.points,
-                        before
-                    );
+                    assert_eq!(scene.point_reduction_tree((&root).into())?.points, before);
                     assert_eq!(root.member_count()?, 0);
                     assert_ne!(root.node_id(), self.left.node_id());
                     assert_ne!(alias.node_id(), self.left_child.node_id());

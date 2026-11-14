@@ -177,9 +177,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         running.live().advance_segment_to(segment, 0.5)?;
         let captured = running.scene().path_query(&rectangle)?;
         assert_eq!(
-            running
-                .scene()
-                .effective_all_points((&vector_family).into())?,
+            running.scene().all_points((&vector_family).into())?,
             captured
                 .points()?
                 .into_iter()
@@ -196,7 +194,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         assert_eq!(
             running
                 .scene()
-                .effective_vector_boundary_points((&vector_family).into())?,
+                .vector_boundary_points((&vector_family).into())?,
             expected_boundary
         );
         let midpoint = captured.start()?;

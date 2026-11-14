@@ -549,19 +549,10 @@ impl Context {
     fn observe_points<'a, T>(
         &self,
         target: MobjectTarget<'a>,
-        authored: impl FnOnce(&MobjectTarget<'a>) -> Result<T, noon::AuthoringError>,
-        effective: impl FnOnce(&Scene, MobjectTarget<'a>) -> Result<T, noon::AuthoringError>,
+        observe: impl FnOnce(&Scene, MobjectTarget<'a>) -> Result<T, noon::AuthoringError>,
     ) -> PyResult<T> {
         self.require_active()?;
-        target
-            .require_store(self.scene.integration_store())
-            .map_err(engine_error)?;
-        let value = if self.has_execution() {
-            effective(&self.scene, target)
-        } else {
-            authored(&target)
-        };
-        value.map_err(engine_error)
+        observe(&self.scene, target).map_err(engine_error)
     }
 
     fn critical_point_3d(
@@ -570,17 +561,9 @@ impl Context {
         direction: noon::SemanticVec3,
         vector_boundary: bool,
     ) -> PyResult<(f64, f64, f64)> {
-        self.observe_points(
-            target,
-            |target| {
-                if vector_boundary {
-                    target.vector_critical_point_3d(direction)
-                } else {
-                    target.critical_point_3d(direction)
-                }
-            },
-            |scene, target| scene.effective_critical_point_3d(target, direction, vector_boundary),
-        )
+        self.observe_points(target, |scene, target| {
+            scene.critical_point_3d(target, direction, vector_boundary)
+        })
         .map(|point| (point.x, point.y, point.z))
     }
 
@@ -2808,32 +2791,20 @@ impl Context {
 
     #[pyo3(name = "queryMobjectPathBoundaryPoints3D")]
     fn mobject_path_boundary_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
-        self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::path_boundary_points_3d,
-            Scene::effective_path_boundary_points_3d,
-        )
-        .map(crate::path_input::flat_points_3d)
+        self.observe_points((&target.handle).into(), Scene::path_boundary_points_3d)
+            .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryMobjectVectorBoundaryPoints3D")]
     fn mobject_vector_boundary_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
-        self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::vector_boundary_points_3d,
-            Scene::effective_vector_boundary_points_3d,
-        )
-        .map(crate::path_input::flat_points_3d)
+        self.observe_points((&target.handle).into(), Scene::vector_boundary_points_3d)
+            .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryMobjectAllPoints3D")]
     fn mobject_all_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
-        self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::all_points_3d,
-            Scene::effective_all_points_3d,
-        )
-        .map(crate::path_input::flat_points_3d)
+        self.observe_points((&target.handle).into(), Scene::all_points_3d)
+            .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryMobjectExtremumAlongDim")]
@@ -2843,29 +2814,21 @@ impl Context {
         dim: usize,
         key: f64,
     ) -> PyResult<f64> {
-        self.observe_points(
-            (&target.handle).into(),
-            |target| target.extremum_along_dim(dim, key),
-            |scene, target| scene.effective_extremum_along_dim(target, dim, key),
-        )
+        self.observe_points((&target.handle).into(), |scene, target| {
+            scene.extremum_along_dim(target, dim, key)
+        })
     }
 
     #[pyo3(name = "queryMobjectLengthOverDim")]
     fn mobject_length_over_dim(&self, target: &MobjectHandle, dim: usize) -> PyResult<f64> {
-        self.observe_points(
-            (&target.handle).into(),
-            |target| target.length_over_dim(dim),
-            |scene, target| scene.effective_length_over_dim(target, dim),
-        )
+        self.observe_points((&target.handle).into(), |scene, target| {
+            scene.length_over_dim(target, dim)
+        })
     }
 
     #[pyo3(name = "queryMobjectCenterOfMass")]
     fn mobject_center_of_mass(&self, target: &MobjectHandle) -> PyResult<(f64, f64)> {
-        self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::center_of_mass,
-            Scene::effective_center_of_mass,
-        )
+        self.observe_points((&target.handle).into(), Scene::center_of_mass)
     }
 
     #[pyo3(name = "queryMobjectBoundaryPoint")]
@@ -2875,11 +2838,9 @@ impl Context {
         direction_x: f64,
         direction_y: f64,
     ) -> PyResult<(f64, f64)> {
-        self.observe_points(
-            (&target.handle).into(),
-            |target| target.boundary_point(direction_x, direction_y),
-            |scene, target| scene.effective_boundary_point(target, direction_x, direction_y),
-        )
+        self.observe_points((&target.handle).into(), |scene, target| {
+            scene.boundary_point(target, direction_x, direction_y)
+        })
     }
 
     #[pyo3(name = "queryMobjectPathBoundaryExtremumAlongDim")]
@@ -2889,11 +2850,9 @@ impl Context {
         dim: usize,
         key: f64,
     ) -> PyResult<f64> {
-        self.observe_points(
-            (&target.handle).into(),
-            |target| target.path_boundary_extremum_along_dim(dim, key),
-            |scene, target| scene.effective_path_boundary_extremum_along_dim(target, dim, key),
-        )
+        self.observe_points((&target.handle).into(), |scene, target| {
+            scene.path_boundary_extremum_along_dim(target, dim, key)
+        })
     }
 
     #[pyo3(name = "queryMobjectPathBoundaryPoint")]
@@ -2903,11 +2862,9 @@ impl Context {
         direction_x: f64,
         direction_y: f64,
     ) -> PyResult<(f64, f64)> {
-        self.observe_points(
-            (&target.handle).into(),
-            |target| target.path_boundary_point(direction_x, direction_y),
-            |scene, target| scene.effective_path_boundary_point(target, direction_x, direction_y),
-        )
+        self.observe_points((&target.handle).into(), |scene, target| {
+            scene.path_boundary_point(target, direction_x, direction_y)
+        })
     }
 
     #[pyo3(name = "queryFamilyPathBoundaryPoints3D")]
@@ -2915,12 +2872,8 @@ impl Context {
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<Vec<f64>> {
-        self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::path_boundary_points_3d,
-            Scene::effective_path_boundary_points_3d,
-        )
-        .map(crate::path_input::flat_points_3d)
+        self.observe_points((&target.family).into(), Scene::path_boundary_points_3d)
+            .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryFamilyVectorBoundaryPoints3D")]
@@ -2928,22 +2881,14 @@ impl Context {
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<Vec<f64>> {
-        self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::vector_boundary_points_3d,
-            Scene::effective_vector_boundary_points_3d,
-        )
-        .map(crate::path_input::flat_points_3d)
+        self.observe_points((&target.family).into(), Scene::vector_boundary_points_3d)
+            .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryFamilyAllPoints3D")]
     fn family_all_points_3d(&self, target: &crate::family::FamilyHandle) -> PyResult<Vec<f64>> {
-        self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::all_points_3d,
-            Scene::effective_all_points_3d,
-        )
-        .map(crate::path_input::flat_points_3d)
+        self.observe_points((&target.family).into(), Scene::all_points_3d)
+            .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryFamilyExtremumAlongDim")]
@@ -2953,11 +2898,9 @@ impl Context {
         dim: usize,
         key: f64,
     ) -> PyResult<f64> {
-        self.observe_points(
-            (&target.family).into(),
-            |target| target.extremum_along_dim(dim, key),
-            |scene, target| scene.effective_extremum_along_dim(target, dim, key),
-        )
+        self.observe_points((&target.family).into(), |scene, target| {
+            scene.extremum_along_dim(target, dim, key)
+        })
     }
 
     #[pyo3(name = "queryFamilyLengthOverDim")]
@@ -2966,20 +2909,14 @@ impl Context {
         target: &crate::family::FamilyHandle,
         dim: usize,
     ) -> PyResult<f64> {
-        self.observe_points(
-            (&target.family).into(),
-            |target| target.length_over_dim(dim),
-            |scene, target| scene.effective_length_over_dim(target, dim),
-        )
+        self.observe_points((&target.family).into(), |scene, target| {
+            scene.length_over_dim(target, dim)
+        })
     }
 
     #[pyo3(name = "queryFamilyCenterOfMass")]
     fn family_center_of_mass(&self, target: &crate::family::FamilyHandle) -> PyResult<(f64, f64)> {
-        self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::center_of_mass,
-            Scene::effective_center_of_mass,
-        )
+        self.observe_points((&target.family).into(), Scene::center_of_mass)
     }
 
     #[pyo3(name = "queryFamilyBoundaryPoint")]
@@ -2989,11 +2926,9 @@ impl Context {
         direction_x: f64,
         direction_y: f64,
     ) -> PyResult<(f64, f64)> {
-        self.observe_points(
-            (&target.family).into(),
-            |target| target.boundary_point(direction_x, direction_y),
-            |scene, target| scene.effective_boundary_point(target, direction_x, direction_y),
-        )
+        self.observe_points((&target.family).into(), |scene, target| {
+            scene.boundary_point(target, direction_x, direction_y)
+        })
     }
 
     #[pyo3(name = "prepareFamilySubsetDisplay")]
@@ -3015,11 +2950,7 @@ impl Context {
         py: Python<'py>,
         target: &MobjectHandle,
     ) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
-        let tree = self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::point_reduction_tree,
-            Scene::effective_point_reduction_tree,
-        )?;
+        let tree = self.observe_points((&target.handle).into(), Scene::point_reduction_tree)?;
         crate::path_input::point_reduction_tree(py, tree)
     }
 
@@ -3029,11 +2960,7 @@ impl Context {
         py: Python<'py>,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
-        let tree = self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::point_reduction_tree,
-            Scene::effective_point_reduction_tree,
-        )?;
+        let tree = self.observe_points((&target.family).into(), Scene::point_reduction_tree)?;
         crate::path_input::point_reduction_tree(py, tree)
     }
 
@@ -3062,22 +2989,16 @@ impl Context {
 
     #[pyo3(name = "queryMobjectPointArray")]
     fn object_point_array(&self, target: &MobjectHandle) -> PyResult<(Vec<f64>, Vec<usize>)> {
-        self.require_active()?;
-        self.scene
-            .point_array((&target.handle).into())
+        self.observe_points((&target.handle).into(), Scene::point_array)
             .map(crate::path_input::point_array)
-            .map_err(engine_error)
     }
     #[pyo3(name = "queryFamilyPointArray")]
     fn family_point_array(
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<(Vec<f64>, Vec<usize>)> {
-        self.require_active()?;
-        self.scene
-            .point_array((&target.family).into())
+        self.observe_points((&target.family).into(), Scene::point_array)
             .map(crate::path_input::point_array)
-            .map_err(engine_error)
     }
 
     #[pyo3(name="setFillImage",signature=(target,paint,opacity))]
@@ -3344,11 +3265,7 @@ impl Context {
 
     #[pyo3(name = "queryMobjectRequiresContentBoundary")]
     fn mobject_requires_content_boundary(&self, target: &MobjectHandle) -> PyResult<bool> {
-        self.observe_points(
-            (&target.handle).into(),
-            MobjectTarget::requires_content_boundary,
-            Scene::effective_requires_content_boundary,
-        )
+        self.observe_points((&target.handle).into(), Scene::requires_content_boundary)
     }
 
     #[pyo3(name = "queryMobjectCriticalPoint3D")]
@@ -3372,11 +3289,7 @@ impl Context {
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<bool> {
-        self.observe_points(
-            (&target.family).into(),
-            MobjectTarget::requires_content_boundary,
-            Scene::effective_requires_content_boundary,
-        )
+        self.observe_points((&target.family).into(), Scene::requires_content_boundary)
     }
 
     #[pyo3(name = "queryFamilyCriticalPoint3D")]
