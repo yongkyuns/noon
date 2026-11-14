@@ -216,22 +216,25 @@ pub mod host_execution {
         Scene::publish_running_transaction(store, root, execution, transaction)
     }
 
-    /// Borrow the original store and root alongside the installed execution.
-    pub fn parts_mut(
+    /// Borrow the installed runtime for host callback and playback services.
+    pub fn session_mut(scene: &mut Scene) -> Option<&mut ExecutionSession> {
+        scene.running_execution_mut()
+    }
+
+    /// Seek the installed runtime with its owning scene available for input cleanup.
+    pub fn seek(
         scene: &mut Scene,
-    ) -> Option<(
-        &Rc<RefCell<SemanticStore>>,
-        SemanticNodeId,
-        &mut ExecutionSession,
-    )> {
-        Some((&scene.store, scene.root, scene.execution.as_mut()?))
+        time: f64,
+    ) -> Option<Result<&noon_runtime::FrameState, ExecutionSessionInputError>> {
+        let execution = scene.execution.as_mut()?;
+        Some(execution.seek_with_store(&mut scene.store.borrow_mut(), time))
     }
 
     /// Retire input-owned state before discarding execution. Keep the authored
     /// Scene so existing handles retain their semantic identity.
     pub fn retire(scene: &mut Scene) -> Result<(), ExecutionSessionInputError> {
-        if let Some((store, _, session)) = parts_mut(scene) {
-            session.retire_interactions_for_source_replacement(&mut store.borrow_mut())?;
+        if let Some(session) = scene.execution.as_mut() {
+            session.retire_interactions_for_source_replacement(&mut scene.store.borrow_mut())?;
         }
         scene.execution = None;
         Ok(())
@@ -267,9 +270,12 @@ impl SceneExecution {
         &mut self,
         apply: impl FnOnce(&mut SemanticStore, &mut ExecutionSession) -> R,
     ) -> R {
-        let store = Rc::clone(self.scene.integration_store());
-        let mut store = store.borrow_mut();
-        apply(&mut store, self.scene.owned_execution_mut())
+        let scene = &mut self.scene;
+        let session = scene
+            .execution
+            .as_mut()
+            .expect("scene execution is installed");
+        apply(&mut scene.store.borrow_mut(), session)
     }
 
     pub fn submit_native_pointer_input(
@@ -315,10 +321,7 @@ impl SceneExecution {
         &mut self,
         time: f64,
     ) -> Result<&noon_runtime::FrameState, ExecutionSessionInputError> {
-        self.with_store_and_session(|store, session| {
-            session.seek_with_store(store, time).map(|_| ())
-        })?;
-        Ok(self.session().frame())
+        host_execution::seek(&mut self.scene, time).expect("scene execution is installed")
     }
 }
 

@@ -124,9 +124,12 @@ impl TranslationDragUndo {
 
     /// Restore the previous translation on the running Scene that issued the receipt.
     pub fn undo(self, scene: &mut crate::Scene) -> Result<(), TranslationDragError> {
-        let (store, _, session) = crate::scene::host_execution::parts_mut(scene)
+        let store = std::rc::Rc::clone(scene.integration_store());
+        let session = scene
+            .running_execution_mut()
             .ok_or(TranslationDragError::StaleUndo)?;
-        self.undo_in_session(session, &mut store.borrow_mut())
+        let mut store = store.borrow_mut();
+        self.undo_in_session(session, &mut store)
     }
 
     pub(super) fn undo_in_session(

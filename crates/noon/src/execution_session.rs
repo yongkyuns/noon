@@ -1730,7 +1730,7 @@ impl ExecutionSession {
     /// Seek with the canonical scene available for exact input-attachment cleanup.
     /// All deterministic seek admission precedes retirement; a rejected request
     /// keeps both the invocation and its semantic attachment unchanged.
-    pub fn seek_with_store(
+    pub(crate) fn seek_with_store(
         &mut self,
         store: &mut SemanticStore,
         time: f64,

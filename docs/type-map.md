@@ -415,6 +415,9 @@ Hosts that configure a runtime before installation use `integration::scene_execu
 Sequential sources use `ScriptScene` for authoring and `play`/`wait`. Use the
 owning `Scene` to observe coordinates and effect parameters, including through
 `LiveProgram::scene()` while a segment is running.
+Host callback transport can borrow the installed runtime through the integration
+namespace. Segment completion and seek use the owning Scene to keep semantic
+publication and input cleanup with the runtime.
 Python's `Scene.live_execution()` drives explicit segments. Use the Python
 `Scene` for membership, content replacement, affine edits, and published translation.
 

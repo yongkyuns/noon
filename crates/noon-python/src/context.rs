@@ -347,7 +347,7 @@ impl Context {
             let session = self.bootstrap()?;
             self.attach_session(session)?;
         }
-        let (_, _, session) = scene_execution::parts_mut(&mut self.scene)
+        let session = scene_execution::session_mut(&mut self.scene)
             .expect("viewer bootstrap installed execution");
         let interactive = session.has_translation_drag_targets();
         if interactive {
@@ -3447,7 +3447,7 @@ impl Context {
             }
             nodes.push(node);
         }
-        if let Some((_, _, session)) = scene_execution::parts_mut(&mut self.scene) {
+        if let Some(session) = scene_execution::session_mut(&mut self.scene) {
             session
                 .set_translation_drag_targets(nodes)
                 .map_err(|error| engine_error(noon::LiveSessionError::TranslationDrag(error)))?;
@@ -4991,14 +4991,16 @@ impl Context {
                 "requested time is outside the live observation range",
             )));
         }
-        let (store, _, session) = scene_execution::parts_mut(&mut self.scene)
+        let current_time = scene_execution::session(&self.scene)
+            .map(ExecutionSession::effective_time)
             .ok_or_else(|| engine_error("no execution session"))?;
-        if time < session.frame().time {
-            session
-                .seek_with_store(&mut store.borrow_mut(), time)
+        if time < current_time {
+            scene_execution::seek(&mut self.scene, time)
+                .expect("evaluation uses the installed execution")
                 .map_err(|e| engine_error(e.to_string()))?;
         } else {
-            session
+            scene_execution::session_mut(&mut self.scene)
+                .expect("evaluation uses the installed execution")
                 .advance_to(time)
                 .map_err(|e| engine_error(e.to_string()))?;
         }
@@ -5173,7 +5175,7 @@ impl Context {
         if self.terminal {
             return Ok(());
         }
-        if let Some((_, _, session)) = scene_execution::parts_mut(&mut self.scene) {
+        if let Some(session) = scene_execution::session_mut(&mut self.scene) {
             if let Some(token) = session.pending_callback_token() {
                 session
                     .interrupt_required_callback_phase(token)
