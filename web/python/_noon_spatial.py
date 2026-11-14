@@ -14,7 +14,7 @@ from operator import index as _integer_index
 import noon as _base
 from _noon_errors import engine_call
 from _manim_semantic_handles import (
-    _attach_shared_handle, _handle_for, _live_constructor_context,
+    _attach_shared_handle, _handle_for, _path_authoring_context,
     _live_mutation_context, _group_target_context,
 )
 
@@ -170,7 +170,7 @@ class Mesh3D(_WorldMobject):
             fill = _as_color("mesh color", color)
             engine_call(candidate.setColor, fill.red, fill.green, fill.blue, fill.alpha)
             engine_call(candidate.setPointLit, point_lit)
-            context = _live_constructor_context("mesh")
+            context = _path_authoring_context()
         except BaseException:
             candidate.free()
             raise

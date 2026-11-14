@@ -33,7 +33,7 @@ class SpatialFacadeTests(unittest.TestCase):
                 self.assertEqual(values, (2.0, 8, 4, 0.0, 2 * math.pi, 0.0, math.pi))
                 return candidate
         with patch.object(spatial, "_mesh_options", Factory), \
-             patch.object(spatial, "_live_constructor_context", return_value=None), \
+             patch.object(spatial, "_path_authoring_context", return_value=None), \
              patch.object(spatial, "_create_mesh", return_value=handle) as admit:
             mesh = spatial.Mesh3D.sphere(2, resolution=(8, 4), color=noon.RED, point_lit=True)
         self.assertIs(mesh._semantic_handle, handle)
@@ -84,7 +84,7 @@ class SpatialFacadeTests(unittest.TestCase):
             calls.append((u, v)); return (u, v, 0)
         with patch.object(spatial, "_surface_plan", return_value=plan) as prepare, \
              patch.object(spatial, "_bulk", side_effect=tuple), \
-             patch.object(spatial, "_live_constructor_context", return_value=None), \
+             patch.object(spatial, "_path_authoring_context", return_value=None), \
              patch.object(spatial, "_create_mesh", return_value=object()):
             spatial.Mesh3D.parametric(sample, u_range=(2, 3), v_range=(7, 9), resolution=(1, 1))
         prepare.assert_called_once_with(2, 3, 7, 9, 1, 1)
@@ -188,7 +188,7 @@ class SpatialFacadeTests(unittest.TestCase):
         factory.line3D.return_value = candidate
         with patch.object(spatial, "_mesh_options", factory), \
              patch.object(spatial, "_bulk", side_effect=tuple), \
-             patch.object(spatial, "_live_constructor_context", return_value=None), \
+             patch.object(spatial, "_path_authoring_context", return_value=None), \
              patch.object(spatial, "_create_mesh", return_value=object()):
             spatial.Mesh3D.line3d((1, 2, 3), (4, 5, 6), thickness=0.1, segments=8)
         factory.line3D.assert_called_once_with((1, 2, 3), (4, 5, 6), 0.1, 8)
@@ -209,7 +209,7 @@ class SpatialFacadeTests(unittest.TestCase):
                     admit.side_effect = create
                     with patch.object(spatial, "_mesh_options", factory), \
                          patch.object(spatial, "_bulk", side_effect=tuple), \
-                         patch.object(spatial, "_live_constructor_context", return_value=context), \
+                         patch.object(spatial, "_path_authoring_context", return_value=context), \
                          patch.object(spatial, "_create_mesh", admit if not live else Mock()):
                         mesh = getattr(spatial.Mesh3D, kind)(
                             height=2, direction=(-2, 3, -1), axial_offset=offset,
@@ -241,7 +241,7 @@ class SpatialFacadeTests(unittest.TestCase):
                 getattr(factory, kind).return_value = candidate
                 with self.subTest(kind=kind), \
                      patch.object(spatial, "_bulk", side_effect=tuple), \
-                     patch.object(spatial, "_live_constructor_context", return_value=None), \
+                     patch.object(spatial, "_path_authoring_context", return_value=None), \
                      patch.object(spatial, "_create_mesh", return_value=object()):
                     getattr(spatial.Mesh3D, kind)(**{option: False})
                 getattr(factory, kind).assert_called_once_with(
@@ -258,7 +258,7 @@ class SpatialFacadeTests(unittest.TestCase):
             candidate = Candidate()
             factory.cylinder.return_value = candidate
             with patch.object(spatial, "_bulk", side_effect=tuple), \
-                 patch.object(spatial, "_live_constructor_context", return_value=None), \
+                 patch.object(spatial, "_path_authoring_context", return_value=None), \
                  patch.object(spatial, "_create_mesh", return_value=object()):
                 spatial.Mesh3D.cylinder(v_range=(math.pi / 4, math.pi))
             factory.cylinder.assert_called_once_with(
@@ -267,7 +267,7 @@ class SpatialFacadeTests(unittest.TestCase):
             factory.reset_mock()
             factory.cone.return_value = Candidate()
             with patch.object(spatial, "_bulk", side_effect=tuple), \
-                 patch.object(spatial, "_live_constructor_context", return_value=None), \
+                 patch.object(spatial, "_path_authoring_context", return_value=None), \
                  patch.object(spatial, "_create_mesh", return_value=object()):
                 spatial.Mesh3D.cone(v_range=(math.pi / 2, math.pi))
             factory.cone.assert_called_once_with(
