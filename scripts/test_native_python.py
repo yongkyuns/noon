@@ -23,6 +23,7 @@ class NativePythonTests(unittest.TestCase):
                      "linear_gradient", "radial_gradient", "noise_paint", "hatch_paint",
                      "image_fill", "showcase_layered_effects", "showcase_painted_surfaces",
                      "ordinary_path_construction", "ordinary_path_editing", "ordinary_path_smoothing",
+                     "specialized_geometry", "live_geometry_construction",
                      "ordinary_path_refinement", "ordinary_path_selection", "ordinary_path_alignment",
                      "showcase_bezier_paths", "manim_parity_family_slices",
                      "manim_parity_object_members", "ordinary_family_membership_order", "manim_parity_family_member_queries",
@@ -158,6 +159,29 @@ class Demo(Scene):
         assert abs(x_label.get_center()[0] - before[0] - 1) < 1e-5
         axes.x_axis.add_numbers((2,))
         assert axes.x_axis.numbers[0].get_value() == 2
+        await self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
+    def test_shape_matchers_capture_current_family_bounds(self):
+        source = """from noon import *
+class Demo(Scene):
+    async def construct(self):
+        left = Square(1).move_to(2 * LEFT)
+        right = Square(1).move_to(2 * RIGHT)
+        targets = VGroup(left, right)
+        self.add(targets)
+        border = SurroundingRectangle(targets, buff=0.25)
+        assert abs(border.width - 5.5) < 1e-5
+        await self.play(targets.animate.shift(UP), run_time=0.125)
+        background = BackgroundRectangle(targets, buff=0.25)
+        cross = Cross(targets)
+        assert abs(background.width - 5.5) < 1e-5
+        assert abs(background.get_center()[1] - 1) < 1e-5
+        assert abs(cross[0].get_start()[1] - 1.5) < 1e-5
+        assert abs(cross[1].get_end()[1] - 0.5) < 1e-5
+        self.add(border, background, cross)
         await self.wait(0.125)
 """
         scene = asyncio.run(run_source(source))

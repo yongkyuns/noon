@@ -1805,6 +1805,27 @@ impl Context {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "mobjectShapeMatcherBounds")]
+    fn mobject_shape_matcher_bounds(&self, target: &MobjectHandle) -> PyResult<[f64; 4]> {
+        self.available()?;
+        self.scene
+            .shape_matcher_bounds((&target.handle).into())
+            .map(crate::geometry::bounds_coordinates)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "familyShapeMatcherBounds")]
+    fn family_shape_matcher_bounds(
+        &self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<[f64; 4]> {
+        self.available()?;
+        self.scene
+            .shape_matcher_bounds((&target.family).into())
+            .map(crate::geometry::bounds_coordinates)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "beginBooleanGeometry")]
     fn begin_boolean_geometry(
         &self,

@@ -1177,6 +1177,14 @@ impl FamilyHandle {
             .map(MobjectHandle::from_semantic_mobject)
             .map_err(engine_error)
     }
+    #[pyo3(name = "shapeMatcherBounds")]
+    fn shape_matcher_bounds(&self) -> PyResult<[f64; 4]> {
+        noon::MobjectTarget::from(&self.family)
+            .shape_matcher_bounds()
+            .map(crate::geometry::bounds_coordinates)
+            .map_err(engine_error)
+    }
+
     fn layout(&self) -> PyResult<FamilyLayoutObservation> {
         self.family
             .layout()
