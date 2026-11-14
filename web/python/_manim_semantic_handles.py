@@ -3535,10 +3535,7 @@ def _group_copy_operation(
             "_table_query_wrappers",
             "_sample_space_handle", "_brace_label_handle", "_matrix_handle", "_table_handle", "_code_handle",
             "_bar_chart_handle", "_bar_chart_context", "_semantic_latex_handle", "_numeric_handle",
-            # Arrow and ArrowVectorField keep this aggregate JS capability only for
-            # convenience queries and dependent edits. Family copying already maps
-            # the authoritative family and every leaf below; there is no valid
-            # Python deepcopy or aggregate-handle alias for the target family.
+            # Copying rebuilds the Arrow capability from the copied family and leaves.
             "_semantic_arrow_handle",
             "_noon_updater_registrations", "_noon_updater_registration_history",
         }
@@ -3594,12 +3591,7 @@ def _group_copy_operation(
                 rebind()
         aggregate = getattr(source, "_semantic_arrow_handle", None)
         if aggregate is not None:
-            index = getattr(source, "_semantic_arrow_index", None)
-            if index is None:
-                target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate)
-            else:
-                target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate, index)
-                target.__dict__.pop("_semantic_arrow_index", None)
+            target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate)
     for source, target in pairs:
         if _is_shared_family(source):
             rehydrate = getattr(target, "_rehydrate_semantic_family_handle", None)

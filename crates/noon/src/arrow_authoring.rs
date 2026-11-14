@@ -9,7 +9,7 @@
 use crate::{AuthoringError, ManimGeometryOptions, Mobject, MobjectFamily};
 use noon_core::{
     Color, SemanticArrowShaftRole, SemanticGraphArrowPolicy, SemanticMutationTransaction,
-    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticObjectRole,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId, SemanticObjectRole,
     SemanticObjectState, SemanticPaint, SemanticStore, StoredGeometry, Vec2, VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
@@ -298,67 +298,71 @@ impl ManimArrow {
     }
 }
 
-/// Publish several already-validated Arrow requests and one outer family in one
-/// semantic transaction. This crate-private seam lets composite authoring reuse
-/// the single Arrow implementation without exposing a second geometry path.
-pub(crate) fn create_arrow_batch_family(
-    store: Rc<RefCell<SemanticStore>>,
+/// Prepare one nested Arrow family and publish all tips and members atomically.
+pub(crate) fn publish_arrow_batch_family(
+    store: &mut SemanticStore,
     options: Vec<ManimArrowOptions>,
-) -> Result<(MobjectFamily, Vec<ManimArrow>), AuthoringError> {
-    let (family_node, committed) = {
-        let mut store_ref = store.borrow_mut();
-        let prepared = options
-            .into_iter()
-            .map(|options| options.prepare(&mut store_ref))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut paths = Vec::with_capacity(
-            prepared.len()
-                + prepared
-                    .iter()
-                    .filter(|arrow| arrow.start_tip.is_some())
-                    .count(),
-        );
-        for arrow in &prepared {
-            paths.push(arrow.end_tip.clone());
-            if let Some(path) = &arrow.start_tip {
-                paths.push(path.clone());
-            }
+    publish: impl FnOnce(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<(SemanticNodeId, Vec<CommittedArrow>), AuthoringError> {
+    let prepared = options
+        .into_iter()
+        .map(|options| options.prepare(store))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut paths = Vec::with_capacity(
+        prepared.len()
+            + prepared
+                .iter()
+                .filter(|arrow| arrow.start_tip.is_some())
+                .count(),
+    );
+    for arrow in &prepared {
+        paths.push(arrow.end_tip.clone());
+        if let Some(path) = &arrow.start_tip {
+            paths.push(path.clone());
         }
+    }
 
-        store_ref.with_geometry_paths(paths, |store, handles| -> Result<_, AuthoringError> {
-            let mut transaction = SemanticMutationTransaction::new();
-            let family = transaction.create_node(SemanticNodeCreation::family());
-            let mut staged = Vec::with_capacity(prepared.len());
-            let mut handle_index = 0usize;
-            for arrow in &prepared {
-                let end_tip_handle = handles[handle_index];
+    store.with_geometry_paths(paths, |store, handles| -> Result<_, AuthoringError> {
+        let mut transaction = SemanticMutationTransaction::new();
+        let family = transaction.create_node(SemanticNodeCreation::family());
+        let mut staged = Vec::with_capacity(prepared.len());
+        let mut handle_index = 0usize;
+        for arrow in &prepared {
+            let end_tip_handle = handles[handle_index];
+            handle_index += 1;
+            let start_tip_handle = if arrow.start_tip.is_some() {
+                let handle = handles[handle_index];
                 handle_index += 1;
-                let start_tip_handle = if arrow.start_tip.is_some() {
-                    let handle = handles[handle_index];
-                    handle_index += 1;
-                    Some(handle)
-                } else {
-                    None
-                };
-                let staged_arrow =
-                    stage_prepared_arrow(&mut transaction, arrow, end_tip_handle, start_tip_handle);
-                transaction.add_member(family, staged_arrow.family);
-                staged.push(staged_arrow);
-            }
-            debug_assert_eq!(handle_index, handles.len());
+                Some(handle)
+            } else {
+                None
+            };
+            let staged_arrow =
+                stage_prepared_arrow(&mut transaction, arrow, end_tip_handle, start_tip_handle);
+            transaction.add_member(family, staged_arrow.family);
+            staged.push(staged_arrow);
+        }
+        debug_assert_eq!(handle_index, handles.len());
 
-            let result = transaction.apply(store).map_err(AuthoringError::from)?;
-            let family_node = result
-                .resolve(family)
-                .ok_or(AuthoringError::UnresolvedCreatedNode(family))?;
-            let committed = staged
-                .into_iter()
-                .map(|arrow| resolve_staged_arrow(arrow, |token| result.resolve(token)))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok((family_node, committed))
-        })?
-    };
+        let result = publish(store, transaction)?;
+        let family_node = result
+            .resolve(family)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(family))?;
+        let committed = staged
+            .into_iter()
+            .map(|arrow| resolve_staged_arrow(arrow, |token| result.resolve(token)))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((family_node, committed))
+    })
+}
 
+pub(crate) fn resolve_arrow_batch_family(
+    store: Rc<RefCell<SemanticStore>>,
+    (family_node, committed): (SemanticNodeId, Vec<CommittedArrow>),
+) -> Result<(MobjectFamily, Vec<ManimArrow>), AuthoringError> {
     let family = MobjectFamily::from_node(Rc::clone(&store), family_node)?;
     let arrows = committed
         .into_iter()

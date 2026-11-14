@@ -208,6 +208,19 @@ impl AuthoringFailure {
         }
     }
 
+    /// Project vector-field preparation and Scene publication with the existing host codes.
+    pub fn from_scene_vector_field(
+        error: crate::ArrowVectorFieldAuthoringError,
+        running: bool,
+    ) -> Self {
+        match error {
+            crate::ArrowVectorFieldAuthoringError::Authoring(error) => {
+                Self::from_scene_mutation(error, running)
+            }
+            error => error.into(),
+        }
+    }
+
     /// Project a Scene mutation through the host's existing running error codes.
     pub fn from_scene_mutation(error: AuthoringError, running: bool) -> Self {
         if !running {
@@ -220,6 +233,44 @@ impl AuthoringFailure {
             other => other.into(),
         }
         .into()
+    }
+}
+
+impl From<crate::ArrowVectorFieldAuthoringError> for AuthoringFailure {
+    fn from(error: crate::ArrowVectorFieldAuthoringError) -> Self {
+        use crate::{ArrowVectorFieldAuthoringError as E, StaticVectorFieldError as Planning};
+        let code = match error {
+            E::Authoring(error) => return error.into(),
+            E::Planning(error) => {
+                let code = match error {
+                    Planning::InvalidRange { .. } => "vector_field.invalid_range",
+                    Planning::SampleCountOverflow => "vector_field.sample_count_overflow",
+                    Planning::NonFiniteFieldOutput { .. } => "vector_field.non_finite_output",
+                    Planning::NonFiniteDisplayedLength { .. } => "vector_field.non_finite_length",
+                };
+                return Self::new("invalid_input", code, error);
+            }
+            E::InvalidColorConfiguration(reason) => {
+                return Self::new(
+                    "invalid_input",
+                    "vector_field.invalid_color_configuration",
+                    reason,
+                );
+            }
+            E::NonFiniteColorSchemeOutput { sample_index } => {
+                return Self::new("invalid_input", "vector_field.non_finite_color_scheme",
+                    format!("vector-field color scheme returned a non-finite value at sample {sample_index}"));
+            }
+            E::SampleOutOfRange(_) => "vector_field.sample_index",
+            E::MissingVector(_) => "vector_field.missing_vector",
+            E::MissingLength(_) => "vector_field.missing_length",
+            E::MissingColorValue(_) => "vector_field.missing_color_value",
+            E::DefaultLength => "vector_field.default_length",
+            E::DefaultColorScheme => "vector_field.default_color_scheme",
+            E::NotGradient => "vector_field.not_gradient",
+            E::InvalidColor => "vector_field.invalid_color",
+        };
+        Self::new("invalid_input", code, error)
     }
 }
 
