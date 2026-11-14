@@ -654,7 +654,7 @@ mod tests {
         let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
         session.take_frame_changes();
         session
-            .activate_animation(
+            .activate_animation_segment(
                 &mut store,
                 animation,
                 AnimationOptions::new()

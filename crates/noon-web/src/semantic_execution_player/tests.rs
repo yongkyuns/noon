@@ -2087,30 +2087,17 @@ fn animated_player() -> SemanticExecutionPlayer {
     let mut target = circle.target_editor().unwrap();
     target.shift(4.0, 0.0).unwrap();
     let animation = scene
-        .integration_store()
-        .borrow_mut()
-        .insert_semantic_transform_animation(
-            circle.node_id(),
-            target.node_id(),
-            AnimationOptions::new(),
-        )
-        .unwrap();
-    let mut session = scene_execution::lower(&scene).unwrap();
-    session
-        .activate_animation(
-            &mut scene.integration_store().borrow_mut(),
-            animation,
+        .declare_transform_to(
+            &circle,
+            &target,
             AnimationOptions::new()
                 .run_time(1.0)
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    SemanticExecutionPlayer::from_scene_execution(
-        scene_execution::consume_with_session(scene, session).unwrap(),
-        2.0,
-        42,
-    )
-    .unwrap()
+    let mut execution = scene.into_execution().unwrap();
+    execution.live().play_animation(&animation).unwrap();
+    SemanticExecutionPlayer::from_scene_execution(execution, 2.0, 42).unwrap()
 }
 
 #[test]
