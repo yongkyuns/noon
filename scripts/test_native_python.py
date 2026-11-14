@@ -101,7 +101,7 @@ class Demo(Scene):
             ]
             assert len(family) == 4
             actual, expected = family[0].get_start(), axes.c2p(-0.5, 0.5625)
-            assert abs(actual.x - expected.x) < 1e-5 and abs(actual.y - expected.y) < 1e-5
+            assert abs(actual[0] - expected[0]) < 1e-5 and abs(actual[1] - expected[1]) < 1e-5
             return family
         subject = VGroup(axes, graph, bound)
         self.add(subject)
@@ -109,10 +109,10 @@ class Demo(Scene):
         self.add(before)
         self.play(subject.animate.shift(RIGHT), run_time=0.125)
         after = rectangles()
-        assert after[0].get_start().x > before[0].get_start().x
+        assert after[0].get_start()[0] > before[0].get_start()[0]
         area = axes.get_area(graph, [-1, 0], bounded_graph=bound, color=GREEN, opacity=0.4)
         actual, expected = area.get_start(), axes.c2p(-1, 1)
-        assert abs(actual.x - expected.x) < 1e-5 and abs(actual.y - expected.y) < 1e-5
+        assert abs(actual[0] - expected[0]) < 1e-5 and abs(actual[1] - expected[1]) < 1e-5
         assert abs(area.get_fill_opacity() - 0.4) < 1e-6
         self.add(area)
         self.add(after)
@@ -142,6 +142,10 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    @unittest.skipUnless(
+        os.environ.get("NOON_LATEX_FONT_DIR") and os.environ.get("NOON_LATEX_RESOURCE_IDENTITY"),
+        "requires an explicit native TeX compiler and BaKoMa font profile",
+    )
     def test_decimal_coordinate_labels_publish_during_playback(self):
         source = """from noon import *
 class Demo(Scene):
