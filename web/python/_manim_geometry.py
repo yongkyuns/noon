@@ -92,12 +92,8 @@ class TangentLine(_compat.Line):
 
         if not isinstance(vmob, _compat.VMobject):
             raise TypeError("TangentLine requires a VMobject source")
-        if shared._live_constructor_context("TangentLine") is not None:
-            raise NotImplementedError(
-                "live TangentLine construction requires effective shared path sampling"
-            )
         source = shared._handle_for(vmob)
-        if source is None or not hasattr(source, "tangentLineOptions"):
+        if source is None:
             raise NotImplementedError(
                 "TangentLine requires a current shared Rust path handle"
             )
@@ -105,19 +101,22 @@ class TangentLine(_compat.Line):
         alpha_value = _base._ir._finite_number("alpha", alpha)
         length_value = _base._ir._finite_number("length", length)
         d_alpha_value = _base._ir._finite_number("d_alpha", d_alpha)
-        options = engine_call(
-            source.tangentLineOptions,
-            alpha_value,
-            length_value,
-            d_alpha_value,
-            operation="TangentLine",
-        )
+        context = shared._path_authoring_context(vmob)
+        args = (alpha_value, length_value, d_alpha_value)
+        if context is None:
+            options = engine_call(source.tangentLineOptions, *args, operation="TangentLine")
+        else:
+            options = engine_call(context.prepareTangentLine, source, *args, operation="TangentLine")
         values = dict(kwargs)
         color = values.pop("color", None)
-        shared._apply_shared_constructor_options(options, values)
-        if color is not None:
-            shared._apply_constructor_color(options, _compat._as_color("color", color))
-        shared._attach_geometry_options(self, options, "TangentLine")
+        try:
+            shared._apply_shared_constructor_options(options, values)
+            if color is not None:
+                shared._apply_constructor_color(options, _compat._as_color("color", color))
+        except BaseException:
+            options.free()
+            raise
+        shared._attach_geometry_options(self, options, "TangentLine", context=context)
         self.length = length_value
         self.d_alpha = d_alpha_value
 

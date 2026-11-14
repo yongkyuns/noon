@@ -60,6 +60,19 @@ impl MobjectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[pyo3(name = "tangentLineOptions")]
+    fn tangent_line_options(
+        &self,
+        alpha: f64,
+        length: f64,
+        d_alpha: f64,
+    ) -> PyResult<crate::geometry::GeometryOptions> {
+        self.handle
+            .manim_tangent_line_options(alpha, length, d_alpha)
+            .map(crate::geometry::GeometryOptions::from_options)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "updatingSuspended")]
     fn updating_suspended(&self) -> PyResult<bool> {
         self.handle.updating_suspended().map_err(engine_error)

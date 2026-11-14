@@ -163,6 +163,24 @@ class Demo(Scene):
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
+    def test_tangent_line_uses_the_published_path_after_a_play(self):
+        source = """from noon import *
+class Demo(Scene):
+    async def construct(self):
+        path = Circle()
+        self.add(path)
+        before = TangentLine(path, 0.2, length=0.75, d_alpha=0.01)
+        self.add(before)
+        await self.play(path.animate.shift(2 * RIGHT), run_time=0.125)
+        after = TangentLine(path, 0.2, length=0.75, d_alpha=0.01)
+        assert abs(after.get_start()[0] - before.get_start()[0] - 2) < 1e-5
+        assert abs(after.get_end()[1] - before.get_end()[1]) < 1e-5
+        self.add(after)
+        await self.wait(0.125)
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_svg_import_after_wait_keeps_playback_coherent(self):
         source = """from noon import *
 class Demo(Scene):
