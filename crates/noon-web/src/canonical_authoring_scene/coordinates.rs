@@ -4,15 +4,7 @@ use super::*;
 
 impl CanonicalAuthoringScene {
     pub(crate) fn coordinate_scene(&self) -> Result<&noon::Scene, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local() {
-                return Ok(player.scene());
-            }
-        }
-        Ok(&self.scene)
+        Ok(self.effective_observation_scene()?.unwrap_or(&self.scene))
     }
 
     pub(crate) fn number_line_frame(

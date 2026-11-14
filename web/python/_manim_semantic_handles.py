@@ -1503,9 +1503,7 @@ def _paint_color(self, channel):
     return _base.Color(float(color.red), float(color.green), float(color.blue), 1.0)
 
 
-def _get_stroke_width(self, background=False):
-    if background:
-        return _get_background_stroke_width(self)
+def _get_stroke_width(self):
     from _manim_updaters import _canonical_phase_context
     if _canonical_phase_context(self) is not None:
         raise NotImplementedError("stroke width getters in host callbacks require staged width observation")
@@ -1891,8 +1889,7 @@ def _set_background_stroke(self, color=None, width=None, opacity=None, family=Tr
     )
 
 
-def _get_background_stroke_style(self):
-    family_handle = getattr(self, "_semantic_family_handle", None)
+def _background_stroke_observation(self, property_name):
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT, _canonical_phase_context
 
     if (
@@ -1902,54 +1899,36 @@ def _get_background_stroke_style(self):
         raise NotImplementedError(
             "background-stroke queries require staged style observation"
         )
-    if family_handle is not None:
-        color_method = getattr(family_handle, "ownBackgroundStrokeColor", None)
-        width_method = getattr(family_handle, "ownBackgroundStrokeWidth", None)
-        opacity_method = getattr(family_handle, "ownBackgroundStrokeOpacity", None)
-        if color_method is not None and width_method is not None and opacity_method is not None:
-            color = engine_call(color_method)
-            return (
-                _base.Color(float(color.red), float(color.green), float(color.blue), float(color.alpha)),
-                float(engine_call(width_method)),
-                float(engine_call(opacity_method)),
-            )
-
-    color = _typed_manim_observation(
-        self, "backgroundStrokeColor", "queryMobjectBackgroundStrokeColor"
-    )
-    width = _typed_manim_observation(
-        self,
-        "backgroundStrokeWidth",
-        "queryMobjectBackgroundStrokeWidth",
-        handle_property=True,
-    )
-    opacity = _typed_manim_observation(
-        self,
-        "backgroundStrokeOpacity",
-        "queryMobjectBackgroundStrokeOpacity",
-        handle_property=True,
-    )
-    if width is None or opacity is None:
+    family_handle = getattr(self, "_semantic_family_handle", None)
+    method = getattr(family_handle, f"ownBackgroundStroke{property_name}", None)
+    if method is not None:
+        return engine_call(method)
+    if getattr(self, "_semantic_handle", None) is None:
         raise RuntimeError("background-stroke observations require the shared Rust authoring host")
-    if color is None:
-        color = _base.BLACK
-    return (
-        _base.Color(float(color.red), float(color.green), float(color.blue), float(color.alpha)),
-        float(width),
-        float(opacity),
+    value = _typed_manim_observation(
+        self,
+        f"backgroundStroke{property_name}",
+        f"queryMobjectBackgroundStroke{property_name}",
+        handle_property=property_name != "Color",
     )
+    if value is None and property_name != "Color":
+        raise RuntimeError("background-stroke observations require the shared Rust authoring host")
+    return value
 
 
 def _get_background_stroke_color(self):
-    return _get_background_stroke_style(self)[0]
+    color = _background_stroke_observation(self, "Color")
+    if color is None:
+        return _base.BLACK
+    return _base.Color(float(color.red), float(color.green), float(color.blue), float(color.alpha))
 
 
 def _get_background_stroke_width(self):
-    return _get_background_stroke_style(self)[1] * 100.0
+    return float(_background_stroke_observation(self, "Width")) * 100.0
 
 
 def _get_background_stroke_opacity(self):
-    return _get_background_stroke_style(self)[2]
+    return float(_background_stroke_observation(self, "Opacity"))
 
 
 def _sheen_direction_components(direction):

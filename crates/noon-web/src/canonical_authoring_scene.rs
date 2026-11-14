@@ -826,10 +826,20 @@ impl CanonicalAuthoringScene {
         self.player_ownership.prepare_for_run(authored)
     }
 
+    /// Select the Scene that can supply current observations without changing
+    /// the retained player's ownership or replacing a stale returned runtime.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn returned_player_is_stale(&self) -> bool {
-        self.player_ownership
-            .returned_is_stale(self.scene.integration_store().borrow().scene_revision())
+    fn effective_observation_scene(&self) -> Result<Option<&noon::Scene>, AuthoringFailure> {
+        match &self.player_ownership {
+            PlayerOwnership::Unstarted => Ok(None),
+            PlayerOwnership::Active(player) => Ok(Some(player.scene())),
+            PlayerOwnership::Returned(player) => {
+                Ok((player.scene_revision() == self.scene.revision()).then(|| player.scene()))
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
     }
 
     /// Begin an explicit authoring-run publication boundary.
@@ -942,9 +952,7 @@ impl CanonicalAuthoringScene {
         authored: impl FnOnce(&noon::Mobject) -> Result<T, E>,
         effective: impl FnOnce(&noon::Scene, &noon::Mobject) -> Result<T, AuthoringFailure>,
     ) -> Result<T, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
+        let scene = self.effective_observation_scene()?;
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
             return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
                 .with_message("mobject belongs to another authoring store"));
@@ -953,10 +961,8 @@ impl CanonicalAuthoringScene {
         if !self.identities.contains_key(&handle.node_id()) {
             return Err("mobject is not bound to this canonical Scene".into());
         }
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local() {
-                return effective(player.scene(), handle);
-            }
+        if let Some(scene) = scene {
+            return effective(scene, handle);
         }
         authored(handle).map_err(Into::into)
     }
@@ -1344,17 +1350,13 @@ impl CanonicalAuthoringScene {
         authored: impl FnOnce(noon::MobjectTarget<'_>) -> Result<T, noon::AuthoringError>,
         effective: impl FnOnce(&noon::Scene, noon::MobjectTarget<'_>) -> Result<T, AuthoringFailure>,
     ) -> Result<T, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
+        let scene = self.effective_observation_scene()?;
         let target = noon::MobjectTarget::from(family);
         target
             .require_store(self.scene.integration_store())
             .map_err(AuthoringFailure::from)?;
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local() {
-                return effective(player.scene(), target);
-            }
+        if let Some(scene) = scene {
+            return effective(scene, target);
         }
         authored(target).map_err(AuthoringFailure::from)
     }
