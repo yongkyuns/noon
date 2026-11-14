@@ -447,33 +447,27 @@ impl Context {
         operation(&mut live).map_err(engine_error)
     }
 
-    fn observe_effective(&self, target: &MobjectHandle) -> PyResult<noon::EffectiveMobjectState> {
-        self.require_active()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        self.scene
-            .effective(&target.handle)
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
-    }
-
     fn observe_bound_mobject<T>(
         &self,
         target: &MobjectHandle,
-        authored: impl FnOnce(&Mobject) -> Result<T, noon::AuthoringError>,
-        effective: impl FnOnce(&Scene, &Mobject) -> Result<T, noon::AuthoringError>,
+        observe: impl FnOnce(&Scene, &Mobject) -> Result<T, noon::AuthoringError>,
     ) -> PyResult<T> {
         self.require_active()?;
         self.same_store(target)?;
         if !self.bound_ids.contains(&target.handle.node_id()) {
             return Err(engine_error("mobject is not bound to this canonical Scene"));
         }
-        if self.has_execution() {
-            effective(&self.scene, &target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
-        } else {
-            authored(&target.handle).map_err(engine_error)
-        }
+        self.observe_mobject(target, observe)
+    }
+
+    fn observe_mobject<T>(
+        &self,
+        target: &MobjectHandle,
+        observe: impl FnOnce(&Scene, &Mobject) -> Result<T, noon::AuthoringError>,
+    ) -> PyResult<T> {
+        let running = self.has_execution();
+        observe(&self.scene, &target.handle)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
 
     fn place<T>(
@@ -2521,12 +2515,10 @@ impl Context {
     fn query_stroke_cap(&self, target: &MobjectHandle) -> PyResult<&'static str> {
         self.require_active()?;
         self.same_store(target)?;
-        let cap = if self.has_execution() {
-            self.scene.effective_stroke_cap(&target.handle)
-        } else {
-            target.handle.stroke_cap()
-        };
-        cap.map(|cap| cap.as_str()).map_err(engine_error)
+        self.scene
+            .stroke_cap(&target.handle)
+            .map(|cap| cap.as_str())
+            .map_err(engine_error)
     }
 
     fn fade(&mut self, target: &MobjectHandle, darkness: f64) -> PyResult<()> {
@@ -3634,7 +3626,7 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<crate::family::ColorObservation> {
-        self.observe_bound_mobject(target, Mobject::manim_color, Scene::effective_manim_color)
+        self.observe_bound_mobject(target, Scene::manim_color)
             .map(Into::into)
     }
     #[pyo3(name = "createFamily")]
@@ -5283,11 +5275,7 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<crate::mobject::LineEndpoints> {
-        let value = self.observe_bound_mobject(
-            target,
-            Mobject::manim_line_endpoints,
-            Scene::effective_line_endpoints,
-        )?;
+        let value = self.observe_bound_mobject(target, Scene::line_endpoints)?;
         Ok(crate::mobject::LineEndpoints { value })
     }
 
@@ -5296,7 +5284,7 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<Option<crate::family::ColorObservation>> {
-        self.observe_bound_mobject(target, Mobject::fill_color, Scene::effective_fill_color)
+        self.observe_bound_mobject(target, Scene::fill_color)
             .map(|color| color.map(Into::into))
     }
     #[pyo3(name = "queryMobjectStrokeColor")]
@@ -5304,7 +5292,7 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<Option<crate::family::ColorObservation>> {
-        self.observe_bound_mobject(target, Mobject::stroke_color, Scene::effective_stroke_color)
+        self.observe_bound_mobject(target, Scene::stroke_color)
             .map(|color| color.map(Into::into))
     }
     #[pyo3(name = "queryMobjectBackgroundStrokeColor")]
@@ -5312,58 +5300,40 @@ impl Context {
         &self,
         target: &MobjectHandle,
     ) -> PyResult<Option<crate::family::ColorObservation>> {
-        self.observe_bound_mobject(
-            target,
-            Mobject::background_stroke_color,
-            Scene::effective_background_stroke_color,
-        )
-        .map(|color| color.map(Into::into))
+        self.observe_bound_mobject(target, Scene::background_stroke_color)
+            .map(|color| color.map(Into::into))
     }
     #[pyo3(name = "queryMobjectBackgroundStrokeWidth")]
     fn query_background_stroke_width(&self, target: &MobjectHandle) -> PyResult<f64> {
-        self.observe_bound_mobject(
-            target,
-            Mobject::background_stroke_width,
-            Scene::effective_background_stroke_width,
-        )
+        self.observe_bound_mobject(target, Scene::background_stroke_width)
     }
     #[pyo3(name = "queryMobjectBackgroundStrokeOpacity")]
     fn query_background_stroke_opacity(&self, target: &MobjectHandle) -> PyResult<f64> {
-        self.observe_bound_mobject(
-            target,
-            Mobject::background_stroke_opacity,
-            Scene::effective_background_stroke_opacity,
-        )
+        self.observe_bound_mobject(target, Scene::background_stroke_opacity)
     }
     #[pyo3(name = "queryMobjectFillOpacity")]
     fn query_fill_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
         if self.has_execution() {
-            self.observe_effective(target).map(|v| v.fill_opacity())
-        } else {
-            target.handle.fill_opacity().map_err(engine_error)
+            self.require_active()?;
         }
+        self.observe_mobject(target, Scene::fill_opacity)
     }
     #[pyo3(name = "queryMobjectStrokeOpacity")]
     fn query_stroke_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
         if self.has_execution() {
-            self.observe_effective(target).map(|v| v.stroke_opacity())
-        } else {
-            target.handle.stroke_opacity().map_err(engine_error)
+            self.require_active()?;
         }
+        self.observe_mobject(target, Scene::stroke_opacity)
     }
     #[pyo3(name = "queryMobjectStrokeWidth")]
     fn query_stroke_width(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
         if self.has_execution() {
             self.require_active()?;
-            self.scene
-                .effective_stroke_width(&target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
-        } else {
-            target.handle.stroke_width().map_err(engine_error)
         }
+        self.observe_mobject(target, Scene::stroke_width)
     }
     #[pyo3(name = "moveToPoint")]
     #[allow(clippy::too_many_arguments)]

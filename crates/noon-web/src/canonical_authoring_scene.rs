@@ -1381,18 +1381,25 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
+    fn observe_mobject_query<'a, T>(
+        &self,
+        running: Option<&noon::Scene>,
+        object: &'a noon::Mobject,
+        observe: impl FnOnce(&noon::Scene, &'a noon::Mobject) -> Result<T, noon::AuthoringError>,
+    ) -> Result<T, AuthoringFailure> {
+        observe(running.unwrap_or(&self.scene), object)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running.is_some()))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_line_endpoints(
         &self,
         handle: &noon::Mobject,
     ) -> Result<noon::ManimLineEndpoints, AuthoringFailure> {
-        self.mobject_observation(
+        self.observe_mobject_query(
+            self.mobject_observation_scene(handle)?,
             handle,
-            noon::Mobject::manim_line_endpoints,
-            |scene, handle| {
-                scene
-                    .effective_line_endpoints(handle)
-                    .map_err(running_scene_error)
-            },
+            noon::Scene::line_endpoints,
         )
     }
 
@@ -1401,44 +1408,40 @@ impl CanonicalAuthoringScene {
         &self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.mobject_observation(target, noon::Mobject::fill_color, |scene, target| {
-            scene
-                .effective_fill_color(target)
-                .map_err(running_scene_error)
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(target)?,
+            target,
+            noon::Scene::fill_color,
+        )
     }
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_stroke_color(
         &self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.mobject_observation(target, noon::Mobject::stroke_color, |scene, target| {
-            scene
-                .effective_stroke_color(target)
-                .map_err(running_scene_error)
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(target)?,
+            target,
+            noon::Scene::stroke_color,
+        )
     }
     #[cfg(target_arch = "wasm32")]
     fn mobject_stroke_width(&self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(target, noon::Mobject::stroke_width, |scene, target| {
-            scene
-                .effective_stroke_width(target)
-                .map_err(running_scene_error)
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(target)?,
+            target,
+            noon::Scene::stroke_width,
+        )
     }
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_background_stroke_color(
         &self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.mobject_observation(
+        self.observe_mobject_query(
+            self.mobject_observation_scene(target)?,
             target,
-            noon::Mobject::background_stroke_color,
-            |scene, target| {
-                scene
-                    .effective_background_stroke_color(target)
-                    .map_err(running_scene_error)
-            },
+            noon::Scene::background_stroke_color,
         )
     }
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1446,14 +1449,10 @@ impl CanonicalAuthoringScene {
         &self,
         target: &noon::Mobject,
     ) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(
+        self.observe_mobject_query(
+            self.mobject_observation_scene(target)?,
             target,
-            noon::Mobject::background_stroke_width,
-            |scene, target| {
-                scene
-                    .effective_background_stroke_width(target)
-                    .map_err(running_scene_error)
-            },
+            noon::Scene::background_stroke_width,
         )
     }
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1461,14 +1460,10 @@ impl CanonicalAuthoringScene {
         &self,
         handle: &noon::Mobject,
     ) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(
+        self.observe_mobject_query(
+            self.mobject_observation_scene(handle)?,
             handle,
-            noon::Mobject::background_stroke_opacity,
-            |scene, handle| {
-                scene
-                    .effective_background_stroke_opacity(handle)
-                    .map_err(running_scene_error)
-            },
+            noon::Scene::background_stroke_opacity,
         )
     }
     #[cfg(target_arch = "wasm32")]
@@ -1476,43 +1471,37 @@ impl CanonicalAuthoringScene {
         &self,
         target: &noon::Mobject,
     ) -> Result<noon_core::StrokeCap, AuthoringFailure> {
-        self.mobject_observation(target, noon::Mobject::stroke_cap, |scene, target| {
-            scene
-                .effective_stroke_cap(target)
-                .map_err(running_scene_error)
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(target)?,
+            target,
+            noon::Scene::stroke_cap,
+        )
     }
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_color(&self, handle: &noon::Mobject) -> Result<noon_core::Color, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::manim_color, |scene, target| {
-            scene
-                .effective_manim_color(target)
-                .map_err(running_scene_error)
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(handle)?,
+            handle,
+            noon::Scene::manim_color,
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_fill_opacity(&self, handle: &noon::Mobject) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::fill_opacity, |scene, handle| {
-            // Reject resource paints before reading their lowered scalar projection.
-            handle.fill_opacity().map_err(AuthoringFailure::from)?;
-            Ok(scene
-                .effective(handle)
-                .map_err(running_scene_error)?
-                .fill_opacity())
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(handle)?,
+            handle,
+            noon::Scene::fill_opacity,
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_stroke_opacity(&self, handle: &noon::Mobject) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::stroke_opacity, |scene, handle| {
-            // Reject resource paints before reading their lowered scalar projection.
-            handle.stroke_opacity().map_err(AuthoringFailure::from)?;
-            Ok(scene
-                .effective(handle)
-                .map_err(running_scene_error)?
-                .stroke_opacity())
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(handle)?,
+            handle,
+            noon::Scene::stroke_opacity,
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
