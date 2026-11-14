@@ -452,7 +452,7 @@ fn image_resource_replacement_keeps_an_older_execution_snapshot_usable() {
             .rgba8(),
         &[0, 255, 0, 128]
     );
-    let mut captured = execution.live().target_editor(&source).unwrap();
+    let mut captured = execution.scene_mut().target_editor(&source).unwrap();
     captured.set_fill_image_mapping(mapping(), None).unwrap();
     assert_eq!(
         captured

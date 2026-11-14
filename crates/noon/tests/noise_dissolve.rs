@@ -52,9 +52,9 @@ fn independent_mask_targets_seek_complete_and_retire_exact_generations() {
     second
         .set_effect("second", EffectUpdate::default().progress(0.6))
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let segment = session
+        .live()
         .declare_and_activate_animation_composition(
             SemanticAnimationCompositionKind::Parallel,
             &[
@@ -71,8 +71,8 @@ fn independent_mask_targets_seek_complete_and_retire_exact_generations() {
         .unwrap();
     for time in [0.75, 0.25, 0.9, 0.5] {
         session.seek(time).unwrap();
-        let first = effective(&session, source.node_id(), a.node_id());
-        let second = effective(&session, source.node_id(), b.node_id());
+        let first = effective(session.session(), source.node_id(), a.node_id());
+        let second = effective(session.session(), source.node_id(), b.node_id());
         assert_eq!(first.progress(), 0.8 * time);
         assert!((first.softness() - (0.08 * (1.0 - time) + 0.4 * time)).abs() < 1e-14);
         assert_eq!(
@@ -81,8 +81,8 @@ fn independent_mask_targets_seek_complete_and_retire_exact_generations() {
         );
         assert_eq!(second.progress(), 0.6 * time);
     }
-    session.advance_segment_to(segment, 1.0).unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(
         a.authored_definition()
             .unwrap()
@@ -91,7 +91,7 @@ fn independent_mask_targets_seek_complete_and_retire_exact_generations() {
             .progress(),
         0.8
     );
-    scene.live(&mut session).remove_effect(&source, &a).unwrap();
+    session.scene_mut().remove_effect(&source, &a).unwrap();
     assert_eq!(
         b.authored_definition()
             .unwrap()
@@ -101,24 +101,24 @@ fn independent_mask_targets_seek_complete_and_retire_exact_generations() {
         0.6
     );
     assert!(a.authored_definition().is_err());
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_effect(&source, NoiseDissolve::default(), "first")
         .unwrap();
     let replacement = source.get_effect("first").unwrap();
     assert_ne!(replacement.node_id(), a.node_id());
-    let before = session.frame().clone();
-    let context = session.publication_context();
-    let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
+    let before = session.session().frame().clone();
+    let context = session.session().publication_context();
+    let revision = session.scene().revision();
+    assert!(session
+        .scene_mut()
         .set_effect(&source, &a, EffectUpdate::default().progress(0.3))
         .is_err());
-    assert_eq!(session.frame(), &before);
-    assert_eq!(session.publication_context(), context);
-    assert_eq!(scene.revision(), revision);
+    assert_eq!(session.session().frame(), &before);
+    assert_eq!(session.session().publication_context(), context);
+    assert_eq!(session.scene().revision(), revision);
     assert_eq!(
-        effective(&session, source.node_id(), replacement.node_id()).progress(),
+        effective(session.session(), source.node_id(), replacement.node_id()).progress(),
         0.0
     );
 }
@@ -139,12 +139,12 @@ fn explicit_zero_mask_writes_conflict_atomically_and_seed_edits_stay_discrete() 
     b.clone()
         .set_effect("mask", EffectUpdate::default().progress(0.0))
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let before = session.frame().clone();
-    let context = session.publication_context();
-    let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let before = session.session().frame().clone();
+    let context = session.session().publication_context();
+    let revision = session.scene().revision();
+    assert!(session
+        .live()
         .declare_and_activate_animation_composition(
             SemanticAnimationCompositionKind::Parallel,
             &[
@@ -159,28 +159,28 @@ fn explicit_zero_mask_writes_conflict_atomically_and_seed_edits_stay_discrete() 
             AnimationOptions::new(),
         )
         .is_err());
-    assert_eq!(session.frame(), &before);
-    assert_eq!(session.publication_context(), context);
-    assert_eq!(scene.revision(), revision);
+    assert_eq!(session.session().frame(), &before);
+    assert_eq!(session.session().publication_context(), context);
+    assert_eq!(session.scene().revision(), revision);
     let attachment = source.get_effect("mask").unwrap();
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .set_effect(&source, &attachment, EffectUpdate::default().seed(u32::MAX))
         .unwrap();
     assert_eq!(
-        effective(&session, source.node_id(), attachment.node_id()).seed(),
+        effective(session.session(), source.node_id(), attachment.node_id()).seed(),
         u32::MAX
     );
-    let target = scene.live(&mut session).copy_mobject(&source).unwrap();
-    scene
-        .live(&mut session)
+    let target = session.scene_mut().copy_mobject(&source).unwrap();
+    session
+        .scene_mut()
         .set_effect(target.root(), "mask", EffectUpdate::default().seed(0))
         .unwrap();
-    let before = session.frame().clone();
-    let context = session.publication_context();
-    let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
+    let before = session.session().frame().clone();
+    let context = session.session().publication_context();
+    let revision = session.scene().revision();
+    assert!(session
+        .live()
         .declare_and_activate_composition(
             &AnimationCompositionRequest::TransformTo(
                 TransformToRequest::new(&source, target.root(), options()).method_target()
@@ -188,9 +188,9 @@ fn explicit_zero_mask_writes_conflict_atomically_and_seed_edits_stay_discrete() 
             AnimationOptions::new(),
         )
         .is_err());
-    assert_eq!(session.frame(), &before);
-    assert_eq!(session.publication_context(), context);
-    assert_eq!(scene.revision(), revision);
+    assert_eq!(session.session().frame(), &before);
+    assert_eq!(session.session().publication_context(), context);
+    assert_eq!(session.scene().revision(), revision);
 }
 
 #[test]
@@ -219,9 +219,13 @@ fn composed_mask_captures_activation_values_and_rejects_rebound_names() {
         )
         .unwrap();
     let attachment = family.get_effect("mask").unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let owner = session.execution_object_id(family.node_id()).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let owner = session
+        .session()
+        .execution_object_id(family.node_id())
+        .unwrap();
     let source_plan = session
+        .session()
         .frame()
         .objects
         .iter()
@@ -232,20 +236,19 @@ fn composed_mask_captures_activation_values_and_rejects_rebound_names() {
             _ => None,
         })
         .unwrap();
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .set_effect(&family, &attachment, EffectUpdate::default().progress(0.4))
         .unwrap();
-    let segment = scene
-        .live(&mut session)
-        .play_animation(&declaration)
-        .unwrap();
-    session.advance_segment_to(segment, 0.5).unwrap();
+    let segment = session.live().play_animation(&declaration).unwrap();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
     assert!(
-        (effective(&session, family.node_id(), attachment.node_id()).progress() - 0.6).abs()
+        (effective(session.session(), family.node_id(), attachment.node_id()).progress() - 0.6)
+            .abs()
             < 1e-14
     );
     let row = session
+        .session()
         .frame()
         .objects
         .iter()
@@ -257,8 +260,8 @@ fn composed_mask_captures_activation_values_and_rejects_rebound_names() {
         }
         _ => panic!("family keeps its composed source"),
     }
-    session.advance_segment_to(segment, 1.0).unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(
         attachment
             .authored_definition()
@@ -268,26 +271,23 @@ fn composed_mask_captures_activation_values_and_rejects_rebound_names() {
             .progress(),
         0.8
     );
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .remove_effect(&family, &attachment)
         .unwrap();
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_effect(&family, NoiseDissolve::default(), "mask")
         .unwrap();
     assert_ne!(
         family.get_effect("mask").unwrap().node_id(),
         attachment.node_id()
     );
-    let before = session.frame().clone();
-    let context = session.publication_context();
-    let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
-        .play_animation(&declaration)
-        .is_err());
-    assert_eq!(session.frame(), &before);
-    assert_eq!(session.publication_context(), context);
-    assert_eq!(scene.revision(), revision);
+    let before = session.session().frame().clone();
+    let context = session.session().publication_context();
+    let revision = session.scene().revision();
+    assert!(session.live().play_animation(&declaration).is_err());
+    assert_eq!(session.session().frame(), &before);
+    assert_eq!(session.session().publication_context(), context);
+    assert_eq!(session.scene().revision(), revision);
 }

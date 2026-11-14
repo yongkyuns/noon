@@ -386,12 +386,18 @@ mod tests {
             .scene_mut()
             .add_many(&[live_parts.family().into()])
             .unwrap();
-        let mut live = execution.live();
-        assert!((live.latex_font_size(&live_parts).unwrap() - 36.0).abs() < 1e-6);
+        assert!((execution.live().latex_font_size(&live_parts).unwrap() - 36.0).abs() < 1e-6);
 
-        let target = live.copy_family(live_parts.family()).unwrap();
-        live.scale_family(target.root(), 2.0, 2.0).unwrap();
-        let segment = live
+        let target = execution
+            .scene_mut()
+            .copy_family(live_parts.family())
+            .unwrap();
+        execution
+            .live()
+            .scale_family(target.root(), 2.0, 2.0)
+            .unwrap();
+        let segment = execution
+            .live()
             .declare_and_activate_family_transform_to(
                 live_parts.family(),
                 target.root(),
@@ -400,31 +406,50 @@ mod tests {
                     .rate_func(noon::RateFunction::Linear),
             )
             .unwrap();
-        live.advance_segment_to(segment, segment.start_time() + 0.5)
+        execution
+            .live()
+            .advance_segment_to(segment, segment.start_time() + 0.5)
             .unwrap();
-        assert!((live.latex_font_size(&live_parts).unwrap() - 54.0).abs() < 1e-4);
-        live.advance_segment_to(segment, segment.end_time())
+        assert!((execution.live().latex_font_size(&live_parts).unwrap() - 54.0).abs() < 1e-4);
+        execution
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
+        execution.live().complete_segment(segment).unwrap();
 
-        let before_rotation = live.effective_family_layout(live_parts.family()).unwrap();
-        live.rotate_family(
-            live_parts.family(),
-            std::f64::consts::FRAC_PI_2,
-            noon::ManimRotationPivot::Center,
-        )
-        .unwrap();
-        let rotated_size = live.latex_font_size(&live_parts).unwrap();
+        let before_rotation = execution
+            .live()
+            .effective_family_layout(live_parts.family())
+            .unwrap();
+        execution
+            .live()
+            .rotate_family(
+                live_parts.family(),
+                std::f64::consts::FRAC_PI_2,
+                noon::ManimRotationPivot::Center,
+            )
+            .unwrap();
+        let rotated_size = execution.live().latex_font_size(&live_parts).unwrap();
         let expected = 72.0 * before_rotation.width / before_rotation.height;
         assert!((rotated_size - expected).abs() < 1e-4);
 
         let removed = live_parts.current_members().unwrap().remove(0);
-        live.remove_family_members(live_parts.family(), &[(&removed).into()])
+        execution
+            .live()
+            .remove_family_members(live_parts.family(), &[(&removed).into()])
             .unwrap();
-        assert!(live.latex_font_size(&live_parts).unwrap().is_finite());
+        assert!(execution
+            .live()
+            .latex_font_size(&live_parts)
+            .unwrap()
+            .is_finite());
 
         let rebound = live_parts.rebind_family(target.root().clone()).unwrap();
-        assert!(live.latex_font_size(&rebound).unwrap().is_finite());
+        assert!(execution
+            .live()
+            .latex_font_size(&rebound)
+            .unwrap()
+            .is_finite());
     }
 
     struct FailingLatexBackend;

@@ -28,7 +28,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         scene.add(&front)?;
         let mut execution = scene.into_execution()?;
         for priority in [2.0, -1.0] {
-            let target = execution.live().target_editor(&back)?;
+            let target = execution.scene_mut().target_editor(&back)?;
             execution
                 .scene_mut()
                 .set_z_index(&(&target).into(), priority, true)?;
@@ -53,11 +53,11 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         }
         // A short child of AnimationGroup finishes with the group, not at its
         // interpolation endpoint. The other child makes that distinction visible.
-        let back_target = execution.live().target_editor(&back)?;
+        let back_target = execution.scene_mut().target_editor(&back)?;
         execution
             .scene_mut()
             .set_z_index(&(&back_target).into(), 2.0, true)?;
-        let front_target = execution.live().target_editor(&front)?;
+        let front_target = execution.scene_mut().target_editor(&front)?;
         let mut live = execution.live();
         live.shift(&front_target, -1.0, 0.0)?;
         let request = Request::Composition {

@@ -298,9 +298,9 @@ fn live_capture_restores_current_completed_state_in_one_publication() {
     let target = source.copy_family().unwrap();
     target.root().shift(3.0, 0.0).unwrap();
     scene.add_many(&[(&source).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let segment = live
+    let mut session = scene.into_execution().unwrap();
+    let segment = session
+        .live()
         .declare_and_activate_family_transform_to(
             &source,
             target.root(),
@@ -309,18 +309,23 @@ fn live_capture_restores_current_completed_state_in_one_publication() {
                 .rate_func(noon::RateFunction::Linear),
         )
         .unwrap();
-    live.advance_segment_to(segment, 0.5).unwrap();
-    assert!(live
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    assert!(session
+        .live()
         .become_family(&source, target.root(), Default::default())
         .is_err());
-    live.advance_segment_to(segment, segment.end_time())
+    session
+        .live()
+        .advance_segment_to(segment, segment.end_time())
         .unwrap();
-    live.complete_segment(segment).unwrap();
-    let saved = live.copy_family(&source).unwrap();
-    live.shift_family(&source, -5.0, 0.0).unwrap();
-    live.become_family(&source, saved.root(), Default::default())
+    session.live().complete_segment(segment).unwrap();
+    let saved = session.scene_mut().copy_family(&source).unwrap();
+    session.live().shift_family(&source, -5.0, 0.0).unwrap();
+    session
+        .live()
+        .become_family(&source, saved.root(), Default::default())
         .unwrap();
-    let layout = live.effective_family_layout(&source).unwrap();
+    let layout = session.live().effective_family_layout(&source).unwrap();
     assert_eq!(layout.center, saved.root().layout().unwrap().center());
 }
 

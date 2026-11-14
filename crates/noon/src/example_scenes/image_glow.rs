@@ -49,47 +49,56 @@ impl LiveContinuation for ImageGlow {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let motion = AnimationOptions::new()
             .run_time(1.5)
             .rate_func(RateFunction::Smooth);
         let segment = match self.stage {
-            0 | 2 | 4 => live.wait_segment(0.75),
+            0 | 2 | 4 => scene.live().wait_segment(0.75),
             1 => {
-                let target = live.target_editor(&self.image).map_err(message)?;
-                live.shift(&target, 0.0, 0.6).map_err(message)?;
-                live.rotate(&target, std::f64::consts::PI / 12.0)
+                let target = scene.target_editor(&self.image).map_err(message)?;
+                scene.live().shift(&target, 0.0, 0.6).map_err(message)?;
+                scene
+                    .live()
+                    .rotate(&target, std::f64::consts::PI / 12.0)
                     .map_err(message)?;
-                live.set_glow(
-                    &target,
-                    EffectUpdate::default()
-                        .color(Color::PINK)
-                        .radius(Pixels(20.0))
-                        .intensity(2.2),
-                )
-                .map_err(message)?;
-                live.declare_and_activate_transform_to(&self.image, &target, motion)
+                scene
+                    .set_glow(
+                        &target,
+                        EffectUpdate::default()
+                            .color(Color::PINK)
+                            .radius(Pixels(20.0))
+                            .intensity(2.2),
+                    )
+                    .map_err(message)?;
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(&self.image, &target, motion)
             }
             3 => {
                 // Return to the original pose while making the effect neutral.
-                let target = live.target_editor(&self.image).map_err(message)?;
-                live.shift(&target, 0.0, -0.6).map_err(message)?;
-                live.rotate(&target, -std::f64::consts::PI / 12.0)
+                let target = scene.target_editor(&self.image).map_err(message)?;
+                scene.live().shift(&target, 0.0, -0.6).map_err(message)?;
+                scene
+                    .live()
+                    .rotate(&target, -std::f64::consts::PI / 12.0)
                     .map_err(message)?;
-                live.set_glow(
-                    &target,
-                    EffectUpdate::default()
-                        .color(Color::BLUE)
-                        .radius(Pixels(10.0))
-                        .intensity(0.0),
-                )
-                .map_err(message)?;
-                live.declare_and_activate_transform_to(&self.image, &target, motion)
+                scene
+                    .set_glow(
+                        &target,
+                        EffectUpdate::default()
+                            .color(Color::BLUE)
+                            .radius(Pixels(10.0))
+                            .intensity(0.0),
+                    )
+                    .map_err(message)?;
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(&self.image, &target, motion)
             }
             5 => {
                 // Removing a neutral effect preserves the same ordinary image.
-                live.remove_glow(&self.image).map_err(message)?;
-                live.wait_segment(0.75)
+                scene.remove_glow(&self.image).map_err(message)?;
+                scene.live().wait_segment(0.75)
             }
             6 => return Ok(ContinuationStep::Finished),
             _ => return Err("image glow continuation resumed after completion".into()),

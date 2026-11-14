@@ -81,16 +81,16 @@ fn shader_composition_revalidates_prepared_program_view_and_detached_membership(
         source
             .add_effect(ShaderEffect::new(original.clone()), "material")
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.require_effect_resource_preparation();
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().require_effect_resource_preparation();
         let request = crate::AnimationCompositionRequest::Fade {
             target: &source,
             direction: noon_core::SemanticFadeDirection::In,
             endpoint: crate::FadeEndpoint::default(),
             options: noon_core::AnimationOptions::new(),
         };
-        let pending = scene
-            .live(&mut session)
+        let pending = session
+            .live()
             .prepare_composition(&request, noon_core::AnimationOptions::new())
             .unwrap();
         match change {
@@ -100,9 +100,13 @@ fn shader_composition_revalidates_prepared_program_view_and_detached_membership(
                     format!("{}\n", original.source()),
                 )
                 .unwrap();
-                let mut live = scene.live(&mut session);
-                live.remove_effect(&source, "material").unwrap();
-                live.add_effect(&source, ShaderEffect::new(replacement), "material")
+                session
+                    .scene_mut()
+                    .remove_effect(&source, "material")
+                    .unwrap();
+                session
+                    .scene_mut()
+                    .add_effect(&source, ShaderEffect::new(replacement), "material")
                     .unwrap();
             }
             1 => {
@@ -111,34 +115,28 @@ fn shader_composition_revalidates_prepared_program_view_and_detached_membership(
                     camera.node_id(),
                     noon_core::ViewColorProfile::LinearHdr,
                 );
-                scene.live(&mut session).apply(transaction).unwrap();
+                session.live().apply(transaction).unwrap();
             }
             _ => {
-                let addition = scene
-                    .live(&mut session)
+                let addition = session
+                    .live()
                     .prepare_membership(crate::SceneMembershipRequest::Add(&[(&source).into()]))
                     .unwrap();
-                scene
-                    .live(&mut session)
-                    .publish_staged_effects(addition)
-                    .unwrap();
+                session.live().publish_staged_effects(addition).unwrap();
             }
         }
-        session.take_frame_changes();
-        let before = session.publication_context();
-        let frame = session.frame().clone();
-        let error = scene
-            .live(&mut session)
-            .publish_staged_effects(pending)
-            .unwrap_err();
+        session.session_mut().take_frame_changes();
+        let before = session.session().publication_context();
+        let frame = session.session().frame().clone();
+        let error = session.live().publish_staged_effects(pending).unwrap_err();
         assert!(format!("{error:?}").contains(match change {
             0 => "ExternalEffectPreparationRequired",
             1 => "UnsupportedEffectProfile",
             _ => "TargetIsNotDetached",
         }));
-        assert_eq!(session.publication_context(), before);
-        assert_eq!(session.frame(), &frame);
-        assert!(session.take_frame_changes().is_empty());
+        assert_eq!(session.session().publication_context(), before);
+        assert_eq!(session.session().frame(), &frame);
+        assert!(session.session_mut().take_frame_changes().is_empty());
     }
 }
 
@@ -152,11 +150,11 @@ fn shader_membership_revalidates_program_and_view_after_preparation() {
         source
             .add_effect(ShaderEffect::new(original.clone()), "material")
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.require_effect_resource_preparation();
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().require_effect_resource_preparation();
         let members = [(&source).into()];
-        let pending = scene
-            .live(&mut session)
+        let pending = session
+            .live()
             .prepare_membership(crate::SceneMembershipRequest::Add(&members))
             .unwrap();
         if change_program {
@@ -165,47 +163,47 @@ fn shader_membership_revalidates_program_and_view_after_preparation() {
                 format!("{}\n", original.source()),
             )
             .unwrap();
-            scene
-                .live(&mut session)
+            session
+                .scene_mut()
                 .remove_effect(&source, "material")
                 .unwrap();
-            scene
-                .live(&mut session)
+            session
+                .scene_mut()
                 .add_effect(&source, ShaderEffect::new(replacement), "material")
                 .unwrap();
         } else {
             let mut transaction = SemanticMutationTransaction::new();
             transaction
                 .set_view_color_profile(camera.node_id(), noon_core::ViewColorProfile::LinearHdr);
-            scene.live(&mut session).apply(transaction).unwrap();
+            session.live().apply(transaction).unwrap();
         }
-        session.take_frame_changes();
-        let before = session.publication_context();
-        let frame = session.frame().clone();
-        let error = scene
-            .live(&mut session)
-            .publish_staged_effects(pending)
-            .unwrap_err();
+        session.session_mut().take_frame_changes();
+        let before = session.session().publication_context();
+        let frame = session.session().frame().clone();
+        let error = session.live().publish_staged_effects(pending).unwrap_err();
         assert!(format!("{error:?}").contains(if change_program {
             "ExternalEffectPreparationRequired"
         } else {
             "UnsupportedEffectProfile"
         }));
-        assert_eq!(session.publication_context(), before);
-        assert_eq!(session.frame(), &frame);
-        assert!(session.take_frame_changes().is_empty());
-        assert!(session.execution_object_id(source.node_id()).is_none());
+        assert_eq!(session.session().publication_context(), before);
+        assert_eq!(session.session().frame(), &frame);
+        assert!(session.session_mut().take_frame_changes().is_empty());
+        assert!(session
+            .session()
+            .execution_object_id(source.node_id())
+            .is_none());
         if change_program {
-            let retry = scene
-                .live(&mut session)
+            let retry = session
+                .live()
                 .prepare_membership(crate::SceneMembershipRequest::Add(&members))
                 .unwrap();
             assert_ne!(retry.programs(), &[original]);
-            scene
-                .live(&mut session)
-                .publish_staged_effects(retry)
-                .unwrap();
-            assert!(session.execution_object_id(source.node_id()).is_some());
+            session.live().publish_staged_effects(retry).unwrap();
+            assert!(session
+                .session()
+                .execution_object_id(source.node_id())
+                .is_some());
         }
     }
 }
@@ -602,12 +600,12 @@ fn shader_targets_share_ordinary_timing_seek_live_reconciliation_and_completion(
             AnimationOptions::new(),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let before = session.frame().clone();
-    assert!(scene.live(&mut session).play_animation(&conflict).is_err());
-    assert_eq!(session.frame(), &before);
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let before = session.session().frame().clone();
+    assert!(session.live().play_animation(&conflict).is_err());
+    assert_eq!(session.session().frame(), &before);
+    let segment = session
+        .live()
         .declare_and_activate_transform_to(
             &source,
             &target,
@@ -616,12 +614,9 @@ fn shader_targets_share_ordinary_timing_seek_live_reconciliation_and_completion(
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.5)
-        .unwrap();
-    assert!(scene
-        .live(&mut session)
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    assert!(session
+        .scene_mut()
         .set_effect(
             &source,
             &original,
@@ -630,7 +625,7 @@ fn shader_targets_share_ordinary_timing_seek_live_reconciliation_and_completion(
         .is_err());
     for time in [0.75, 0.25, 0.5, 0.5] {
         session.seek(time).unwrap();
-        let actual = effective(&session, &source);
+        let actual = effective(session.session(), &source);
         assert_eq!(actual.values()[0], ShaderValue::Scalar(0.25 + 0.5 * time));
         assert_eq!(
             actual.values()[1],
@@ -656,17 +651,14 @@ fn shader_targets_share_ordinary_timing_seek_live_reconciliation_and_completion(
             .values()[0],
         ShaderValue::Scalar(0.25)
     );
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(
         original.authored_definition().unwrap().as_shader().unwrap(),
-        &effective(&session, &source)
+        &effective(session.session(), &source)
     );
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .set_effect(
             &source,
             &original,
@@ -674,27 +666,27 @@ fn shader_targets_share_ordinary_timing_seek_live_reconciliation_and_completion(
         )
         .unwrap();
     assert_eq!(
-        effective(&session, &source).values()[15],
+        effective(session.session(), &source).values()[15],
         ShaderValue::Scalar(0.375)
     );
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .remove_effect(&source, &original)
         .unwrap();
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_effect(&source, ShaderEffect::new(program), "scan")
         .unwrap();
     assert_ne!(
         source.get_effect("scan").unwrap().node_id(),
         original.node_id()
     );
-    assert!(scene
-        .live(&mut session)
+    assert!(session
+        .scene_mut()
         .set_effect(&source, &original, EffectUpdate::default())
         .is_err());
     assert_eq!(
-        effective(&session, &source).values()[15],
+        effective(session.session(), &source).values()[15],
         ShaderValue::Scalar(0.125)
     );
 }
@@ -978,20 +970,23 @@ fn shader_time_uses_live_wait_boundaries_and_stops_after_removal_or_source_compl
             &mut self,
             scene: &mut crate::ContinuationScene,
         ) -> Result<ContinuationStep, String> {
-            let live = &mut scene.live();
             let step = self.stage;
             self.stage += 1;
             match step {
-                0 => live
+                0 => scene
+                    .live()
                     .wait_segment(1.0)
                     .map(ContinuationStep::Await)
                     .map_err(|e| e.to_string()),
                 1 => {
                     if self.retire {
-                        live.remove_effect(&self.source, "clock")
+                        scene
+                            .remove_effect(&self.source, "clock")
                             .map_err(|e| e.to_string())?;
                     }
-                    live.wait_segment(0.5)
+                    scene
+                        .live()
+                        .wait_segment(0.5)
                         .map(ContinuationStep::Await)
                         .map_err(|e| e.to_string())
                 }
@@ -1078,50 +1073,47 @@ fn shader_time_dependency_follows_selected_history_across_attachment_removal() {
     scene
         .add_effect(&source, ShaderEffect::new(time_program()), "clock")
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     session
+        .session_mut()
         .begin_replay_retention(noon_runtime::ReplayLimits::default())
         .unwrap();
-    let wait = scene.live(&mut session).wait_segment(1.0).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(wait, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(wait).unwrap();
-    scene
-        .live(&mut session)
-        .remove_effect(&source, "clock")
-        .unwrap();
-    let wait = scene.live(&mut session).wait_segment(1.0).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(wait, 2.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(wait).unwrap();
-    session.seal_replay().unwrap();
+    let wait = session.live().wait_segment(1.0).unwrap();
+    session.live().advance_segment_to(wait, 1.0).unwrap();
+    session.live().complete_segment(wait).unwrap();
+    session.scene_mut().remove_effect(&source, "clock").unwrap();
+    let wait = session.live().wait_segment(1.0).unwrap();
+    session.live().advance_segment_to(wait, 2.0).unwrap();
+    session.live().complete_segment(wait).unwrap();
+    session.session_mut().seal_replay().unwrap();
     for _ in 0..2 {
         session.seek(0.25).unwrap();
-        session.take_renderer_publication();
+        session.session_mut().take_renderer_publication();
         assert_eq!(
-            session.wake_state().timeline(),
+            session.session().wake_state().timeline(),
             TimelineWakeState::Continuous
         );
-        session.advance_to(0.5).unwrap();
+        session.session_mut().advance_to(0.5).unwrap();
         assert_eq!(
             session
+                .session_mut()
                 .take_renderer_publication()
                 .changes()
                 .object_indices(),
             &[0]
         );
         session.seek(1.5).unwrap();
-        session.take_renderer_publication();
+        session.session_mut().take_renderer_publication();
         assert_eq!(
-            session.wake_state().timeline(),
+            session.session().wake_state().timeline(),
             TimelineWakeState::Quiescent
         );
-        session.advance_to(1.75).unwrap();
-        assert!(session.take_renderer_publication().changes().is_empty());
+        session.session_mut().advance_to(1.75).unwrap();
+        assert!(session
+            .session_mut()
+            .take_renderer_publication()
+            .changes()
+            .is_empty());
     }
 }
 
@@ -1294,28 +1286,28 @@ fn composed_local_shader_rejects_before_publication_and_scene_coordinates_remain
         let leaf = scene.circle(0.4).unwrap();
         let family = scene.family(&[(&leaf).into()]).unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let before = session.publication_context();
-        let frame = session.frame().clone();
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        let before = session.session().publication_context();
+        let frame = session.session().frame().clone();
         let nodes = leaf.integration_store().borrow().len();
-        let result = scene
-            .live(&mut session)
+        let result = session
+            .scene_mut()
             .add_effect(&family, material, "material");
         if coordinates == ShaderCoordinates::LocalNormalized {
             assert!(
                 format!("{result:?}").contains("UnsupportedLocalShaderCoordinates"),
                 "{result:?}"
             );
-            assert_eq!(session.publication_context(), before);
-            assert_eq!(session.frame(), &frame);
+            assert_eq!(session.session().publication_context(), before);
+            assert_eq!(session.session().frame(), &frame);
             assert_eq!(leaf.integration_store().borrow().len(), nodes);
             assert!(family.get_effect("material").is_err());
-            assert!(session.take_frame_changes().is_empty());
+            assert!(session.session_mut().take_frame_changes().is_empty());
         } else {
             result.unwrap();
             assert!(family.get_effect("material").is_ok());
-            assert_ne!(session.publication_context(), before);
+            assert_ne!(session.session().publication_context(), before);
         }
     }
 }

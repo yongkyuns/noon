@@ -1,5 +1,5 @@
 //! Thin Rust appearance authoring over the canonical semantic transaction path.
-//! Finite glow playback uses the same Scene/LiveSession publication owners.
+//! The Scene publishes ordinary effect edits and execution stages host-prepared resources.
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
@@ -338,19 +338,6 @@ impl Scene {
 }
 
 impl LiveSession<'_> {
-    /// Publish through the ordinary live transaction, including attachment
-    /// enrollment/removal. Unsupported profiles fail before either state commits.
-    pub fn set_glow<'owner>(
-        &mut self,
-        object: impl Into<MobjectTarget<'owner>>,
-        update: EffectUpdate,
-    ) -> Result<(), LiveSessionError> {
-        let object = object.into();
-        object.require_store(self.integration_store())?;
-        self.apply(glow_transaction(object, update)?)?;
-        Ok(())
-    }
-
     /// Stage one atomic batch of named attachments for the existing program's
     /// publication-preparation barrier. No attachment/revision is visible yet.
     pub fn prepare_effect_attachments<'owner, 'name, T>(
@@ -368,51 +355,6 @@ impl LiveSession<'_> {
             transaction.create_effect(object.node_id(), name, definition);
         }
         self.stage_effect_publication(transaction)
-    }
-
-    pub fn add_effect<'owner>(
-        &mut self,
-        object: impl Into<MobjectTarget<'owner>>,
-        definition: impl Into<EffectDefinition>,
-        name: &str,
-    ) -> Result<(), LiveSessionError> {
-        let object = object.into();
-        object.require_store(self.integration_store())?;
-        self.apply(add_transaction(object, definition.into(), name)?)?;
-        Ok(())
-    }
-
-    pub fn set_effect<'owner, 'a>(
-        &mut self,
-        object: impl Into<MobjectTarget<'owner>>,
-        selector: impl Into<EffectSelector<'a>>,
-        update: EffectUpdate,
-    ) -> Result<(), LiveSessionError> {
-        let object = object.into();
-        object.require_store(self.integration_store())?;
-        self.apply(update_transaction(object, selector.into(), update)?)?;
-        Ok(())
-    }
-
-    pub fn remove_effect<'owner, 'a>(
-        &mut self,
-        object: impl Into<MobjectTarget<'owner>>,
-        selector: impl Into<EffectSelector<'a>>,
-    ) -> Result<(), LiveSessionError> {
-        let object = object.into();
-        object.require_store(self.integration_store())?;
-        self.apply(remove_transaction(object, selector.into())?)?;
-        Ok(())
-    }
-
-    pub fn remove_glow<'owner>(
-        &mut self,
-        object: impl Into<MobjectTarget<'owner>>,
-    ) -> Result<(), LiveSessionError> {
-        let object = object.into();
-        object.require_store(self.integration_store())?;
-        self.apply(remove_glow_transaction(object)?)?;
-        Ok(())
     }
 }
 

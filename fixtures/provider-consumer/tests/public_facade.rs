@@ -13,7 +13,7 @@ fn public_authoring_live_queries_and_completion() -> Result<(), Box<dyn std::err
     assert!(scene.revision().get() > before.get());
     scene.add(&circle)?;
     let mut running = scene.into_execution()?;
-    let target = running.live().target_editor(&circle)?;
+    let target = running.scene_mut().target_editor(&circle)?;
     running.live().shift(&target, 4.0, -2.0)?;
     let segment = running.live().declare_and_activate_transform_to(
         &circle,

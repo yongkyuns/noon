@@ -11,10 +11,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     dot.disable_stroke()?;
     dot.set_fill(1.0, 1.0, 1.0, 1.0)?;
     scene.add(&dot)?;
-    let mut session = scene.execution_session()?;
-    let mut live = scene.live(&mut session);
-    let target = live.target_editor(&dot)?;
-    live.set_glow(
+    let mut session = scene.into_execution()?;
+    let target = session.scene_mut().target_editor(&dot)?;
+    session.scene_mut().set_glow(
         &target,
         EffectUpdate::default()
             .color(Color::BLUE)
@@ -25,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dot.get_effect("glow").is_err(),
         "target construction is inert"
     );
-    let segment = live.declare_and_activate_transform_to(
+    let segment = session.live().declare_and_activate_transform_to(
         &dot,
         &target,
         AnimationOptions::new()
@@ -35,12 +34,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let attachment = dot.get_effect("glow")?;
     let neutral = (attachment.authored_definition()?).as_glow().unwrap();
     assert_eq!(neutral.intensity(), 0.0);
-    live.advance_segment_to(segment, 0.125)?;
-    live.advance_segment_to(segment, 0.25)?;
-    live.complete_segment(segment)?;
+    session.live().advance_segment_to(segment, 0.125)?;
+    session.live().advance_segment_to(segment, 0.25)?;
+    session.live().complete_segment(segment)?;
     let completed = (attachment.authored_definition()?).as_glow().unwrap();
     assert_eq!(completed.intensity(), 1.4);
-    live.remove_glow(&dot)?;
+    session.scene_mut().remove_glow(&dot)?;
     assert!(
         attachment.authored_definition().is_err(),
         "generation retired"

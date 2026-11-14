@@ -32,7 +32,7 @@ fn history(mut observe: impl FnMut(&mut ExecutionSession)) -> PrefixReader {
         .math_typst(MathTypst::new("integral_0^1 x^2 dif x = frac(1, 3)").with_font_size(36.0))
         .unwrap();
     execution
-        .live()
+        .scene_mut()
         .set_glow(
             &text,
             EffectUpdate::default()

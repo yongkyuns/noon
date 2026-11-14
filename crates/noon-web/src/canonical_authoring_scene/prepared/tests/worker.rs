@@ -346,7 +346,8 @@ fn interpreter_worker_retains_single_glow_edits_between_prefixes() {
         context
             .active_live_player()
             .unwrap()
-            .live_set_glow(
+            .scene_mut()
+            .set_glow(
                 &target,
                 EffectUpdate::default()
                     .color(color)
