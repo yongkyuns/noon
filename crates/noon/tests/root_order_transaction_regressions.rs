@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{SemanticMutationTransaction, SemanticStore};
-use noon::ExecutionSession;
 use noon_compile::semantic_execution_object_id;
 use noon_core::{
     plan_semantic_scene_membership, SemanticNodeId, SemanticObjectState,

@@ -1,9 +1,10 @@
 //! Visibility enrollment and lifecycle through the shared animation pipeline.
 //! Uses the ordinary Scene transaction, lowering and runtime publication path.
 use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::{
     effects::{EffectUpdate, Glow, NoiseDissolve, Pixels},
-    ExecutionSession, Scene,
+    Scene,
 };
 use noon_core::{SemanticMutationTransaction, SemanticNodeId};
 

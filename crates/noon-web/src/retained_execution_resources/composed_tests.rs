@@ -6,9 +6,10 @@ use crate::{
     TransportComposedSourceHandle, TransportSlotId,
 };
 use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::{
     effects::{Blur, EffectUpdate, Pixels},
-    ExecutionSession, Mobject, MobjectFamily, Scene,
+    Mobject, MobjectFamily, Scene,
 };
 use noon_compile::CompiledComposedSourceErrorKind as Kind;
 use noon_core::{

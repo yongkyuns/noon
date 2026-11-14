@@ -1,11 +1,12 @@
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::BlockingContinuation;
 use noon::integration::{ExecutionViewportQuery, RendererPublication, TimelineWakeState};
 use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameSnapshot, PointerFrameView,
 };
 use noon::{
-    ExecutionSession, LiveContinuation, LiveProgram, PlaybackProgram, RustHostCallbackTable,
-    SceneExecution, ScriptError, TranslationDragError,
+    LiveContinuation, LiveProgram, PlaybackProgram, RustHostCallbackTable, SceneExecution,
+    ScriptError, TranslationDragError,
 };
 use noon_core::{
     Camera2DState, Inset2DViewState, NativeEventOccurrence, NativeInputValue, NativePointerId,

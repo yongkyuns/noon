@@ -1,6 +1,7 @@
+use noon::integration::scene_execution::ExecutionSession;
 use noon::{
     effects::{EffectUpdate, NoiseDissolve},
-    AnimationCompositionRequest, AnimationOptions, ExecutionSession, RateFunction, Scene,
+    AnimationCompositionRequest, AnimationOptions, RateFunction, Scene,
     SemanticAnimationCompositionKind, TransformToRequest,
 };
 use noon_core::SemanticNodeId;

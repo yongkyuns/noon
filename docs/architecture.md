@@ -1108,7 +1108,7 @@ Ordered runtime evaluation may produce two different classes of staged output an
 
 [D2 source](diagrams/live-publication.d2).
 
-This is the publication contract for supported operations, not a claim that every mutation kind in the roadmap is implemented. Today `noon::ExecutionSession` coordinates preparation and commit; `noon-compile` owns local lowering and root-relative membership/painter-order preparation, and `noon-runtime` owns effective execution. A failed preparation leaves the previous coherent publication live.
+`ExecutionSession` coordinates preparation and commit. `noon-compile` owns local lowering and root-relative membership and painter-order preparation, and `noon-runtime` owns effective execution. A failed preparation leaves the previous coherent publication live. Rust hosts that need the raw session import it from `noon::integration::scene_execution`.
 
 Both classes participate in the same semantic updater order, transactional overlay and coherent `FrameEpoch` publication barrier, but they have different ownership and invalidation costs.
 

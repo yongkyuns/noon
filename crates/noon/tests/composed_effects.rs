@@ -1,9 +1,10 @@
 //! Scene and integration publication of composed scopes, without a transport.
 mod composed_effect_animation;
 use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::{
     effects::{Blur, EffectUpdate, Pixels},
-    ExecutionSession, MobjectFamily, Scene,
+    MobjectFamily, Scene,
 };
 use noon_core::{ComposedSource, SemanticMutationTransaction, SemanticNodeId};
 

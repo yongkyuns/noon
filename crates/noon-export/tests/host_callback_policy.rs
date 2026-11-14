@@ -5,14 +5,15 @@
 
 use std::{cell::RefCell, rc::Rc};
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     CallbackAdvance, CallbackRegionAdvance, ExportFrameOptions, ExportFramePolicy,
     ExportFramePolicyStatus, ExportFrameSummary, ExportStop, FrameRate, HostCallbackId,
     SampleObservation, SemanticMutationTransaction,
 };
 use noon::{
-    ContinuationStep, ExecutionSegment, ExecutionSession, LiveContinuation, LiveSessionError,
-    Mobject, RustHostCallbackTable, Scene, Transform2D,
+    ContinuationStep, ExecutionSegment, LiveContinuation, LiveSessionError, Mobject,
+    RustHostCallbackTable, Scene, Transform2D,
 };
 use noon_export::{capture_frames, Backends, CaptureOptions, SessionCapture};
 

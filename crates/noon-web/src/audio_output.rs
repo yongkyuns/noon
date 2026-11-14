@@ -113,7 +113,7 @@ mod wasm {
         rc::Rc,
     };
 
-    use noon::ExecutionSession;
+    use noon::integration::scene_execution::ExecutionSession;
     use noon_core::AudioResourceHandle;
     use wasm_bindgen::{closure::Closure, JsCast, JsValue};
     use web_sys::{

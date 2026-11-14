@@ -3,10 +3,10 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     ExportFrameSummary, PixelChannelOrder, PixelRowOrder, RendererPublication, Rgba8ReadbackLayout,
 };
-use noon::ExecutionSession;
 use noon_core::{Camera2DState, Inset2DViewState, Rect, Vec2};
 use noon_render_wgpu::{
     text::TextDeviceMetrics, Camera2D, GpuRenderer, HdrBloomCapture, HdrBloomFilter, HdrBloomScope,

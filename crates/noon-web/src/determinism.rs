@@ -1,6 +1,6 @@
 //! Renderer-independent frame snapshots used by deterministic replay tests and tools.
 
-use noon::ExecutionSession;
+use noon::integration::scene_execution::ExecutionSession;
 use noon_runtime::{EvaluationError, FrameState};
 
 fn normalize_playhead(time: f64) -> f64 {

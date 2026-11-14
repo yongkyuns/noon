@@ -1,10 +1,8 @@
 #![cfg(feature = "prepared-prefix")]
 mod raster_support;
 use noon::integration::scene_execution;
-use noon::{
-    ExecutionSession, ImageMobjectOptions, ImagePaintOptions, ManimBecomeOptions, PrefixReader,
-    Scene,
-};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{ImageMobjectOptions, ImagePaintOptions, ManimBecomeOptions, PrefixReader, Scene};
 use noon_runtime::{PrefixError, ReplayLimits};
 
 fn fixture() -> (

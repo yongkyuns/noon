@@ -1,7 +1,6 @@
 use noon::integration::scene_execution;
-use noon::{
-    AnimationOptions, ExecutionSession, FadeEndpoint, FadeTranslation, RateFunction, Scene,
-};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{AnimationOptions, FadeEndpoint, FadeTranslation, RateFunction, Scene};
 use noon_core::{SemanticFadeDirection, SemanticVec3};
 use noon_runtime::{FrameState, ReplayError, ReplayLimits};
 

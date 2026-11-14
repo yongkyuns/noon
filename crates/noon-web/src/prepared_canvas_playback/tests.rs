@@ -1,7 +1,8 @@
 use super::*;
 use crate::{BrowserExecutionWakeClock, BrowserExecutionWakePlan, BrowserHostWake};
 use noon::integration::scene_execution;
-use noon::{AnimationOptions, ExecutionSession, IndicateOptions, PrefixPublisher, Scene};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{AnimationOptions, IndicateOptions, PrefixPublisher, Scene};
 use noon_core::ObjectId;
 use noon_runtime::{ReplayLimits, TimelineWakeState};
 

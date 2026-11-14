@@ -1,8 +1,9 @@
 //! Every authoring entrypoint admits animation content below persistent foreground.
 use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::{
-    AnimationCompositionRequest as Request, AnimationOptions, ExecutionSession, FocusOnOptions,
-    Mobject, RateFunction, Scene, SemanticAnimationCompositionKind as Kind,
+    AnimationCompositionRequest as Request, AnimationOptions, FocusOnOptions, Mobject,
+    RateFunction, Scene, SemanticAnimationCompositionKind as Kind,
 };
 use noon_compile::semantic_execution_object_id;
 use noon_core::{ObjectId, SemanticFadeDirection, SemanticNodeId};

@@ -1,5 +1,6 @@
 //! Deterministic scalar history uses authored tracks, not sampled host results.
-use noon::{ExecutionSession, RateFunction, RustHostCallbackTable, Scene};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{RateFunction, RustHostCallbackTable, Scene};
 use noon_core::{
     HostCallbackId, ReactiveValue, SemanticMutationTransaction, SemanticNodeId,
     SemanticObjectState, SemanticStore, StoredGeometry, TrackTiming,

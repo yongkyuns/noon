@@ -239,7 +239,7 @@ impl Context {
     ) -> PyResult<CallbackPhaseToken> {
         self.require_active()?;
         let expected = scene_execution::session(&self.scene)
-            .and_then(noon::ExecutionSession::pending_callback_token)
+            .and_then(|session| session.pending_callback_token())
             .ok_or_else(|| engine_error("no pending callback"))?;
         require_token(py, token, expected)?;
         Ok(expected)

@@ -3,13 +3,14 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     CallbackAdvance, ExportFrameOptions, ExportStop, FrameGrid, FrameRate, HostCallbackId,
     SemanticMutationTransaction,
 };
 use noon::{
-    AnimationOptions, ContinuationStep, ExecutionSegment, ExecutionSession, LiveContinuation,
-    LiveSessionError, Mobject, RateFunction, RustHostCallbackTable, Scene,
+    AnimationOptions, ContinuationStep, ExecutionSegment, LiveContinuation, LiveSessionError,
+    Mobject, RateFunction, RustHostCallbackTable, Scene,
 };
 use noon_export::{capture_frames, Backends, CaptureOptions, SessionCapture, SessionCaptureError};
 

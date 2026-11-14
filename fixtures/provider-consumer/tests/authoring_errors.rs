@@ -1,5 +1,5 @@
 //! Exercise the public Rust error contract as an external, provider-free consumer.
-use noon::integration::scene_execution;
+use noon::integration::scene_execution::{self, ExecutionSession};
 use std::error::Error;
 
 use noon::integration::{
@@ -7,8 +7,8 @@ use noon::integration::{
     SemanticSceneOperationError, SemanticStoreError,
 };
 use noon::{
-    AnimationOptions, AuthoringError, ExecutionSession, ExecutionSessionPublicationError,
-    LiveSessionError, MobjectTarget, RateFunction, Scene, SceneRevision, SemanticNodeId, Vec2,
+    AnimationOptions, AuthoringError, ExecutionSessionPublicationError, LiveSessionError,
+    MobjectTarget, RateFunction, Scene, SceneRevision, SemanticNodeId, Vec2,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;

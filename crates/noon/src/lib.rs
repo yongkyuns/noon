@@ -92,7 +92,8 @@
 //! - The crate root and [`prelude`] contain explicit authoring values, handles,
 //!   live operations, logical completion, and their errors.
 //! - [`integration`] contains raw arena access types, host/callback plumbing and
-//!   renderer observations. These are advanced facilities, not ordinary authoring.
+//!   renderer observations. Host-managed runtimes use
+//!   [`integration::scene_execution::ExecutionSession`].
 //! - `diagnostics` (feature gated) provides explicit debug/export observations.
 //!
 //! Use [`Scene::authored`] for base state and [`Scene::effective`] for the current
@@ -110,6 +111,10 @@
 //!
 //! ```compile_fail,E0432
 //! use noon::FrameState;
+//! ```
+//!
+//! ```compile_fail,E0603
+//! use noon::ExecutionSession;
 //! ```
 //!
 //! Implementation modules are not an alternative public facade:
@@ -328,11 +333,12 @@ pub use elbow_authoring::ElbowAuthoringError;
 pub use execution_segment::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentError, ExecutionSegmentState,
 };
+use execution_session::ExecutionSession;
 pub use execution_session::{
-    ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
-    ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
-    ExecutionSessionContentError, ExecutionSessionCreateError, ExecutionSessionFadeError,
-    ExecutionSessionInputError, ExecutionSessionInset2DError, ExecutionSessionMaintenanceError,
+    ExecutionSegmentCompletionError, ExecutionSessionAnimationError, ExecutionSessionCallbackError,
+    ExecutionSessionCallbackReadError, ExecutionSessionCameraError, ExecutionSessionContentError,
+    ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
+    ExecutionSessionInset2DError, ExecutionSessionMaintenanceError,
     ExecutionSessionPublicationError, InspectionNavigationError, PointerHoverTransition,
     SignalTimelineAppendError, StagedEffectPublication, TranslationDragError,
     TranslationDragReceipt, TranslationDragUndo,

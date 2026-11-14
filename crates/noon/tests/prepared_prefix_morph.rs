@@ -1,7 +1,8 @@
 #![cfg(feature = "prepared-prefix")]
 mod raster_support;
 use noon::integration::scene_execution;
-use noon::{AnimationOptions, ExecutionSession, PrefixReader, RateFunction, Scene};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{AnimationOptions, PrefixReader, RateFunction, Scene};
 use noon_core::{SemanticStyle, Vec2, VectorPath};
 use noon_runtime::ReplayLimits;
 

@@ -4,7 +4,8 @@ use super::*;
 use crate::{
     RetainedFamilyExecutionDeltaEncoder, TransportEffectDefinition, TransportShaderProgramHandle,
 };
-use noon::{effects::*, Color, ExecutionSession, Mobject, Scene};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{effects::*, Color, Mobject, Scene};
 use noon_core::ShaderParameterDefinition as Parameter;
 
 fn program(source: String) -> WgslEffectProgram {

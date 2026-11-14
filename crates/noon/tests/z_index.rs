@@ -1,4 +1,5 @@
-use noon::{ExecutionSession, LayoutAnchor, Scene};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{LayoutAnchor, Scene};
 use noon_compile::semantic_execution_object_id;
 use noon_core::SemanticMutationTransaction;
 

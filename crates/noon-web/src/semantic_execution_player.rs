@@ -18,6 +18,7 @@ use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::browser_pointer_input::BrowserPointerBinding;
 use crate::retained_family_execution_encoder::NoChangePresentation;
+use noon::integration::scene_execution::ExecutionSession;
 #[cfg(test)]
 use noon::integration::MAX_CALLBACK_MEMBERSHIP_STAGES;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -31,7 +32,7 @@ use noon::integration::{
 };
 #[cfg(any(target_arch = "wasm32", test))]
 use noon::integration::{CallbackReadRequest, CallbackReadValue, TimelineWakeState};
-use noon::{ExecutionSession, SceneExecution};
+use noon::SceneExecution;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::SemanticObjectContent;
 use noon_core::{

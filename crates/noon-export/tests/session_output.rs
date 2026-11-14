@@ -8,12 +8,13 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     ExportEndReason, ExportFrameOptions, ExportStop, FrameRate, HostCallbackId,
     SemanticMutationTransaction,
 };
 use noon::{
-    AnimationOptions, AudioClipOptions, AudioResource, ExecutionSession, RateFunction, Scene,
+    AnimationOptions, AudioClipOptions, AudioResource, RateFunction, Scene,
     SemanticAnimationCompositionKind, SemanticVec3,
 };
 use noon_core::{

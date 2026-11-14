@@ -8,10 +8,9 @@ use crate::{
     geometry::GeometryOptions,
     mobject::{pivot, LayoutAnchor, LayoutObservation, MobjectHandle},
 };
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{scene_execution, AuthoringFailure, HostCallbackId, SemanticStore};
-use noon::{
-    ExecutionSegment, ExecutionSession, Mobject, MobjectTarget, Scene, SceneMembershipRequest,
-};
+use noon::{ExecutionSegment, Mobject, MobjectTarget, Scene, SceneMembershipRequest};
 use noon::{Transform2D, Vec2};
 use pyo3::prelude::*;
 use std::{cell::RefCell, collections::HashSet, rc::Rc};

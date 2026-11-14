@@ -1,6 +1,7 @@
 //! Qualification of the ordinary retained image lane, not a second renderer.
 use noon::integration::scene_execution;
-use noon::{ExecutionSession, ImageMobjectOptions, RasterImageSampling, Scene};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{ImageMobjectOptions, RasterImageSampling, Scene};
 use noon_core::{
     FontResourceArena, GeometryResourceArena, RasterImageResourceArena, TextResourceArena,
 };

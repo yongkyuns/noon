@@ -6,7 +6,8 @@
 mod raster_support;
 
 use noon::integration::scene_execution;
-use noon::{ExecutionSession, Mobject, PrefixPublisher, PrefixReader, Scene};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{Mobject, PrefixPublisher, PrefixReader, Scene};
 use noon_core::{Color, ObjectId, SemanticClickIndicate};
 use noon_runtime::{FrameState, ReplayLimits};
 

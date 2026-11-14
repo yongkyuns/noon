@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use noon::ExecutionSession;
+use noon::integration::scene_execution::ExecutionSession;
 #[cfg(feature = "prepared-prefix")]
 use noon::PrefixReader;
 use noon_core::{

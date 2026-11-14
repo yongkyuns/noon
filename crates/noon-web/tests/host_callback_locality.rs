@@ -1,10 +1,11 @@
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     CallbackAdvance, CallbackTerminationKind, EffectivePropertyBatch,
     EffectiveSemanticPropertyWrite,
 };
 use noon::{
-    ExecutionSession, ExecutionSessionCallbackError, SemanticNodeId, SemanticObjectState,
-    StoredGeometry, Style, Transform2D, Vec2,
+    ExecutionSessionCallbackError, SemanticNodeId, SemanticObjectState, StoredGeometry, Style,
+    Transform2D, Vec2,
 };
 use noon_core::{HostCallbackId, SemanticMutationTransaction, SemanticStore};
 

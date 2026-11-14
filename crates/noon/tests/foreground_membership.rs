@@ -1,7 +1,6 @@
 //! Typed scene membership and completion consume shared foreground declarations.
-use noon::{
-    AnimationOptions, ExecutionSession, Mobject, RateFunction, Scene, SceneMembershipRequest,
-};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{AnimationOptions, Mobject, RateFunction, Scene, SceneMembershipRequest};
 use noon_compile::semantic_execution_object_id;
 use noon_core::{ObjectId, SemanticFadeDirection, SemanticNodeId};
 

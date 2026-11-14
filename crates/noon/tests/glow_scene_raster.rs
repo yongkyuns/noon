@@ -1,9 +1,10 @@
 //! Public authoring -> Scene execution -> ordinary retained wgpu rendering.
 //! The independent filter reference uses only a separate no-effect Scene image.
 use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::{
     effects::{EffectUpdate, Pixels},
-    AnimationOptions, Color, ExecutionSession, Mobject, RateFunction, Scene,
+    AnimationOptions, Color, Mobject, RateFunction, Scene,
 };
 use noon_core::Vec2;
 use noon_render_wgpu::{

@@ -1,8 +1,9 @@
 //! Actual authored composed/mixed captures in the linear working profile.
 use super::{decode, read, reference as bloom_reference, srgb_decode};
+use noon::integration::scene_execution::ExecutionSession;
 use noon::{
     effects::{Blur, EffectUpdate, Pixels},
-    ExecutionSession, Scene,
+    Scene,
 };
 use noon_core::{SemanticMutationTransaction, Vec2, ViewColorProfile};
 use noon_render_wgpu::{

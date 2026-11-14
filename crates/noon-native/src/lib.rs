@@ -56,9 +56,9 @@ use noon::integration::scene_execution;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use noon::integration::{RendererPublication, TimelineWakeState};
 #[cfg(test)]
-use noon::ExecutionSession;
+use noon::integration::scene_execution::ExecutionSession;
+use noon::integration::{RendererPublication, TimelineWakeState};
 use noon::{
     EvaluationError, ExecutionSessionCameraError, ExecutionSessionInputError, LiveContinuation,
     LiveProgram, RustHostCallbackError, RustHostCallbackTable, SceneExecution,

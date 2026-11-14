@@ -3,7 +3,8 @@
 //! not claim a new independent font rasterizer. Color decode/source-over is f64.
 use super::super::{decode, read, srgb_decode};
 use noon::integration::scene_execution;
-use noon::{ExecutionSession, Mobject, Scene, Text};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{Mobject, Scene, Text};
 use noon_core::{SemanticMutationTransaction, Vec2, ViewColorProfile};
 use noon_render_wgpu::{
     text::TextDeviceMetrics, Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState,

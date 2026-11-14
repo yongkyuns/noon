@@ -6,11 +6,9 @@
 mod raster_support;
 
 use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{NativeInputModifiers, NativePointerInputKind, NativePointerPosition};
-use noon::{
-    AnimationOptions, ExecutionSession, IndicateOptions, Mobject, PrefixPublisher, PrefixReader,
-    Scene,
-};
+use noon::{AnimationOptions, IndicateOptions, Mobject, PrefixPublisher, PrefixReader, Scene};
 use noon_core::{
     Color, NativePointerId, NativePointerInput, ObjectId, SemanticClickIndicate,
     SemanticMutationTransaction, Vec2,

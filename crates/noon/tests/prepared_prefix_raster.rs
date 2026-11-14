@@ -5,9 +5,8 @@
 
 mod raster_support;
 
-use noon::{
-    AnimationOptions, ExecutionSession, FadeEndpoint, FadeTranslation, RateFunction, Scene,
-};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{AnimationOptions, FadeEndpoint, FadeTranslation, RateFunction, Scene};
 use noon_core::{SemanticFadeDirection, SemanticVec3};
 use noon_runtime::ReplayLimits;
 use raster_support::Raster;

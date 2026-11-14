@@ -2,7 +2,8 @@
 //! Generation-qualified actions after delivery of genuinely new execution slots.
 //! Direct effects and pointer dispatch share the same historical session.
 
-use noon::{ExecutionSession, PrefixError, PrefixPublisher, PrefixReader};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{PrefixError, PrefixPublisher, PrefixReader};
 use noon_core::{
     Color, ObjectId, SemanticClickIndicate, SemanticMutationTransaction, SemanticNodeCreation,
     SemanticNodeId, SemanticObjectState, SemanticPaint, SemanticStore, StoredGeometry, Vec2,

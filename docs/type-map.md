@@ -402,8 +402,9 @@ between segments. Activating that declaration is a separate execution operation.
 the derived index, slots, reactive projection, signal timeline, `SceneInstance`,
 and callback and completion state. Semantic transactions remain the source of
 authored state, and execution publishes its derived changes after preparation
-succeeds. Hosts that manage a standalone runtime import `ExecutionSession`
-explicitly.
+succeeds. Hosts that manage a standalone runtime import it from
+`noon::integration::scene_execution`. Ordinary authoring uses `Scene` and
+`SceneExecution`.
 
 ### `LiveSession`
 

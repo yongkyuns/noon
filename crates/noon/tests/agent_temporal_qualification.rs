@@ -3,7 +3,8 @@
 //! this is not a native clone of the browser preview service.
 
 use noon::integration::scene_execution;
-use noon::{AnimationOptions, Color, ExecutionSession, RateFunction, Scene};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{AnimationOptions, Color, RateFunction, Scene};
 
 mod raster_support;
 use raster_support::{Raster, SIZE, WORLD_SIZE};

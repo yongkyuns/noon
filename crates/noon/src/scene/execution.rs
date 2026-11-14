@@ -4,9 +4,10 @@
 //! available to mutation-bearing input and retirement on native and WASM hosts.
 
 use super::Scene;
+use crate::execution_session::ExecutionSession;
 use crate::{
     integration::{NativePointerInputPublication, NativePointerInputToken},
-    ExecutionSession, ExecutionSessionInputError, ExecutionSessionPublicationError, LiveSession,
+    ExecutionSessionInputError, ExecutionSessionPublicationError, LiveSession,
 };
 use noon_core::{NativePointerInput, SemanticNodeId, SemanticStore};
 use std::{cell::RefCell, rc::Rc};
@@ -75,6 +76,7 @@ impl Scene {
 /// Execution services for hosts that retain an authoring Scene across bootstrap.
 pub mod host_execution {
     use super::*;
+    pub use crate::execution_session::ExecutionSession;
 
     /// Adopt an existing semantic family as an integration scene's canonical root.
     ///

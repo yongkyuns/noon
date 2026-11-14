@@ -4,8 +4,9 @@
 
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{SemanticMutationTransaction, SemanticNodeKind, SemanticStore};
-use noon::{ExecutionSession, ExecutionSessionPublicationError};
+use noon::ExecutionSessionPublicationError;
 use noon_compile::{
     semantic_execution_object_id, SemanticLoweringError, SemanticPublicationLoweringError,
 };

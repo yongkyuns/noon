@@ -1,11 +1,12 @@
 //! Real software-Vulkan pixel proof. Scene-only capture is intentionally exercised
 //! on the same renderer while the separate interactive GPU overlay stays resident.
 use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     NativeInputModifiers, NativePointerCancellation, NativePointerId, NativePointerInput,
     NativePointerInputKind, NativePointerPosition,
 };
-use noon::{ExecutionSession, Scene, Text};
+use noon::{Scene, Text};
 use noon_core::{Color, Vec2};
 use noon_render_wgpu::AnalyticOverlay;
 

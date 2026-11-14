@@ -653,7 +653,7 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn lower_execution(&self) -> Result<noon::ExecutionSession, String> {
+    fn lower_execution(&self) -> Result<scene_execution::ExecutionSession, String> {
         scene_execution::lower(&self.scene).map_err(|error| error.to_string())
     }
 
@@ -761,7 +761,7 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn build_live_player_with_session(
         &self,
-        session: noon::ExecutionSession,
+        session: scene_execution::ExecutionSession,
         duration: f64,
         transport_session: u32,
     ) -> Result<crate::SemanticExecutionPlayer, String> {

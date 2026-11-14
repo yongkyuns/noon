@@ -5,7 +5,10 @@ use noon_core::{
     SemanticTransform2_5D, SemanticVec3,
 };
 
-fn row_index(execution: &noon::ExecutionSession, object: ObjectId) -> usize {
+fn row_index(
+    execution: &noon::integration::scene_execution::ExecutionSession,
+    object: ObjectId,
+) -> usize {
     execution
         .frame()
         .objects
@@ -14,7 +17,10 @@ fn row_index(execution: &noon::ExecutionSession, object: ObjectId) -> usize {
         .unwrap()
 }
 
-fn anchor_center(execution: &noon::ExecutionSession, object: ObjectId) -> SemanticVec3 {
+fn anchor_center(
+    execution: &noon::integration::scene_execution::ExecutionSession,
+    object: ObjectId,
+) -> SemanticVec3 {
     execution.frame().objects[row_index(execution, object)]
         .spatial
         .as_deref()
