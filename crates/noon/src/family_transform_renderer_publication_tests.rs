@@ -64,67 +64,63 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
     contracted.set_fill(None, Some(0.0)).unwrap();
 
     scene.add_many(&[(&source).into()]).unwrap();
-    let mut execution = scene.execution_session().unwrap();
+    let mut execution = scene.into_execution().unwrap();
 
     {
-        let wait = scene.live(&mut execution).wait_segment(0.5).unwrap();
-        finish(&mut scene.live(&mut execution), wait);
+        let wait = execution.live().wait_segment(0.5).unwrap();
+        finish(&mut execution.live(), wait);
     }
-    drain(&mut execution);
+    drain(execution.session_mut());
 
     let outline = {
-        let mut live = scene.live(&mut execution);
-        let copied = live.copy_family(&source).unwrap();
-        live.set_family_fill(copied.root(), None, Some(0.0))
+        let copied = execution.scene_mut().copy_family(&source).unwrap();
+        execution
+            .live()
+            .set_family_fill(copied.root(), None, Some(0.0))
             .unwrap();
         copied
     };
     {
-        let mut live = scene.live(&mut execution);
-        let segment = family_transform(&mut live, &source, outline.root(), 0.35);
+        let segment = family_transform(&mut execution.live(), &source, outline.root(), 0.35);
         assert_eq!(segment.end_time(), 0.85);
-        finish(&mut live, segment);
+        finish(&mut execution.live(), segment);
     }
-    drain(&mut execution);
+    drain(execution.session_mut());
 
     {
-        let mut live = scene.live(&mut execution);
-        let contraction = family_transform(&mut live, &source, &contracted, 1.8);
+        let contraction = family_transform(&mut execution.live(), &source, &contracted, 1.8);
         assert_eq!(contraction.end_time(), 2.65);
-        finish(&mut live, contraction);
+        finish(&mut execution.live(), contraction);
     }
-    drain(&mut execution);
+    drain(execution.session_mut());
 
-    scene
-        .live(&mut execution)
+    execution
+        .live()
         .set_family_fill(&source, None, Some(1.0))
         .unwrap();
-    drain(&mut execution);
+    drain(execution.session_mut());
 
     {
-        let wait = scene.live(&mut execution).wait_segment(0.75).unwrap();
+        let wait = execution.live().wait_segment(0.75).unwrap();
         assert_eq!(wait.end_time(), 3.4);
-        finish(&mut scene.live(&mut execution), wait);
+        finish(&mut execution.live(), wait);
     }
-    drain(&mut execution);
+    drain(execution.session_mut());
 
-    scene
-        .live(&mut execution)
+    execution
+        .live()
         .set_family_fill(&source, None, Some(0.0))
         .unwrap();
-    drain(&mut execution);
+    drain(execution.session_mut());
 
     {
-        let wait = scene.live(&mut execution).wait_segment(0.35).unwrap();
+        let wait = execution.live().wait_segment(0.35).unwrap();
         assert_eq!(wait.end_time(), 3.75);
-        finish(&mut scene.live(&mut execution), wait);
+        finish(&mut execution.live(), wait);
     }
-    drain(&mut execution);
+    drain(execution.session_mut());
 
-    let contracted_state = scene
-        .live(&mut execution)
-        .effective(&source_objects[1])
-        .unwrap();
+    let contracted_state = execution.live().effective(&source_objects[1]).unwrap();
     assert_eq!(
         contracted_state.appearance, 1.0,
         "contraction retained execution-only Appearance instead of releasing it"
@@ -135,17 +131,19 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
     );
 
     let restoration = {
-        let mut live = scene.live(&mut execution);
-        let segment = family_transform(&mut live, &source, returned.root(), 1.8);
+        let segment = family_transform(&mut execution.live(), &source, returned.root(), 1.8);
         assert_eq!(segment.end_time(), 5.55);
         assert_eq!(
-            live.segment_state(segment).timeline(),
+            execution.live().segment_state(segment).timeline(),
             TimelineWakeState::Continuous,
             "return Transform published no active execution driver"
         );
         let midpoint = segment.start_time() + segment.duration() * 0.5;
-        live.advance_segment_to(segment, midpoint).unwrap();
-        let midpoint_state = live.effective(&source_objects[1]).unwrap();
+        execution
+            .live()
+            .advance_segment_to(segment, midpoint)
+            .unwrap();
+        let midpoint_state = execution.live().effective(&source_objects[1]).unwrap();
         assert_eq!(
             midpoint_state.appearance, 1.0,
             "return Transform reacquired the released Appearance domain"
@@ -155,10 +153,12 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
             "source leaf 1 did not animate authored opacity at midpoint: {}",
             midpoint_state.style.opacity
         );
-        live.advance_segment_to(segment, segment.end_time())
+        execution
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
         for (index, object) in source_objects.iter().enumerate() {
-            let state = live.effective(object).unwrap();
+            let state = execution.live().effective(object).unwrap();
             assert_eq!(
                 state.appearance, 1.0,
                 "source leaf {index} did not keep neutral Appearance at the return endpoint"
@@ -172,10 +172,9 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
     };
 
     {
-        let mut live = scene.live(&mut execution);
-        live.complete_segment(restoration).unwrap();
+        execution.live().complete_segment(restoration).unwrap();
         for (index, object) in source_objects.iter().enumerate() {
-            let state = live.effective(object).unwrap();
+            let state = execution.live().effective(object).unwrap();
             assert_eq!(
                 state.appearance, 1.0,
                 "source leaf {index} lost neutral Appearance during completion"
@@ -187,11 +186,10 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
         }
     }
 
-    drain(&mut execution);
+    drain(execution.session_mut());
 
-    let mut live = scene.live(&mut execution);
     for (index, object) in source_objects.iter().enumerate() {
-        let state = live.effective(object).unwrap();
+        let state = execution.live().effective(object).unwrap();
         assert_eq!(
             state.appearance, 1.0,
             "source leaf {index} lost neutral Appearance after renderer drain"
@@ -201,7 +199,7 @@ fn renderer_publication_drain_preserves_restored_family_appearance() {
             "source leaf {index} lost restored authored opacity after renderer drain"
         );
     }
-    live.copy_family(&source).unwrap();
+    execution.scene_mut().copy_family(&source).unwrap();
 }
 
 #[test]
@@ -244,52 +242,49 @@ fn complex_filled_family_round_trip_restores_padding_without_repainting() {
     let target = scene.family(&target_members).unwrap();
     target.set_fill(Some(Color::WHITE), Some(1.0)).unwrap();
     scene.add_many(&[(&source).into()]).unwrap();
-    let mut execution = scene.execution_session().unwrap();
+    let mut execution = scene.into_execution().unwrap();
     {
-        let mut live = scene.live(&mut execution);
-        let segment = family_transform(&mut live, &source, &target, 1.8);
+        let segment = family_transform(&mut execution.live(), &source, &target, 1.8);
         assert_eq!(
-            live.segment_state(segment).timeline(),
+            execution.live().segment_state(segment).timeline(),
             TimelineWakeState::Continuous
         );
-        live.advance_segment_to(segment, 0.9).unwrap();
-        let midpoint = live.effective(&source_objects[1]).unwrap();
+        execution.live().advance_segment_to(segment, 0.9).unwrap();
+        let midpoint = execution.live().effective(&source_objects[1]).unwrap();
         assert_eq!(midpoint.style.fill, Some(Color::WHITE));
         let opacity = midpoint.appearance * midpoint.style.opacity;
         assert!(
             (opacity - 0.5).abs() < 1e-6,
             "contraction must apply one fade, not multiply two fades: {opacity}"
         );
-        finish(&mut live, segment);
+        finish(&mut execution.live(), segment);
     }
-    drain(&mut execution);
-    let contracted = scene
-        .live(&mut execution)
-        .effective(&source_objects[1])
-        .unwrap();
+    drain(execution.session_mut());
+    let contracted = execution.live().effective(&source_objects[1]).unwrap();
     // Completion persists padding visibility in authored opacity and releases
     // the execution-only Appearance driver; it must not keep a hidden overlay.
     assert_eq!(contracted.appearance, 1.0);
     assert_eq!(contracted.style.opacity, 0.0);
     assert_eq!(contracted.style.fill, Some(Color::WHITE));
     {
-        let wait = scene.live(&mut execution).wait_segment(0.75).unwrap();
-        finish(&mut scene.live(&mut execution), wait);
+        let wait = execution.live().wait_segment(0.75).unwrap();
+        finish(&mut execution.live(), wait);
     }
-    drain(&mut execution);
+    drain(execution.session_mut());
     {
-        let mut live = scene.live(&mut execution);
-        let held = live.effective(&source_objects[1]).unwrap();
+        let held = execution.live().effective(&source_objects[1]).unwrap();
         assert_eq!(held.appearance, 1.0);
         assert_eq!(held.style.opacity, 0.0, "padding reappeared during hold");
-        let segment = family_transform(&mut live, &source, returned.root(), 1.8);
+        let segment = family_transform(&mut execution.live(), &source, returned.root(), 1.8);
         assert_eq!(
-            live.segment_state(segment).timeline(),
+            execution.live().segment_state(segment).timeline(),
             TimelineWakeState::Continuous
         );
-        live.advance_segment_to(segment, segment.start_time() + segment.duration() * 0.5)
+        execution
+            .live()
+            .advance_segment_to(segment, segment.start_time() + segment.duration() * 0.5)
             .unwrap();
-        let midpoint = live.effective(&source_objects[1]).unwrap();
+        let midpoint = execution.live().effective(&source_objects[1]).unwrap();
         assert_eq!(
             midpoint.appearance, 1.0,
             "return Transform must not reacquire the released Appearance domain"
@@ -300,21 +295,22 @@ fn complex_filled_family_round_trip_restores_padding_without_repainting() {
             (opacity - 0.5).abs() < 1e-6,
             "padding must recover continuously through authored opacity: {opacity}"
         );
-        finish(&mut live, segment);
+        finish(&mut execution.live(), segment);
     }
-    drain(&mut execution);
+    drain(execution.session_mut());
     {
-        let wait = scene.live(&mut execution).wait_segment(0.85).unwrap();
-        finish(&mut scene.live(&mut execution), wait);
+        let wait = execution.live().wait_segment(0.85).unwrap();
+        finish(&mut execution.live(), wait);
     }
-    drain(&mut execution);
-    let mut live = scene.live(&mut execution);
+    drain(execution.session_mut());
     for object in &source_objects {
-        let state = live.effective(object).unwrap();
+        let state = execution.live().effective(object).unwrap();
         assert_eq!(state.appearance, 1.0);
         assert_eq!(state.style.opacity, 1.0);
         assert_eq!(state.style.fill, Some(Color::WHITE));
     }
-    live.copy_family(&source)
+    execution
+        .scene_mut()
+        .copy_family(&source)
         .expect("returned filled family remains capturable after hold/drain");
 }

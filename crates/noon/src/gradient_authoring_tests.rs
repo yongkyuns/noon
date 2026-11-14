@@ -137,11 +137,11 @@ fn public_solid_to_gradient_and_live_target_capture_keep_effective_paint() {
         Some(current.as_ref().clone())
     );
     // Creating an authored target observes the ordinary segment completion barrier.
-    assert!(running.live().target_editor(&source).is_err());
+    assert!(running.scene_mut().target_editor(&source).is_err());
     running.live().advance_segment_to(segment, 1.0).unwrap();
     running.live().complete_segment(segment).unwrap();
     let current = row(running.session(), &source).fill_paint.clone().unwrap();
-    let captured = running.live().target_editor(&source).unwrap();
+    let captured = running.scene_mut().target_editor(&source).unwrap();
     let state = running.live().authored(&captured).unwrap();
     assert_eq!(state.style.fill, Some(current.as_ref().clone()));
     assert_eq!(

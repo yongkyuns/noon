@@ -695,44 +695,62 @@ pub fn ordinary_affine_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
             .rate_func(RateFunction::Linear)
     };
 
-    let mut session = scene.execution_session()?;
+    let mut session = scene.into_execution()?;
     {
-        let mut live = scene.live(&mut session);
-        let first = live.declare_and_activate_transform_to(&circle, &first_target, linear(2.0))?;
+        let first = session.live().declare_and_activate_transform_to(
+            &circle,
+            &first_target,
+            linear(2.0),
+        )?;
         assert_eq!((first.start_time(), first.end_time()), (0.0, 2.0));
-        live.advance_segment_to(first, first.end_time())?;
-        live.complete_segment(first)?;
-        assert_eq!(live.effective_layout(&circle)?.center, (2.0, -1.0));
+        session.live().advance_segment_to(first, first.end_time())?;
+        session.live().complete_segment(first)?;
+        assert_eq!(
+            session.live().effective_layout(&circle)?.center,
+            (2.0, -1.0)
+        );
     }
-    assert_eq!(session.frame().time, 2.0);
+    assert_eq!(session.session().frame().time, 2.0);
 
     {
-        let mut live = scene.live(&mut session);
-        let wait = live.wait_segment(1.0)?;
+        let wait = session.live().wait_segment(1.0)?;
         assert_eq!((wait.start_time(), wait.end_time()), (2.0, 3.0));
-        live.advance_segment_to(wait, wait.end_time())?;
-        live.complete_segment(wait)?;
-        assert_eq!(live.effective_layout(&circle)?.center, (2.0, -1.0));
-        live.shift(&circle, 1.0, 0.0)?;
-        assert_eq!(live.effective_layout(&circle)?.center, (3.0, -1.0));
+        session.live().advance_segment_to(wait, wait.end_time())?;
+        session.live().complete_segment(wait)?;
+        assert_eq!(
+            session.live().effective_layout(&circle)?.center,
+            (2.0, -1.0)
+        );
+        session.live().shift(&circle, 1.0, 0.0)?;
+        assert_eq!(
+            session.live().effective_layout(&circle)?.center,
+            (3.0, -1.0)
+        );
     }
-    assert_eq!(session.frame().time, 3.0);
+    assert_eq!(session.session().frame().time, 3.0);
 
     {
-        let mut live = scene.live(&mut session);
-        let second_target = live.target_editor(&circle)?;
-        live.set_translation(&second_target, 5.0, -1.0)?;
-        let second =
-            live.declare_and_activate_transform_to(&circle, &second_target, linear(1.0))?;
+        let second_target = session.scene_mut().target_editor(&circle)?;
+        session.live().set_translation(&second_target, 5.0, -1.0)?;
+        let second = session.live().declare_and_activate_transform_to(
+            &circle,
+            &second_target,
+            linear(1.0),
+        )?;
         assert_eq!((second.start_time(), second.end_time()), (3.0, 4.0));
-        live.advance_segment_to(second, second.end_time())?;
-        live.complete_segment(second)?;
-        assert_eq!(live.effective_layout(&circle)?.center, (5.0, -1.0));
-        let authored = live.authored(&circle)?.transform.translation;
+        session
+            .live()
+            .advance_segment_to(second, second.end_time())?;
+        session.live().complete_segment(second)?;
+        assert_eq!(
+            session.live().effective_layout(&circle)?.center,
+            (5.0, -1.0)
+        );
+        let authored = session.live().authored(&circle)?.transform.translation;
         assert_eq!((authored.x, authored.y), (5.0, -1.0));
     }
-    assert_eq!(session.frame().time, 4.0);
-    Ok(scene.into_execution_with_session(session)?)
+    assert_eq!(session.session().frame().time, 4.0);
+    Ok(session)
 }
 
 /// Ordinary Rust continuation used unchanged by native and direct Rust/WASM hosts.

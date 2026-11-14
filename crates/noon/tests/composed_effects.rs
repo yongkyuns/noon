@@ -443,19 +443,19 @@ fn unsupported_family_effect_units_and_matching_targets_reject_atomically() {
     let mut family = scene.family(&[(&a).into()]).unwrap();
     family.add_effect(Blur::default(), "soften").unwrap();
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let target = scene.live(&mut session).copy_family(&family).unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let target = session.scene_mut().copy_family(&family).unwrap();
+    session
+        .live()
         .set_effect(
             target.root(),
             "soften",
             EffectUpdate::default().radius(Pixels(4.0)),
         )
         .unwrap();
-    let before = session.frame().clone();
-    let revision = scene.revision();
-    let context = session.publication_context();
+    let before = session.session().frame().clone();
+    let revision = session.scene().revision();
+    let context = session.session().publication_context();
     for request in [
         AnimationCompositionRequest::FamilyMethodTargetTo {
             source: &family,
@@ -478,16 +478,16 @@ fn unsupported_family_effect_units_and_matching_targets_reject_atomically() {
             options: AnimationOptions::new(),
         },
     ] {
-        let result = scene
-            .live(&mut session)
+        let result = session
+            .live()
             .declare_and_activate_composition(&request, AnimationOptions::new());
         assert!(
             result.is_err(),
             "unsupported unit changes and matching profiles must reject"
         );
-        assert_eq!(session.frame(), &before);
-        assert_eq!(scene.revision(), revision);
-        assert_eq!(session.publication_context(), context);
+        assert_eq!(session.session().frame(), &before);
+        assert_eq!(session.scene().revision(), revision);
+        assert_eq!(session.session().publication_context(), context);
     }
 }
 
@@ -500,15 +500,18 @@ fn unchanged_family_effect_copy_can_animate_member_motion_without_rebinding_scop
     family.add_effect(Blur::default(), "soften").unwrap();
     scene.add_many(&[(&family).into()]).unwrap();
     let original = family.get_effect("soften").unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let owner = session.execution_object_id(family.node_id()).unwrap();
-    let target = scene.live(&mut session).copy_family(&family).unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let owner = session
+        .session()
+        .execution_object_id(family.node_id())
+        .unwrap();
+    let target = session.scene_mut().copy_family(&family).unwrap();
+    session
+        .live()
         .shift_family(target.root(), 2.0, 0.0)
         .unwrap();
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_composition(
             &AnimationCompositionRequest::FamilyMethodTargetTo {
                 source: &family,
@@ -520,14 +523,24 @@ fn unchanged_family_effect_copy_can_animate_member_motion_without_rebinding_scop
             AnimationOptions::new(),
         )
         .unwrap();
-    session.advance_segment_to(segment, 0.5).unwrap();
+    session
+        .session_mut()
+        .advance_segment_to(segment, 0.5)
+        .unwrap();
     assert_eq!(
-        row(&session, a.node_id()).unwrap().transform.translation.x,
+        row(session.session(), a.node_id())
+            .unwrap()
+            .transform
+            .translation
+            .x,
         1.0
     );
-    assert_eq!(session.execution_object_id(family.node_id()), Some(owner));
     assert_eq!(
-        row(&session, family.node_id())
+        session.session().execution_object_id(family.node_id()),
+        Some(owner)
+    );
+    assert_eq!(
+        row(session.session(), family.node_id())
             .unwrap()
             .effects
             .as_ref()

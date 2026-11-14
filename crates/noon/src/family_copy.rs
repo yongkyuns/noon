@@ -691,15 +691,15 @@ mod owned_root_fallback_copy_tests {
             let family = scene.family(&[(&leaf).into()]).unwrap();
             family.set_object_opacity(start).unwrap();
             scene.add_many(&[(&family).into()]).unwrap();
-            let mut session = scene.execution_session().unwrap();
-            let target = scene.live(&mut session).copy_family(&family).unwrap();
+            let mut session = scene.into_execution().unwrap();
+            let target = session.scene_mut().copy_family(&family).unwrap();
             assert_eq!(target.root().own_style().unwrap().object_opacity, start);
-            scene
-                .live(&mut session)
+            session
+                .live()
                 .set_family_object_opacity(target.root(), 0.25)
                 .unwrap();
-            let segment = scene
-                .live(&mut session)
+            let segment = session
+                .live()
                 .declare_and_activate_composition(
                     &AnimationCompositionRequest::FamilyTransformTo {
                         source: &family,
@@ -711,9 +711,16 @@ mod owned_root_fallback_copy_tests {
                     AnimationOptions::new(),
                 )
                 .unwrap();
-            session.advance_segment_to(segment, 0.5).unwrap();
-            let object = session.execution_object_id(family.node_id()).unwrap();
+            session
+                .session_mut()
+                .advance_segment_to(segment, 0.5)
+                .unwrap();
+            let object = session
+                .session()
+                .execution_object_id(family.node_id())
+                .unwrap();
             let effective = session
+                .session()
                 .frame()
                 .objects
                 .iter()
@@ -721,10 +728,10 @@ mod owned_root_fallback_copy_tests {
                 .unwrap()
                 .style
                 .opacity;
-            let before = session.publication_context();
-            let count = scene.integration_store().borrow().len();
+            let before = session.session().publication_context();
+            let count = session.scene().integration_store().borrow().len();
             assert!(
-                scene.live(&mut session).copy_family(&family).is_err(),
+                session.scene_mut().copy_family(&family).is_err(),
                 "copy publication retains the ordinary pending-completion barrier"
             );
             let (copy, pending) = prepare_semantic_copy::<AuthoringError>(
@@ -732,19 +739,24 @@ mod owned_root_fallback_copy_tests {
                 &[],
                 |object, graph_row| {
                     crate::effective_capture::capture_mobject_state_with_graph_dependency(
-                        scene.integration_store(),
-                        &session,
+                        session.scene().integration_store(),
+                        session.session(),
                         object,
                         graph_row,
                     )
                 },
                 |store, source, style| {
-                    crate::effective_capture::capture_family_style(store, &session, source, style)
+                    crate::effective_capture::capture_family_style(
+                        store,
+                        session.session(),
+                        source,
+                        style,
+                    )
                 },
                 |store, source, target, transaction| {
                     crate::effective_capture::stage_effect_copy(
                         store,
-                        &session,
+                        session.session(),
                         source,
                         target,
                         transaction,
@@ -753,7 +765,7 @@ mod owned_root_fallback_copy_tests {
             )
             .unwrap();
             {
-                let mut store = scene.integration_store().borrow_mut();
+                let mut store = session.scene().integration_store().borrow_mut();
                 let prepared = copy.prepare(&mut store).unwrap();
                 assert_eq!(
                     prepared
@@ -773,8 +785,8 @@ mod owned_root_fallback_copy_tests {
             }
             assert_eq!(family.own_style().unwrap().object_opacity, start);
             assert_eq!(leaf.state().unwrap().style.object_opacity, 1.0);
-            assert_eq!(session.publication_context(), before);
-            assert_eq!(scene.integration_store().borrow().len(), count);
+            assert_eq!(session.session().publication_context(), before);
+            assert_eq!(session.scene().integration_store().borrow().len(), count);
         }
     }
 
@@ -817,9 +829,9 @@ mod owned_root_fallback_copy_tests {
         let style = source.own_object().unwrap().unwrap().state().unwrap().style;
         let authored = source.copy_family().unwrap().root().clone();
         scene.add_many(&[(&source).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let live = scene
-            .live(&mut session)
+        let mut session = scene.into_execution().unwrap();
+        let live = session
+            .scene_mut()
             .copy_family(&source)
             .unwrap()
             .root()

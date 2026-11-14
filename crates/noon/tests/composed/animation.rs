@@ -117,8 +117,8 @@ fn public_nested_family_animation_pixels_seek_complete_and_retire() {
     scene
         .add_many(&[(&unrelated).into(), (&outer).into(), (&foreground).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let target = scene.live(&mut session).copy_family(&outer).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let target = session.scene_mut().copy_family(&outer).unwrap();
     let target_inner = target.family(&inner).unwrap();
     let target_image = target.mobject(&images[0]).unwrap();
     let targets: [(noon::MobjectTarget<'_>, f64); 3] = [
@@ -127,8 +127,8 @@ fn public_nested_family_animation_pixels_seek_complete_and_retire() {
         (target.root().into(), 1.0),
     ];
     for (owner, radius) in targets {
-        scene
-            .live(&mut session)
+        session
+            .live()
             .set_effect(
                 owner,
                 "soften",
@@ -136,8 +136,12 @@ fn public_nested_family_animation_pixels_seek_complete_and_retire() {
             )
             .unwrap();
     }
-    let outer_object = session.execution_object_id(outer.node_id()).unwrap();
+    let outer_object = session
+        .session()
+        .execution_object_id(outer.node_id())
+        .unwrap();
     let source_plan = session
+        .session()
         .frame()
         .objects
         .iter()
@@ -147,8 +151,8 @@ fn public_nested_family_animation_pixels_seek_complete_and_retire() {
         .composed_source()
         .unwrap()
         .clone();
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_composition(
             &AnimationCompositionRequest::FamilyMethodTargetTo {
                 source: &outer,
@@ -170,14 +174,22 @@ fn public_nested_family_animation_pixels_seek_complete_and_retire() {
         .chain((0..32).flat_map(|_| [0.25, 0.75, 0.5, 1.0]));
     for (sample, time) in times.enumerate() {
         if sample < 5 {
-            session.advance_segment_to(segment, time).unwrap();
+            session
+                .session_mut()
+                .advance_segment_to(segment, time)
+                .unwrap();
         } else {
             // Absolute seek restores runtime base state and marks the restored
             // frame dirty. Local invalidation is checked on forward playback;
             // seek must reproduce those forward pixels exactly.
             session.seek(time).unwrap();
         }
-        let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+        let actual = surface.render_on(
+            &device,
+            &queue,
+            session.session_mut(),
+            wgpu::Color::TRANSPARENT,
+        );
         let key = (time * 4.0) as u32;
         let expected = references
             .entry(key)
@@ -216,6 +228,7 @@ fn public_nested_family_animation_pixels_seek_complete_and_retire() {
             );
         }
         let plan = session
+            .session()
             .frame()
             .objects
             .iter()
@@ -233,8 +246,11 @@ fn public_nested_family_animation_pixels_seek_complete_and_retire() {
             surface.effect_stats
         );
     }
-    session.advance_segment_to(segment, 1.0).unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session
+        .session_mut()
+        .advance_segment_to(segment, 1.0)
+        .unwrap();
+    session.live().complete_segment(segment).unwrap();
     let removals: [(usize, noon::MobjectTarget<'_>); 3] = [
         (1, (&outer).into()),
         (2, (&inner).into()),
@@ -242,11 +258,13 @@ fn public_nested_family_animation_pixels_seek_complete_and_retire() {
     ];
     let mut last_removal = Vec::new();
     for (removed, owner) in removals {
-        scene
-            .live(&mut session)
-            .remove_effect(owner, "soften")
-            .unwrap();
-        let actual = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+        session.live().remove_effect(owner, "soften").unwrap();
+        let actual = surface.render_on(
+            &device,
+            &queue,
+            session.session_mut(),
+            wgpu::Color::TRANSPARENT,
+        );
         let expected = animated_reference(1.0, removed);
         let error = actual
             .iter()
@@ -261,7 +279,12 @@ fn public_nested_family_animation_pixels_seek_complete_and_retire() {
         );
         last_removal = actual;
     }
-    let held = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+    let held = surface.render_on(
+        &device,
+        &queue,
+        session.session_mut(),
+        wgpu::Color::TRANSPARENT,
+    );
     assert_eq!(
         held, last_removal,
         "clean held frame preserves the exact published pixels"

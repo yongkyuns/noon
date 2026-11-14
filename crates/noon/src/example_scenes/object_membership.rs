@@ -36,33 +36,41 @@ fn build() -> Result<crate::SceneExecution, Box<dyn std::error::Error>> {
     let child = authored.mobject(&child)?;
     let parent = authored.root().clone();
     scene.add(&tail)?;
-    let mut session = scene.execution_session()?;
+    let mut session = scene.into_execution()?;
     let mut admit = SemanticMutationTransaction::new();
-    admit.add_member(scene.root(), parent.node_id());
-    session.apply_semantic_transaction_at_root(&mut store.borrow_mut(), scene.root(), admit)?;
+    admit.add_member(session.scene().root(), parent.node_id());
+    session.scene_mut().apply_semantic_transaction(admit)?;
     let mut reorder = SemanticMutationTransaction::new();
-    reorder.reorder_member(scene.root(), parent.node_id(), Some(tail.node_id()));
-    session.apply_semantic_transaction_at_root(&mut store.borrow_mut(), scene.root(), reorder)?;
-    let copied = scene.live(&mut session).copy_mobject(&parent)?;
+    reorder.reorder_member(
+        session.scene().root(),
+        parent.node_id(),
+        Some(tail.node_id()),
+    );
+    session.scene_mut().apply_semantic_transaction(reorder)?;
+    let copied = session.scene_mut().copy_mobject(&parent)?;
     let copied_child = copied.mobject(&child)?;
     let copied_parent = copied.root().clone();
-    assert_eq!(session.frame().objects.len(), 3);
+    assert_eq!(session.session().frame().objects.len(), 3);
     let mut replace = SemanticMutationTransaction::new();
-    replace.remove_member(scene.root(), parent.node_id());
-    replace.add_member(scene.root(), copied_parent.node_id());
-    replace.reorder_member(scene.root(), copied_parent.node_id(), Some(tail.node_id()));
-    session.apply_semantic_transaction_at_root(&mut store.borrow_mut(), scene.root(), replace)?;
+    replace.remove_member(session.scene().root(), parent.node_id());
+    replace.add_member(session.scene().root(), copied_parent.node_id());
+    replace.reorder_member(
+        session.scene().root(),
+        copied_parent.node_id(),
+        Some(tail.node_id()),
+    );
+    session.scene_mut().apply_semantic_transaction(replace)?;
     let parent = copied_parent;
     let child = copied_child;
-    let baseline = scene.live(&mut session).effective_layout(&parent)?;
+    let baseline = session.live().effective_layout(&parent)?;
     let child_pose = child.state()?.transform.translation;
-    let shifted = scene.live(&mut session).shift(&parent, 1.0, -0.25)?;
+    let shifted = session.live().shift(&parent, 1.0, -0.25)?;
     assert_eq!(shifted.impacts().len(), 2);
     assert_eq!(child.state()?.transform.translation.x, child_pose.x + 1.0);
-    let shifted = scene.live(&mut session).effective_layout(&parent)?;
+    let shifted = session.live().effective_layout(&parent)?;
     assert!((shifted.center.0 - baseline.center.0 - 1.0).abs() < 1e-6);
     assert!((shifted.center.1 - baseline.center.1 + 0.25).abs() < 1e-6);
-    scene.live(&mut session).shift(&parent, -1.0, 0.25)?;
+    session.live().shift(&parent, -1.0, 0.25)?;
     assert_eq!(child.state()?.transform.translation, child_pose);
     let target = MobjectTarget::from(&parent);
     let own_points = parent.path_query()?.points()?;
@@ -100,16 +108,16 @@ fn build() -> Result<crate::SceneExecution, Box<dyn std::error::Error>> {
     assert_eq!(target.vector_boundary_points()?, expected_anchors);
     assert_eq!(
         session
+            .session()
             .painter_order()
             .iter()
-            .map(|&row| session.frame().objects[row as usize].id)
+            .map(|&row| session.session().frame().objects[row as usize].id)
             .collect::<Vec<_>>(),
         [parent.node_id(), child.node_id(), tail.node_id()]
             .map(noon_compile::semantic_execution_object_id)
     );
-    let mut live = scene.live(&mut session);
-    let wait = live.wait_segment(0.2)?;
-    live.advance_segment_to(wait, wait.end_time())?;
-    live.complete_segment(wait)?;
-    Ok(scene.into_execution_with_session(session)?)
+    let wait = session.live().wait_segment(0.2)?;
+    session.live().advance_segment_to(wait, wait.end_time())?;
+    session.live().complete_segment(wait)?;
+    Ok(session)
 }

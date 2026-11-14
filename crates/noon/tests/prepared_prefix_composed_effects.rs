@@ -134,7 +134,7 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
     reader.seek(0.3).unwrap();
     let publication = reader.publication_context();
 
-    let target = execution.live().copy_family(&treated).unwrap();
+    let target = execution.scene_mut().copy_family(&treated).unwrap();
     execution
         .live()
         .set_effect(

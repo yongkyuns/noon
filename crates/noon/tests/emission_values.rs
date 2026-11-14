@@ -171,7 +171,7 @@ fn ordinary_material_targets_keep_exact_endpoints_seek_and_parallel_opacity() {
     session.seek(0.5).unwrap();
     session.live().complete_segment(wait).unwrap();
     let segment = {
-        let target = session.live().target_editor(&source).unwrap();
+        let target = session.scene_mut().target_editor(&source).unwrap();
         session.scene_mut().set_emission(&target, end).unwrap();
         session
             .scene_mut()
@@ -221,7 +221,7 @@ fn ordinary_material_targets_keep_exact_endpoints_seek_and_parallel_opacity() {
     );
 
     let pulse = {
-        let target = session.live().target_editor(&source).unwrap();
+        let target = session.scene_mut().target_editor(&source).unwrap();
         session.scene_mut().set_emission(&target, 0.0).unwrap();
         session
             .live()
@@ -277,10 +277,14 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
         scene
             .add_many(&[(&family).into(), (&other).into()])
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene.into_execution().unwrap();
         let index = |object: &noon::Mobject| {
-            let id = session.execution_object_id(object.node_id()).unwrap();
+            let id = session
+                .session()
+                .execution_object_id(object.node_id())
+                .unwrap();
             session
+                .session()
                 .frame()
                 .objects
                 .iter()
@@ -292,8 +296,12 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
             .into_iter()
             .filter(|_| composed)
             .map(|root| {
-                let id = session.execution_object_id(root.node_id()).unwrap();
+                let id = session
+                    .session()
+                    .execution_object_id(root.node_id())
+                    .unwrap();
                 session
+                    .session()
                     .frame()
                     .objects
                     .iter()
@@ -302,11 +310,11 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
             })
             .collect::<Vec<_>>();
         let other_index = index(&other);
-        let unrelated = session.frame().objects[other_index].clone();
-        drop(session.take_renderer_publication());
+        let unrelated = session.session().frame().objects[other_index].clone();
+        drop(session.session_mut().take_renderer_publication());
         let end = 7.000000000000001;
-        scene
-            .live(&mut session)
+        session
+            .live()
             .set_family_style(
                 &family,
                 StyleUpdate {
@@ -315,7 +323,7 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
                 },
             )
             .unwrap();
-        let publication = session.take_renderer_publication();
+        let publication = session.session_mut().take_renderer_publication();
         assert!(!publication.changes().is_all());
         assert_eq!(publication.changes().object_indices().len(), indices.len());
         for index in indices {
@@ -329,14 +337,14 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
         for root in [&family, &nested] {
             assert_eq!(root.own_style().unwrap().emission.strength(), end);
         }
-        let before = session.frame().clone();
+        let before = session.session().frame().clone();
         for invalid in [-0.1, 64.0, f64::NAN] {
             assert!(family.set_emission(invalid).is_err());
             assert_eq!(a.emission().unwrap(), end);
             assert_eq!(nested.own_style().unwrap().emission.strength(), end);
         }
-        assert!(scene
-            .live(&mut session)
+        assert!(session
+            .live()
             .set_family_style(
                 &family,
                 StyleUpdate {
@@ -346,12 +354,12 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
                 }
             )
             .is_err());
-        assert_eq!(session.frame(), &before);
+        assert_eq!(session.session().frame(), &before);
         assert_eq!(a.emission().unwrap(), end);
         assert_eq!(family.own_style().unwrap().emission.strength(), end);
-        let target = scene.live(&mut session).copy_family(&family).unwrap();
-        scene
-            .live(&mut session)
+        let target = session.scene_mut().copy_family(&family).unwrap();
+        session
+            .live()
             .set_family_style(
                 target.root(),
                 StyleUpdate {
@@ -360,8 +368,8 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
                 },
             )
             .unwrap();
-        let segment = scene
-            .live(&mut session)
+        let segment = session
+            .live()
             .declare_and_activate_composition(
                 &AnimationCompositionRequest::FamilyMethodTargetTo {
                     source: &family,
@@ -376,18 +384,21 @@ fn nested_family_material_updates_are_atomic_sparse_and_animate_each_leaf_once()
         for t in [0.0, 0.12345678912345, 1.0, 0.5, 0.0, 1.0] {
             session.seek(t).unwrap();
             for index in indices {
-                let value = session.frame().objects[index].style.emission.strength();
+                let value = session.session().frame().objects[index]
+                    .style
+                    .emission
+                    .strength();
                 assert!((value - (end * (1.0 - t) + 63.0 * t)).abs() < 1e-12);
             }
             for &index in &controllers {
                 assert_eq!(
-                    session.frame().objects[index].style.emission,
+                    session.session().frame().objects[index].style.emission,
                     Emission::NONE
                 );
             }
-            assert_eq!(session.frame().objects[other_index], unrelated);
+            assert_eq!(session.session().frame().objects[other_index], unrelated);
         }
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        session.live().complete_segment(segment).unwrap();
         for leaf in [&a, &b] {
             assert_eq!(leaf.emission().unwrap(), 63.0);
         }

@@ -62,7 +62,7 @@ fn image_seek_matches_forward_for_fades_and_affine_transform() -> TestResult {
                 animation_options,
             )?,
             "transform" => {
-                let target = running.live().target_editor(&image)?;
+                let target = running.scene_mut().target_editor(&image)?;
                 let mut live = running.live();
                 live.set_translation(&target, 3.0, -1.0)?;
                 live.rotate(&target, std::f64::consts::FRAC_PI_4)?;
