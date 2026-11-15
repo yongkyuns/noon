@@ -58,7 +58,7 @@ test('integration cannot ignore pending or failed path-selected checks', () => {
   const admission = conditionSection('queue_conditions');
   assert.match(admission, /^      - label = merge-train$/m);
   const merge = conditionSection('merge_conditions');
-  assert.match(merge, /^      - "-check-failure \\*= @github-actions\/\\*\\*"$/m);
-  assert.match(merge, /^      - "-check-pending \\*= @github-actions\/\\*\\*"$/m);
+  assert.ok(merge.split('\n').includes('      - "-check-failure *= @github-actions/**"'));
+  assert.ok(merge.split('\n').includes('      - "-check-pending *= @github-actions/**"'));
   assert.doesNotMatch(config, /branch_protection_injection_mode:|skip_intermediate_results:/);
 });
