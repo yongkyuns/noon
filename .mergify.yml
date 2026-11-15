@@ -1,0 +1,48 @@
+# Noon is a personal-account repository; GitHub's native merge queue is not
+# available. This file is inactive until the owner installs the Mergify GitHub
+# App and enables Merge Queue + Workflow Automation for this repository.
+# Opt-in only: existing PRs do not enter the queue without "merge-train".
+merge_queue:
+  mode: serial
+  max_parallel_checks: 2
+  status_comments: outcomes
+
+queue_rules:
+  - name: master
+    merge_method: merge
+    # Batches exercise PR CI on a temporary combined-revision draft PR.
+    # Keep this above one to avoid Mergify's in-place single-PR shortcut.
+    batch_size: 2
+    queue_conditions:
+      - base = master
+      - -draft
+      # Enforce opt-in even for direct/manual queue commands.
+      - label = merge-train
+      - check-success = @github-actions/Rust format and lint
+      - check-success = @github-actions/Rust unit tests
+      - check-success = @github-actions/Web static and unit checks
+      - check-success = @github-actions/Browser fast checks
+      - check-success = @github-actions/Architecture constraints do not regress
+      - check-success = @github-actions/Engine dependency direction stays one-way
+    merge_conditions:
+      # Re-run the same always-on checks against the actual queue revision.
+      - check-success = @github-actions/Rust format and lint
+      - check-success = @github-actions/Rust unit tests
+      - check-success = @github-actions/Web static and unit checks
+      - check-success = @github-actions/Browser fast checks
+      - check-success = @github-actions/Architecture constraints do not regress
+      - check-success = @github-actions/Engine dependency direction stays one-way
+      # Path-selected qualification is relevant only when it runs. Do not
+      # merge over its failure or while its GitHub Actions checks are pending.
+      - "-check-failure *= @github-actions/**"
+      - "-check-pending *= @github-actions/**"
+
+pull_request_rules:
+  - name: Queue explicitly opted-in master PRs
+    conditions:
+      - base = master
+      - -draft
+      - label = merge-train
+    actions:
+      queue:
+        name: master
