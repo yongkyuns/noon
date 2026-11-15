@@ -5,6 +5,29 @@ const EXPECTED_RUNTIME_PATHS = Object.freeze({
   verifier: "./runtime-build-verifier.js",
 });
 
+const sharedModuleKey = Symbol.for(`noon.site.compiled-runtime:${import.meta.url}`);
+
+// Same-origin site embeds can share compiled code. Each worker still creates
+// its own instance and owns its own memory, GPU resources and scene state.
+export function loadEmbeddedRuntimeModule() {
+  if (globalThis.document?.documentElement?.dataset?.noonEmbed !== "true" ||
+      globalThis.parent === globalThis) return null;
+  let host;
+  try {
+    host = globalThis.parent.document;
+  } catch {
+    return null;
+  }
+  if (!host) return null;
+  host[sharedModuleKey] ??= loadRuntimeBuild()
+    .then(({ wasmBytes }) => WebAssembly.compile(wasmBytes))
+    .catch(error => {
+      delete host[sharedModuleKey];
+      throw error;
+    });
+  return host[sharedModuleKey];
+}
+
 export async function loadRuntimeBuild() {
   const response = await fetch(new URL("./runtime-build-identity.json", import.meta.url), { redirect: "error" });
   if (!response.ok) {

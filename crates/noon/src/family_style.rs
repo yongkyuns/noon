@@ -1394,11 +1394,11 @@ mod tests {
         let leaf = scene.square(0.5).unwrap();
         let family = scene.family(&[(&leaf).into()]).unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let leaf_before = live.effective(&leaf).unwrap();
+        let mut session = scene.into_execution().unwrap();
+        let leaf_before = session.live().effective(&leaf).unwrap();
 
-        let result = live
+        let result = session
+            .live()
             .set_family_own_style_with_background_stroke(
                 &family,
                 StyleUpdate {
@@ -1424,17 +1424,26 @@ mod tests {
         assert_eq!(family.own_background_stroke_color().unwrap(), Color::BLUE);
         assert_eq!(family.own_background_stroke_width().unwrap(), 0.06);
         assert_eq!(family.own_background_stroke_opacity().unwrap(), 0.55);
-        assert_eq!(live.effective(&leaf).unwrap().style, leaf_before.style);
+        assert_eq!(
+            session.live().effective(&leaf).unwrap().style,
+            leaf_before.style
+        );
 
-        live.set_family_own_stroke_cap(&family, "square").unwrap();
+        session
+            .live()
+            .set_family_own_stroke_cap(&family, "square")
+            .unwrap();
         assert_eq!(
             family.own_stroke_cap().unwrap(),
             noon_core::StrokeCap::Square
         );
-        assert_eq!(live.effective(&leaf).unwrap().style, leaf_before.style);
-        live.set_stroke_cap(&leaf, "butt").unwrap();
         assert_eq!(
-            live.effective_stroke_cap(&leaf).unwrap(),
+            session.live().effective(&leaf).unwrap().style,
+            leaf_before.style
+        );
+        session.scene_mut().set_stroke_cap(&leaf, "butt").unwrap();
+        assert_eq!(
+            session.scene().effective_stroke_cap(&leaf).unwrap(),
             noon_core::StrokeCap::Butt
         );
         assert_eq!(
@@ -1511,22 +1520,28 @@ mod tests {
         assert!(black_callback.is_empty());
 
         scene.add(&direct).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        live.fade_to(&direct, target, 0.5).unwrap();
-        let Some(live_fill) = live.effective(&direct).unwrap().style.fill else {
+        let mut running = scene.into_execution().unwrap();
+        running.scene_mut().fade_to(&direct, target, 0.5).unwrap();
+        let Some(live_fill) = running.live().effective(&direct).unwrap().style.fill else {
             panic!("live fade_to should preserve solid fill paint");
         };
         assert!((live_fill.red - 0.25).abs() < 1e-6);
         assert!((live_fill.blue - 0.75).abs() < 1e-6);
         assert_eq!(live_fill.alpha, 1.0);
-        assert_eq!(live.effective(&direct).unwrap().fill_opacity(), 1.0);
+        assert_eq!(
+            running.live().effective(&direct).unwrap().fill_opacity(),
+            1.0
+        );
 
         let before = a.state().unwrap();
         assert!(family.fade_to(target, f64::NAN).is_err());
         assert_eq!(a.state().unwrap(), before);
 
-        let revision = scene.integration_store().borrow().scene_revision();
+        let revision = running
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision();
         let phase_style = Style {
             fill: Some(Color::rgba(1.0, 0.0, 0.0, 0.5)),
             stroke: Some(Color::rgba(0.0, 0.0, 1.0, 0.25)),

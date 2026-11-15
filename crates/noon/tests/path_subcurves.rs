@@ -13,7 +13,7 @@ fn subcurve_copies_preserve_style_source_and_coherent_live_state() {
         let before = source.state().unwrap();
         let mut running = scene.into_execution().unwrap();
         let selected = if live_mode {
-            let copy = running.live().subcurve(&source, 0.25, 0.75).unwrap();
+            let copy = running.scene_mut().subcurve(&source, 0.25, 0.75).unwrap();
             assert!(!running.live().contains(&copy).unwrap());
             running.live().add(&copy).unwrap();
             assert_eq!(
@@ -38,7 +38,7 @@ fn subcurve_copies_preserve_style_source_and_coherent_live_state() {
         );
         assert_eq!(source.state().unwrap(), before);
         let full = if live_mode {
-            running.live().subcurve(&source, 0., 1.).unwrap()
+            running.scene_mut().subcurve(&source, 0., 1.).unwrap()
         } else {
             source.subcurve(0., 1.).unwrap()
         };
@@ -169,44 +169,29 @@ fn live_subcurve_captures_effective_transform_and_rejects_reveal_override() {
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.)
-        .unwrap();
-    let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
-        .subcurve(&source, 0.25, 0.75)
-        .is_err());
-    assert_eq!(scene.revision(), revision);
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 2.)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    session.seek(1.).unwrap();
-    let selected = scene
-        .live(&mut session)
-        .subcurve(&source, 0.25, 0.75)
-        .unwrap();
+    let mut running = scene.into_execution().unwrap();
+    let segment = running.live().play_animation(&animation).unwrap();
+    running.live().advance_segment_to(segment, 1.).unwrap();
+    let revision = running.scene().revision();
+    assert!(running.scene_mut().subcurve(&source, 0.25, 0.75).is_err());
+    assert_eq!(running.scene().revision(), revision);
+    running.live().advance_segment_to(segment, 2.).unwrap();
+    running.live().complete_segment(segment).unwrap();
+    running.seek(1.).unwrap();
+    let selected = running.scene_mut().subcurve(&source, 0.25, 0.75).unwrap();
     assert_eq!(selected.path_query().unwrap().start().unwrap(), (1., 1.));
     assert_eq!(source.path_query().unwrap().start().unwrap(), (0., 2.));
-    session.seek(2.).unwrap();
+    running.seek(2.).unwrap();
     assert_eq!(selected.path_query().unwrap().start().unwrap(), (1., 1.));
 
     let mut scene = Scene::new();
     let source = scene.circle(1.).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    scene
-        .live(&mut session)
+    let mut running = scene.into_execution().unwrap();
+    running
+        .live()
         .declare_and_activate_create(&source, AnimationOptions::new())
         .unwrap();
-    let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
-        .subcurve(&source, 0.2, 0.8)
-        .is_err());
-    assert_eq!(scene.revision(), revision);
+    let revision = running.scene().revision();
+    assert!(running.scene_mut().subcurve(&source, 0.2, 0.8).is_err());
+    assert_eq!(running.scene().revision(), revision);
 }

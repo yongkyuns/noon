@@ -100,31 +100,23 @@ fn rejected_live_noise_profile_preserves_authored_frame_and_publication() {
         .set_fill_noise(paint([0.5; 2], [0.5; 2]), Some(0.25))
         .unwrap();
     scene.add(&source).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let before = session.frame().clone();
-    let publication = session.publication_context();
-    let authored = scene.live(&mut session).authored(&source).unwrap();
-    assert!(scene
-        .live(&mut session)
+    let mut running = scene.into_execution().unwrap();
+    let before = running.session().frame().clone();
+    let publication = running.session().publication_context();
+    let authored = running.live().authored(&source).unwrap();
+    assert!(running
+        .scene_mut()
         .set_fill_noise(&source, paint([1e-60, 0.5], [0.5; 2]), Some(0.75))
         .is_err());
-    assert_eq!(session.frame(), &before);
-    assert_eq!(session.publication_context(), publication);
-    assert_eq!(
-        scene.live(&mut session).authored(&source).unwrap(),
-        authored
-    );
-    scene
-        .live(&mut session)
+    assert_eq!(running.session().frame(), &before);
+    assert_eq!(running.session().publication_context(), publication);
+    assert_eq!(running.live().authored(&source).unwrap(), authored);
+    running
+        .scene_mut()
         .set_fill_noise(&source, paint([0.75; 2], [0.75; 2]), None)
         .unwrap();
     assert_eq!(
-        scene
-            .live(&mut session)
-            .authored(&source)
-            .unwrap()
-            .style
-            .fill_opacity,
+        running.live().authored(&source).unwrap().style.fill_opacity,
         0.25
     );
 }
@@ -159,26 +151,15 @@ fn non_solid_effective_zero_fill_uses_the_current_stroke_color() {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-        scene
-            .live(&mut session)
-            .advance_segment_to(segment, 1.0)
-            .unwrap();
+        let mut running = scene.into_execution().unwrap();
+        let segment = running.live().play_animation(&animation).unwrap();
+        running.live().advance_segment_to(segment, 1.0).unwrap();
         assert_eq!(
-            scene
-                .live(&mut session)
-                .authored(&source)
-                .unwrap()
-                .style
-                .fill_opacity,
+            running.live().authored(&source).unwrap().style.fill_opacity,
             1.0
         );
         assert_eq!(
-            scene
-                .live(&mut session)
-                .effective_manim_color(&source)
-                .unwrap(),
+            running.scene().effective_manim_color(&source).unwrap(),
             Color::rgb(0.0, 1.0, 0.0)
         );
     }

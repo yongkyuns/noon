@@ -28,31 +28,42 @@ fn live_family_restore_is_one_local_publication_and_pending_failure_preserves_ha
     scene
         .add_many(&[(&source).into(), (&unrelated).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    session.take_renderer_publication();
-    let owner = session.execution_object_id(source.node_id()).unwrap();
-    let unrelated_id = session.execution_object_id(unrelated.node_id()).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    session.session_mut().take_renderer_publication();
+    let owner = session
+        .session()
+        .execution_object_id(source.node_id())
+        .unwrap();
+    let unrelated_id = session
+        .session()
+        .execution_object_id(unrelated.node_id())
+        .unwrap();
     let old = source.get_effect("soften").unwrap();
     let before_unrelated = session
+        .session()
         .frame()
         .objects
         .iter()
         .find(|row| row.id == unrelated_id)
         .unwrap()
         .clone();
-    let revision = scene.revision();
+    let revision = session.scene().revision();
 
-    scene
-        .live(&mut session)
+    session
+        .live()
         .become_family(&source, saved.root(), Default::default())
         .unwrap();
 
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
-    assert_eq!(session.execution_object_id(source.node_id()), Some(owner));
+    assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
+    assert_eq!(
+        session.session().execution_object_id(source.node_id()),
+        Some(owner)
+    );
     assert!(old.authored_definition().is_err());
     let new = source.get_effect("soften").unwrap();
     assert_ne!(old.node_id(), new.node_id());
     let row = session
+        .session()
         .frame()
         .objects
         .iter()
@@ -69,6 +80,7 @@ fn live_family_restore_is_one_local_publication_and_pending_failure_preserves_ha
     );
     assert_eq!(
         session
+            .session()
             .frame()
             .objects
             .iter()
@@ -77,24 +89,26 @@ fn live_family_restore_is_one_local_publication_and_pending_failure_preserves_ha
         &before_unrelated
     );
     let unrelated_index = session
+        .session()
         .frame()
         .objects
         .iter()
         .position(|row| row.id == unrelated_id)
         .unwrap();
     assert!(!session
+        .session_mut()
         .take_renderer_publication()
         .changes()
         .object_indices()
         .contains(&unrelated_index));
 
-    let target = scene.live(&mut session).copy_family(&source).unwrap();
-    scene
-        .live(&mut session)
+    let target = session.scene_mut().copy_family(&source).unwrap();
+    session
+        .live()
         .set_family_object_opacity(target.root(), 0.75)
         .unwrap();
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_composition(
             &AnimationCompositionRequest::FamilyMethodTargetTo {
                 source: &source,
@@ -106,19 +120,22 @@ fn live_family_restore_is_one_local_publication_and_pending_failure_preserves_ha
             AnimationOptions::new(),
         )
         .unwrap();
-    session.advance_segment_to(segment, 0.5).unwrap();
-    let context = session.publication_context();
-    let revision = scene.revision();
-    let frame = session.frame().clone();
-    let bindings = snapshot(&scene, source.node_id());
-    assert!(scene
-        .live(&mut session)
+    session
+        .session_mut()
+        .advance_segment_to(segment, 0.5)
+        .unwrap();
+    let context = session.session().publication_context();
+    let revision = session.scene().revision();
+    let frame = session.session().frame().clone();
+    let bindings = snapshot(session.scene(), source.node_id());
+    assert!(session
+        .live()
         .become_family(&source, saved.root(), Default::default())
         .is_err());
-    assert_eq!(session.publication_context(), context);
-    assert_eq!(scene.revision(), revision);
-    assert_eq!(session.frame(), &frame);
-    assert_eq!(snapshot(&scene, source.node_id()), bindings);
+    assert_eq!(session.session().publication_context(), context);
+    assert_eq!(session.scene().revision(), revision);
+    assert_eq!(session.session().frame(), &frame);
+    assert_eq!(snapshot(session.scene(), source.node_id()), bindings);
     assert!(new.authored_definition().is_ok());
 }
 

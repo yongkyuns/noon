@@ -1091,10 +1091,11 @@ fn prepared_worker_static_time_controls_reject_invalid_wall_time_atomically() {
 fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
     let mut f = Fixture::new(87);
     let segment = {
-        let mut live = f.source.live();
-        let target = live.target_editor(&f.target).unwrap();
-        live.set_translation(&target, 2.0, 0.0).unwrap();
-        let segment = live
+        let target = f.source.scene_mut().target_editor(&f.target).unwrap();
+        f.source.live().set_translation(&target, 2.0, 0.0).unwrap();
+        let segment = f
+            .source
+            .live()
             .declare_and_activate_transform_to(
                 &f.target,
                 &target,
@@ -1103,9 +1104,11 @@ fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
                     .rate_func(noon_core::RateFunction::Linear),
             )
             .unwrap();
-        live.advance_segment_to(segment, segment.end_time())
+        f.source
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
+        f.source.live().complete_segment(segment).unwrap();
         segment
     };
     let batch = f

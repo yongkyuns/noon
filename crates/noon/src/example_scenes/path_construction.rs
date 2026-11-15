@@ -22,27 +22,16 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         )?;
         polygon.shift(-2., -2.)?;
         scene.add_many(&[(&curves).into(), (&polygon).into()])?;
-        let mut session = scene.execution_session()?;
-        crate::integration::publish_borrowed_path_edit(
-            scene.integration_store(),
-            scene.root(),
-            &mut session,
-            crate::integration::BorrowedPathEdit::AppendCornersF64 {
-                object: &polygon,
-                points: &[(0., -2.)],
-            },
-        )?;
-        crate::integration::publish_borrowed_path_edit(
-            scene.integration_store(),
-            scene.root(),
-            &mut session,
-            crate::integration::BorrowedPathEdit::Close { object: &polygon },
-        )?;
-        let mut live = scene.live(&mut session);
+        let mut running = scene.into_execution()?;
+        running
+            .scene_mut()
+            .add_points_as_corners_f64(&polygon, &[(0., -2.)])?;
+        running.scene_mut().close_path(&polygon)?;
+        let mut live = running.live();
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(running)
     };
     build().map_err(|error| error.to_string())
 }

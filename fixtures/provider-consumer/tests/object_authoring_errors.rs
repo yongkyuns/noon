@@ -308,20 +308,20 @@ fn pending_callback_capture_keeps_token_and_recovers_without_rebuilding() -> Tes
     let mut callbacks = SemanticMutationTransaction::new();
     callbacks.add_updater(object.node_id(), HostCallbackId::new(9), 0.0, None);
     callbacks.apply(&mut scene.integration_store().borrow_mut())?;
-    let mut session = scene.execution_session()?;
-    let overlay = match session.advance_to_callback_barrier(0.0)? {
+    let mut running = scene.into_execution()?;
+    let overlay = match running.session_mut().advance_to_callback_barrier(0.0)? {
         CallbackAdvance::HostRequired { overlay, .. } => overlay,
         CallbackAdvance::Ready(_) => panic!("expected callback barrier"),
     };
-    let token = session.pending_callback_token().unwrap();
-    session.take_frame_changes();
-    let before = snapshot(&scene, &[&object]);
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
-    let execution_id = session.execution_object_id(object.node_id());
+    let token = running.session().pending_callback_token().unwrap();
+    running.session_mut().take_frame_changes();
+    let before = snapshot(running.scene(), &[&object]);
+    let frame = running.session().frame().clone();
+    let publication = running.session().publication_context();
+    let execution_id = running.session().execution_object_id(object.node_id());
     for error in [
-        scene.live(&mut session).target_editor(&object).unwrap_err(),
-        scene.live(&mut session).copy_family(&family).unwrap_err(),
+        running.scene_mut().target_editor(&object).unwrap_err(),
+        running.scene_mut().copy_family(&family).unwrap_err(),
     ] {
         assert!(
             matches!(&error, LiveSessionError::Callback(ExecutionSessionCallbackError::Pending(found)) if *found == token)
@@ -331,11 +331,19 @@ fn pending_callback_capture_keeps_token_and_recovers_without_rebuilding() -> Tes
             .unwrap()
             .is::<ExecutionSessionCallbackError>());
     }
-    assert_live_unchanged(&scene, &mut session, &[&object], before, frame, publication);
-    session.commit_required_callback_phase(overlay.finish())?;
-    scene.live(&mut session).target_editor(&object)?;
-    scene.live(&mut session).copy_family(&family)?;
-    assert_eq!(session.execution_object_id(object.node_id()), execution_id);
+    assert_eq!(snapshot(running.scene(), &[&object]), before);
+    assert_eq!(running.session().frame(), &frame);
+    assert_eq!(running.session().publication_context(), publication);
+    assert!(running.session_mut().take_frame_changes().is_empty());
+    running
+        .session_mut()
+        .commit_required_callback_phase(overlay.finish())?;
+    running.scene_mut().target_editor(&object)?;
+    running.scene_mut().copy_family(&family)?;
+    assert_eq!(
+        running.session().execution_object_id(object.node_id()),
+        execution_id
+    );
     Ok(())
 }
 
@@ -428,26 +436,30 @@ fn rejection_retains_previously_queued_changes_and_local_recovery() -> TestResul
     let second = scene.square(1.0)?;
     scene.add(&first)?;
     scene.add(&second)?;
-    let mut session = scene.execution_session()?;
-    session.take_frame_changes();
-    scene.live(&mut session).shift(&first, 1.0, 0.0)?;
-    let before = snapshot(&scene, &[&first, &second]);
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
+    let mut running = scene.into_execution()?;
+    running.session_mut().take_frame_changes();
+    running.live().shift(&first, 1.0, 0.0)?;
+    let before = snapshot(running.scene(), &[&first, &second]);
+    let frame = running.session().frame().clone();
+    let publication = running.session().publication_context();
     assert!(matches!(
-        scene.live(&mut session).set_fill_opacity(&second, -1.0),
-        Err(LiveSessionError::Authoring(
-            AuthoringError::InvalidOpacity { .. }
-        ))
+        running.scene_mut().set_fill_opacity(&second, -1.0),
+        Err(AuthoringError::InvalidOpacity { .. })
     ));
-    assert_eq!(snapshot(&scene, &[&first, &second]), before);
-    assert_eq!(session.frame(), &frame);
-    assert_eq!(session.publication_context(), publication);
+    assert_eq!(snapshot(running.scene(), &[&first, &second]), before);
+    assert_eq!(running.session().frame(), &frame);
+    assert_eq!(running.session().publication_context(), publication);
     // The successful first edit must neither disappear nor be expanded to the
     // unrelated second row merely because the later operation was rejected.
-    assert_eq!(session.take_frame_changes().object_indices(), &[0]);
-    scene.live(&mut session).set_fill_opacity(&second, 0.5)?;
-    assert_eq!(session.take_frame_changes().object_indices(), &[1]);
+    assert_eq!(
+        running.session_mut().take_frame_changes().object_indices(),
+        &[0]
+    );
+    running.scene_mut().set_fill_opacity(&second, 0.5)?;
+    assert_eq!(
+        running.session_mut().take_frame_changes().object_indices(),
+        &[1]
+    );
     Ok(())
 }
 

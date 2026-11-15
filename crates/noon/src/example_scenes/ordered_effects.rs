@@ -19,31 +19,32 @@ fn message(error: impl std::fmt::Display) -> String {
 impl LiveContinuation for OrderedEffects {
     type Error = String;
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
         let segment = match self.stage {
-            0 | 2 | 4 => live.wait_segment(0.5),
+            0 | 2 | 4 => scene.live().wait_segment(0.5),
             1 => {
-                let first = live.target_editor(&self.source).map_err(message)?;
-                let finish = live.target_editor(&self.source).map_err(message)?;
-                let reference = live.target_editor(&self.reference).map_err(message)?;
-                live.shift(&first, 0.0, 0.4).map_err(message)?;
-                live.shift(&reference, 0.0, 0.4).map_err(message)?;
-                live.set_effect(
-                    &first,
-                    "soften",
-                    EffectUpdate::default().radius(Pixels(4.0)),
-                )
-                .map_err(message)?;
-                live.set_effect(
-                    &finish,
-                    "finish",
-                    EffectUpdate::default().radius(Pixels(3.0)),
-                )
-                .map_err(message)?;
-                live.declare_and_activate_animation_composition(
+                let first = scene.target_editor(&self.source).map_err(message)?;
+                let finish = scene.target_editor(&self.source).map_err(message)?;
+                let reference = scene.target_editor(&self.reference).map_err(message)?;
+                scene.live().shift(&first, 0.0, 0.4).map_err(message)?;
+                scene.live().shift(&reference, 0.0, 0.4).map_err(message)?;
+                scene
+                    .set_effect(
+                        &first,
+                        "soften",
+                        EffectUpdate::default().radius(Pixels(4.0)),
+                    )
+                    .map_err(message)?;
+                scene
+                    .set_effect(
+                        &finish,
+                        "finish",
+                        EffectUpdate::default().radius(Pixels(3.0)),
+                    )
+                    .map_err(message)?;
+                scene.live().declare_and_activate_animation_composition(
                     SemanticAnimationCompositionKind::Parallel,
                     &[
                         AnimationCompositionRequest::TransformTo(
@@ -62,23 +63,26 @@ impl LiveContinuation for OrderedEffects {
                 )
             }
             3 => {
-                let target = live.target_editor(&self.source).map_err(message)?;
-                let reference = live.target_editor(&self.reference).map_err(message)?;
-                live.shift(&target, 0.0, -0.4).map_err(message)?;
-                live.shift(&reference, 0.0, -0.4).map_err(message)?;
+                let target = scene.target_editor(&self.source).map_err(message)?;
+                let reference = scene.target_editor(&self.reference).map_err(message)?;
+                scene.live().shift(&target, 0.0, -0.4).map_err(message)?;
+                scene.live().shift(&reference, 0.0, -0.4).map_err(message)?;
                 for name in ["soften", "finish"] {
-                    live.set_effect(&target, name, EffectUpdate::default().radius(Pixels(0.0)))
+                    scene
+                        .set_effect(&target, name, EffectUpdate::default().radius(Pixels(0.0)))
                         .map_err(message)?;
                 }
-                live.set_effect(&target, "glow", EffectUpdate::default().intensity(0.0))
+                scene
+                    .set_effect(&target, "glow", EffectUpdate::default().intensity(0.0))
                     .map_err(message)?;
-                live.set_effect(
-                    &target,
-                    "depth",
-                    EffectUpdate::default().color(Color::rgba(0.0, 0.0, 1.0, 0.0)),
-                )
-                .map_err(message)?;
-                live.declare_and_activate_animation_composition(
+                scene
+                    .set_effect(
+                        &target,
+                        "depth",
+                        EffectUpdate::default().color(Color::rgba(0.0, 0.0, 1.0, 0.0)),
+                    )
+                    .map_err(message)?;
+                scene.live().declare_and_activate_animation_composition(
                     SemanticAnimationCompositionKind::Parallel,
                     &[
                         AnimationCompositionRequest::TransformTo(
@@ -95,9 +99,9 @@ impl LiveContinuation for OrderedEffects {
             }
             5 => {
                 for name in ["soften", "glow", "depth", "finish"] {
-                    live.remove_effect(&self.source, name).map_err(message)?;
+                    scene.remove_effect(&self.source, name).map_err(message)?;
                 }
-                live.wait_segment(0.5)
+                scene.live().wait_segment(0.5)
             }
             6 => return Ok(ContinuationStep::Finished),
             _ => return Err("ordered appearance resumed after completion".into()),

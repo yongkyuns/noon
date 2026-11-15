@@ -13,15 +13,15 @@ fn inert_geometry_priority_is_finite_high_precision_and_published_once() {
     assert_eq!(scene.revision(), revision.checked_next().unwrap());
     assert_eq!(object.z_index().unwrap(), z);
     scene.add(&object).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let revision = scene.revision();
-    let live_object = scene
-        .live(&mut session)
-        .create_manim_geometry(options)
-        .unwrap();
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    let mut execution = scene.into_execution().unwrap();
+    let revision = execution.scene().revision();
+    let live_object = execution.scene_mut().geometry(options).unwrap();
+    assert_eq!(
+        execution.scene().revision(),
+        revision.checked_next().unwrap()
+    );
     assert_eq!(live_object.z_index().unwrap(), z);
-    assert_eq!(session.frame().objects.len(), 1);
+    assert_eq!(execution.session().frame().objects.len(), 1);
 }
 
 #[test]

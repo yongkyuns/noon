@@ -30,16 +30,27 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     scene
         .add_many(&[(&family).into()])
         .map_err(|error| error.to_string())?;
-    let mut session = scene.execution_session().map_err(|e| e.to_string())?;
+    let mut session = scene.into_execution().map_err(|e| e.to_string())?;
     {
-        let mut live = scene.live(&mut session);
-        let wait = live.wait_segment(0.1).map_err(|e| e.to_string())?;
-        live.advance_segment_to(wait, wait.end_time())
+        let wait = session
+            .live()
+            .wait_segment(0.1)
             .map_err(|e| e.to_string())?;
-        live.complete_segment(wait).map_err(|e| e.to_string())?;
-        live.set_family_color(&family, 0.2, 0.6, 1.0, 1.0)
+        session
+            .live()
+            .advance_segment_to(wait, wait.end_time())
             .map_err(|e| e.to_string())?;
-        live.set_family_opacity(&family, 0.5)
+        session
+            .live()
+            .complete_segment(wait)
+            .map_err(|e| e.to_string())?;
+        session
+            .live()
+            .set_family_color(&family, 0.2, 0.6, 1.0, 1.0)
+            .map_err(|e| e.to_string())?;
+        session
+            .live()
+            .set_family_opacity(&family, 0.5)
             .map_err(|e| e.to_string())?;
         for root in [&family, &nested] {
             let style = root.own_style().map_err(|error| error.to_string())?;
@@ -52,12 +63,21 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             );
         }
         for object in [&a, &b] {
-            let effective = live.effective(object).map_err(|e| e.to_string())?;
+            let effective = session
+                .live()
+                .effective(object)
+                .map_err(|e| e.to_string())?;
             assert_eq!(effective.fill_opacity(), 0.5);
             assert_eq!(effective.stroke_opacity(), 0.5);
         }
-        live.fade(&a, 0.5).map_err(|e| e.to_string())?;
-        live.fade_family(&family, 0.5).map_err(|e| e.to_string())?;
+        session
+            .scene_mut()
+            .fade(&a, 0.5)
+            .map_err(|e| e.to_string())?;
+        session
+            .live()
+            .fade_family(&family, 0.5)
+            .map_err(|e| e.to_string())?;
         for root in [&family, &nested] {
             let style = root.own_style().map_err(|error| error.to_string())?;
             assert_eq!(style.fill_opacity, 0.25);
@@ -69,30 +89,44 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             );
         }
         for (object, opacity) in [(&a, 0.0625), (&b, 0.25)] {
-            let effective = live.effective(object).map_err(|e| e.to_string())?;
+            let effective = session
+                .live()
+                .effective(object)
+                .map_err(|e| e.to_string())?;
             assert_eq!(effective.fill_opacity(), opacity);
             assert_eq!(effective.stroke_opacity(), opacity);
         }
-        live.fade_to_family(&family, Color::rgb(1.0, 0.0, 0.0), 0.5)
+        session
+            .live()
+            .fade_to_family(&family, Color::rgb(1.0, 0.0, 0.0), 0.5)
             .map_err(|e| e.to_string())?;
         for (object, color, opacity) in [
             (&a, Color::rgba(0.8, 0.15, 0.25, 0.0625), 0.0625),
             (&b, Color::rgba(0.6, 0.3, 0.5, 0.25), 0.25),
         ] {
-            let effective = live.effective(object).map_err(|e| e.to_string())?;
+            let effective = session
+                .live()
+                .effective(object)
+                .map_err(|e| e.to_string())?;
             assert_eq!(effective.style.fill, Some(color));
             assert_eq!(effective.fill_opacity(), opacity);
             assert_eq!(effective.style.stroke, Some(color));
             assert_eq!(effective.stroke_opacity(), opacity);
         }
-        let wait = live.wait_segment(0.1).map_err(|e| e.to_string())?;
-        live.advance_segment_to(wait, wait.end_time())
+        let wait = session
+            .live()
+            .wait_segment(0.1)
             .map_err(|e| e.to_string())?;
-        live.complete_segment(wait).map_err(|e| e.to_string())?;
+        session
+            .live()
+            .advance_segment_to(wait, wait.end_time())
+            .map_err(|e| e.to_string())?;
+        session
+            .live()
+            .complete_segment(wait)
+            .map_err(|e| e.to_string())?;
     }
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(session)
 }
 
 #[cfg(test)]

@@ -970,10 +970,12 @@ fn specialized_options_admit_through_one_live_geometry_path_after_wait() {
     let mut scene = Scene::new();
     let anchor = scene.circle(0.1).unwrap();
     scene.add(&anchor).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let wait = live.wait_segment(0.5).unwrap();
-    live.advance_segment_to(wait, wait.end_time()).unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let wait = execution.live().wait_segment(0.5).unwrap();
+    execution
+        .live()
+        .advance_segment_to(wait, wait.end_time())
+        .unwrap();
 
     let options = [
         ManimGeometryOptions::dot(-4.0, 2.0, 0.3).unwrap(),
@@ -1007,13 +1009,13 @@ fn specialized_options_admit_through_one_live_geometry_path_after_wait() {
 
     let mut admitted = Vec::new();
     for options in options {
-        let object = live.create_manim_geometry(options).unwrap();
-        assert!(!live.contains(&object).unwrap());
-        live.add(&object).unwrap();
+        let object = execution.scene_mut().geometry(options).unwrap();
+        assert!(!execution.live().contains(&object).unwrap());
+        execution.scene_mut().add(&object).unwrap();
         admitted.push(object);
     }
 
-    assert_eq!(session.frame().objects.len(), 10);
+    assert_eq!(execution.session().frame().objects.len(), 10);
     assert_eq!(admitted[0].center().unwrap(), (-4.0, 2.0));
     assert_eq!(admitted[8].center().unwrap(), (0.0, -0.7));
     assert_eq!(admitted[8].width().unwrap(), 2.0);

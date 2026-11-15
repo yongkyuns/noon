@@ -1,6 +1,9 @@
 //! Atomic copies of an addressed authoritative semantic membership graph.
 use crate::AuthoringError;
-use crate::{ManimArrow, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget};
+use crate::{
+    ExecutionSession, LiveSessionError, ManimArrow, ManimArrowVectorField, Mobject, MobjectFamily,
+    MobjectTarget, Scene,
+};
 use noon_core::{
     SemanticGraphEdgeDependency, SemanticLocalNodeToken, SemanticMutationTransaction,
     SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId, SemanticNodeKind,
@@ -128,6 +131,10 @@ pub(crate) struct PendingSemanticCopy {
 impl PendingSemanticCopy {
     pub(crate) fn root_token(&self) -> SemanticLocalNodeToken {
         self.copied[&self.source_root]
+    }
+
+    pub(crate) fn copied_token(&self, source: SemanticNodeId) -> SemanticLocalNodeToken {
+        self.copied[&source]
     }
 
     pub(crate) fn resolve<R>(
@@ -547,12 +554,117 @@ impl Mobject {
     }
 }
 
+impl Scene {
+    /// Copy a family and its metadata from the Scene's authored or effective state.
+    pub fn copy_family(&mut self, family: &MobjectFamily) -> Result<FamilyCopy, LiveSessionError> {
+        self.copy_family_with_references(family, &[])
+    }
+
+    pub fn copy_family_with_references(
+        &mut self,
+        family: &MobjectFamily,
+        references: &[MobjectTarget<'_>],
+    ) -> Result<FamilyCopy, LiveSessionError> {
+        self.copy_target(family.into(), references, MobjectFamily::from_node)
+    }
+
+    pub fn copy_mobject(&mut self, object: &Mobject) -> Result<MobjectCopy, LiveSessionError> {
+        self.copy_mobject_with_references(object, &[])
+    }
+
+    pub fn copy_mobject_with_references(
+        &mut self,
+        object: &Mobject,
+        references: &[MobjectTarget<'_>],
+    ) -> Result<MobjectCopy, LiveSessionError> {
+        self.copy_target(object.into(), references, Mobject::from_node)
+    }
+
+    /// Prepare one detached editing target with the Scene's current state.
+    pub fn target_editor(&mut self, object: &Mobject) -> Result<Mobject, LiveSessionError> {
+        self.copy_mobject(object).map(|copy| copy.root().clone())
+    }
+
+    fn copy_target<R>(
+        &mut self,
+        source: MobjectTarget<'_>,
+        references: &[MobjectTarget<'_>],
+        from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
+    ) -> Result<SemanticCopy<R>, LiveSessionError> {
+        source.require_store(self.integration_store())?;
+        if let Some((store, root, execution)) = crate::scene::host_execution::parts_mut(self) {
+            return publish_running_copy(store, root, execution, source, references, from_node);
+        }
+        authored_copy(source, references, from_node).map_err(Into::into)
+    }
+}
+
+pub(crate) fn publish_running_copy<R>(
+    store: &Rc<RefCell<SemanticStore>>,
+    root: SemanticNodeId,
+    execution: &mut ExecutionSession,
+    source: MobjectTarget<'_>,
+    references: &[MobjectTarget<'_>],
+    from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
+) -> Result<SemanticCopy<R>, LiveSessionError> {
+    crate::effective_capture::require_target_capture(execution, &store.borrow())?;
+    let (transaction, pending) =
+        prepare_running_copy(store, execution, source, references, |_, _| {})?;
+    let result = Scene::publish_running_transaction(store, root, execution, transaction)?;
+    pending
+        .resolve(&result, from_node)
+        .map_err(LiveSessionError::from)
+}
+
+pub(crate) fn prepare_running_copy(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    source: MobjectTarget<'_>,
+    references: &[MobjectTarget<'_>],
+    mut observe: impl FnMut(&Mobject, &SemanticObjectState),
+) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), LiveSessionError> {
+    prepare_semantic_copy(
+        source,
+        references,
+        |mobject, graph_row| {
+            let state = crate::effective_capture::capture_mobject_state_with_graph_dependency(
+                store, execution, mobject, graph_row,
+            )?;
+            observe(mobject, &state);
+            Ok(state)
+        },
+        |store, source, style| {
+            crate::effective_capture::capture_family_style(store, execution, source, style)
+                .map_err(LiveSessionError::from)
+        },
+        |store, source, target, transaction| {
+            crate::effective_capture::stage_effect_copy(
+                store,
+                execution,
+                source,
+                target,
+                transaction,
+            )
+            .map_err(LiveSessionError::from)
+        },
+    )
+}
+
 fn authored_copy<R>(
     source: MobjectTarget<'_>,
     references: &[MobjectTarget<'_>],
     from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
 ) -> Result<SemanticCopy<R>, AuthoringError> {
-    let (transaction, pending) = prepare_semantic_copy(
+    let (transaction, pending) = prepare_authored_copy(source, references)?;
+    let result = transaction.apply(&mut source.integration_store().borrow_mut())?;
+    pending.resolve(&result, from_node)
+}
+
+pub(crate) fn prepare_authored_copy(
+    source: MobjectTarget<'_>,
+    references: &[MobjectTarget<'_>],
+) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), AuthoringError> {
+    prepare_semantic_copy(
         source,
         references,
         |mobject, _| mobject.state(),
@@ -562,9 +674,7 @@ fn authored_copy<R>(
                 .copy_effects_into(source, target, transaction)
                 .map_err(AuthoringError::from)
         },
-    )?;
-    let result = transaction.apply(&mut source.integration_store().borrow_mut())?;
-    pending.resolve(&result, from_node)
+    )
 }
 
 #[cfg(test)]
@@ -581,15 +691,15 @@ mod owned_root_fallback_copy_tests {
             let family = scene.family(&[(&leaf).into()]).unwrap();
             family.set_object_opacity(start).unwrap();
             scene.add_many(&[(&family).into()]).unwrap();
-            let mut session = scene.execution_session().unwrap();
-            let target = scene.live(&mut session).copy_family(&family).unwrap();
+            let mut session = scene.into_execution().unwrap();
+            let target = session.scene_mut().copy_family(&family).unwrap();
             assert_eq!(target.root().own_style().unwrap().object_opacity, start);
-            scene
-                .live(&mut session)
+            session
+                .live()
                 .set_family_object_opacity(target.root(), 0.25)
                 .unwrap();
-            let segment = scene
-                .live(&mut session)
+            let segment = session
+                .live()
                 .declare_and_activate_composition(
                     &AnimationCompositionRequest::FamilyTransformTo {
                         source: &family,
@@ -601,9 +711,16 @@ mod owned_root_fallback_copy_tests {
                     AnimationOptions::new(),
                 )
                 .unwrap();
-            session.advance_segment_to(segment, 0.5).unwrap();
-            let object = session.execution_object_id(family.node_id()).unwrap();
+            session
+                .session_mut()
+                .advance_segment_to(segment, 0.5)
+                .unwrap();
+            let object = session
+                .session()
+                .execution_object_id(family.node_id())
+                .unwrap();
             let effective = session
+                .session()
                 .frame()
                 .objects
                 .iter()
@@ -611,10 +728,10 @@ mod owned_root_fallback_copy_tests {
                 .unwrap()
                 .style
                 .opacity;
-            let before = session.publication_context();
-            let count = scene.integration_store().borrow().len();
+            let before = session.session().publication_context();
+            let count = session.scene().integration_store().borrow().len();
             assert!(
-                scene.live(&mut session).copy_family(&family).is_err(),
+                session.scene_mut().copy_family(&family).is_err(),
                 "copy publication retains the ordinary pending-completion barrier"
             );
             let (copy, pending) = prepare_semantic_copy::<AuthoringError>(
@@ -622,19 +739,24 @@ mod owned_root_fallback_copy_tests {
                 &[],
                 |object, graph_row| {
                     crate::effective_capture::capture_mobject_state_with_graph_dependency(
-                        scene.integration_store(),
-                        &session,
+                        session.scene().integration_store(),
+                        session.session(),
                         object,
                         graph_row,
                     )
                 },
                 |store, source, style| {
-                    crate::effective_capture::capture_family_style(store, &session, source, style)
+                    crate::effective_capture::capture_family_style(
+                        store,
+                        session.session(),
+                        source,
+                        style,
+                    )
                 },
                 |store, source, target, transaction| {
                     crate::effective_capture::stage_effect_copy(
                         store,
-                        &session,
+                        session.session(),
                         source,
                         target,
                         transaction,
@@ -643,7 +765,7 @@ mod owned_root_fallback_copy_tests {
             )
             .unwrap();
             {
-                let mut store = scene.integration_store().borrow_mut();
+                let mut store = session.scene().integration_store().borrow_mut();
                 let prepared = copy.prepare(&mut store).unwrap();
                 assert_eq!(
                     prepared
@@ -663,8 +785,8 @@ mod owned_root_fallback_copy_tests {
             }
             assert_eq!(family.own_style().unwrap().object_opacity, start);
             assert_eq!(leaf.state().unwrap().style.object_opacity, 1.0);
-            assert_eq!(session.publication_context(), before);
-            assert_eq!(scene.integration_store().borrow().len(), count);
+            assert_eq!(session.session().publication_context(), before);
+            assert_eq!(session.scene().integration_store().borrow().len(), count);
         }
     }
 
@@ -707,9 +829,9 @@ mod owned_root_fallback_copy_tests {
         let style = source.own_object().unwrap().unwrap().state().unwrap().style;
         let authored = source.copy_family().unwrap().root().clone();
         scene.add_many(&[(&source).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let live = scene
-            .live(&mut session)
+        let mut session = scene.into_execution().unwrap();
+        let live = session
+            .scene_mut()
             .copy_family(&source)
             .unwrap()
             .root()

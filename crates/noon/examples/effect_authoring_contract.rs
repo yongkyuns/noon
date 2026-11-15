@@ -33,9 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &format!("extra-{index}"),
         )?;
     }
-    let mut execution = scene.execution_session()?;
-    assert!(scene
-        .live(&mut execution)
+    let mut execution = scene.into_execution()?;
+    assert!(execution
+        .scene_mut()
         .add_effect(&dot, Glow::default(), "overflow")
         .is_err());
     assert!(dot.get_effect("overflow").is_err());
@@ -48,23 +48,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0.25
     );
     for index in 0..6 {
-        scene
-            .live(&mut execution)
+        execution
+            .scene_mut()
             .remove_effect(&dot, format!("extra-{index}").as_str())?;
     }
-    scene.remove_effect(&dot, &original)?;
+    execution.scene_mut().remove_effect(&dot, &original)?;
     assert!(original.authored_definition().is_err());
     let independent = (target.get_effect("glow")?.authored_definition()?)
         .as_glow()
         .unwrap();
     assert_eq!(independent.intensity(), 1.4);
-    scene.remove_effect(&dot, "accent")?;
-    target.remove_glow()?;
-    target.remove_effect("accent")?;
+    execution.scene_mut().remove_effect(&dot, "accent")?;
+    execution.scene_mut().remove_glow(&target)?;
+    execution.scene_mut().remove_effect(&target, "accent")?;
     // As in the Python pair, rejection must not poison ordinary continuation.
-    scene.wait(0.1)?;
-    assert_eq!(scene.time(), 0.1);
-    assert!(scene.execution_session().is_ok());
+    let segment = execution.live().wait_segment(0.1)?;
+    execution.live().advance_segment_to(segment, 0.1)?;
+    execution.live().complete_segment(segment)?;
+    assert_eq!(execution.session().effective_time(), 0.1);
     println!("Rust declaration/copy checks passed; eight bindings admitted and overflow rejected.");
     Ok(())
 }

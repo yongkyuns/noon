@@ -361,28 +361,44 @@ mod tests {
     #[test]
     fn live_markup_presentation_reuses_retained_content() {
         let scene = crate::Scene::new();
-        let mut session = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut session);
-        let text = live
-            .create_text(
-                MarkupText::new("<b>Noon</b> <span foreground='green'>native</span>").into(),
-            )
+        let mut execution = scene.into_execution().unwrap();
+        let text = execution
+            .scene_mut()
+            .text(super::Text::from(MarkupText::new(
+                "<b>Noon</b> <span foreground='green'>native</span>",
+            )))
             .unwrap();
-        let content = live.authored(&text).unwrap().content;
-        live.add(&text).unwrap();
-        let before = scene.integration_store().borrow().text_resources().stats();
-        live.set_translation(&text, 1.0, -0.5).unwrap();
-        assert_eq!(live.authored(&text).unwrap().content, content);
+        let content = execution.scene().authored(&text).unwrap().content;
+        execution.scene_mut().add(&text).unwrap();
+        let before = execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .stats();
+        execution.live().set_translation(&text, 1.0, -0.5).unwrap();
+        assert_eq!(execution.scene().authored(&text).unwrap().content, content);
         assert_eq!(
-            scene.integration_store().borrow().text_resources().stats(),
+            execution
+                .scene()
+                .integration_store()
+                .borrow()
+                .text_resources()
+                .stats(),
             before
         );
         assert_eq!(
-            live.effective(&text).unwrap().transform.translation,
+            execution
+                .scene()
+                .effective(&text)
+                .unwrap()
+                .transform
+                .translation,
             Vec2::new(1.0, -0.5)
         );
         assert_eq!(
-            scene
+            execution
+                .scene()
                 .integration_store()
                 .borrow()
                 .text_resources()

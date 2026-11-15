@@ -14,10 +14,10 @@ impl LiveContinuation for Placement {
     type Error = String;
 
     fn resume(&mut self, scene: &mut noon::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         if self.stage == 0 {
             self.stage = 1;
-            return live
+            return scene
+                .live()
                 .wait_segment(0.25)
                 .map(ContinuationStep::Await)
                 .map_err(|error| error.to_string());
@@ -25,7 +25,7 @@ impl LiveContinuation for Placement {
         if self.stage > 2 {
             return Ok(ContinuationStep::Finished);
         }
-        let target = live
+        let target = scene
             .target_editor(&self.source)
             .map_err(|error| error.to_string())?;
         let (destination, mask) = if self.stage == 1 {
@@ -33,18 +33,22 @@ impl LiveContinuation for Placement {
         } else {
             (LiveLayoutTarget::Mobject(&self.reference), (0.5, 1.0))
         };
-        live.move_to(&target, destination, (0.0, 1.0), mask)
+        scene
+            .live()
+            .move_to(&target, destination, (0.0, 1.0), mask)
             .map_err(|error| error.to_string())?;
         self.stage += 1;
-        live.declare_and_activate_transform_to(
-            &self.source,
-            &target,
-            AnimationOptions::new()
-                .run_time(0.5)
-                .rate_func(RateFunction::Linear),
-        )
-        .map(ContinuationStep::Await)
-        .map_err(|error| error.to_string())
+        scene
+            .live()
+            .declare_and_activate_transform_to(
+                &self.source,
+                &target,
+                AnimationOptions::new()
+                    .run_time(0.5)
+                    .rate_func(RateFunction::Linear),
+            )
+            .map(ContinuationStep::Await)
+            .map_err(|error| error.to_string())
     }
 }
 

@@ -288,7 +288,7 @@ mod view_color_profile_tests;
 
 impl Mobject {
     /// Select the authored camera's working color profile before execution or on
-    /// a detached target. Running scenes use the matching LiveSession operation.
+    /// a detached target. Use [`Scene::set_view_color_profile`] for Scene-owned publication.
     pub fn set_view_color_profile(
         &mut self,
         profile: noon_core::ViewColorProfile,
@@ -309,19 +309,6 @@ impl Scene {
         let mut tx = SemanticMutationTransaction::new();
         tx.set_view_color_profile(camera.node_id(), profile);
         self.apply_semantic_transaction(tx)?;
-        Ok(())
-    }
-}
-impl crate::LiveSession<'_> {
-    pub fn set_view_color_profile(
-        &mut self,
-        camera: &Mobject,
-        profile: noon_core::ViewColorProfile,
-    ) -> Result<(), crate::LiveSessionError> {
-        crate::MobjectTarget::from(camera).require_store(self.integration_store())?;
-        let mut tx = SemanticMutationTransaction::new();
-        tx.set_view_color_profile(camera.node_id(), profile);
-        self.apply(tx)?;
         Ok(())
     }
 }

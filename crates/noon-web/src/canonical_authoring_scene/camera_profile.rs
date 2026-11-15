@@ -32,22 +32,13 @@ impl CanonicalAuthoringScene {
         camera: &noon::Mobject,
         profile: noon_core::ViewColorProfile,
     ) -> Result<(), crate::AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), camera.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        camera.validate()?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => self
-                .scene
-                .set_view_color_profile(camera, profile)
-                .map_err(Into::into),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_set_view_color_profile(camera, profile),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let (scene, running) = self.camera_scene_mut(
+            camera,
+            "live execution session is running in the semantic engine",
+        )?;
+        scene
+            .set_view_color_profile(camera, profile)
+            .map_err(|error| crate::AuthoringFailure::from_scene_mutation(error, running))
     }
 
     pub(crate) fn effective_camera_profile(

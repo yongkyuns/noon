@@ -6,9 +6,112 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { playgroundRedirect } from "../web/site/site.js";
 import { buildProjectSite } from "./build-project-site.mjs";
+import { observeUnpromptedPlayback, observedUnpromptedProgress } from "./project-site-autoplay-observer.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = name => readFile(path.join(root, name), "utf8");
+
+test("autoplay observer captures a late inserted status without initiating playback", () => {
+  let state = null, poll = null, observe = null, onPageHide = null;
+  let disconnected = 0, cleared = 0, chosenInterval = null;
+  const doc = {querySelector: selector => selector === "#status" ? state : null};
+  const win = {
+    setInterval(callback, period) { poll = callback; chosenInterval = period; return 7; },
+    clearInterval(id) { assert.equal(id, 7); cleared += 1; },
+    addEventListener(name, callback) {
+      assert.equal(name, "pagehide");
+      onPageHide = callback;
+    },
+  };
+  class Observer {
+    constructor(callback) { observe = callback; }
+    observe(target, config) {
+      assert.equal(target, doc);
+      assert.equal(config.attributes, true);
+      assert.equal(config.childList, true);
+      assert.equal(config.subtree, true);
+    }
+    disconnect() { disconnected += 1; }
+  }
+  observeUnpromptedPlayback(win, doc, Observer);
+  assert.equal(win.__noonSitePlayingObserved, false);
+  assert.equal(chosenInterval, 100);
+  state = {dataset: {playbackPlaying: "false"}};
+  observe();
+  assert.equal(win.__noonSitePlayingObserved, false);
+  // A live insert already marked playing can be detected even without a
+  // subsequent attribute change. The observer is strictly read-only.
+  state = {dataset: {playbackPlaying: "true"}};
+  poll();
+  assert.equal(win.__noonSitePlayingObserved, true);
+  assert.equal(disconnected, 1);
+  assert.equal(cleared, 1);
+  onPageHide();
+  assert.equal(disconnected, 1);
+});
+
+test("autoplay observer retires when page leaves before playback", () => {
+  let onPageHide = null, pollsCleared = 0, disconnected = 0;
+  const win = {
+    setInterval() { return 11; },
+    clearInterval(id) { assert.equal(id, 11); pollsCleared += 1; },
+    addEventListener(_name, listener) { onPageHide = listener; },
+  };
+  class Observer {
+    observe() {}
+    disconnect() { disconnected += 1; }
+  }
+  observeUnpromptedPlayback(win, {querySelector: () => null}, Observer);
+  onPageHide();
+  assert.equal(win.__noonSitePlayingObserved, false);
+  assert.equal(disconnected, 1);
+  assert.equal(pollsCleared, 1);
+});
+
+
+test("real autoplay proof requires frame and time progress without a source rerun or gesture", () => {
+  let generation = 1, inFlight = false, frames = 6474, time = "4.04 s";
+  let playing = "true";
+  const win = {__noonExampleGallery: {
+    generationDiagnostics: {get runGeneration() { return generation; }},
+    get runInFlight() { return inFlight; },
+  }};
+  const doc = {querySelector(selector) {
+    if (selector === "#status") return {dataset: {
+      get playbackPlaying() { return playing; },
+      get presentedFrames() { return String(frames); },
+    }};
+    if (selector === "#metric-time") return {get value() { return time; }};
+    return null;
+  }};
+  const first = {generation: 1,frames:6474,time:4.04};
+  assert.equal(observedUnpromptedProgress(first, win, doc), false, "old frame/time not enough");
+  frames += 9;
+  assert.equal(observedUnpromptedProgress(first, win, doc), false, "renderer frames alone do not prove playback");
+  time = "4.23 s";
+  assert.equal(observedUnpromptedProgress(first, win, doc), true, "unprompted active playback advanced");
+  playing = "false";
+  assert.equal(observedUnpromptedProgress(first, win, doc), false, "paused session not autoplay");
+  playing = "true"; inFlight = true;
+  assert.equal(observedUnpromptedProgress(first, win, doc), false, "source still building");
+  inFlight = false; generation = 2;
+  assert.equal(observedUnpromptedProgress(first, win, doc), false, "new generation not the observed initial Run");
+});
+
+test("website qualification uses the actual optimized Pages runtime without relaxing live browser coverage", async () => {
+  const workflow = await read(".github/workflows/playground-project-site.yml");
+  const pages = await read(".github/workflows/pages.yml");
+  for (const source of [workflow, pages]) {
+    assert.match(source, /NOON_WASM_PROFILE:\s*["']?release/);
+    assert.match(source, /NOON_WASM_SKIP_OPT:\s*["']?0/);
+    assert.match(source, /install-wasm-opt/);
+    assert.match(source, /bash scripts\/build-web-demo\.sh/);
+  }
+  assert.doesNotMatch(workflow, /uses:\s*\.\/\.github\/actions\/dev-wasm-build/);
+  assert.match(workflow, /xvfb-run -a node scripts\/project-site-embed-smoke\.mjs/);
+  assert.match(workflow, /node scripts\/project-site-design-smoke\.mjs/);
+  assert.match(workflow, /node scripts\/build-project-site\.mjs/);
+});
 
 test("legacy query URLs preserve every parameter and fragment under a project prefix", () => {
   for (const base of ["https://example.test/", "https://example.test/noon/", "https://example.test/noon/index.html"]) {
@@ -26,19 +129,20 @@ test("homepage and its section anchors do not redirect", () => {
   assert.equal(playgroundRedirect(new URL("https://example.test/noon/#start")), null);
 });
 
-test("every selected clip and editable link resolves to a current curated source", async () => {
+test("every selected live scene and README clip resolves to a current curated source", async () => {
   const selected = JSON.parse(await read("web/site/examples.json"));
   const gallery = JSON.parse(await read("web/python/examples/noon_showcase_manifest.json"));
   const html = await read("web/site/index.html");
   const readme = await read("README.md");
   assert.equal(new Set(selected.map(entry => entry.id)).size, selected.length);
+  assert.equal([...html.matchAll(/data-demo="/g)].length, selected.length);
   for (const { id, start, end } of selected) {
     const entry = gallery.entries.find(item => item.id === id);
     assert.ok(entry, id);
     assert.ok(Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end > start && end <= entry.duration);
     await readFile(path.join(root, "web", entry.path));
     await readFile(path.join(root, "web", entry.thumbnail));
-    assert.ok(html.includes(`${id}.mp4`) && html.includes(`example=${id}`), id);
+    assert.ok(html.includes(`data-demo="${id}"`) && html.includes(`example=${id}`), id);
     assert.ok(readme.includes(`${id}.gif`) && readme.includes(`example=${id}`), id);
   }
   for (const match of html.matchAll(/example=(showcase-[a-z0-9-]+)/g)) {
@@ -46,16 +150,14 @@ test("every selected clip and editable link resolves to a current curated source
   }
 });
 
-test("homepage is usable without JS, never autoplays, and loads no third-party presentation assets", async () => {
+test("homepage keeps no-JS navigation but uses live scenes rather than videos or posters", async () => {
   const html = await read("web/site/index.html");
   assert.match(html, /class="skip" href="#main"/);
   assert.equal([...html.matchAll(/<h1\b/g)].length, 1);
-  for (const [video] of html.matchAll(/<video\b[^>]*>/g)) {
-    assert.match(video, /\bcontrols\b/);
-    assert.match(video, /preload="none"/);
-    assert.match(video, /aria-label="[^"]+"/);
-    assert.doesNotMatch(video, /\bautoplay\b/);
-  }
+  assert.doesNotMatch(html, /<video\b|demo-poster|data-demo-open/);
+  assert.match(html, /data-frame-src="\.\/embed\.html\?/);
+  assert.match(html, /<noscript>/);
+  assert.match(await read("web/site/site.js"), /installPreviews/);
   assert.doesNotMatch(html, /(?:src|poster)="https?:/);
   for (const [, id] of html.matchAll(/href="#([^"]+)"/g)) assert.ok(html.includes(`id="${id}"`), id);
   assert.match(await read("web/site/site.css"), /prefers-reduced-motion/);

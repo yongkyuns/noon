@@ -266,17 +266,17 @@ fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
         .apply_family(player.delta(true).unwrap().unwrap())
         .unwrap();
 
-    let mut graph = player
-        .live_create_graph(
-            true,
-            vec![(1, (-1.0, 0.0)), (2, (1.0, 0.0))],
-            vec![(1, 2)],
-            noon::GraphOptions::default(),
-        )
-        .unwrap();
-    player
-        .live_mutate_graph(
-            &mut graph,
+    let mut graph = NativeGraph::new(
+        player.scene_mut(),
+        true,
+        vec![(1, (-1.0, 0.0)), (2, (1.0, 0.0))],
+        vec![(1, 2)],
+        noon::GraphOptions::default(),
+    )
+    .unwrap();
+    graph
+        .apply(
+            player.scene_mut(),
             GraphOperation::Explicit(vec![(0.0, 1.0), (2.0, -1.0)]),
         )
         .unwrap();
@@ -310,9 +310,9 @@ fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
     }
     mirror.apply_family(admitted).unwrap();
 
-    player
-        .live_mutate_graph(
-            &mut graph,
+    graph
+        .apply(
+            player.scene_mut(),
             GraphOperation::Explicit(vec![(-2.0, 0.5), (3.0, 0.25)]),
         )
         .unwrap();

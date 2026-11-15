@@ -35,6 +35,17 @@ const requiredPortableControls = [
 ];
 const caseKey = ({ entry, noJspi }) => entry.id + ":" + (noJspi ? "no-jspi" : "normal");
 
+test("cross-browser gallery qualifies optimized WASM without reducing portable or shader coverage", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/playground-cross-browser.yml", import.meta.url), "utf8");
+  assert.match(workflow, /NOON_WASM_PROFILE:\s*["']?release/);
+  assert.match(workflow, /NOON_WASM_SKIP_OPT:\s*["']?0/);
+  assert.match(workflow, /NOON_RENDERER_SMOKE:\s*["']?1/);
+  assert.match(workflow, /uses:\s*\.\/\.github\/actions\/install-wasm-opt/);
+  assert.match(workflow, /node scripts\/playground-gallery-runtime-smoke\.mjs/);
+  assert.match(workflow, /Qualify the full gallery shard, including portable no-JSPI controls/);
+  assert.match(workflow, /web\/pkg/);
+});
+
 test("every current gallery entry and no-JSPI control is covered exactly once per browser", () => {
   assert.deepEqual([...affected], requiredPortableControls, "portable coverage policy was changed");
   for (const browser of ["chromium", "firefox", "webkit"]) {

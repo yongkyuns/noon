@@ -93,7 +93,7 @@ class Shape:
         self.write('web/index.html', '<!doctype html><html lang="en"><head></head><body><script type="module" src="./python-editor-bootstrap.js"></script><script type="module" src="./main.js"></script></body></html>')
         self.site = self.root / '_site'
         self.site.mkdir()
-        for name in ('index.html','playground.html','site/theme-init.js','site/docs.css','site/docs.js','python/examples/first.py','thumbnails/first.png'):
+        for name in ('index.html','playground.html','site/theme-init.js','site/docs.css','site/docs.js','site/live.css','python/examples/first.py','thumbnails/first.png'):
             p = self.site / name; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('fixture')
         rust = self.root / 'rustdoc'
         for name in ('noon','noon_native','noon_export'):
@@ -112,6 +112,9 @@ class Shape:
         self.assertIn('Noon documentation',(result/'rust/noon/index.html').read_text())
         self.assertNotIn('<iframe',(result/'index.html').read_text())
         self.assertIn('data-frame-src',(result/'index.html').read_text())
+        self.assertNotIn('demo-poster',(result/'index.html').read_text())
+        self.assertNotIn('data-demo-open',(result/'index.html').read_text())
+        self.assertIn('data-demo-retry',(result/'index.html').read_text())
         self.assertIn('&lt;unsafe&gt;',(result/'python-Shape.html').read_text())
         provenance = json.loads((result/'build-provenance.json').read_text())
         self.assertEqual(provenance['source_sha256']['docs/architecture.md'], __import__('hashlib').sha256((self.root/'docs/architecture.md').read_bytes()).hexdigest())
@@ -199,12 +202,14 @@ class Shape:
         renderer = SiteMarkdown(builder, self.root/'web/README.md', builder.out/'web-runtime.html')
         with self.assertRaises(FileNotFoundError): renderer.local_url('missing.html')
 
-    def test_embed_reuses_main_and_removes_optional_editor_bootstrap(self):
+    def test_embed_reuses_gallery_startup_editor_and_main_once(self):
         builder, _ = self.builder()
         before = (self.root/'web/index.html').read_bytes()
         build_embed(self.root, self.site)
         embed = (self.site/'embed.html').read_text()
-        self.assertNotIn('python-editor-bootstrap.js',embed)
+        self.assertEqual(embed.count('src="./python-editor-bootstrap.js"'), 1)
+        self.assertEqual(embed.count('src="./main.js"'), 1)
+        self.assertLess(embed.index('src="./site/embed-host.js"'), embed.index('src="./python-editor-bootstrap.js"'))
         self.assertIn('src="./main.js"',embed)
         self.assertIn('src="./site/embed-host.js"',embed)
         self.assertEqual(before,(self.root/'web/index.html').read_bytes())

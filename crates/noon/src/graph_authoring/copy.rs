@@ -57,12 +57,9 @@ impl<K: Clone + Eq + Hash> Graph<K> {
         })
     }
 
-    /// Copy the current effective state through the existing live publisher.
-    pub fn copy_live(
-        &self,
-        live: &mut crate::LiveSession<'_>,
-    ) -> Result<Self, GraphAuthoringError> {
-        let copied = live.copy_family(self.family())?;
+    /// Copy geometry, appearance and topology through the owning Scene.
+    pub fn copy_in_scene(&self, scene: &mut Scene) -> Result<Self, GraphAuthoringError> {
+        let copied = scene.copy_family(self.family())?;
         Ok(Self {
             inner: self.inner.rebind_copy(&copied)?,
         })
@@ -78,12 +75,9 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         })
     }
 
-    /// Copy the current effective state through the existing live publisher.
-    pub fn copy_live(
-        &self,
-        live: &mut crate::LiveSession<'_>,
-    ) -> Result<Self, GraphAuthoringError> {
-        let copied = live.copy_family(self.family())?;
+    /// Copy geometry, appearance and topology through the owning Scene.
+    pub fn copy_in_scene(&self, scene: &mut Scene) -> Result<Self, GraphAuthoringError> {
+        let copied = scene.copy_family(self.family())?;
         Ok(Self {
             inner: self.inner.rebind_copy(&copied)?,
         })

@@ -146,18 +146,25 @@ fn late_uncapturable_object_child_rejects_the_entire_live_copy_without_allocatin
         .bind_semantic_signal(signal, child.node_id(), SemanticObjectProperty::Translation)
         .unwrap();
     scene.add(&parent).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let publication = execution.publication_context();
-    let nodes_before = scene.integration_store().borrow().len();
-    let source_members = members(&scene, parent.node_id());
-    assert!(scene.live(&mut execution).copy_mobject(&parent).is_err());
-    assert_eq!(execution.publication_context(), publication);
-    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
+    let mut execution = scene.into_execution().unwrap();
+    let publication = execution.session().publication_context();
+    let nodes_before = execution.scene().integration_store().borrow().len();
+    let source_members = members(execution.scene(), parent.node_id());
+    assert!(execution.scene_mut().copy_mobject(&parent).is_err());
+    assert_eq!(execution.session().publication_context(), publication);
     assert_eq!(
-        scene.integration_store().borrow().scene_revision(),
+        execution.scene().integration_store().borrow().len(),
+        nodes_before
+    );
+    assert_eq!(
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
         publication.scene_revision()
     );
-    assert_eq!(members(&scene, parent.node_id()), source_members);
+    assert_eq!(members(execution.scene(), parent.node_id()), source_members);
 }
 
 #[test]
@@ -196,14 +203,14 @@ fn live_object_copy_captures_graph_dependencies_below_object_roots_and_metadata_
         } else {
             scene.add_many(&[graph.family().into()]).unwrap();
         }
-        let mut execution = scene.execution_session().unwrap();
-        let count = execution.frame().objects.len();
-        let copied = scene
-            .live(&mut execution)
+        let mut execution = scene.into_execution().unwrap();
+        let count = execution.session().frame().objects.len();
+        let copied = execution
+            .scene_mut()
             .copy_mobject_with_references(&parent, &[graph.family().into()])
             .unwrap();
         assert_eq!(
-            execution.frame().objects.len(),
+            execution.session().frame().objects.len(),
             count,
             "detached copies do not enter execution"
         );
@@ -213,7 +220,7 @@ fn live_object_copy_captures_graph_dependencies_below_object_roots_and_metadata_
         let copied_tip = copied.mobject(source_arrow.end_tip()).unwrap();
         let copied_edge_family = copied.family(source_arrow.family()).unwrap();
         let edge_id = graph.edge_id(&"a", &"b").unwrap();
-        let store = scene.integration_store().borrow();
+        let store = execution.scene().integration_store().borrow();
         let declaration = store
             .semantic_graph_declaration(copied_graph.node_id())
             .unwrap()
@@ -228,7 +235,7 @@ fn live_object_copy_captures_graph_dependencies_below_object_roots_and_metadata_
         assert_eq!(end_tip, copied_tip.node_id());
         drop(store);
         assert_eq!(
-            members(&scene, copied.root().node_id()),
+            members(execution.scene(), copied.root().node_id()),
             if graph_is_child {
                 vec![copied_graph.node_id()]
             } else {

@@ -12,9 +12,11 @@ impl LiveContinuation for ScaleInPlace {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         if self.stage == 2 {
-            let state = live.effective(&self.square).map_err(|e| e.to_string())?;
+            let state = scene
+                .live()
+                .effective(&self.square)
+                .map_err(|e| e.to_string())?;
             if state.transform.translation != noon_core::Vec2::new(1.0, 0.0)
                 || state.transform.scale != noon_core::Vec2::new(2.0, 2.0)
             {
@@ -26,27 +28,34 @@ impl LiveContinuation for ScaleInPlace {
         if self.stage > 2 {
             return Err("scale continuation resumed after completion".into());
         }
-        let target = live
+        let target = scene
             .target_editor(&self.square)
             .map_err(|e| e.to_string())?;
         let duration = if self.stage == 0 {
-            live.set_translation(&target, 1.0, 0.0)
+            scene
+                .live()
+                .set_translation(&target, 1.0, 0.0)
                 .map_err(|e| e.to_string())?;
             0.25
         } else {
-            live.scale(&target, 2.0, 2.0).map_err(|e| e.to_string())?;
+            scene
+                .live()
+                .scale(&target, 2.0, 2.0)
+                .map_err(|e| e.to_string())?;
             0.75
         };
         self.stage += 1;
-        live.declare_and_activate_transform_to(
-            &self.square,
-            &target,
-            AnimationOptions::new()
-                .run_time(duration)
-                .rate_func(RateFunction::Linear),
-        )
-        .map(ContinuationStep::Await)
-        .map_err(|e| e.to_string())
+        scene
+            .live()
+            .declare_and_activate_transform_to(
+                &self.square,
+                &target,
+                AnimationOptions::new()
+                    .run_time(duration)
+                    .rate_func(RateFunction::Linear),
+            )
+            .map(ContinuationStep::Await)
+            .map_err(|e| e.to_string())
     }
 }
 

@@ -134,9 +134,9 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
     reader.seek(0.3).unwrap();
     let publication = reader.publication_context();
 
-    let target = execution.live().copy_family(&treated).unwrap();
+    let target = execution.scene_mut().copy_family(&treated).unwrap();
     execution
-        .live()
+        .scene_mut()
         .set_effect(
             target.root(),
             "soften",
@@ -144,7 +144,7 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
         )
         .unwrap();
     execution
-        .live()
+        .scene_mut()
         .set_effect(
             target.root(),
             "glow",
@@ -309,8 +309,11 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
         .attachments()
         .to_vec();
     let removal_start = execution.session().frame().time;
-    execution.live().remove_effect(&treated, "soften").unwrap();
-    execution.live().remove_glow(&treated).unwrap();
+    execution
+        .scene_mut()
+        .remove_effect(&treated, "soften")
+        .unwrap();
+    execution.scene_mut().remove_glow(&treated).unwrap();
     append_wait(execution.session_mut(), &mut publisher, &mut reader);
     let removal_time = execution.session().frame().time;
     reader.seek(removal_start + 0.25).unwrap();
@@ -326,7 +329,7 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
     );
 
     execution
-        .live()
+        .scene_mut()
         .add_effect(
             &treated,
             Blur::new(EffectUpdate::default().radius(Pixels(0.0))).unwrap(),
@@ -334,7 +337,7 @@ fn composed_family_prefix_keeps_members_resources_and_effect_tracks_historical()
         )
         .unwrap();
     execution
-        .live()
+        .scene_mut()
         .set_glow(
             &treated,
             EffectUpdate::default()

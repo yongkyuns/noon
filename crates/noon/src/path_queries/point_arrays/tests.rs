@@ -1,5 +1,5 @@
 use super::*;
-use crate::{LiveSession, Scene};
+use crate::Scene;
 use noon_core::PointArrayShapeError;
 
 #[test]
@@ -116,39 +116,55 @@ fn live_empty_point_array_publication_preserves_shapes_and_invalid_edits_are_ato
             crate::CompositeEntryHandle::Mobject(scene.circle(0.2).unwrap())
         };
         scene.add_many(&[source.as_target()]).unwrap();
-        let mut execution = scene.execution_session().unwrap();
+        let mut running = scene.into_execution().unwrap();
         let shape = PointArrayShape::new(vec![0, 2, 3]).unwrap();
         {
-            let mut live =
-                LiveSession::new(scene.integration_store(), scene.root(), &mut execution);
-            live.set_empty_point_array(source.as_target(), shape.clone())
+            running
+                .scene_mut()
+                .set_empty_point_array(source.as_target(), shape.clone())
                 .unwrap();
             assert_eq!(
-                live.point_array(source.as_target()).unwrap().shape(),
+                running
+                    .scene()
+                    .effective_point_array(source.as_target())
+                    .unwrap()
+                    .shape(),
                 &shape
             );
-            let copied = live.promote_own_points(source.as_target(), &[]).unwrap();
+            let copied = running
+                .live()
+                .promote_own_points(source.as_target(), &[])
+                .unwrap();
             assert_eq!(
-                live.point_array(copied.root().as_target()).unwrap().shape(),
+                running
+                    .scene()
+                    .effective_point_array(copied.root().as_target())
+                    .unwrap()
+                    .shape(),
                 &shape
             );
-            assert!(live.point_array(source.as_target()).is_err());
+            assert!(running
+                .scene()
+                .effective_point_array(source.as_target())
+                .is_err());
         }
-        let revision = scene.revision();
-        let nodes = scene.integration_store().borrow().len();
-        let resources = scene
+        let revision = running.scene().revision();
+        let nodes = running.scene().integration_store().borrow().len();
+        let resources = running
+            .scene()
             .integration_store()
             .borrow()
             .geometry_resources()
             .len();
-        let mut live = LiveSession::new(scene.integration_store(), scene.root(), &mut execution);
-        assert!(live
+        assert!(running
+            .scene_mut()
             .set_empty_point_array(source.as_target(), PointArrayShape::xyz(1).unwrap())
             .is_err());
-        assert_eq!(scene.revision(), revision);
-        assert_eq!(scene.integration_store().borrow().len(), nodes);
+        assert_eq!(running.scene().revision(), revision);
+        assert_eq!(running.scene().integration_store().borrow().len(), nodes);
         assert_eq!(
-            scene
+            running
+                .scene()
                 .integration_store()
                 .borrow()
                 .geometry_resources()
@@ -156,11 +172,15 @@ fn live_empty_point_array_publication_preserves_shapes_and_invalid_edits_are_ato
             resources
         );
         let foreign = Scene::new().family(&[]).unwrap();
-        assert!(live
+        assert!(running
+            .scene_mut()
             .set_empty_point_array((&foreign).into(), shape)
             .is_err());
-        assert!(live.point_array((&foreign).into()).is_err());
-        assert_eq!(scene.revision(), revision);
+        assert!(running
+            .scene()
+            .effective_point_array((&foreign).into())
+            .is_err());
+        assert_eq!(running.scene().revision(), revision);
     }
 }
 

@@ -46,7 +46,6 @@ impl LiveContinuation for MovingZoomedSceneAround {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
@@ -66,30 +65,37 @@ impl LiveContinuation for MovingZoomedSceneAround {
                         options,
                     },
                 ];
-                live.declare_and_activate_animation_composition(
-                    Kind::Parallel,
-                    &requests,
-                    AnimationOptions::new().rate_func(RateFunction::Linear),
-                    AnimationOptions::new(),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(message)
+                scene
+                    .live()
+                    .declare_and_activate_animation_composition(
+                        Kind::Parallel,
+                        &requests,
+                        AnimationOptions::new().rate_func(RateFunction::Linear),
+                        AnimationOptions::new(),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(message)
             }
             1 | 9 => {
                 // Manim saves the current display, stretches it over the camera
                 // frame, then runs Restore back to that saved state. Capture
                 // from the exact effective publication before stretching.
                 if self.stage == 1 {
-                    live.activate_zooming(&self.zoomed_view).map_err(message)?;
+                    scene
+                        .live()
+                        .activate_zooming(&self.zoomed_view)
+                        .map_err(message)?;
                 }
-                let saved_display = live.target_editor(&self.display).map_err(message)?;
-                live.replace_layout(
-                    &LayoutAnchor::from(&self.display),
-                    &LayoutAnchor::from(&self.frame),
-                    LayoutDimension::Width,
-                    true,
-                )
-                .map_err(message)?;
+                let saved_display = scene.target_editor(&self.display).map_err(message)?;
+                scene
+                    .live()
+                    .replace_layout(
+                        &LayoutAnchor::from(&self.display),
+                        &LayoutAnchor::from(&self.frame),
+                        LayoutDimension::Width,
+                        true,
+                    )
+                    .map_err(message)?;
                 let transform_options = if self.stage == 9 {
                     smooth(STEP_DURATION).reverse_rate_function(true)
                 } else {
@@ -109,47 +115,58 @@ impl LiveContinuation for MovingZoomedSceneAround {
                     },
                 ];
                 self.stage += 1;
-                live.declare_and_activate_animation_composition(
-                    Kind::Parallel,
-                    &requests,
-                    AnimationOptions::new().rate_func(RateFunction::Linear),
-                    AnimationOptions::new(),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(message)
+                scene
+                    .live()
+                    .declare_and_activate_animation_composition(
+                        Kind::Parallel,
+                        &requests,
+                        AnimationOptions::new().rate_func(RateFunction::Linear),
+                        AnimationOptions::new(),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(message)
             }
             2 => {
                 let caption_anchor = LayoutAnchor::from(&self.zoomed_camera_text);
-                live.next_layout_to_aligned(
-                    &caption_anchor,
-                    LiveLayoutTarget::Mobject(&self.display),
-                    &caption_anchor,
-                    ManimNextToArgs {
-                        direction: (0.0, -1.0),
-                        buff: 0.25,
-                        aligned_edge: (0.0, 0.0),
-                        mask: (1.0, 1.0),
-                    },
-                )
-                .map_err(message)?;
+                scene
+                    .live()
+                    .next_layout_to_aligned(
+                        &caption_anchor,
+                        LiveLayoutTarget::Mobject(&self.display),
+                        &caption_anchor,
+                        ManimNextToArgs {
+                            direction: (0.0, -1.0),
+                            buff: 0.25,
+                            aligned_edge: (0.0, 0.0),
+                            mask: (1.0, 1.0),
+                        },
+                    )
+                    .map_err(message)?;
                 self.stage = 3;
-                live.declare_and_activate_fade_with_endpoint(
-                    &self.zoomed_camera_text,
-                    SemanticFadeDirection::In,
-                    FadeEndpoint::new(
-                        1.0,
-                        FadeTranslation::Shift(SemanticVec3::new(0.0, 1.0, 0.0)),
-                    ),
-                    smooth(STEP_DURATION),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(message)
+                scene
+                    .live()
+                    .declare_and_activate_fade_with_endpoint(
+                        &self.zoomed_camera_text,
+                        SemanticFadeDirection::In,
+                        FadeEndpoint::new(
+                            1.0,
+                            FadeTranslation::Shift(SemanticVec3::new(0.0, 1.0, 0.0)),
+                        ),
+                        smooth(STEP_DURATION),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(message)
             }
             3 => {
-                let frame_target = live.target_editor(&self.frame).map_err(message)?;
-                live.manim_scale(&frame_target, 0.5, 1.5).map_err(message)?;
-                let display_target = live.target_editor(&self.display).map_err(message)?;
-                live.manim_scale(&display_target, 0.5, 1.5)
+                let frame_target = scene.target_editor(&self.frame).map_err(message)?;
+                scene
+                    .live()
+                    .manim_scale(&frame_target, 0.5, 1.5)
+                    .map_err(message)?;
+                let display_target = scene.target_editor(&self.display).map_err(message)?;
+                scene
+                    .live()
+                    .manim_scale(&display_target, 0.5, 1.5)
                     .map_err(message)?;
                 let options = smooth(STEP_DURATION);
                 let requests = [
@@ -177,38 +194,49 @@ impl LiveContinuation for MovingZoomedSceneAround {
                     },
                 ];
                 self.stage = 4;
-                live.declare_and_activate_animation_composition(
-                    Kind::Parallel,
-                    &requests,
-                    AnimationOptions::new().rate_func(RateFunction::Linear),
-                    AnimationOptions::new(),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(message)
+                scene
+                    .live()
+                    .declare_and_activate_animation_composition(
+                        Kind::Parallel,
+                        &requests,
+                        AnimationOptions::new().rate_func(RateFunction::Linear),
+                        AnimationOptions::new(),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(message)
             }
             4 | 6 | 8 | 11 => {
                 self.stage += 1;
-                live.wait_segment(STEP_DURATION)
+                scene
+                    .live()
+                    .wait_segment(STEP_DURATION)
                     .map(ContinuationStep::Await)
                     .map_err(message)
             }
             5 => {
-                let target = live.target_editor(&self.display).map_err(message)?;
-                live.manim_scale(&target, 2.0, 2.0).map_err(message)?;
+                let target = scene.target_editor(&self.display).map_err(message)?;
+                scene
+                    .live()
+                    .manim_scale(&target, 2.0, 2.0)
+                    .map_err(message)?;
                 self.stage = 6;
-                live.declare_and_activate_transform_to(
-                    &self.display,
-                    &target,
-                    smooth(STEP_DURATION),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(message)
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(
+                        &self.display,
+                        &target,
+                        smooth(STEP_DURATION),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(message)
             }
             7 => {
-                let target = live.target_editor(&self.frame).map_err(message)?;
-                live.shift(&target, 0.0, -2.5).map_err(message)?;
+                let target = scene.target_editor(&self.frame).map_err(message)?;
+                scene.live().shift(&target, 0.0, -2.5).map_err(message)?;
                 self.stage = 8;
-                live.declare_and_activate_transform_to(&self.frame, &target, smooth(STEP_DURATION))
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(&self.frame, &target, smooth(STEP_DURATION))
                     .map(ContinuationStep::Await)
                     .map_err(message)
             }
@@ -227,14 +255,16 @@ impl LiveContinuation for MovingZoomedSceneAround {
                     },
                 ];
                 self.stage = 11;
-                live.declare_and_activate_animation_composition(
-                    Kind::Parallel,
-                    &requests,
-                    AnimationOptions::new().rate_func(RateFunction::Linear),
-                    AnimationOptions::new(),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(message)
+                scene
+                    .live()
+                    .declare_and_activate_animation_composition(
+                        Kind::Parallel,
+                        &requests,
+                        AnimationOptions::new().rate_func(RateFunction::Linear),
+                        AnimationOptions::new(),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(message)
             }
             12 => {
                 self.stage = 13;

@@ -10,11 +10,11 @@ fn qualify_family_opacity_target(start: f64) {
         let source = scene.family(&[(&a).into(), (&b).into()]).unwrap();
         source.set_object_opacity(start).unwrap();
         scene.add_many(&[(&source).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let target = scene.live(&mut session).copy_family(&source).unwrap();
+        let mut session = scene.into_execution().unwrap();
+        let target = session.scene_mut().copy_family(&source).unwrap();
         let end = 0.234567890123;
-        scene
-            .live(&mut session)
+        session
+            .live()
             .set_family_object_opacity(target.root(), end)
             .unwrap();
         let options = AnimationOptions::new()
@@ -33,20 +33,26 @@ fn qualify_family_opacity_target(start: f64) {
                 options,
             }
         };
-        let segment = scene
-            .live(&mut session)
+        let segment = session
+            .live()
             .declare_and_activate_composition(&request, AnimationOptions::new())
             .unwrap();
-        session.advance_segment_to(segment, 0.5).unwrap();
-        let scope = row(&session, source.node_id())
+        session
+            .session_mut()
+            .advance_segment_to(segment, 0.5)
+            .unwrap();
+        let scope = row(session.session(), source.node_id())
             .expect("family opacity animation needs its real composed controller");
         assert!(
             (f64::from(scope.style.opacity) - (start + end) * 0.5).abs() < 1e-6,
             "start={start} method={method}: family opacity must use the shared root clock; got {}",
             scope.style.opacity
         );
-        session.advance_segment_to(segment, 1.0).unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        session
+            .session_mut()
+            .advance_segment_to(segment, 1.0)
+            .unwrap();
+        session.live().complete_segment(segment).unwrap();
         assert_eq!(
             source.own_style().unwrap().object_opacity,
             end,
@@ -120,15 +126,15 @@ fn sequential_family_targets_distinguish_omitted_method_opacity_from_full_snapsh
             )
             .unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let a = scene.live(&mut session).copy_family(&family).unwrap();
-        let b = scene.live(&mut session).copy_family(&family).unwrap();
-        scene
-            .live(&mut session)
+        let mut session = scene.into_execution().unwrap();
+        let a = session.scene_mut().copy_family(&family).unwrap();
+        let b = session.scene_mut().copy_family(&family).unwrap();
+        session
+            .live()
             .set_family_object_opacity(a.root(), 0.25)
             .unwrap();
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .set_effect(
                 b.root(),
                 "soften",
@@ -138,8 +144,8 @@ fn sequential_family_targets_distinguish_omitted_method_opacity_from_full_snapsh
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
-        let segment = scene
-            .live(&mut session)
+        let segment = session
+            .live()
             .declare_and_activate_animation_composition(
                 SemanticAnimationCompositionKind::Sequence,
                 &[
@@ -175,13 +181,19 @@ fn sequential_family_targets_distinguish_omitted_method_opacity_from_full_snapsh
         ] {
             session.seek(time).unwrap();
             assert_eq!(
-            row(&session, family.node_id()).unwrap().style.opacity,
-            opacity,
-            "method={method}: target selection must preserve the declared appearance policy at {time}"
-        );
+                row(session.session(), family.node_id())
+                    .unwrap()
+                    .style
+                    .opacity,
+                opacity,
+                "method={method}: target selection must preserve the declared appearance policy at {time}"
+            );
         }
-        session.advance_segment_to(segment, 2.0).unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        session
+            .session_mut()
+            .advance_segment_to(segment, 2.0)
+            .unwrap();
+        session.live().complete_segment(segment).unwrap();
         assert_eq!(
             family.own_style().unwrap().object_opacity,
             if method { 0.25 } else { 0.5 }
@@ -201,55 +213,53 @@ fn explicit_equal_scope_opacity_writes_reserve_the_ordinary_driver_lane() {
         let family = scene.family(&[(&leaf).into()]).unwrap();
         family.set_object_opacity(start).unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let a = scene.live(&mut session).copy_family(&family).unwrap();
-        let b = scene.live(&mut session).copy_family(&family).unwrap();
-        scene
-            .live(&mut session)
+        let mut session = scene.into_execution().unwrap();
+        let a = session.scene_mut().copy_family(&family).unwrap();
+        let b = session.scene_mut().copy_family(&family).unwrap();
+        session
+            .live()
             .set_family_object_opacity(a.root(), 0.25)
             .unwrap();
-        let revision = scene.revision();
-        scene
-            .live(&mut session)
+        let revision = session.scene().revision();
+        session
+            .live()
             .set_family_object_opacity(b.root(), start)
             .unwrap();
         assert_ne!(
-            scene.revision(),
+            session.scene().revision(),
             revision,
             "an explicit target write is authored intent even at the copied value"
         );
-        let before = session.frame().clone();
-        let context = session.publication_context();
-        let revision = scene.revision();
+        let before = session.session().frame().clone();
+        let context = session.session().publication_context();
+        let revision = session.scene().revision();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
-        let result = scene
-            .live(&mut session)
-            .declare_and_activate_animation_composition(
-                SemanticAnimationCompositionKind::Parallel,
-                &[
-                    AnimationCompositionRequest::FamilyMethodTargetTo {
-                        source: &family,
-                        target_state: a.root(),
-                        options,
-                    },
-                    AnimationCompositionRequest::FamilyMethodTargetTo {
-                        source: &family,
-                        target_state: b.root(),
-                        options,
-                    },
-                ],
-                AnimationOptions::new(),
-                AnimationOptions::new(),
-            );
+        let result = session.live().declare_and_activate_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            &[
+                AnimationCompositionRequest::FamilyMethodTargetTo {
+                    source: &family,
+                    target_state: a.root(),
+                    options,
+                },
+                AnimationCompositionRequest::FamilyMethodTargetTo {
+                    source: &family,
+                    target_state: b.root(),
+                    options,
+                },
+            ],
+            AnimationOptions::new(),
+            AnimationOptions::new(),
+        );
         assert!(
             result.is_err(),
             "same-valued explicit opacity still competes with another opacity driver"
         );
-        assert_eq!(session.frame(), &before);
-        assert_eq!(session.publication_context(), context);
-        assert_eq!(scene.revision(), revision);
+        assert_eq!(session.session().frame(), &before);
+        assert_eq!(session.session().publication_context(), context);
+        assert_eq!(session.scene().revision(), revision);
     }
 }
 
@@ -265,48 +275,49 @@ fn parallel_family_opacity_targets_reject_conflicting_drivers_before_scope_admis
         let family = scene.family(&[(&leaf).into()]).unwrap();
         family.set_object_opacity(start).unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let a = scene.live(&mut session).copy_family(&family).unwrap();
-        let b = scene.live(&mut session).copy_family(&family).unwrap();
-        scene
-            .live(&mut session)
+        let mut session = scene.into_execution().unwrap();
+        let a = session.scene_mut().copy_family(&family).unwrap();
+        let b = session.scene_mut().copy_family(&family).unwrap();
+        session
+            .live()
             .set_family_object_opacity(a.root(), 0.25)
             .unwrap();
-        scene
-            .live(&mut session)
+        session
+            .live()
             .set_family_object_opacity(b.root(), 0.75)
             .unwrap();
-        let before = session.frame().clone();
-        let context = session.publication_context();
-        let revision = scene.revision();
+        let before = session.session().frame().clone();
+        let context = session.session().publication_context();
+        let revision = session.scene().revision();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
-        let result = scene
-            .live(&mut session)
-            .declare_and_activate_animation_composition(
-                SemanticAnimationCompositionKind::Parallel,
-                &[
-                    AnimationCompositionRequest::FamilyMethodTargetTo {
-                        source: &family,
-                        target_state: a.root(),
-                        options,
-                    },
-                    AnimationCompositionRequest::FamilyMethodTargetTo {
-                        source: &family,
-                        target_state: b.root(),
-                        options,
-                    },
-                ],
-                AnimationOptions::new(),
-                AnimationOptions::new(),
-            );
+        let result = session.live().declare_and_activate_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            &[
+                AnimationCompositionRequest::FamilyMethodTargetTo {
+                    source: &family,
+                    target_state: a.root(),
+                    options,
+                },
+                AnimationCompositionRequest::FamilyMethodTargetTo {
+                    source: &family,
+                    target_state: b.root(),
+                    options,
+                },
+            ],
+            AnimationOptions::new(),
+            AnimationOptions::new(),
+        );
         assert!(result.is_err());
-        assert_eq!(session.frame(), &before);
-        assert_eq!(session.publication_context(), context);
-        assert_eq!(scene.revision(), revision);
+        assert_eq!(session.session().frame(), &before);
+        assert_eq!(session.session().publication_context(), context);
+        assert_eq!(session.scene().revision(), revision);
         assert_eq!(family.own_style().unwrap().object_opacity, start);
-        assert_eq!(row(&session, family.node_id()).is_some(), start != 1.0);
+        assert_eq!(
+            row(session.session(), family.node_id()).is_some(),
+            start != 1.0
+        );
     }
 }
 
@@ -319,14 +330,14 @@ fn family_opacity_uses_root_clock_with_member_lag_backward_seek_and_returning_co
         let b = scene.square(0.5).unwrap();
         let source = scene.family(&[(&a).into(), (&b).into()]).unwrap();
         scene.add_many(&[(&source).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let target = scene.live(&mut session).copy_family(&source).unwrap();
-        scene
-            .live(&mut session)
+        let mut session = scene.into_execution().unwrap();
+        let target = session.scene_mut().copy_family(&source).unwrap();
+        session
+            .live()
             .set_family_object_opacity(target.root(), 0.25)
             .unwrap();
-        scene
-            .live(&mut session)
+        session
+            .live()
             .shift_family(target.root(), 2.0, 0.0)
             .unwrap();
         let options = AnimationOptions::new()
@@ -345,8 +356,8 @@ fn family_opacity_uses_root_clock_with_member_lag_backward_seek_and_returning_co
                 options,
             }
         };
-        let segment = scene
-            .live(&mut session)
+        let segment = session
+            .live()
             .declare_and_activate_composition(
                 &request,
                 AnimationOptions::new()
@@ -359,14 +370,26 @@ fn family_opacity_uses_root_clock_with_member_lag_backward_seek_and_returning_co
         for (time, opacity) in [(0.0, 1.0), (2.0, 0.25), (4.0, 1.0), (2.0, 0.25), (0.0, 1.0)] {
             session.seek(time).unwrap();
             assert_eq!(
-                row(&session, source.node_id()).unwrap().style.opacity,
+                row(session.session(), source.node_id())
+                    .unwrap()
+                    .style
+                    .opacity,
                 opacity
             );
         }
-        session.advance_segment_to(segment, 4.0).unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        session
+            .session_mut()
+            .advance_segment_to(segment, 4.0)
+            .unwrap();
+        session.live().complete_segment(segment).unwrap();
         assert_eq!(source.own_style().unwrap().object_opacity, 1.0);
-        assert_eq!(row(&session, source.node_id()).unwrap().style.opacity, 1.0);
+        assert_eq!(
+            row(session.session(), source.node_id())
+                .unwrap()
+                .style
+                .opacity,
+            1.0
+        );
     }
 }
 
@@ -466,41 +489,44 @@ fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generatio
             let leaf_effect = leaf.get_effect("leaf").unwrap();
             let inner_effect = inner.get_effect("inner").unwrap();
             let root_effect = family.get_effect("root").unwrap();
-            let mut session = scene.execution_session().unwrap();
-            let owner = session.execution_object_id(family.node_id()).unwrap();
-            let source_plan = match &row(&session, family.node_id()).unwrap().content {
+            let mut session = scene.into_execution().unwrap();
+            let owner = session
+                .session()
+                .execution_object_id(family.node_id())
+                .unwrap();
+            let source_plan = match &row(session.session(), family.node_id()).unwrap().content {
                 noon_core::ObjectContentRef::Composed(source) => std::sync::Arc::clone(source),
                 _ => panic!("expected composed source"),
             };
-            let target = scene.live(&mut session).copy_family(&family).unwrap();
+            let target = session.scene_mut().copy_family(&family).unwrap();
             let target_inner = target.family(&inner).unwrap();
             let target_leaf = target.mobject(&leaf).unwrap();
-            scene
-                .live(&mut session)
+            session
+                .scene_mut()
                 .set_effect(
                     target.root(),
                     "root",
                     EffectUpdate::default().radius(Pixels(7.0)),
                 )
                 .unwrap();
-            scene
-                .live(&mut session)
+            session
+                .scene_mut()
                 .set_effect(
                     &target_inner,
                     "inner",
                     EffectUpdate::default().radius(Pixels(6.0)),
                 )
                 .unwrap();
-            scene
-                .live(&mut session)
+            session
+                .scene_mut()
                 .set_effect(
                     &target_leaf,
                     "leaf",
                     EffectUpdate::default().radius(Pixels(5.0)),
                 )
                 .unwrap();
-            scene
-                .live(&mut session)
+            session
+                .live()
                 .shift_family(target.root(), 2.0, 0.0)
                 .unwrap();
             let options = AnimationOptions::new()
@@ -519,18 +545,21 @@ fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generatio
                     options,
                 }
             };
-            let segment = scene
-                .live(&mut session)
+            let segment = session
+                .live()
                 .declare_and_activate_composition(&request, AnimationOptions::new())
                 .unwrap();
-            session.advance_segment_to(segment, 0.5).unwrap();
+            session
+                .session_mut()
+                .advance_segment_to(segment, 0.5)
+                .unwrap();
             for (id, attachment, radius) in [
                 (leaf.node_id(), leaf_effect.node_id(), 3.0),
                 (inner.node_id(), inner_effect.node_id(), 4.0),
                 (family.node_id(), root_effect.node_id(), 5.0),
             ] {
                 assert_eq!(
-                    row(&session, id)
+                    row(session.session(), id)
                         .unwrap()
                         .effects
                         .as_ref()
@@ -543,7 +572,7 @@ fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generatio
                 );
             }
             assert_eq!(
-                row(&session, leaf.node_id())
+                row(session.session(), leaf.node_id())
                     .unwrap()
                     .transform
                     .translation
@@ -554,14 +583,17 @@ fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generatio
                 root_effect.authored_definition().unwrap().radius(),
                 Some(Pixels(3.0).into())
             );
-            match &row(&session, family.node_id()).unwrap().content {
+            match &row(session.session(), family.node_id()).unwrap().content {
                 noon_core::ObjectContentRef::Composed(source) => {
                     assert!(std::sync::Arc::ptr_eq(&source_plan, source))
                 }
                 _ => panic!("expected composed source"),
             }
-            session.advance_segment_to(segment, 1.0).unwrap();
-            scene.live(&mut session).complete_segment(segment).unwrap();
+            session
+                .session_mut()
+                .advance_segment_to(segment, 1.0)
+                .unwrap();
+            session.live().complete_segment(segment).unwrap();
             assert_eq!(
                 root_effect.authored_definition().unwrap().radius(),
                 Some(Pixels(7.0).into())
@@ -574,7 +606,10 @@ fn family_effect_targets_interpolate_nested_columns_and_complete_exact_generatio
                 leaf_effect.authored_definition().unwrap().radius(),
                 Some(Pixels(5.0).into())
             );
-            assert_eq!(session.execution_object_id(family.node_id()), Some(owner));
+            assert_eq!(
+                session.session().execution_object_id(family.node_id()),
+                Some(owner)
+            );
         }
     }
 }
@@ -612,22 +647,22 @@ fn family_scope_clock_preserves_play_overrides_member_lag_and_seek() {
         .unwrap();
     let attachment = family.get_effect("soften").unwrap();
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let target = scene.live(&mut session).copy_family(&family).unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let target = session.scene_mut().copy_family(&family).unwrap();
+    session
+        .live()
         .shift_family(target.root(), 2.0, 0.0)
         .unwrap();
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .set_effect(
             target.root(),
             "soften",
             EffectUpdate::default().radius(Pixels(6.0)),
         )
         .unwrap();
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_composition(
             &AnimationCompositionRequest::FamilyMethodTargetTo {
                 source: &family,
@@ -650,20 +685,31 @@ fn family_scope_clock_preserves_play_overrides_member_lag_and_seek() {
     ] {
         session.seek(time).unwrap();
         assert_eq!(
-            effect_radius(&session, family.node_id(), attachment.node_id()),
+            effect_radius(session.session(), family.node_id(), attachment.node_id()),
             radius
         );
         assert_eq!(
-            row(&session, a.node_id()).unwrap().transform.translation.x,
+            row(session.session(), a.node_id())
+                .unwrap()
+                .transform
+                .translation
+                .x,
             ax
         );
         assert_eq!(
-            row(&session, b.node_id()).unwrap().transform.translation.x,
+            row(session.session(), b.node_id())
+                .unwrap()
+                .transform
+                .translation
+                .x,
             bx
         );
     }
-    session.advance_segment_to(segment, 4.0).unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session
+        .session_mut()
+        .advance_segment_to(segment, 4.0)
+        .unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(
         attachment.authored_definition().unwrap().radius(),
         Some(Pixels(6.0).into())
@@ -691,11 +737,11 @@ fn parallel_family_targets_reserve_exact_parameter_generations_and_rollback_conf
         scene.add_many(&[(&family).into()]).unwrap();
         let first = family.get_effect("first").unwrap();
         let second = family.get_effect("second").unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let a = scene.live(&mut session).copy_family(&family).unwrap();
-        let b = scene.live(&mut session).copy_family(&family).unwrap();
-        scene
-            .live(&mut session)
+        let mut session = scene.into_execution().unwrap();
+        let a = session.scene_mut().copy_family(&family).unwrap();
+        let b = session.scene_mut().copy_family(&family).unwrap();
+        session
+            .scene_mut()
             .set_effect(
                 a.root(),
                 "first",
@@ -703,8 +749,8 @@ fn parallel_family_targets_reserve_exact_parameter_generations_and_rollback_conf
             )
             .unwrap();
         // Same-valued explicit writes still compete for the exact lane.
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .set_effect(
                 b.root(),
                 if conflict { "first" } else { "second" },
@@ -714,46 +760,47 @@ fn parallel_family_targets_reserve_exact_parameter_generations_and_rollback_conf
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
-        let before = session.frame().clone();
-        let context = session.publication_context();
-        let revision = scene.revision();
-        let result = scene
-            .live(&mut session)
-            .declare_and_activate_animation_composition(
-                SemanticAnimationCompositionKind::Parallel,
-                &[
-                    AnimationCompositionRequest::FamilyMethodTargetTo {
-                        source: &family,
-                        target_state: a.root(),
-                        options,
-                    },
-                    AnimationCompositionRequest::FamilyMethodTargetTo {
-                        source: &family,
-                        target_state: b.root(),
-                        options,
-                    },
-                ],
-                AnimationOptions::new(),
-                AnimationOptions::new(),
-            );
+        let before = session.session().frame().clone();
+        let context = session.session().publication_context();
+        let revision = session.scene().revision();
+        let result = session.live().declare_and_activate_animation_composition(
+            SemanticAnimationCompositionKind::Parallel,
+            &[
+                AnimationCompositionRequest::FamilyMethodTargetTo {
+                    source: &family,
+                    target_state: a.root(),
+                    options,
+                },
+                AnimationCompositionRequest::FamilyMethodTargetTo {
+                    source: &family,
+                    target_state: b.root(),
+                    options,
+                },
+            ],
+            AnimationOptions::new(),
+            AnimationOptions::new(),
+        );
         if conflict {
             assert!(result.is_err());
-            assert_eq!(session.frame(), &before);
-            assert_eq!(session.publication_context(), context);
-            assert_eq!(scene.revision(), revision);
+            assert_eq!(session.session().frame(), &before);
+            assert_eq!(session.session().publication_context(), context);
+            assert_eq!(session.scene().revision(), revision);
         } else {
             let segment = result.unwrap();
             session.seek(0.5).unwrap();
             assert_eq!(
-                effect_radius(&session, family.node_id(), first.node_id()),
+                effect_radius(session.session(), family.node_id(), first.node_id()),
                 3.0
             );
             assert_eq!(
-                effect_radius(&session, family.node_id(), second.node_id()),
+                effect_radius(session.session(), family.node_id(), second.node_id()),
                 6.0
             );
-            session.advance_segment_to(segment, 1.0).unwrap();
-            scene.live(&mut session).complete_segment(segment).unwrap();
+            session
+                .session_mut()
+                .advance_segment_to(segment, 1.0)
+                .unwrap();
+            session.live().complete_segment(segment).unwrap();
             assert_eq!(
                 first.authored_definition().unwrap().radius(),
                 Some(Pixels(5.0).into())
@@ -828,11 +875,11 @@ fn sequential_family_targets_capture_prior_scope_endpoint_and_seek_deterministic
         .unwrap();
     scene.add_many(&[(&family).into()]).unwrap();
     let attachment = family.get_effect("soften").unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let first = scene.live(&mut session).copy_family(&family).unwrap();
-    let last = scene.live(&mut session).copy_family(&family).unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let first = session.scene_mut().copy_family(&family).unwrap();
+    let last = session.scene_mut().copy_family(&family).unwrap();
+    session
+        .scene_mut()
         .set_effect(
             first.root(),
             "soften",
@@ -841,8 +888,8 @@ fn sequential_family_targets_capture_prior_scope_endpoint_and_seek_deterministic
         .unwrap();
     // This explicit return to the original value must consume the preceding
     // completed radius, rather than being treated as an unchanged copied target.
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .set_effect(
             last.root(),
             "soften",
@@ -868,20 +915,23 @@ fn sequential_family_targets_capture_prior_scope_endpoint_and_seek_deterministic
         ],
         options: AnimationOptions::new().rate_func(RateFunction::Linear),
     };
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_composition(&request, AnimationOptions::new())
         .unwrap();
     assert_eq!(segment.end_time(), 2.0);
     for (time, radius) in [(0.5, 4.0), (1.0, 6.0), (1.5, 4.0), (0.5, 4.0), (2.0, 2.0)] {
         session.seek(time).unwrap();
         assert_eq!(
-            effect_radius(&session, family.node_id(), attachment.node_id()),
+            effect_radius(session.session(), family.node_id(), attachment.node_id()),
             radius
         );
     }
-    session.advance_segment_to(segment, 2.0).unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session
+        .session_mut()
+        .advance_segment_to(segment, 2.0)
+        .unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(
         attachment.authored_definition().unwrap().radius(),
         Some(Pixels(2.0).into())
@@ -920,32 +970,29 @@ fn inert_family_effect_declaration_captures_effective_values_and_rejects_rebound
         )
         .unwrap();
     let attachment = family.get_effect("soften").unwrap();
-    let mut session = scene.execution_session().unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    session
+        .scene_mut()
         .set_effect(
             &family,
             &attachment,
             EffectUpdate::default().radius(Pixels(4.0)),
         )
         .unwrap();
-    let segment = scene
-        .live(&mut session)
-        .play_animation(&declaration)
-        .unwrap();
-    session.advance_segment_to(segment, 0.5).unwrap();
+    let segment = session.live().play_animation(&declaration).unwrap();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
     assert_eq!(
-        effect_radius(&session, family.node_id(), attachment.node_id()),
+        effect_radius(session.session(), family.node_id(), attachment.node_id()),
         5.0
     );
-    session.advance_segment_to(segment, 1.0).unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    scene
-        .live(&mut session)
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
+    session
+        .scene_mut()
         .remove_effect(&family, &attachment)
         .unwrap();
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_effect(
             &family,
             Blur::new(EffectUpdate::default().radius(Pixels(2.0))).unwrap(),
@@ -954,14 +1001,11 @@ fn inert_family_effect_declaration_captures_effective_values_and_rejects_rebound
         .unwrap();
     let replacement = family.get_effect("soften").unwrap();
     assert_ne!(replacement.node_id(), attachment.node_id());
-    let before = session.frame().clone();
-    let context = session.publication_context();
-    let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
-        .play_animation(&declaration)
-        .is_err());
-    assert_eq!(session.frame(), &before);
-    assert_eq!(session.publication_context(), context);
-    assert_eq!(scene.revision(), revision);
+    let before = session.session().frame().clone();
+    let context = session.session().publication_context();
+    let revision = session.scene().revision();
+    assert!(session.live().play_animation(&declaration).is_err());
+    assert_eq!(session.session().frame(), &before);
+    assert_eq!(session.session().publication_context(), context);
+    assert_eq!(session.scene().revision(), revision);
 }

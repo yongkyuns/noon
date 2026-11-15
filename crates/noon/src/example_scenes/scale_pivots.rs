@@ -23,41 +23,49 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         let family = scene.family(&[(&a).into(), (&nested).into()])?;
         LayoutAnchor::from(&family).scale(1.25, 1.25, Pivot::Point(0., 0.))?;
         scene.add_many(&[(&line).into(), (&other).into(), (&family).into()])?;
-        let mut session = scene.execution_session()?;
-        let mut live = scene.live(&mut session);
-        live.manim_scale(&line, 0.8, 0.8)?;
-        live.manim_scale_about_point(&other, 0.8, 0.8, 2., 1.)?;
-        live.scale_layout(&LayoutAnchor::from(&family), 1.2, 1.2, Pivot::Edge(-1., 0.))?;
-        live.rescale_to_fit_with_pivot(
+        let mut session = scene.into_execution()?;
+        session.live().manim_scale(&line, 0.8, 0.8)?;
+        session
+            .live()
+            .manim_scale_about_point(&other, 0.8, 0.8, 2., 1.)?;
+        session.live().scale_layout(
+            &LayoutAnchor::from(&family),
+            1.2,
+            1.2,
+            Pivot::Edge(-1., 0.),
+        )?;
+        session.live().rescale_to_fit_with_pivot(
             &LayoutAnchor::from(&line),
             2.,
             crate::LayoutDimension::Width,
             false,
             Pivot::Edge(-1., 0.),
         )?;
-        live.match_dim_size_with_pivot(
+        session.live().match_dim_size_with_pivot(
             &LayoutAnchor::from(&other),
             &LayoutAnchor::from(&line),
             crate::LayoutDimension::Height,
             false,
             Pivot::Point(2., 1.),
         )?;
-        live.rescale_to_fit_with_pivot(
+        session.live().rescale_to_fit_with_pivot(
             &LayoutAnchor::from(&family),
             4.,
             crate::LayoutDimension::Width,
             false,
             Pivot::Edge(1., 0.),
         )?;
-        live.stretch(
+        session.live().stretch(
             &LayoutAnchor::from(&family),
             0.8,
             crate::LayoutDimension::Height,
             Pivot::Point(0., 0.),
         )?;
-        live.rotate_layout(&LayoutAnchor::from(&b), 0.27, Pivot::Center)?;
-        let target = live.target_editor(&b)?;
-        live.stretch(
+        session
+            .live()
+            .rotate_layout(&LayoutAnchor::from(&b), 0.27, Pivot::Center)?;
+        let target = session.scene_mut().target_editor(&b)?;
+        session.live().stretch(
             &LayoutAnchor::from(&target),
             1.3,
             crate::LayoutDimension::Width,
@@ -73,14 +81,17 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             )
             .method_target(),
         );
-        let segment =
-            live.declare_and_activate_composition(&request, crate::AnimationOptions::new())?;
-        live.advance_segment_to(segment, segment.end_time())?;
-        live.complete_segment(segment)?;
-        let wait = live.wait_segment(0.2)?;
-        live.advance_segment_to(wait, wait.end_time())?;
-        live.complete_segment(wait)?;
-        Ok(scene.into_execution_with_session(session)?)
+        let segment = session
+            .live()
+            .declare_and_activate_composition(&request, crate::AnimationOptions::new())?;
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())?;
+        session.live().complete_segment(segment)?;
+        let wait = session.live().wait_segment(0.2)?;
+        session.live().advance_segment_to(wait, wait.end_time())?;
+        session.live().complete_segment(wait)?;
+        Ok(session)
     };
     build().map_err(|error| error.to_string())
 }

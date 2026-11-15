@@ -48,7 +48,7 @@ impl LiveCoordinatePlayback {
                 let line = scene.number_line(&line_options)?;
                 scene.shift_family(line.family(), 0.0, 2.0)?;
                 scene.add_many(&[axes.family().into(), line.family().into()])?;
-                let target = scene.live().copy_family(axes.family())?;
+                let target = scene.copy_family(axes.family())?;
                 scene.shift_family(target.root(), 0.5, 0.0)?;
                 let segment = scene.live().declare_and_activate_family_transform_to(
                     axes.family(),

@@ -26,9 +26,12 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
     let a = scene.square(1.0).unwrap();
     let family = scene.family(&[(&a).into()]).unwrap();
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let camera_id = session.execution_object_id(camera.node_id()).unwrap();
-    let publication = session.take_renderer_publication();
+    let mut execution = scene.into_execution().unwrap();
+    let camera_id = execution
+        .session()
+        .execution_object_id(camera.node_id())
+        .unwrap();
+    let publication = execution.session_mut().take_renderer_publication();
     assert_eq!(publication.primary_view(), Some(camera_id));
     assert_eq!(
         publication.view_effects().unwrap().input_role(),
@@ -37,40 +40,80 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
     drop(publication);
     let (device, queue) = wgpu::Device::noop(&Default::default());
     let mut wrong_host = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
-    let publication = session.take_renderer_publication();
+    let publication = execution.session_mut().take_renderer_publication();
     assert!(matches!(
         wrong_host.effect_source_visibility(&publication, &[]),
         Err(noon_render_wgpu::EffectPrepareError::UnsupportedCapture)
     ));
     assert!(!wrong_host.has_retained_effect_sources());
     drop(publication);
-    let before = scene.integration_store().borrow().scene_revision();
+    let before = execution
+        .scene()
+        .integration_store()
+        .borrow()
+        .scene_revision();
     let mut wrong = a.clone();
     assert!(wrong.add_effect(Bloom::default(), "wrong-initial").is_err());
-    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
+    assert_eq!(
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
+        before
+    );
 
-    assert!(scene
-        .live(&mut session)
+    assert!(execution
+        .scene_mut()
         .add_effect(&a, Bloom::default(), "wrong")
         .is_err());
-    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
-    assert!(scene
-        .live(&mut session)
+    assert_eq!(
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
+        before
+    );
+    assert!(execution
+        .scene_mut()
         .add_effect(&family, Bloom::default(), "wrong")
         .is_err());
-    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
-    assert!(scene
-        .live(&mut session)
+    assert_eq!(
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
+        before
+    );
+    assert!(execution
+        .scene_mut()
         .add_effect(&camera, Bloom::default(), "duplicate")
         .is_err());
-    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
-    assert!(scene
-        .live(&mut session)
+    assert_eq!(
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
+        before
+    );
+    assert!(execution
+        .scene_mut()
         .set_view_color_profile(&camera, ViewColorProfile::Compatibility)
         .is_err());
-    assert_eq!(scene.integration_store().borrow().scene_revision(), before);
     assert_eq!(
-        session
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
+        before
+    );
+    assert_eq!(
+        execution
+            .session_mut()
             .take_renderer_publication()
             .view_effects()
             .unwrap()
@@ -81,12 +124,13 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
         0.25
     );
     let binding = camera.get_effect("bloom").unwrap();
-    scene
-        .live(&mut session)
+    execution
+        .scene_mut()
         .set_effect(&camera, &binding, EffectUpdate::default().threshold(0.0))
         .unwrap();
     assert_eq!(
-        session
+        execution
+            .session_mut()
             .take_renderer_publication()
             .view_effects()
             .unwrap()
@@ -100,8 +144,8 @@ fn view_bloom_admission_and_profile_changes_preserve_atomic_publication() {
     let mut tx = noon_core::SemanticMutationTransaction::new();
     tx.set_view_color_profile(camera.node_id(), ViewColorProfile::Compatibility);
     tx.remove_node(binding.node_id());
-    scene.live(&mut session).apply(tx).unwrap();
-    let publication = session.take_renderer_publication();
+    execution.live().apply(tx).unwrap();
+    let publication = execution.session_mut().take_renderer_publication();
     assert_eq!(publication.color_profile(), ViewColorProfile::Compatibility);
     assert!(publication.view_effects().is_none());
 }
@@ -150,11 +194,8 @@ fn authored_camera_bloom_animation_seek_removal_matches_independent_pixels() {
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
-        .play_animation(&declaration)
-        .unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let segment = session.live().play_animation(&declaration).unwrap();
     let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba16Float);
     renderer.set_viewport(&device, &queue, SIZE, SIZE);
     renderer.set_camera(
@@ -200,14 +241,11 @@ fn authored_camera_bloom_animation_seek_removal_matches_independent_pixels() {
     let mut opacity_negative = 0.0f64;
     for (phase, time) in [0.0, 0.5, 0.875, 0.25, 0.75, 0.5].into_iter().enumerate() {
         if phase <= 2 {
-            scene
-                .live(&mut session)
-                .advance_segment_to(segment, time)
-                .unwrap();
+            session.live().advance_segment_to(segment, time).unwrap();
         } else {
             session.seek(time).unwrap();
         }
-        let publication = session.take_renderer_publication();
+        let publication = session.session_mut().take_renderer_publication();
         let bloom = publication.view_effects().unwrap().definitions()[0]
             .as_bloom()
             .unwrap();
@@ -238,7 +276,13 @@ fn authored_camera_bloom_animation_seek_removal_matches_independent_pixels() {
             .unwrap();
         let upload = renderer.upload_retained(&device, &queue, &prepared, &mut text);
         if phase == 1 || phase == 2 {
-            assert_eq!(upload.bytes_uploaded(),0,"camera parameter edits do not reupload source draws: phase={phase} all={} stats={:?}",publication.changes().is_all(),prepared.geometry_stats());
+            assert_eq!(
+                upload.bytes_uploaded(),
+                0,
+                "camera parameter edits do not reupload source draws: phase={phase} all={} stats={:?}",
+                publication.changes().is_all(),
+                prepared.geometry_stats()
+            );
         }
         let mut encoder = device.create_command_encoder(&Default::default());
         let effects = renderer
@@ -366,16 +410,13 @@ fn authored_camera_bloom_animation_seek_removal_matches_independent_pixels() {
         }
         cases.push(serde_json::json!({"id":id,"time":time,"radius":p.sigma_pixels,"threshold":p.threshold,"intensity":p.intensity,"expected":linear,"display_expected":display}));
     }
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    scene
-        .live(&mut session)
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
+    session
+        .scene_mut()
         .remove_effect(&camera, &binding)
         .unwrap();
-    let publication = session.take_renderer_publication();
+    let publication = session.session_mut().take_renderer_publication();
     assert!(publication.view_effects().is_none());
     let p = HdrBloomParameters {
         sigma_pixels: 0.0,
@@ -424,5 +465,8 @@ fn authored_camera_bloom_animation_seek_removal_matches_independent_pixels() {
             .collect::<Vec<_>>(),
         [EffectParameter::Threshold]
     );
-    eprintln!("authored camera Bloom: {} samples, float max={maximum}, display max={display_max}, exact seek restoration and camera-opacity independence; actual wrong-opacity negative={opacity_negative}",cases.len());
+    eprintln!(
+        "authored camera Bloom: {} samples, float max={maximum}, display max={display_max}, exact seek restoration and camera-opacity independence; actual wrong-opacity negative={opacity_negative}",
+        cases.len()
+    );
 }

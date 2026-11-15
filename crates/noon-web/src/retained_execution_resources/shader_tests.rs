@@ -115,10 +115,10 @@ fn apply(
 #[test]
 fn shader_programs_transfer_once_share_across_attachments_and_retire_exactly() {
     let (scene, objects, program) = fixture();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(17);
     let mut mirror = mirror();
-    let initial = encode(&mut encoder, &mut session, true);
+    let initial = encode(&mut encoder, session.session_mut(), true);
     let handle = key(&initial);
     assert_eq!(
         initial
@@ -144,6 +144,7 @@ fn shader_programs_transfer_once_share_across_attachments_and_retire_exactly() {
     assert_eq!(installed.shader_program(handle), Some(&program));
     apply(&mut mirror, &initial);
     for (sender, received) in session
+        .session()
         .frame()
         .objects
         .iter()
@@ -151,8 +152,8 @@ fn shader_programs_transfer_once_share_across_attachments_and_retire_exactly() {
     {
         assert_eq!(sender.effects, received.effects);
     }
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .set_effect(
             &objects[0],
             "material",
@@ -168,7 +169,7 @@ fn shader_programs_transfer_once_share_across_attachments_and_retire_exactly() {
                 .seed(u32::MAX),
         )
         .unwrap();
-    let changed = encode(&mut encoder, &mut session, false);
+    let changed = encode(&mut encoder, session.session_mut(), false);
     assert_eq!(changed.retained.objects.len(), 1);
     assert!(changed.resource_additions.is_none());
     assert_eq!(key(&changed), handle);
@@ -181,6 +182,7 @@ fn shader_programs_transfer_once_share_across_attachments_and_retire_exactly() {
     assert!(!json.contains("fn shade"));
     apply(&mut mirror, &changed);
     for (sender, received) in session
+        .session()
         .frame()
         .objects
         .iter()
@@ -189,11 +191,11 @@ fn shader_programs_transfer_once_share_across_attachments_and_retire_exactly() {
         assert_eq!(sender.effects, received.effects);
     }
     for (step, object) in objects.iter().enumerate() {
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .remove_effect(object, "material")
             .unwrap();
-        let removed = encode(&mut encoder, &mut session, false);
+        let removed = encode(&mut encoder, session.session_mut(), false);
         assert!(removed.resource_additions.is_none());
         assert_eq!(
             removed.resource_retirements.shader_programs,
@@ -205,11 +207,11 @@ fn shader_programs_transfer_once_share_across_attachments_and_retire_exactly() {
             usize::from(step == 0)
         );
     }
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_effect(&objects[0], ShaderEffect::new(program), "material")
         .unwrap();
-    let reenrolled = encode(&mut encoder, &mut session, false);
+    let reenrolled = encode(&mut encoder, session.session_mut(), false);
     assert_ne!(
         key(&reenrolled),
         handle,
@@ -236,19 +238,19 @@ fn shader_programs_transfer_once_share_across_attachments_and_retire_exactly() {
 #[test]
 fn shader_resource_and_value_failures_preserve_frame_resources_and_retry_sequence() {
     let (scene, objects, _) = fixture();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(19);
-    let initial = encode(&mut encoder, &mut session, true);
+    let initial = encode(&mut encoder, session.session_mut(), true);
     let replacement = program(format!("{SOURCE}\nfn marker() -> u32 {{ return 17u; }}"));
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .remove_effect(&objects[0], "material")
         .unwrap();
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_effect(&objects[0], ShaderEffect::new(replacement), "material")
         .unwrap();
-    let next = encode(&mut encoder, &mut session, false);
+    let next = encode(&mut encoder, session.session_mut(), false);
     for case in 0..8 {
         let mut mirror = mirror();
         apply(&mut mirror, &initial);

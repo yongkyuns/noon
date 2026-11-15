@@ -56,12 +56,18 @@ impl LiveSession<'_> {
         match target {
             MobjectTarget::Object(object) => {
                 self.require_mobject(object)?;
-                self.get_num_points(object)
+                crate::path_queries::effective_mobject_point_count(self.store, self.session, object)
+                    .map_err(Into::into)
             }
             MobjectTarget::Family(family) => {
                 self.require_family(family)?;
                 match family.own_object()? {
-                    Some(object) => self.get_num_points(&object),
+                    Some(object) => crate::path_queries::effective_mobject_point_count(
+                        self.store,
+                        self.session,
+                        &object,
+                    )
+                    .map_err(Into::into),
                     None => Ok(0),
                 }
             }

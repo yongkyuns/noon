@@ -1,6 +1,41 @@
 import assert from "node:assert/strict";
 import { summarizeSamples, summarizeCadence } from "../web/frame-metrics.js";
 
+// Real product E2E readiness guard. An earlier Run may leave "applied" in
+// the DOM while the new click has just advanced its generation. Require the
+// matching source-run generation before accepting success or showing its error.
+// Playwright serializes this closure-free function into the browser unchanged.
+export function freshProductRunSettled(input, browser = globalThis) {
+  const previousGeneration = typeof input === "number" ? input : input?.previousGeneration;
+  const allowLegacyBaseline = typeof input === "object" && input?.allowLegacyBaseline === true;
+  if (!Number.isSafeInteger(previousGeneration) || previousGeneration < 0) return false;
+  const gallery = browser.__noonExampleGallery;
+  const generation = gallery?.generationDiagnostics?.runGeneration;
+  if (!Number.isSafeInteger(generation) || generation <= previousGeneration) return false;
+  const patch = browser.document?.querySelector("#patch-status");
+  const state = patch?.dataset?.state;
+  if (patch?.dataset?.runGeneration === String(generation) &&
+      (state === "applied" || state === "error")) return true;
+
+  // The pinned historical baseline can finish a source run without a usable
+  // generation-tagged patch receipt. Only for that baseline, corroborate its
+  // applied state with the *new* generation's completed authoring record, the
+  // selected example, and no in-flight source run. The candidate still
+  // requires the exact generation-tagged patch receipt above.
+  if (allowLegacyBaseline && state === "applied") {
+    const run = gallery?.runPhaseMetrics;
+    if (gallery?.runInFlight === false && run?.runGeneration === generation &&
+        run?.exampleId === gallery.selectedExampleId &&
+        Number.isFinite(run.sourceRunCompletedAtMs) &&
+        patch?.dataset?.exampleId === gallery.selectedExampleId) return true;
+  }
+
+  // Startup failures can occur before the new patch identity is published.
+  // Still surface them instead of converting a real failure into a timeout.
+  const status = browser.document?.querySelector("#status");
+  return status?.dataset?.state === "error" && gallery?.runInFlight === false;
+}
+
 const TIME_EPSILON_SECONDS = 0.001;
 const END_TOLERANCE_SECONDS = 0.001;
 

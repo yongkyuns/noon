@@ -1,7 +1,8 @@
 //! Root-only appends reuse the existing payload and coherent path publication.
+use super::xyz::publish_append_family_points_3d;
 use super::*;
 
-pub fn publish_append_family_points(
+pub(super) fn publish_append_family_points(
     store: &Rc<std::cell::RefCell<SemanticStore>>,
     root: noon_core::SemanticNodeId,
     execution: &mut crate::ExecutionSession,

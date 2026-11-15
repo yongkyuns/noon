@@ -11,24 +11,8 @@ impl CanonicalAuthoringScene {
         edges: Vec<(u32, u32)>,
         options: noon::GraphOptions,
     ) -> Result<NativeGraph, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_create_graph(directed, vertices, edges, options),
-            PlayerOwnership::Unstarted => {
-                let graph = if directed {
-                    noon::DiGraph::with_options(&mut self.scene, vertices, edges, options)
-                        .map(NativeGraph::Directed)
-                } else {
-                    noon::Graph::with_options(&mut self.scene, vertices, edges, options)
-                        .map(NativeGraph::Undirected)
-                };
-                graph.map_err(|error| AuthoringFailure::unclassified("graph.create", &error))
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        NativeGraph::new(self.graph_scene()?, directed, vertices, edges, options)
+            .map_err(|error| AuthoringFailure::unclassified("graph.create", &error))
     }
 
     pub(crate) fn live_mutate_graph(
@@ -36,30 +20,26 @@ impl CanonicalAuthoringScene {
         graph: &mut NativeGraph,
         operation: GraphOperation,
     ) -> Result<(), AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_mutate_graph(graph, operation),
-            PlayerOwnership::Unstarted => graph
-                .apply(&mut self.scene, operation)
-                .map_err(|error| AuthoringFailure::unclassified("graph.mutate", &error)),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        graph
+            .apply(self.graph_scene()?, operation)
+            .map_err(|error| AuthoringFailure::unclassified("graph.mutate", &error))
     }
 
     pub(crate) fn live_copy_graph(
         &mut self,
         graph: &NativeGraph,
     ) -> Result<NativeGraph, AuthoringFailure> {
+        graph
+            .copy_in_scene(self.graph_scene()?)
+            .map_err(|error| AuthoringFailure::unclassified("graph.copy", &error))
+    }
+
+    fn graph_scene(&mut self) -> Result<&mut noon::Scene, AuthoringFailure> {
         match &mut self.player_ownership {
             PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_copy_graph(graph)
+                Ok(self.active_live_player()?.scene_mut())
             }
-            PlayerOwnership::Unstarted => graph
-                .copy_cold()
-                .map_err(|error| AuthoringFailure::unclassified("graph.copy", &error)),
+            PlayerOwnership::Unstarted => Ok(&mut self.scene),
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }

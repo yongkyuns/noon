@@ -69,20 +69,9 @@ fn refinement_preserves_shape_discontinuities_identity_and_live_publication() {
         let revision = scene.revision();
         object.insert_n_curves(0).unwrap();
         assert_eq!(scene.revision(), revision);
-        let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                noon::integration::BorrowedPathEdit::Subdivide {
-                    object: &object,
-                    additional: 3,
-                },
-            )
-            .unwrap();
+            running.scene_mut().insert_n_curves(&object, 3).unwrap();
         } else {
             object.insert_n_curves(3).unwrap();
         }

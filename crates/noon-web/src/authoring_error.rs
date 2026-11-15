@@ -438,17 +438,17 @@ mod tests {
         let unrelated = scene.square(1.0).unwrap();
         scene.add(&target).unwrap();
         scene.add(&unrelated).unwrap();
-        let mut execution = scene.execution_session().unwrap();
-        execution.take_frame_changes();
-        let before = execution.frame().clone();
-        let publication = execution.publication_context();
+        let mut execution = scene.into_execution().unwrap();
+        execution.session_mut().take_frame_changes();
+        let before = execution.session().frame().clone();
+        let publication = execution.session().publication_context();
         let authored = target.state().unwrap();
-        let error = scene
-            .live(&mut execution)
+        let error = execution
+            .scene_mut()
             .set_fill_opacity(&target, 1.5)
             .unwrap_err();
         let message = error.to_string();
-        let projected = AuthoringFailure::from(error);
+        let projected = AuthoringFailure::from_scene_mutation(error, true);
         assert_eq!(projected.category, "invalid_input");
         assert_eq!(projected.code, "live.authoring");
         assert_eq!(
@@ -456,16 +456,22 @@ mod tests {
             "authoring.invalid_opacity"
         );
         assert_eq!(projected.message, message);
-        assert_eq!(execution.frame(), &before);
-        assert_eq!(execution.publication_context(), publication);
+        assert_eq!(execution.session().frame(), &before);
+        assert_eq!(execution.session().publication_context(), publication);
         assert_eq!(target.state().unwrap(), authored);
-        assert!(execution.take_frame_changes().is_empty());
-        scene
-            .live(&mut execution)
+        assert!(execution.session_mut().take_frame_changes().is_empty());
+        execution
+            .scene_mut()
             .set_fill_opacity(&target, 0.5)
             .unwrap();
-        assert_eq!(execution.take_frame_changes().object_indices(), &[0]);
-        assert_eq!(execution.frame().objects[1], before.objects[1]);
+        assert_eq!(
+            execution
+                .session_mut()
+                .take_frame_changes()
+                .object_indices(),
+            &[0]
+        );
+        assert_eq!(execution.session().frame().objects[1], before.objects[1]);
     }
     #[test]
     fn effect_errors_project_shared_causes_without_text_matching() {

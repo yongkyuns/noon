@@ -31,21 +31,16 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             Vec2::new(1., -1.),
         ])?;
         scene.add(&polygon)?;
-        let mut session = scene.execution_session()?;
-        crate::integration::publish_borrowed_path_edit(
-            scene.integration_store(),
-            scene.root(),
-            &mut session,
-            crate::integration::BorrowedPathEdit::Corners {
-                object: &path,
-                points: &[Vec2::new(-3., -1.), Vec2::new(-2., 0.), Vec2::new(-1., -1.)],
-            },
+        let mut running = scene.into_execution()?;
+        running.scene_mut().set_points_as_corners(
+            &path,
+            &[Vec2::new(-3., -1.), Vec2::new(-2., 0.), Vec2::new(-1., -1.)],
         )?;
-        let mut live = scene.live(&mut session);
+        let mut live = running.live();
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(running)
     };
     build().map_err(|error| error.to_string())
 }

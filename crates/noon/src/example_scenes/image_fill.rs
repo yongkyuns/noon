@@ -48,7 +48,7 @@ impl LiveContinuation for ImageSurface {
         let segment = match self.stage {
             0 => scene.live().wait_segment(0.5),
             1 => {
-                let target = scene.live().target_editor(&self.panel).map_err(message)?;
+                let target = scene.target_editor(&self.panel).map_err(message)?;
                 scene
                     .set_fill_image_mapping(&target, mapping(false)?, Some(0.5))
                     .map_err(message)?;

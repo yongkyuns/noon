@@ -1,71 +1,82 @@
-# Getting started
+# Your first animation
 
-Choose a host before installing anything. The browser is the easiest place to
-try Python; native Rust or CPython is useful for a normal application or an
-export workflow. Registry names are not finalized: do not install an unrelated
-package named `noon` from a public registry.
+Run a scene, change its color and timing, and understand the few ideas behind it.
+This first lesson runs in your browser; there is nothing to install.
 
 ## Browser
 
-Open an example below, then press **Run** in the preview. The preview executes
-the same Rust/WASM and Pyodide path as the full playground. **Open full editor**
-lets you change the source. The first run downloads runtime resources, so it
-requires network access and can take longer than subsequent runs.
+The live scene below starts as the page loads. It creates a circle and a square,
+moves them, then brings them back. The first load downloads the engine and Python
+runtime; a loading message disappears when the scene is ready.
 
 <!-- noon:demo showcase-first-scene -->
 
-Preview activation is explicit. Reading a guide does not start WASM or Python.
-Only one documentation preview is open at a time; closing it, opening another,
-or hiding the tab retires its embedded browsing context. Reopening starts fresh.
+Use the small **View / Code** switch on the scene. Code is the actual Python
+source, not a screenshot. Edits run automatically after a typing pause. Switching
+back to View preserves your changes and does not submit another run.
 
-## Native Python
+## 1. Change a color
 
-For development from a checkout, use CPython 3.11+ and the pinned Rust toolchain:
+Switch to **Code**. Find the line that creates the circle:
 
-```sh
-git clone https://github.com/yongkyuns/noon.git
-cd noon
-python3 scripts/build-native-python.py --profile dev
-PYTHONPATH=build/python python3 -m noon_native web/python/examples/first_lesson.py
+```python
+circle = Circle(radius=0.75, color=BLUE).set_fill(BLUE, opacity=0.8)
 ```
 
-These commands use a POSIX shell. Source builds also need the platform's native C
-and graphics build dependencies. A native viewer requires a compatible graphics
-driver. For wheel installation, Windows shell instructions, host limitations and
-headless modes, read [native Python details](native-python.html).
+Change both occurrences of `BLUE` to `GREEN`, then switch back to **View**.
+The circle should now have a green outline and green fill. The square should
+remain pink. No Run button or separate editor is needed.
 
-Continue with the [Python walkthrough](python.html).
+## 2. Change the motion
 
-## Native Rust
+Find `circle.animate.shift(0.7 * UP)`. Change `0.7` to `1.2`. After the automatic
+reload, the circle should move farther upward. Change the later downward shift
+to `1.2` too, so it returns to the same starting position.
 
-From the same checkout, run the ordinary synchronous lesson:
+The `run_time=1.6` argument controls that motion's duration in authored seconds.
+Changing it to `3.2` makes the same motion take twice as long. It is not a frame
+count: you describe what should happen over time, not how many frames to draw.
 
-```sh
-cargo run -p noon-native --example first_lesson
+## 3. Understand the structure
+
+The core pattern is small. The live example adds captions and a few more steps:
+
+```python
+from noon import *
+
+class Demo(Scene):
+    def construct(self):
+        circle = Circle(color=BLUE)
+        square = Square(color=PINK)
+        square.next_to(circle, RIGHT)
+
+        self.play(Create(circle), Create(square))
+        self.play(circle.animate.shift(UP), run_time=2)
+        self.wait(1)
 ```
 
-Rust uses the shared engine directly; this command does not need Python, Pyodide,
-or a browser. The repository toolchain and example dependencies are selected by
-Cargo. The [Rust walkthrough](rust.html) explains the lesson and its native host.
+`Scene` is the program you author. `construct` describes its work. `Circle` and
+`Square` create visual objects; `next_to` arranges them. `Create` introduces the
+objects, `.animate` describes a change, and `wait` adds time without a new action.
 
-## Browser Rust and local web development
+Two animations inside one `play` call run together. Separate `play` calls happen
+in sequence. These ideas are enough to begin; the [authoring guide](guide.html)
+goes into scene membership, families, coordinates, and animation composition.
 
-Build the repository's existing browser package, then serve its web directory:
+## When an edit does not work
 
-```sh
-bash scripts/build-web-demo.sh
-python3 -m http.server --directory web 8080
-```
+Incomplete Python is normal while typing. Switch to **Code** to read the error,
+correct the source, and let it reload. Changing View/Code does not discard the
+draft. Use your editor's Undo command to reverse an accidental change.
 
-Open `http://localhost:8080`. This is the development playground; the published
-project website is staged separately. Rust source is compiled into WASM. Editing
-Rust code requires rebuilding; the Python editor does not interpret Rust.
-[Browser integration](web-runtime.html) describes direct Rust/WASM examples and
-the distinct optional Pyodide worker path.
+For a blank canvas after loading, check [troubleshooting](troubleshooting.html).
+For full playback controls, open the [playground](../../playground.html?catalog=showcase&example=showcase-first-scene).
 
-## Check your first run
+## Continue from here
 
-A successful run shows actual rendered output, not just a loaded editor. Inspect
-the status and diagnostics when a scene fails. Start with the unchanged first
-lesson before adding effects, assets, callbacks or external dependencies.
-[Troubleshooting](troubleshooting.html) covers the common boundaries.
+[Learn scene authoring](guide.html), follow the [Python walkthrough](python.html),
+or [choose a local installation](installation.html). Prefer Rust? The
+[Rust walkthrough](rust.html) starts with a complete synchronous lesson.
+
+The website runs Python through Pyodide and the Rust engine through WASM.
+Changing Rust source is a build step, not an edit in this Python panel.

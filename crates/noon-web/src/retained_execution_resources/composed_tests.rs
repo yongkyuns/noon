@@ -787,25 +787,31 @@ fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows(
     scene
         .add_many(&[(&earlier).into(), (&panel).into(), (&later).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let anchor = session.execution_object_id(panel.node_id()).unwrap();
-    let earlier_id = session.execution_object_id(earlier.node_id()).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let anchor = session
+        .session()
+        .execution_object_id(panel.node_id())
+        .unwrap();
+    let earlier_id = session
+        .session()
+        .execution_object_id(earlier.node_id())
+        .unwrap();
     let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(123);
     let mut mirror =
         InstalledRetainedExecutionMirror::from_bundle_bytes(&empty().encode_binary().unwrap())
             .unwrap();
-    let snapshot = encode(&mut encoder, &mut session, true);
+    let snapshot = encode(&mut encoder, session.session_mut(), true);
     apply(&mut mirror, &snapshot).unwrap();
     assert!(mirror
         .renderer_publication(&FrameChanges::default())
         .unwrap()
         .spatial_index()
         .is_none());
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_effect(&panel, BackdropBlur::default(), "glass")
         .unwrap();
-    let added = encode(&mut encoder, &mut session, false);
+    let added = encode(&mut encoder, session.session_mut(), false);
     let (_, changes) = apply(&mut mirror, &added).unwrap();
     assert_eq!(mirror.last_spatial_query_update_stats().full_rebuilds, 1);
     let query = mirror
@@ -815,8 +821,8 @@ fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows(
         .unwrap();
     assert_eq!(query.objects, [earlier_id]);
     assert_eq!(query.stats.full_scan_fallbacks, 0);
-    scene.live(&mut session).shift(&earlier, 20.0, 0.0).unwrap();
-    let moved = encode(&mut encoder, &mut session, false);
+    session.live().shift(&earlier, 20.0, 0.0).unwrap();
+    let moved = encode(&mut encoder, session.session_mut(), false);
     let (_, changes) = apply(&mut mirror, &moved).unwrap();
     let stats = mirror.last_spatial_query_update_stats();
     assert_eq!(stats.full_rebuilds, 0);
@@ -830,11 +836,8 @@ fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows(
         .is_empty());
     // A bad suffix must preserve the previously committed query, not just the
     // frame and protocol sequence. Retry the exact same sequence afterward.
-    scene
-        .live(&mut session)
-        .shift(&earlier, -20.0, 0.0)
-        .unwrap();
-    let good = encode(&mut encoder, &mut session, false);
+    session.live().shift(&earlier, -20.0, 0.0).unwrap();
+    let good = encode(&mut encoder, session.session_mut(), false);
     let mut bad = good.clone();
     let mut suffix = added.retained.objects[0].clone();
     suffix.effects[0].definition = crate::TransportEffectDefinition::BackdropBlur {
@@ -861,11 +864,8 @@ fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows(
             .objects,
         [earlier_id]
     );
-    scene
-        .live(&mut session)
-        .remove_effect(&panel, "glass")
-        .unwrap();
-    let removed = encode(&mut encoder, &mut session, false);
+    session.scene_mut().remove_effect(&panel, "glass").unwrap();
+    let removed = encode(&mut encoder, session.session_mut(), false);
     apply(&mut mirror, &removed).unwrap();
     assert!(mirror
         .renderer_publication(&FrameChanges::default())

@@ -87,7 +87,7 @@ fn shared_textures_motion_opacity_sampling_and_retirement_are_sparse() {
     assert_eq!(after.text_snapshot_copies, baseline.text_snapshot_copies);
     assert_eq!(after.mixed_order_rebuilds, baseline.mixed_order_rebuilds);
     assert_eq!(after.scratch_reuses - baseline.scratch_reuses, 128);
-    execution.live().set_opacity(&a, 0.25).unwrap();
+    execution.scene_mut().set_opacity(&a, 0.25).unwrap();
     assert_eq!(
         upload(
             execution.session_mut(),

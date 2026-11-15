@@ -60,28 +60,29 @@ pub(crate) fn live(
         channel("text alpha", alpha)?,
     );
     let opacity = channel("text opacity", opacity)?;
-    if math {
-        let text = noon::MathTypst::new(source)
-            .with_font_size(size)
-            .color(color)
-            .set_opacity(opacity);
-        if context.has_execution() {
-            context.with_live(|live| live.create_math_typst(text))
-        } else {
-            noon::Mobject::from_math_typst(Rc::clone(context.scene.integration_store()), text)
-                .map_err(engine_error)
-        }
+    let running = context.has_execution();
+    let result = if math {
+        context.scene.math_typst(
+            noon::MathTypst::new(source)
+                .with_font_size(size)
+                .color(color)
+                .set_opacity(opacity),
+        )
     } else {
-        let text = noon::Typst::new(source)
-            .with_font_size(size)
-            .color(color)
-            .set_opacity(opacity);
-        if context.has_execution() {
-            context.with_live(|live| live.create_typst(text))
-        } else {
-            noon::Mobject::from_typst(Rc::clone(context.scene.integration_store()), text)
-                .map_err(engine_error)
-        }
-    }
-    .map(MobjectHandle::from_semantic_mobject)
+        context.scene.typst(
+            noon::Typst::new(source)
+                .with_font_size(size)
+                .color(color)
+                .set_opacity(opacity),
+        )
+    };
+    result
+        .map(MobjectHandle::from_semantic_mobject)
+        .map_err(|error| {
+            if running {
+                engine_error(noon::integration::live_text_failure(error))
+            } else {
+                engine_error(error)
+            }
+        })
 }

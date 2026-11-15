@@ -152,6 +152,11 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
+      # WebKit previously crashed while loading two unoptimized ~221 MiB
+      # runtime modules on its macOS shard. Build the same optimized release
+      # code as the deployed viewer, retaining the renderer-smoke fixtures.
+      - name: Install pinned wasm-opt
+        uses: ./.github/actions/install-wasm-opt
       - name: Verify gallery inventory, dependency setup and edit observations
         run: |
           node --test --test-concurrency=2 scripts/gallery-shards.test.mjs scripts/playground-stress-observation.test.mjs scripts/playground-browser-matrix-smoke.test.mjs
@@ -159,9 +164,12 @@ jobs:
           python3 -S scripts/test_ci_install_playwright_browser.py
       - name: Build browser package
         env:
-          NOON_WASM_SKIP_OPT: "1"
+          NOON_WASM_PROFILE: "release"
+          NOON_WASM_SKIP_OPT: "0"
           NOON_RENDERER_SMOKE: "1"
-        run: bash scripts/build-web-demo.sh
+        run: |
+          bash scripts/build-web-demo.sh
+          node -e "const fs=require('fs'); const n=fs.statSync('web/pkg/noon_web_bg.wasm').size; console.log('Optimized cross-browser WASM:',n,'bytes'); if(!n || n >= 100*1024*1024) process.exit(1)"
       - name: Upload browser runtime assets
         uses: actions/upload-artifact@v7
         with:

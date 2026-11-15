@@ -15,15 +15,15 @@ test("creator-derived demonstration is excluded from project presentation", asyn
   }
 });
 
-test("website videos and README GIFs use only the selected project examples", async () => {
+test("website live scenes and README GIFs use only the selected project examples", async () => {
   const selected = JSON.parse(await read("./site/examples.json")).map(entry => entry.id).sort();
   const html = await read("./site/index.html");
   const readme = await read("../README.md");
-  const videos = [...html.matchAll(/src="\.\/site\/media\/(showcase-[a-z0-9-]+)\.mp4"/g)]
+  const scenes = [...html.matchAll(/data-demo="(showcase-[a-z0-9-]+)"/g)]
     .map(match => match[1]).sort();
   const gifs = [...readme.matchAll(/\/site\/media\/(showcase-[a-z0-9-]+)\.gif/g)]
     .map(match => match[1]).sort();
-  assert.deepEqual(videos, selected);
+  assert.deepEqual(scenes, selected);
   assert.deepEqual(gifs, selected);
   for (const id of selected) {
     assert.ok(html.includes(`example=${id}`), `${id}: editable website demo`);

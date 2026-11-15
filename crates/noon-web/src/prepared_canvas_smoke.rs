@@ -2,8 +2,8 @@
 //! JavaScript supplies only canvas lifecycle and explicit preparation triggers.
 use crate::WasmExecutionCanvasRenderer;
 use noon::{
-    AnimationOptions, ExecutionSession, IndicateOptions, Mobject, PrefixPublisher, PrefixReader,
-    Scene,
+    AnimationOptions, IndicateOptions, Mobject, PrefixPublisher, PrefixReader, Scene,
+    SceneExecution,
 };
 use noon_runtime::ReplayLimits;
 use wasm_bindgen::prelude::*;
@@ -13,9 +13,8 @@ fn js_error(error: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&error.to_string())
 }
 struct Producer {
-    scene: Scene,
+    execution: SceneExecution,
     target: Mobject,
-    session: ExecutionSession,
     publisher: PrefixPublisher,
 }
 
@@ -54,9 +53,10 @@ impl PreparedCanvasFixture {
         reader.seek(0.5).map_err(js_error)?;
         Ok(Self {
             source: Some(Producer {
-                scene,
+                execution: scene
+                    .into_execution_with_session(session)
+                    .map_err(js_error)?,
                 target,
-                session,
                 publisher,
             }),
             reader: Some(reader),
@@ -106,11 +106,11 @@ impl PreparedCanvasFixture {
             .source
             .as_mut()
             .ok_or_else(|| js_error("producer already finished"))?;
-        let second = source.session.frame().time >= 2.0;
+        let second = source.execution.session().frame().time >= 2.0;
         source
-            .scene
-            .live(&mut source.session)
-            .set_fill(
+            .execution
+            .scene_mut()
+            .set_fill_rgb(
                 &source.target,
                 if second { 0.0 } else { 1.0 },
                 if second { 1.0 } else { 0.0 },
@@ -119,24 +119,35 @@ impl PreparedCanvasFixture {
             )
             .map_err(js_error)?;
         source
-            .scene
-            .live(&mut source.session)
+            .execution
+            .live()
             .shift(&source.target, 1.0, 0.0)
             .map_err(js_error)?;
-        let segment = source.session.wait_segment(1.0).map_err(js_error)?;
+        let segment = source
+            .execution
+            .session()
+            .wait_segment(1.0)
+            .map_err(js_error)?;
         source
-            .session
+            .execution
+            .session_mut()
             .advance_to(segment.end_time())
             .map_err(js_error)?;
         let batch = if terminal {
-            source.session.seal_replay().map_err(js_error)?;
             source
-                .session
+                .execution
+                .session_mut()
+                .seal_replay()
+                .map_err(js_error)?;
+            source
+                .execution
+                .session_mut()
                 .finish_prepared_prefix(segment, &mut source.publisher)
                 .map_err(js_error)?
         } else {
             source
-                .session
+                .execution
+                .session_mut()
                 .publish_prepared_prefix(segment, &mut source.publisher)
                 .map_err(js_error)?
         };
@@ -205,24 +216,23 @@ impl LiveContinuation for CooperativeScene {
         &mut self,
         scene: &mut noon::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let stage = self.calls.get();
         self.calls.set(stage + 1);
         if stage == self.fail_at {
-            return live.wait_segment(-1.0).map(ContinuationStep::Await);
+            return scene.live().wait_segment(-1.0).map(ContinuationStep::Await);
         }
         if stage == 0 {
-            return Ok(ContinuationStep::Await(live.wait_segment(1.0)?));
+            return Ok(ContinuationStep::Await(scene.live().wait_segment(1.0)?));
         }
         if stage > self.steps {
             return Ok(ContinuationStep::Finished);
         }
         let x = -2.0 + f64::from(stage % 8) * 0.25;
         if self.animated {
-            let target = live.target_editor(&self.marker)?;
-            live.set_translation(&target, x, 2.0)?;
+            let target = scene.target_editor(&self.marker)?;
+            scene.live().set_translation(&target, x, 2.0)?;
             return Ok(ContinuationStep::Await(
-                live.declare_and_activate_transform_to(
+                scene.live().declare_and_activate_transform_to(
                     &self.marker,
                     &target,
                     AnimationOptions::new()
@@ -231,8 +241,8 @@ impl LiveContinuation for CooperativeScene {
                 )?,
             ));
         }
-        live.set_translation(&self.marker, x, 2.0)?;
-        Ok(ContinuationStep::Await(live.wait_segment(0.25)?))
+        scene.live().set_translation(&self.marker, x, 2.0)?;
+        Ok(ContinuationStep::Await(scene.live().wait_segment(0.25)?))
     }
 }
 #[wasm_bindgen]

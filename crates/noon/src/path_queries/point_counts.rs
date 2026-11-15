@@ -43,10 +43,20 @@ impl Mobject {
     }
 }
 
+impl crate::Scene {
+    /// Count the addressed object's own points in the current publication.
+    pub fn effective_mobject_point_count(&self, object: &Mobject) -> Result<usize, AuthoringError> {
+        let execution = self.running_execution().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        effective_mobject_point_count(self.integration_store(), execution, object)
+    }
+}
+
 /// Count this object's own points from one coherent effective publication.
 /// Geometry retains the same morph/reveal observation as a live path query;
 /// image quads and text roots do not require a vector-path conversion.
-pub fn effective_mobject_point_count(
+pub(crate) fn effective_mobject_point_count(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     object: &Mobject,

@@ -1,5 +1,4 @@
 use super::*;
-use crate::integration::{publish_borrowed_path_edit, BorrowedPathEdit};
 
 const PREFIX: [Point; 4] = [
     (0.123456789012345, 0.234567890123456),
@@ -43,7 +42,7 @@ fn vec2_conveniences_do_not_lower_an_existing_semantic_precision_prefix() {
 }
 
 #[test]
-fn scalar_edits_match_pinned_ce_in_authored_scene_owned_and_borrowed_execution() {
+fn scalar_edits_match_pinned_ce_in_authored_and_running() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../../fixtures/manim-v0.21/scalar-path-precision.json"
     ))
@@ -51,7 +50,7 @@ fn scalar_edits_match_pinned_ce_in_authored_scene_owned_and_borrowed_execution()
     assert_eq!(fixture["manimVersion"], "0.21.0");
     let cases = fixture["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 10);
-    for mode in 0..3 {
+    for mode in 0..2 {
         for expected in cases {
             let method = expected["method"].as_str().unwrap();
             let mut scene = crate::Scene::new();
@@ -83,7 +82,7 @@ fn scalar_edits_match_pinned_ce_in_authored_scene_owned_and_borrowed_execution()
                     _ => panic!("uncovered pinned method: {method}"),
                 }
                 .unwrap(),
-                1 => {
+                _ => {
                     let execution = scene.execution_session().unwrap();
                     scene.install_execution(execution);
                     match method {
@@ -111,72 +110,6 @@ fn scalar_edits_match_pinned_ce_in_authored_scene_owned_and_borrowed_execution()
                     }
                     .unwrap();
                 }
-                _ => {
-                    let mut execution = scene.execution_session().unwrap();
-                    let edit = match method {
-                        "set_points" => BorrowedPathEdit::RawPoints {
-                            object: &object,
-                            points: &points,
-                        },
-                        "append_points" => BorrowedPathEdit::AppendRawPoints {
-                            object: &object,
-                            points: &points,
-                        },
-                        "start_new_path" => BorrowedPathEdit::StartF64WithStride {
-                            object: &object,
-                            point: POINT,
-                            stride: 4,
-                        },
-                        "add_line_to" => BorrowedPathEdit::LineF64WithSamples {
-                            object: &object,
-                            point: POINT,
-                            stride: 4,
-                            bezier_t_values: &LINE_SAMPLES,
-                        },
-                        "add_quadratic_bezier_curve_to" => {
-                            BorrowedPathEdit::QuadraticF64WithStride {
-                                object: &object,
-                                control: HANDLE1,
-                                anchor: POINT,
-                                stride: 4,
-                            }
-                        }
-                        "add_cubic_bezier_curve_to" => BorrowedPathEdit::CubicF64WithStride {
-                            object: &object,
-                            control1: HANDLE1,
-                            control2: HANDLE2,
-                            anchor: POINT,
-                            stride: 4,
-                        },
-                        "add_cubic_bezier_curve" => BorrowedPathEdit::CubicCurveF64 {
-                            object: &object,
-                            anchor1: PREFIX[0],
-                            handle1: HANDLE1,
-                            handle2: HANDLE2,
-                            anchor2: POINT,
-                        },
-                        "add_points_as_corners" => BorrowedPathEdit::AppendCornersF64WithStride {
-                            object: &object,
-                            points: &points,
-                            stride: 4,
-                            bezier_t_values: &LINE_SAMPLES,
-                        },
-                        "set_points_as_corners" => BorrowedPathEdit::CornersF64WithSamples {
-                            object: &object,
-                            points: &corners,
-                            bezier_t_values: &LINE_SAMPLES,
-                        },
-                        "close_path" => BorrowedPathEdit::Close { object: &object },
-                        _ => panic!("uncovered pinned method: {method}"),
-                    };
-                    publish_borrowed_path_edit(
-                        scene.integration_store(),
-                        scene.root(),
-                        &mut execution,
-                        edit,
-                    )
-                    .unwrap();
-                }
             }
             let actual = object.path_query().unwrap().points().unwrap();
             let expected = expected["pointsXY"].as_array().unwrap();
@@ -200,7 +133,7 @@ fn scalar_edits_match_pinned_ce_in_authored_scene_owned_and_borrowed_execution()
 #[test]
 fn cubic_batches_preserve_incoming_and_existing_semantic_precision() {
     let curves = [[PREFIX[0], HANDLE1, HANDLE2, POINT]];
-    for mode in 0..3 {
+    for mode in 0..2 {
         for replace in [false, true] {
             let mut scene = crate::Scene::new();
             let mut object = scene.path(VectorPath::new(), Default::default()).unwrap();
@@ -215,7 +148,7 @@ fn cubic_batches_preserve_incoming_and_existing_semantic_precision() {
                     }
                     .unwrap();
                 }
-                1 => {
+                _ => {
                     let execution = scene.execution_session().unwrap();
                     scene.install_execution(execution);
                     if replace {
@@ -223,27 +156,6 @@ fn cubic_batches_preserve_incoming_and_existing_semantic_precision() {
                     } else {
                         scene.add_cubic_bezier_curves_f64(&object, &curves)
                     }
-                    .unwrap();
-                }
-                _ => {
-                    let mut execution = scene.execution_session().unwrap();
-                    let edit = if replace {
-                        BorrowedPathEdit::SetCubicCurvesF64 {
-                            object: &object,
-                            curves: &curves,
-                        }
-                    } else {
-                        BorrowedPathEdit::CubicCurvesF64 {
-                            object: &object,
-                            curves: &curves,
-                        }
-                    };
-                    publish_borrowed_path_edit(
-                        scene.integration_store(),
-                        scene.root(),
-                        &mut execution,
-                        edit,
-                    )
                     .unwrap();
                 }
             }
@@ -260,7 +172,7 @@ fn cubic_batches_preserve_incoming_and_existing_semantic_precision() {
 #[test]
 fn scalar_invalid_inputs_preserve_payload_revision_and_resources() {
     for live in [false, true] {
-        for edit in 0..3 {
+        for edit in 0..2 {
             let mut scene = crate::Scene::new();
             let mut object = scene.path(VectorPath::new(), Default::default()).unwrap();
             object.set_points_f64(&PREFIX).unwrap();
@@ -305,7 +217,7 @@ fn appended_corners_preserve_existing_morph_target_metadata() {
     let target = VectorPath::from_manim_points_f64(
         PREFIX.iter().map(|&(x, y)| (x + 2.0, y - 1.0)).collect(),
     );
-    for mode in 0..3 {
+    for mode in 0..2 {
         for precise in [false, true] {
             let mut scene = crate::Scene::new();
             let path = VectorPath::from_manim_points_f64(PREFIX.to_vec())
@@ -333,7 +245,7 @@ fn appended_corners_preserve_existing_morph_target_metadata() {
                     }
                     .unwrap();
                 }
-                1 => {
+                _ => {
                     let execution = scene.execution_session().unwrap();
                     scene.install_execution(execution);
                     if precise {
@@ -341,27 +253,6 @@ fn appended_corners_preserve_existing_morph_target_metadata() {
                     } else {
                         scene.add_points_as_corners(&object, &corners)
                     }
-                    .unwrap();
-                }
-                _ => {
-                    let mut execution = scene.execution_session().unwrap();
-                    let edit = if precise {
-                        BorrowedPathEdit::AppendCornersF64 {
-                            object: &object,
-                            points: &corners_f64,
-                        }
-                    } else {
-                        BorrowedPathEdit::AppendCorners {
-                            object: &object,
-                            points: &corners,
-                        }
-                    };
-                    publish_borrowed_path_edit(
-                        scene.integration_store(),
-                        scene.root(),
-                        &mut execution,
-                        edit,
-                    )
                     .unwrap();
                 }
             }

@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    integration::{publish_borrowed_path_edit, BorrowedPathEdit},
-    Scene,
-};
+use crate::Scene;
 
 #[test]
 fn recursive_xyz_queries_preserve_owned_roots_order_and_shared_aliases() {
@@ -38,24 +35,25 @@ fn recursive_xyz_queries_preserve_owned_roots_order_and_shared_aliases() {
             .map(SemanticVec3::xy)
             .collect::<Vec<_>>()
     );
-    let mut execution = scene.execution_session().unwrap();
+    let mut running = scene.into_execution().unwrap();
     assert_eq!(
-        effective_all_points_3d(scene.integration_store(), &execution, (&root).into()).unwrap(),
+        effective_all_points_3d(
+            running.scene().integration_store(),
+            running.session(),
+            (&root).into()
+        )
+        .unwrap(),
         expected
     );
     let updated = SemanticVec3::new(7.0, 8.0, 9.125);
-    publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut execution,
-        BorrowedPathEdit::RawPoints3d {
-            object: &a,
-            points: &[updated],
-        },
-    )
-    .unwrap();
+    running.scene_mut().set_points_3d(&a, &[updated]).unwrap();
     assert_eq!(
-        effective_all_points_3d(scene.integration_store(), &execution, (&root).into()).unwrap(),
+        effective_all_points_3d(
+            running.scene().integration_store(),
+            running.session(),
+            (&root).into()
+        )
+        .unwrap(),
         [root_point, updated, updated, second]
     );
     assert_eq!(root.member_count().unwrap(), 2);

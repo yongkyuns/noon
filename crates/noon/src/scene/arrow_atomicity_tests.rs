@@ -2,6 +2,79 @@ use super::*;
 use crate::{arrow_authoring::publish_arrow_options, ManimArrowOptions};
 use noon_core::SemanticObjectProperty;
 
+#[test]
+fn arrow_created_after_wait_is_detached_and_usable_by_live_family_transform() {
+    let mut execution = Scene::new().into_execution().unwrap();
+    let wait = execution.live().wait_segment(0.5).unwrap();
+    execution
+        .live()
+        .advance_segment_to(wait, wait.end_time())
+        .unwrap();
+    execution.live().complete_segment(wait).unwrap();
+
+    let arrow = execution
+        .scene_mut()
+        .manim_arrow(ManimArrowOptions::arrow(0.0, 0.0, 1.0, 0.0).unwrap())
+        .unwrap();
+    let store = execution.scene().integration_store().borrow();
+    assert_eq!(
+        store.node(execution.scene().root()).unwrap().members(),
+        Vec::<noon_core::SemanticNodeId>::new()
+    );
+    assert!(store.node(arrow.family().node_id()).is_some());
+    drop(store);
+
+    execution
+        .scene_mut()
+        .add_many(&[arrow.family().into()])
+        .unwrap();
+    let target = execution
+        .scene_mut()
+        .manim_arrow(ManimArrowOptions::arrow(0.0, 0.0, 2.0, 0.0).unwrap())
+        .unwrap();
+    let from_width = execution
+        .scene()
+        .effective(arrow.shaft())
+        .unwrap()
+        .style
+        .stroke_width;
+    // Detached targets intentionally have no effective runtime row.
+    let to_width = target.shaft().state().unwrap().style.stroke_width as f32;
+    let segment = execution
+        .live()
+        .declare_and_activate_family_transform_to(
+            arrow.family(),
+            target.family(),
+            AnimationOptions::new().run_time(0.25),
+        )
+        .unwrap();
+    execution
+        .live()
+        .advance_segment_to(segment, segment.start_time() + 0.5 * segment.duration())
+        .unwrap();
+    let halfway_width = execution
+        .scene()
+        .effective(arrow.shaft())
+        .unwrap()
+        .style
+        .stroke_width;
+    assert!((halfway_width - (from_width + to_width) * 0.5).abs() < 1.0e-5);
+    execution
+        .live()
+        .advance_segment_to(segment, segment.end_time())
+        .unwrap();
+    execution.live().complete_segment(segment).unwrap();
+    assert_eq!(
+        execution
+            .scene()
+            .effective(arrow.shaft())
+            .unwrap()
+            .style
+            .stroke_width,
+        to_width
+    );
+}
+
 fn running_scene() -> (Scene, Mobject) {
     let mut scene = Scene::new();
     let seed = scene.circle(0.25).unwrap();

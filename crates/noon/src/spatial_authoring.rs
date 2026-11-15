@@ -756,8 +756,43 @@ impl Scene {
         )?)
     }
 
+    /// Regenerate only this mesh's resource after a dependency changes. Old
+    /// immutable versions remain available to snapshots and submitted draw work.
+    pub fn replace_mesh_geometry(
+        &mut self,
+        object: &Mobject,
+        mesh: noon_core::MeshResource,
+    ) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        let old = object
+            .state()?
+            .content
+            .geometry()
+            .and_then(|geometry| geometry.resource_handle())
+            .ok_or(AuthoringError::NonFiniteGeometry)?;
+        {
+            let store = self.integration_store().borrow();
+            if !matches!(
+                store.geometry_resources().get(old),
+                Some(noon_core::GeometryResource::Mesh(_))
+            ) {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+        }
+        self.with_semantic_publication(|store, publish| {
+            store.with_geometry_mesh(mesh, |store, handle| {
+                let mut transaction = SemanticMutationTransaction::new();
+                transaction.replace_content(
+                    object.node_id(),
+                    noon_core::StoredGeometry::Resource(handle),
+                );
+                publish(store, transaction).map(|_| ())
+            })
+        })
+    }
+
     /// Atomically recolor a sampled Surface through the owning Scene. The same
-    /// prepared edit is used for cold authoring and active LiveSession work.
+    /// prepared edit is used before and after execution starts.
     pub fn set_surface_checkerboard(
         &mut self,
         surface: &SurfaceFamily,
@@ -1027,5 +1062,7 @@ pub(crate) fn effective_world_or_authored(
     effective_world(session, store, node)
 }
 
+#[cfg(test)]
+mod mesh_edit_tests;
 #[cfg(test)]
 mod tests;

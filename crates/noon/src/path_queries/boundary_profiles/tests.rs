@@ -60,69 +60,72 @@ fn effective_boundary_profile_tracks_content_replacement_and_keeps_queries_read_
         .unwrap();
     let family = scene.family(&[(&target).into()]).unwrap();
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    assert!(!scene
-        .live(&mut execution)
+    let mut execution = scene.into_execution().unwrap();
+    assert!(!execution
+        .live()
         .requires_content_boundary((&family).into())
         .unwrap());
     // Replacing content preserves the target's style. Image admission must
     // reject a stroked geometry style before changing either authority.
-    let publication = execution.publication_context();
-    let revision = scene.revision();
+    let publication = execution.session().publication_context();
+    let revision = execution.scene().revision();
     let state = target.state().unwrap();
-    assert!(scene
-        .live(&mut execution)
-        .replace_content(&target, &image)
-        .is_err());
-    assert_eq!(execution.publication_context(), publication);
-    assert_eq!(scene.revision(), revision);
+    assert!(execution.live().replace_content(&target, &image).is_err());
+    assert_eq!(execution.session().publication_context(), publication);
+    assert_eq!(execution.scene().revision(), revision);
     assert_eq!(target.state().unwrap(), state);
-    assert!(!scene
-        .live(&mut execution)
+    assert!(!execution
+        .live()
         .requires_content_boundary((&family).into())
         .unwrap());
     {
-        let mut live = scene.live(&mut execution);
-        live.set_style(
-            &target,
-            crate::StyleUpdate {
-                fill_color: Some(crate::Color::WHITE),
-                fill_opacity: Some(1.),
-                stroke_width: Some(0.),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        live.disable_stroke(&target).unwrap();
+        execution
+            .scene_mut()
+            .set_style(
+                &target,
+                crate::StyleUpdate {
+                    fill_color: Some(crate::Color::WHITE),
+                    fill_opacity: Some(1.),
+                    stroke_width: Some(0.),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        execution.scene_mut().disable_stroke(&target).unwrap();
     }
     for source in [&image, &geometry, &image] {
-        let mut live = scene.live(&mut execution);
-        live.replace_content(&target, source).unwrap();
+        execution.live().replace_content(&target, source).unwrap();
         let expected = MobjectTarget::from(source)
             .requires_content_boundary()
             .unwrap();
         assert_eq!(
-            live.requires_content_boundary((&family).into()).unwrap(),
+            execution
+                .live()
+                .requires_content_boundary((&family).into())
+                .unwrap(),
             expected
         );
         assert_eq!(
-            live.requires_content_boundary(source.into()).unwrap(),
+            execution
+                .live()
+                .requires_content_boundary(source.into())
+                .unwrap(),
             expected
         );
     }
-    let before = execution.publication_context();
+    let before = execution.session().publication_context();
     let foreign = Scene::new().circle(0.5).unwrap();
-    assert!(scene
-        .live(&mut execution)
+    assert!(execution
+        .live()
         .requires_content_boundary((&foreign).into())
         .is_err());
-    assert_eq!(execution.publication_context(), before);
-    let _out_of_band = scene.circle(1.).unwrap();
-    assert!(scene
-        .live(&mut execution)
+    assert_eq!(execution.session().publication_context(), before);
+    target.set_z_index(4.0).unwrap();
+    assert!(execution
+        .live()
         .requires_content_boundary((&family).into())
         .is_err());
-    assert_eq!(execution.publication_context(), before);
+    assert_eq!(execution.session().publication_context(), before);
 }
 
 #[cfg(feature = "native-text")]

@@ -80,42 +80,36 @@ fn predeclared_motion_and_glow_complete_through_public_scene() {
     let animation = scene
         .declare_transform_to(&source, &target, options())
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.5)
-        .unwrap();
-    let middle = only_effect(row(&session, &source).effects.as_ref().unwrap()).definition;
+    let mut session = scene.into_execution().unwrap();
+    let segment = session.live().play_animation(&animation).unwrap();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    let middle = only_effect(row(session.session(), &source).effects.as_ref().unwrap()).definition;
     assert_eq!(
         middle.as_glow().unwrap().intensity(),
         old.intensity() + (1.4 - old.intensity()) * 0.5
     );
     assert_eq!(middle.radius(), Some(Pixels(4.875).into()));
-    assert_eq!(row(&session, &source).transform.translation.x, 1.0);
+    assert_eq!(row(session.session(), &source).transform.translation.x, 1.0);
     assert_eq!(
         definition(&source),
         old,
         "active values do not rewrite authored state"
     );
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(definition(&source).intensity(), 1.4);
     assert_eq!(definition(&source).color(), Color::BLUE);
     assert_eq!(definition(&source).radius(), Pixels(6.5).into());
     assert_eq!(
-        only_effect(row(&session, &source).effects.as_ref().unwrap()).definition,
+        only_effect(row(session.session(), &source).effects.as_ref().unwrap()).definition,
         (definition(&source)).into()
     );
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .set_glow(&source, EffectUpdate::default().intensity(0.2))
         .unwrap();
     assert_eq!(
-        only_effect(row(&session, &source).effects.as_ref().unwrap())
+        only_effect(row(session.session(), &source).effects.as_ref().unwrap())
             .definition
             .as_glow()
             .unwrap()
@@ -128,80 +122,82 @@ fn predeclared_motion_and_glow_complete_through_public_scene() {
 #[test]
 fn live_target_preserves_an_independent_attachment_then_activates() {
     let (scene, source) = fixture(true);
-    let mut session = scene.execution_session().unwrap();
-    session.take_renderer_publication();
-    let target = scene.live(&mut session).target_editor(&source).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    session.session_mut().take_renderer_publication();
+    let target = session.scene_mut().target_editor(&source).unwrap();
     assert_eq!(definition(&target), definition(&source));
     assert_ne!(
         target.get_effect("glow").unwrap().node_id(),
         source.get_effect("glow").unwrap().node_id()
     );
-    assert!(session.take_renderer_publication().changes().is_empty());
-    scene
-        .live(&mut session)
+    assert!(session
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
+    session
+        .scene_mut()
         .set_glow(&target, EffectUpdate::default().intensity(1.5))
         .unwrap();
-    scene.live(&mut session).shift(&target, 2.0, 0.0).unwrap();
-    assert!(session.take_renderer_publication().changes().is_empty());
-    let segment = scene
-        .live(&mut session)
+    session.live().shift(&target, 2.0, 0.0).unwrap();
+    assert!(session
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
+    let segment = session
+        .live()
         .declare_and_activate_transform_to(&source, &target, options())
         .unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(definition(&source).intensity(), 1.5);
-    assert_eq!(row(&session, &source).transform.translation.x, 2.0);
+    assert_eq!(row(session.session(), &source).transform.translation.x, 2.0);
 }
 
 #[test]
 fn live_add_remove_and_stale_handle_preserve_source_and_spatial_state() {
     let (scene, source) = fixture(false);
-    let mut session = scene.execution_session().unwrap();
-    let object_id = session.execution_object_id(source.node_id()).unwrap();
-    let layout = scene.live(&mut session).effective_layout(&source).unwrap();
-    session.take_renderer_publication();
-    scene
-        .live(&mut session)
-        .set_glow(&source, initial())
+    let mut session = scene.into_execution().unwrap();
+    let object_id = session
+        .session()
+        .execution_object_id(source.node_id())
         .unwrap();
+    let layout = session.live().effective_layout(&source).unwrap();
+    session.session_mut().take_renderer_publication();
+    session.scene_mut().set_glow(&source, initial()).unwrap();
     let original = source.get_effect("glow").unwrap();
     assert_eq!(
-        only_effect(row(&session, &source).effects.as_ref().unwrap()).attachment,
+        only_effect(row(session.session(), &source).effects.as_ref().unwrap()).attachment,
         original.node_id()
     );
-    scene.live(&mut session).remove_glow(&source).unwrap();
-    assert!(row(&session, &source).effects.is_none());
-    scene
-        .live(&mut session)
-        .set_glow(&source, initial())
-        .unwrap();
+    session.scene_mut().remove_glow(&source).unwrap();
+    assert!(row(session.session(), &source).effects.is_none());
+    session.scene_mut().set_glow(&source, initial()).unwrap();
     assert_ne!(
         source.get_effect("glow").unwrap().node_id(),
         original.node_id()
     );
-    let before = session.publication_context();
-    assert!(scene
-        .live(&mut session)
+    let before = session.session().publication_context();
+    assert!(session
+        .scene_mut()
         .remove_effect(&source, &original)
         .is_err());
-    assert_eq!(session.publication_context(), before);
+    assert_eq!(session.session().publication_context(), before);
     assert_eq!(
-        session.execution_object_id(source.node_id()),
+        session.session().execution_object_id(source.node_id()),
         Some(object_id)
     );
-    let after_layout = scene.live(&mut session).effective_layout(&source).unwrap();
+    let after_layout = session.live().effective_layout(&source).unwrap();
     assert_eq!(
         (after_layout.center, after_layout.width, after_layout.height),
         (layout.center, layout.width, layout.height)
     );
-    scene.live(&mut session).remove_glow(&source).unwrap();
-    let before = session.publication_context();
-    scene.live(&mut session).remove_glow(&source).unwrap();
+    session.scene_mut().remove_glow(&source).unwrap();
+    let before = session.session().publication_context();
+    session.scene_mut().remove_glow(&source).unwrap();
     assert_eq!(
-        session.publication_context(),
+        session.session().publication_context(),
         before,
         "absent removal is idle"
     );
@@ -210,21 +206,18 @@ fn live_add_remove_and_stale_handle_preserve_source_and_spatial_state() {
 #[test]
 fn public_glow_profile_rejects_invalid_live_edits_without_partial_commit() {
     let (scene, source) = fixture(true);
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     for i in 1..noon_core::MAX_EFFECT_STACK_LEN {
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .add_effect(&source, noon_core::Glow::default(), &format!("extra{i}"))
             .unwrap();
     }
-    let before = session.publication_context();
-    let original = row(&session, &source).clone();
-    assert!(scene
-        .live(&mut session)
-        .set_scale(&source, 0.0, 1.0)
-        .is_err());
-    assert!(scene
-        .live(&mut session)
+    let before = session.session().publication_context();
+    let original = row(session.session(), &source).clone();
+    assert!(session.live().set_scale(&source, 0.0, 1.0).is_err());
+    assert!(session
+        .scene_mut()
         .add_effect(&source, noon_core::Glow::default(), "other")
         .is_err());
     let mut batch = SemanticMutationTransaction::new();
@@ -234,9 +227,9 @@ fn public_glow_profile_rejects_invalid_live_edits_without_partial_commit() {
         SemanticVec3::new(9.0, 0.0, 0.0),
     );
     batch.create_effect(source.node_id(), "second", noon_core::Glow::default());
-    assert!(scene.live(&mut session).apply(batch).is_err());
-    assert_eq!(session.publication_context(), before);
-    assert_eq!(row(&session, &source), &original);
+    assert!(session.live().apply(batch).is_err());
+    assert_eq!(session.session().publication_context(), before);
+    assert_eq!(row(session.session(), &source), &original);
     assert!(source.get_effect("second").is_err());
 }
 
@@ -271,35 +264,30 @@ fn public_replay_restores_original_attachment_after_completed_motion_and_removal
     let animation = scene
         .declare_transform_to(&source, &target, options())
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     session
+        .session_mut()
         .begin_replay_retention(noon_runtime::ReplayLimits::default())
         .unwrap();
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    scene.live(&mut session).remove_glow(&source).unwrap();
-    let wait = scene.live(&mut session).wait_segment(1.0).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(wait, 2.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(wait).unwrap();
-    session.seal_replay().unwrap();
+    let segment = session.live().play_animation(&animation).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
+    session.scene_mut().remove_glow(&source).unwrap();
+    let wait = session.live().wait_segment(1.0).unwrap();
+    session.live().advance_segment_to(wait, 2.0).unwrap();
+    session.live().complete_segment(wait).unwrap();
+    session.session_mut().seal_replay().unwrap();
     for _ in 0..3 {
         session.seek(0.5).unwrap();
-        let effect = only_effect(row(&session, &source).effects.as_ref().unwrap());
+        let effect = only_effect(row(session.session(), &source).effects.as_ref().unwrap());
         assert_eq!(effect.attachment, original_id);
         assert_eq!(
             effect.definition.as_glow().unwrap().intensity(),
             original.intensity() + (1.4 - original.intensity()) * 0.5
         );
-        assert_eq!(row(&session, &source).transform.translation.x, 1.0);
+        assert_eq!(row(session.session(), &source).transform.translation.x, 1.0);
         session.seek(2.0).unwrap();
-        assert!(row(&session, &source).effects.is_none());
+        assert!(row(session.session(), &source).effects.is_none());
         assert!(
             source.get_effect("glow").is_err(),
             "replay does not rewind authored identity"
@@ -351,43 +339,40 @@ fn pending_segment_keeps_the_existing_publication_barrier() {
     let animation = scene
         .declare_transform_to(&source, &target, options())
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.5)
-        .unwrap();
-    let before = session.publication_context();
-    let count = scene.integration_store().borrow().len();
-    assert!(scene.live(&mut session).remove_glow(&source).is_err());
-    assert!(scene.live(&mut session).target_editor(&source).is_err());
-    assert_eq!(session.publication_context(), before);
-    assert_eq!(scene.integration_store().borrow().len(), count);
+    let mut session = scene.into_execution().unwrap();
+    let segment = session.live().play_animation(&animation).unwrap();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
+    let before = session.session().publication_context();
+    let count = session.scene().integration_store().borrow().len();
+    assert!(session.scene_mut().remove_glow(&source).is_err());
+    assert!(session.scene_mut().target_editor(&source).is_err());
+    assert_eq!(session.session().publication_context(), before);
+    assert_eq!(session.scene().integration_store().borrow().len(), count);
 
     // The target-copy preparation helper must still capture the current value,
     // not the authored base. Abort the prepared copy: the ordinary live barrier
     // above remains authoritative about when it may be published.
-    let store = scene.integration_store().borrow();
+    let store = session.scene().integration_store().borrow();
     let mut copy = SemanticMutationTransaction::new();
     let target = copy.create_node(noon_core::SemanticNodeCreation::object(
         source.state().unwrap(),
     ));
     crate::effective_capture::stage_effect_copy(
         &store,
-        &session,
+        session.session(),
         source.node_id(),
         target,
         &mut copy,
     )
     .unwrap();
     drop(store);
-    let mut store = scene.integration_store().borrow_mut();
+    let mut store = session.scene().integration_store().borrow_mut();
     let prepared = copy.prepare(&mut store).unwrap();
     let effects = prepared.animation_effect_snapshot(target).unwrap();
     let captured = (effects[0].definition).as_glow().unwrap();
     assert_eq!(
         captured,
-        (only_effect(row(&session, &source).effects.as_ref().unwrap()).definition)
+        (only_effect(row(session.session(), &source).effects.as_ref().unwrap()).definition)
             .as_glow()
             .unwrap()
     );
@@ -403,52 +388,50 @@ fn definition_from_initial() -> noon_core::Glow {
 #[test]
 fn absent_to_glow_enrolls_neutral_at_activation_and_completes_normally() {
     let (scene, source) = fixture(false);
-    let mut session = scene.execution_session().unwrap();
-    let source_execution_id = session.execution_object_id(source.node_id());
-    let target = scene.live(&mut session).target_editor(&source).unwrap();
-    scene
-        .live(&mut session)
-        .set_glow(&target, initial())
-        .unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let source_execution_id = session.session().execution_object_id(source.node_id());
+    let target = session.scene_mut().target_editor(&source).unwrap();
+    session.scene_mut().set_glow(&target, initial()).unwrap();
     assert!(
         source.get_effect("glow").is_err(),
         "target building is inert"
     );
-    assert!(row(&session, &source).effects.is_none());
-    session.take_renderer_publication();
+    assert!(row(session.session(), &source).effects.is_none());
+    session.session_mut().take_renderer_publication();
 
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_transform_to(&source, &target, options())
         .unwrap();
     let attached = source.get_effect("glow").unwrap();
     let new_generation = attached.node_id();
     assert_ne!(target.get_effect("glow").unwrap().node_id(), new_generation);
     assert_eq!(
-        session.execution_object_id(source.node_id()),
+        session.session().execution_object_id(source.node_id()),
         source_execution_id
     );
     assert_eq!(definition(&source).intensity(), 0.0);
     assert_eq!(
-        only_effect(row(&session, &source).effects.as_ref().unwrap()).attachment,
+        only_effect(row(session.session(), &source).effects.as_ref().unwrap()).attachment,
         new_generation
     );
     assert_eq!(
-        only_effect(row(&session, &source).effects.as_ref().unwrap())
+        only_effect(row(session.session(), &source).effects.as_ref().unwrap())
             .definition
             .as_glow()
             .unwrap()
             .intensity(),
         0.0
     );
-    assert!(!session.take_renderer_publication().changes().is_empty());
+    assert!(!session
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
 
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.5)
-        .unwrap();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
     assert_eq!(
-        only_effect(row(&session, &source).effects.as_ref().unwrap())
+        only_effect(row(session.session(), &source).effects.as_ref().unwrap())
             .definition
             .as_glow()
             .unwrap()
@@ -456,18 +439,15 @@ fn absent_to_glow_enrolls_neutral_at_activation_and_completes_normally() {
         initial().intensity.unwrap() * 0.5,
     );
     assert_eq!(definition(&source).intensity(), 0.0);
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(
         definition(&source).intensity(),
         initial().intensity.unwrap()
     );
     assert_eq!(source.get_effect("glow").unwrap().node_id(), new_generation);
-    scene.live(&mut session).remove_glow(&source).unwrap();
-    assert!(row(&session, &source).effects.is_none());
+    session.scene_mut().remove_glow(&source).unwrap();
+    assert!(row(session.session(), &source).effects.is_none());
     assert!(
         attached.authored_definition().is_err(),
         "old handle is stale"
@@ -477,46 +457,35 @@ fn absent_to_glow_enrolls_neutral_at_activation_and_completes_normally() {
 #[test]
 fn absent_to_glow_replay_restores_neutral_generation_and_never_restores_authored_identity() {
     let (scene, source) = fixture(false);
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     session
+        .session_mut()
         .begin_replay_retention(noon_runtime::ReplayLimits::default())
         .unwrap();
-    let target = scene.live(&mut session).target_editor(&source).unwrap();
-    scene
-        .live(&mut session)
-        .set_glow(&target, initial())
-        .unwrap();
-    let animation = scene
-        .live(&mut session)
+    let target = session.scene_mut().target_editor(&source).unwrap();
+    session.scene_mut().set_glow(&target, initial()).unwrap();
+    let animation = session
+        .live()
         .declare_and_activate_transform_to(&source, &target, options())
         .unwrap();
     let new_generation = source.get_effect("glow").unwrap().node_id();
-    scene
-        .live(&mut session)
-        .advance_segment_to(animation, 1.0)
-        .unwrap();
-    scene
-        .live(&mut session)
-        .complete_segment(animation)
-        .unwrap();
-    scene.live(&mut session).remove_glow(&source).unwrap();
-    let wait = scene.live(&mut session).wait_segment(1.0).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(wait, 2.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(wait).unwrap();
-    session.seal_replay().unwrap();
+    session.live().advance_segment_to(animation, 1.0).unwrap();
+    session.live().complete_segment(animation).unwrap();
+    session.scene_mut().remove_glow(&source).unwrap();
+    let wait = session.live().wait_segment(1.0).unwrap();
+    session.live().advance_segment_to(wait, 2.0).unwrap();
+    session.live().complete_segment(wait).unwrap();
+    session.session_mut().seal_replay().unwrap();
     for _ in 0..3 {
         session.seek(0.5).unwrap();
-        let effect = only_effect(row(&session, &source).effects.as_ref().unwrap());
+        let effect = only_effect(row(session.session(), &source).effects.as_ref().unwrap());
         assert_eq!(effect.attachment, new_generation);
         assert_eq!(
             effect.definition.as_glow().unwrap().intensity(),
             initial().intensity.unwrap() * 0.5
         );
         session.seek(2.0).unwrap();
-        assert!(row(&session, &source).effects.is_none());
+        assert!(row(session.session(), &source).effects.is_none());
         assert!(source.get_effect("glow").is_err());
     }
 }
@@ -524,14 +493,11 @@ fn absent_to_glow_replay_restores_neutral_generation_and_never_restores_authored
 #[test]
 fn returning_absent_to_glow_reconciles_neutral_without_losing_attachment_identity() {
     let (scene, source) = fixture(false);
-    let mut session = scene.execution_session().unwrap();
-    let target = scene.live(&mut session).target_editor(&source).unwrap();
-    scene
-        .live(&mut session)
-        .set_glow(&target, initial())
-        .unwrap();
-    let animation = scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let target = session.scene_mut().target_editor(&source).unwrap();
+    session.scene_mut().set_glow(&target, initial()).unwrap();
+    let animation = session
+        .live()
         .declare_and_activate_transform_to(
             &source,
             &target,
@@ -539,33 +505,24 @@ fn returning_absent_to_glow_reconciles_neutral_without_losing_attachment_identit
         )
         .unwrap();
     let fresh = source.get_effect("glow").unwrap().node_id();
-    scene
-        .live(&mut session)
-        .advance_segment_to(animation, 0.5)
-        .unwrap();
+    session.live().advance_segment_to(animation, 0.5).unwrap();
     assert!(
-        only_effect(row(&session, &source).effects.as_ref().unwrap())
+        only_effect(row(session.session(), &source).effects.as_ref().unwrap())
             .definition
             .as_glow()
             .unwrap()
             .intensity()
             > 0.0
     );
-    scene
-        .live(&mut session)
-        .advance_segment_to(animation, 1.0)
-        .unwrap();
-    scene
-        .live(&mut session)
-        .complete_segment(animation)
-        .unwrap();
+    session.live().advance_segment_to(animation, 1.0).unwrap();
+    session.live().complete_segment(animation).unwrap();
     assert_eq!(definition(&source).intensity(), 0.0);
     assert_eq!(
-        only_effect(row(&session, &source).effects.as_ref().unwrap()).attachment,
+        only_effect(row(session.session(), &source).effects.as_ref().unwrap()).attachment,
         fresh
     );
     assert_eq!(
-        only_effect(row(&session, &source).effects.as_ref().unwrap())
+        only_effect(row(session.session(), &source).effects.as_ref().unwrap())
             .definition
             .as_glow()
             .unwrap()
@@ -577,26 +534,23 @@ fn returning_absent_to_glow_reconciles_neutral_without_losing_attachment_identit
 #[test]
 fn unsupported_absent_target_glow_does_not_allocate_or_publish() {
     let (scene, source) = fixture(false);
-    let mut session = scene.execution_session().unwrap();
-    let target = scene.live(&mut session).target_editor(&source).unwrap();
-    scene
-        .live(&mut session)
-        .set_glow(&target, initial())
-        .unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let target = session.scene_mut().target_editor(&source).unwrap();
+    session.scene_mut().set_glow(&target, initial()).unwrap();
+    session
+        .scene_mut()
         .add_effect(&target, noon_core::Glow::default(), "other")
         .unwrap();
-    let before = session.publication_context();
-    let count = scene.integration_store().borrow().len();
-    assert!(scene
-        .live(&mut session)
+    let before = session.session().publication_context();
+    let count = session.scene().integration_store().borrow().len();
+    assert!(session
+        .live()
         .declare_and_activate_transform_to(&source, &target, options())
         .is_err());
-    assert_eq!(session.publication_context(), before);
-    assert_eq!(scene.integration_store().borrow().len(), count);
+    assert_eq!(session.session().publication_context(), before);
+    assert_eq!(session.scene().integration_store().borrow().len(), count);
     assert!(source.get_effect("glow").is_err());
-    assert!(row(&session, &source).effects.is_none());
+    assert!(row(session.session(), &source).effects.is_none());
 }
 
 #[test]
@@ -604,17 +558,15 @@ fn ordinary_composition_enrolls_absent_glow_at_activation_and_replays_exact_gene
     use crate::{AnimationCompositionRequest, TransformToRequest};
 
     let (scene, source) = fixture(false);
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     session
+        .session_mut()
         .begin_replay_retention(noon_runtime::ReplayLimits::default())
         .unwrap();
-    let target = scene.live(&mut session).target_editor(&source).unwrap();
-    scene
-        .live(&mut session)
-        .set_glow(&target, initial())
-        .unwrap();
+    let target = session.scene_mut().target_editor(&source).unwrap();
+    session.scene_mut().set_glow(&target, initial()).unwrap();
     assert!(source.get_effect("glow").is_err());
-    let before = session.publication_context();
+    let before = session.session().publication_context();
     let request = AnimationCompositionRequest::Composition {
         kind: noon_core::SemanticAnimationCompositionKind::Parallel,
         children: vec![AnimationCompositionRequest::TransformTo(
@@ -622,52 +574,46 @@ fn ordinary_composition_enrolls_absent_glow_at_activation_and_replays_exact_gene
         )],
         options: AnimationOptions::new(),
     };
-    let segment = scene
-        .live(&mut session)
+    let segment = session
+        .live()
         .declare_and_activate_composition(&request, AnimationOptions::new())
         .unwrap();
-    assert_ne!(session.publication_context(), before);
+    assert_ne!(session.session().publication_context(), before);
     let effect = source.get_effect("glow").unwrap();
     let generation = effect.node_id();
     assert_ne!(generation, target.get_effect("glow").unwrap().node_id());
     assert_eq!(definition(&source).intensity(), 0.0);
     assert_eq!(
-        only_effect(row(&session, &source).effects.as_ref().unwrap()).attachment,
+        only_effect(row(session.session(), &source).effects.as_ref().unwrap()).attachment,
         generation
     );
 
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.5)
-        .unwrap();
+    session.live().advance_segment_to(segment, 0.5).unwrap();
     assert_eq!(
-        only_effect(row(&session, &source).effects.as_ref().unwrap())
+        only_effect(row(session.session(), &source).effects.as_ref().unwrap())
             .definition
             .as_glow()
             .unwrap()
             .intensity(),
         initial().intensity.unwrap() * 0.5
     );
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.0)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session.live().advance_segment_to(segment, 1.0).unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(
         definition(&source).intensity(),
         initial().intensity.unwrap()
     );
-    scene.live(&mut session).remove_glow(&source).unwrap();
+    session.scene_mut().remove_glow(&source).unwrap();
     assert!(effect.authored_definition().is_err());
-    session.seal_replay().unwrap();
+    session.session_mut().seal_replay().unwrap();
     for _ in 0..2 {
         session.seek(0.5).unwrap();
         assert_eq!(
-            only_effect(row(&session, &source).effects.as_ref().unwrap()).attachment,
+            only_effect(row(session.session(), &source).effects.as_ref().unwrap()).attachment,
             generation
         );
         assert_eq!(
-            only_effect(row(&session, &source).effects.as_ref().unwrap())
+            only_effect(row(session.session(), &source).effects.as_ref().unwrap())
                 .definition
                 .as_glow()
                 .unwrap()
@@ -675,7 +621,7 @@ fn ordinary_composition_enrolls_absent_glow_at_activation_and_replays_exact_gene
             initial().intensity.unwrap() * 0.5
         );
         session.seek(1.0).unwrap();
-        assert!(row(&session, &source).effects.is_none());
+        assert!(row(session.session(), &source).effects.is_none());
     }
 }
 
@@ -684,31 +630,31 @@ fn ordinary_composition_rejects_stacked_absent_glow_without_any_publication() {
     use crate::{AnimationCompositionRequest, TransformToRequest};
 
     let (scene, source) = fixture(false);
-    let mut session = scene.execution_session().unwrap();
-    let target = scene.live(&mut session).target_editor(&source).unwrap();
-    scene
-        .live(&mut session)
-        .set_glow(&target, initial())
-        .unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let target = session.scene_mut().target_editor(&source).unwrap();
+    session.scene_mut().set_glow(&target, initial()).unwrap();
+    session
+        .scene_mut()
         .add_effect(&target, noon_core::Glow::default(), "second")
         .unwrap();
-    let before = session.publication_context();
-    let old_frame = session.frame().clone();
-    let node_count = scene.integration_store().borrow().len();
+    let before = session.session().publication_context();
+    let old_frame = session.session().frame().clone();
+    let node_count = session.scene().integration_store().borrow().len();
     let request = AnimationCompositionRequest::TransformTo(TransformToRequest::new(
         &source,
         &target,
         options(),
     ));
-    assert!(scene
-        .live(&mut session)
+    assert!(session
+        .live()
         .declare_and_activate_composition(&request, AnimationOptions::new())
         .is_err());
-    assert_eq!(session.publication_context(), before);
-    assert_eq!(session.frame(), &old_frame);
-    assert_eq!(scene.integration_store().borrow().len(), node_count);
+    assert_eq!(session.session().publication_context(), before);
+    assert_eq!(session.session().frame(), &old_frame);
+    assert_eq!(
+        session.scene().integration_store().borrow().len(),
+        node_count
+    );
     assert!(source.get_effect("glow").is_err());
 }
 

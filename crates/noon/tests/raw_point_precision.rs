@@ -1,4 +1,4 @@
-use noon::{integration::BorrowedPathEdit, ManimGeometryOptions, Scene};
+use noon::{ManimGeometryOptions, Scene};
 use noon_core::{SemanticTransform2_5D, SemanticVec3, VectorPath};
 
 fn raw_points() -> Vec<(f64, f64)> {
@@ -19,21 +19,13 @@ fn raw_coordinates_survive_authored_and_effective_edits_without_renderer_quantiz
         let mut scene = Scene::new();
         let mut object = scene.square(1.0).unwrap();
         scene.add(&object).unwrap();
-        let semantics = std::rc::Rc::clone(scene.integration_store());
-        let scene_root = scene.root();
         let mut running = scene.into_execution().unwrap();
         let points = raw_points();
         if live {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                BorrowedPathEdit::RawPoints {
-                    object: &object,
-                    points: &points,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .set_points_f64(&object, &points)
+                .unwrap();
         } else {
             object.set_points_f64(&points).unwrap();
         }
@@ -51,16 +43,10 @@ fn raw_coordinates_survive_authored_and_effective_edits_without_renderer_quantiz
         );
         let tail = [(3.0 + 2.0_f64.powi(-39), 4.0)];
         if live {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                BorrowedPathEdit::AppendRawPoints {
-                    object: &object,
-                    points: &tail,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .append_points_f64(&object, &tail)
+                .unwrap();
             let effective = running.scene().effective_path_query(&object).unwrap();
             assert_eq!(
                 effective.points().unwrap(),
@@ -77,29 +63,14 @@ fn raw_coordinates_survive_authored_and_effective_edits_without_renderer_quantiz
         let mut expected = points.clone();
         expected.extend(tail);
         if live {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                BorrowedPathEdit::ReversePoints { object: &object },
-            )
-            .unwrap();
+            running.scene_mut().reverse_points(&object).unwrap();
         } else {
             object.reverse_points().unwrap();
         }
         expected.reverse();
         assert_eq!(object.path_query().unwrap().points().unwrap(), expected);
         if live {
-            noon::integration::publish_borrowed_path_edit(
-                &semantics,
-                scene_root,
-                running.session_mut(),
-                BorrowedPathEdit::RepeatPoints {
-                    object: &object,
-                    count: 2,
-                },
-            )
-            .unwrap();
+            running.scene_mut().repeat_points(&object, 2).unwrap();
         } else {
             object.repeat_points(2).unwrap();
         }

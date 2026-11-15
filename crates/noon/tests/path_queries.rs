@@ -42,10 +42,16 @@ fn text_root_owns_no_points_on_authored_and_live_paths() {
     let text = scene.text(noon::Text::new("A")).unwrap();
     assert_eq!(text.get_num_points().unwrap(), 0);
     scene.add(&text).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let publication = execution.publication_context();
-    assert_eq!(scene.live(&mut execution).get_num_points(&text).unwrap(), 0);
-    assert_eq!(execution.publication_context(), publication);
+    let running = scene.into_execution().unwrap();
+    let publication = running.session().publication_context();
+    assert_eq!(
+        running
+            .scene()
+            .effective_mobject_point_count(&text)
+            .unwrap(),
+        0
+    );
+    assert_eq!(running.session().publication_context(), publication);
 }
 
 #[test]
@@ -80,7 +86,13 @@ fn live_point_counts_preserve_partial_paths_and_publication_guards() {
     ] {
         running.live().advance_segment_to(reveal, alpha).unwrap();
         let publication = running.session().publication_context();
-        assert_eq!(running.live().get_num_points(&circle).unwrap(), expected);
+        assert_eq!(
+            running
+                .scene()
+                .effective_mobject_point_count(&circle)
+                .unwrap(),
+            expected
+        );
         assert_eq!(
             running
                 .scene()
@@ -89,16 +101,34 @@ fn live_point_counts_preserve_partial_paths_and_publication_guards() {
                 .point_count(),
             expected
         );
-        assert_eq!(running.live().get_num_points(&image).unwrap(), 4);
-        assert_eq!(running.live().get_num_points(&empty).unwrap(), 0);
+        assert_eq!(
+            running
+                .scene()
+                .effective_mobject_point_count(&image)
+                .unwrap(),
+            4
+        );
+        assert_eq!(
+            running
+                .scene()
+                .effective_mobject_point_count(&empty)
+                .unwrap(),
+            0
+        );
         assert_eq!(running.session().publication_context(), publication);
     }
     let publication = running.session().publication_context();
     let mut other_scene = Scene::new();
     let foreign = other_scene.circle(1.0).unwrap();
-    assert!(running.live().get_num_points(&foreign).is_err());
+    assert!(running
+        .scene()
+        .effective_mobject_point_count(&foreign)
+        .is_err());
     image.set_object_opacity(0.5).unwrap();
-    assert!(running.live().get_num_points(&image).is_err());
+    assert!(running
+        .scene()
+        .effective_mobject_point_count(&image)
+        .is_err());
     assert_eq!(running.session().publication_context(), publication);
 }
 

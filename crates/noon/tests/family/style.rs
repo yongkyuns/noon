@@ -447,28 +447,28 @@ fn cross_alias_matching_observes_staged_styles_and_live_updates_are_atomic() {
         })
         .unwrap();
     scene.add_many(&[(&source).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let matched = live.match_family_style(&source, &target).unwrap();
+    let mut running = scene.into_execution().unwrap();
+    let matched = running.live().match_family_style(&source, &target).unwrap();
     assert_eq!(matched.impacts().len(), 2);
     assert_eq!(source.own_style().unwrap(), target.own_style().unwrap());
-    assert_eq!(live.effective(&a).unwrap().fill_opacity(), 0.25);
+    assert_eq!(running.scene().effective(&a).unwrap().fill_opacity(), 0.25);
     assert_eq!(
-        live.effective(&a).unwrap().style.fill,
-        live.effective(&b).unwrap().style.fill
+        running.scene().effective(&a).unwrap().style.fill,
+        running.scene().effective(&b).unwrap().style.fill
     );
     let update = StyleUpdate {
         stroke_color: Some(Color::RED),
         stroke_width: Some(0.05),
         ..Default::default()
     };
-    let updated = live.set_family_style(&source, update).unwrap();
+    let updated = running.live().set_family_style(&source, update).unwrap();
     assert_eq!(updated.impacts().len(), 3);
     assert!(updated.impacts().iter().any(|impact| matches!(impact,
         noon_core::SemanticMutationImpact::FamilyStyle { node } if *node == source.node_id())));
     assert_eq!(source.own_style().unwrap().stroke_width, 0.05);
-    let before = live.effective(&a).unwrap();
-    assert!(live
+    let before = running.scene().effective(&a).unwrap();
+    assert!(running
+        .scene_mut()
         .set_style(
             &a,
             StyleUpdate {
@@ -477,7 +477,7 @@ fn cross_alias_matching_observes_staged_styles_and_live_updates_are_atomic() {
             }
         )
         .is_err());
-    assert_eq!(live.effective(&a).unwrap(), before);
+    assert_eq!(running.scene().effective(&a).unwrap(), before);
 }
 
 #[test]

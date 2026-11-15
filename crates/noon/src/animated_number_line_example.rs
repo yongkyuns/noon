@@ -74,16 +74,16 @@ impl NumberLinePlayback {
                 };
                 let frame = scene.effective_number_line_frame(&self.line)?;
                 let [x, y] = frame.number_to_point(value)?;
-                let target = scene.live().target_editor(&self.marker)?;
+                let target = scene.target_editor(&self.marker)?;
                 scene.live().set_translation(&target, x, y)?;
                 scene
                     .live()
                     .declare_and_activate_transform_to(&self.marker, &target, options)?
             }
             7 => {
-                let line_target = scene.live().copy_family(self.line.family())?;
+                let line_target = scene.copy_family(self.line.family())?;
                 scene.shift_family(line_target.root(), 0.0, 0.6)?;
-                let marker_target = scene.live().target_editor(&self.marker)?;
+                let marker_target = scene.target_editor(&self.marker)?;
                 scene.live().shift(&marker_target, 0.0, 0.6)?;
                 scene.live().declare_and_activate_composition(
                     &Request::Composition {

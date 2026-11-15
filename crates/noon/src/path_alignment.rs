@@ -1,24 +1,27 @@
 //! Leaf and family root alignment share one semantic/resource operation.
 mod roots;
-use crate::{AuthoringError, ExecutionSession, LayoutAnchor, Mobject};
-use noon_core::{SemanticNodeId, SemanticStore};
-pub use roots::publish_root_alignment;
-use std::{cell::RefCell, rc::Rc};
+use crate::{AuthoringError, LayoutAnchor, Mobject, Scene};
+use std::rc::Rc;
 
-pub fn publish_alignment(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    left: &Mobject,
-    right: &Mobject,
-) -> Result<(), AuthoringError> {
-    publish_root_alignment(
-        store,
-        root,
-        execution,
-        &LayoutAnchor::from(left),
-        &LayoutAnchor::from(right),
-    )
+impl Scene {
+    /// Align the addressed roots atomically, preserving both identities and shapes.
+    pub fn align_path_points(
+        &mut self,
+        left: &LayoutAnchor,
+        right: &LayoutAnchor,
+    ) -> Result<(), AuthoringError> {
+        if self.running_execution().is_some() {
+            return self.with_running_execution(|store, root, execution| {
+                roots::publish_root_alignment(store, root, execution, left, right)
+            });
+        }
+        if !Rc::ptr_eq(self.integration_store(), left.integration_store())
+            || !Rc::ptr_eq(self.integration_store(), right.integration_store())
+        {
+            return Err(AuthoringError::ForeignStore);
+        }
+        left.align_path_points(right)
+    }
 }
 
 impl Mobject {

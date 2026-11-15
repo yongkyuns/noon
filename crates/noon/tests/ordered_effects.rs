@@ -59,9 +59,9 @@ fn ordinary_parallel_targets_drive_two_blurs_and_preserve_order_through_seek_and
             TransformToRequest::new(&source, &second, options()).method_target(),
         ),
     ];
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let segment = session
+        .live()
         .declare_and_activate_animation_composition(
             SemanticAnimationCompositionKind::Parallel,
             &children,
@@ -71,10 +71,10 @@ fn ordinary_parallel_targets_drive_two_blurs_and_preserve_order_through_seek_and
         .unwrap();
     for time in [0.75, 0.25, 1.0, 0.5] {
         session.seek(time).unwrap();
-        assert_eq!(radius(&session, a.node_id()), 1.0 + 4.0 * time);
-        assert_eq!(radius(&session, b.node_id()), 2.0 + 8.0 * time);
+        assert_eq!(radius(session.session(), a.node_id()), 1.0 + 4.0 * time);
+        assert_eq!(radius(session.session(), b.node_id()), 2.0 + 8.0 * time);
         assert_eq!(
-            session.frame().objects[0]
+            session.session().frame().objects[0]
                 .effects
                 .as_ref()
                 .unwrap()
@@ -82,11 +82,11 @@ fn ordinary_parallel_targets_drive_two_blurs_and_preserve_order_through_seek_and
             &[a.node_id(), b.node_id()]
         );
     }
-    scene
-        .live(&mut session)
+    session
+        .live()
         .advance_segment_to(segment, segment.end_time())
         .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    session.live().complete_segment(segment).unwrap();
     assert_eq!(
         a.authored_definition().unwrap().radius(),
         Some(Pixels(5.0).into())
@@ -95,36 +95,36 @@ fn ordinary_parallel_targets_drive_two_blurs_and_preserve_order_through_seek_and
         b.authored_definition().unwrap().radius(),
         Some(Pixels(10.0).into())
     );
-    scene.live(&mut session).remove_effect(&source, &a).unwrap();
-    assert_eq!(radius(&session, b.node_id()), 10.0);
+    session.scene_mut().remove_effect(&source, &a).unwrap();
+    assert_eq!(radius(session.session(), b.node_id()), 10.0);
     assert_eq!(
-        session.frame().objects[0]
+        session.session().frame().objects[0]
             .effects
             .as_ref()
             .unwrap()
             .attachments(),
         &[b.node_id()]
     );
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .add_effect(&source, Blur::default(), "first")
         .unwrap();
     let replacement = source.get_effect("first").unwrap();
     assert_ne!(replacement.node_id(), a.node_id());
     assert_eq!(
-        session.frame().objects[0]
+        session.session().frame().objects[0]
             .effects
             .as_ref()
             .unwrap()
             .attachments(),
         &[b.node_id(), replacement.node_id()]
     );
-    let before = session.publication_context();
-    let frame = session.frame().clone();
-    assert!(scene
-        .live(&mut session)
+    let before = session.session().publication_context();
+    let frame = session.session().frame().clone();
+    assert!(session
+        .scene_mut()
         .set_effect(&source, &a, EffectUpdate::default().radius(Pixels(7.0)))
         .is_err());
-    assert_eq!(session.publication_context(), before);
-    assert_eq!(session.frame(), &frame);
+    assert_eq!(session.session().publication_context(), before);
+    assert_eq!(session.session().frame(), &frame);
 }

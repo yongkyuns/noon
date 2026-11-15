@@ -19,18 +19,12 @@ fn smoothing_and_jagged_edits_preserve_identity_style_and_world_anchors() {
         let anchors = source.path_query().unwrap().anchors().unwrap();
         let copy = source.copy_handle().unwrap();
         let copy_before = copy.state().unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut running = scene.into_execution().unwrap();
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut session,
-                noon::integration::BorrowedPathEdit::AnchorMode {
-                    object: &source,
-                    smooth: true,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .change_anchor_mode(&source, true)
+                .unwrap();
         } else {
             source.make_smooth().unwrap();
         }
@@ -40,16 +34,10 @@ fn smoothing_and_jagged_edits_preserve_identity_style_and_world_anchors() {
         assert_eq!(copy.state().unwrap(), copy_before);
         assert_ne!(source.state().unwrap().content, before.content);
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut session,
-                noon::integration::BorrowedPathEdit::AnchorMode {
-                    object: &source,
-                    smooth: false,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .change_anchor_mode(&source, false)
+                .unwrap();
         } else {
             source.make_jagged().unwrap();
         }
@@ -57,22 +45,16 @@ fn smoothing_and_jagged_edits_preserve_identity_style_and_world_anchors() {
             source.path_query().unwrap().first_handles()[0],
             (1. / 3., 3. + 1. / 3.)
         );
-        let revision = scene.revision();
+        let revision = running.scene().revision();
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut session,
-                noon::integration::BorrowedPathEdit::AnchorMode {
-                    object: &source,
-                    smooth: false,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .change_anchor_mode(&source, false)
+                .unwrap();
         } else {
             source.make_jagged().unwrap();
         }
-        assert_eq!(scene.revision(), revision);
+        assert_eq!(running.scene().revision(), revision);
     }
 }
 
@@ -103,24 +85,19 @@ fn family_smoothing_deduplicates_aliases_and_publishes_once() {
             .borrow()
             .geometry_resources()
             .len();
-        let mut session = scene.execution_session().unwrap();
+        let mut running = scene.into_execution().unwrap();
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut session,
-                noon::integration::BorrowedPathEdit::FamilyAnchorMode {
-                    family: &family,
-                    smooth: true,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .change_family_anchor_mode(&family, true)
+                .unwrap();
         } else {
             family.make_smooth().unwrap();
         }
-        assert_eq!(scene.revision(), revision.checked_next().unwrap());
+        assert_eq!(running.scene().revision(), revision.checked_next().unwrap());
         assert_eq!(
-            scene
+            running
+                .scene()
                 .integration_store()
                 .borrow()
                 .geometry_resources()
@@ -130,7 +107,7 @@ fn family_smoothing_deduplicates_aliases_and_publishes_once() {
         // Both unique leaves receive a path; the superseded first path retires.
         // Aliasing first through the nested family must not retain another copy.
         {
-            let store = scene.integration_store();
+            let store = running.scene().integration_store();
             let store = store.borrow();
             assert!(store.geometry_resources().get(old_path).is_none());
             for leaf in [&first, &second] {
@@ -146,22 +123,16 @@ fn family_smoothing_deduplicates_aliases_and_publishes_once() {
             }
         }
         assert_eq!(unrelated.state().unwrap(), before_unrelated);
-        let revision = scene.revision();
+        let revision = running.scene().revision();
         if live_mode {
-            noon::integration::publish_borrowed_path_edit(
-                scene.integration_store(),
-                scene.root(),
-                &mut session,
-                noon::integration::BorrowedPathEdit::FamilyAnchorMode {
-                    family: &family,
-                    smooth: true,
-                },
-            )
-            .unwrap();
+            running
+                .scene_mut()
+                .change_family_anchor_mode(&family, true)
+                .unwrap();
         } else {
             family.make_smooth().unwrap();
         }
-        assert_eq!(scene.revision(), revision);
+        assert_eq!(running.scene().revision(), revision);
     }
 }
 

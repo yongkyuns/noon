@@ -171,26 +171,32 @@ fn live_copy_obeys_completion_and_captures_completed_state_without_changing_sour
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut execution);
-    let segment = live.play_animation(&animation).unwrap();
-    live.advance_segment_to(segment, 1.0).unwrap();
-    let halfway = live.effective(&leaf).unwrap();
-    assert!(live.copy_family(&family).is_err());
-    assert_eq!(live.effective(&leaf).unwrap(), halfway);
-    live.advance_segment_to(segment, 2.0).unwrap();
-    live.complete_segment(segment).unwrap();
-    let before = live.effective(&leaf).unwrap();
-    let copied = live.copy_family(&family).unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let segment = execution.live().play_animation(&animation).unwrap();
+    execution.live().advance_segment_to(segment, 1.0).unwrap();
+    let halfway = execution.live().effective(&leaf).unwrap();
+    assert!(execution.scene_mut().copy_family(&family).is_err());
+    assert_eq!(execution.live().effective(&leaf).unwrap(), halfway);
+    execution.live().advance_segment_to(segment, 2.0).unwrap();
+    execution.live().complete_segment(segment).unwrap();
+    let before = execution.live().effective(&leaf).unwrap();
+    let copied = execution.scene_mut().copy_family(&family).unwrap();
     let copy_leaf = copied.mobject(&leaf).unwrap();
     assert_eq!(copy_leaf.center().unwrap(), (4.0, 0.0));
     assert_eq!(leaf.center().unwrap(), (4.0, 0.0));
-    assert_eq!(live.effective(&leaf).unwrap().transform, before.transform);
     assert_eq!(
-        scene.integration_store().borrow().scene_revision(),
+        execution.live().effective(&leaf).unwrap().transform,
+        before.transform
+    );
+    assert_eq!(
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
         before.publication.scene_revision().checked_next().unwrap()
     );
-    live.shift(&copy_leaf, 1.0, 0.0).unwrap();
+    execution.live().shift(&copy_leaf, 1.0, 0.0).unwrap();
     assert_eq!(copy_leaf.center().unwrap(), (5.0, 0.0));
     assert_eq!(leaf.center().unwrap(), (4.0, 0.0));
 }
@@ -217,12 +223,16 @@ fn a_late_uncapturable_member_rejects_the_entire_live_copy() {
     let source = scene
         .family(&[(&first).into(), (&reactive).into()])
         .unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let before = execution.publication_context();
-    assert!(scene.live(&mut execution).copy_family(&source).is_err());
-    assert_eq!(execution.publication_context(), before);
+    let mut execution = scene.into_execution().unwrap();
+    let before = execution.session().publication_context();
+    assert!(execution.scene_mut().copy_family(&source).is_err());
+    assert_eq!(execution.session().publication_context(), before);
     assert_eq!(
-        scene.integration_store().borrow().scene_revision(),
+        execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision(),
         before.scene_revision()
     );
     assert_eq!(first.center().unwrap(), (0.0, 0.0));

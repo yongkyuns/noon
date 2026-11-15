@@ -19,24 +19,27 @@ impl LiveContinuation for GlassLens {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let segment = match self.stage {
-            0 | 2 | 4 | 8 | 10 => live.wait_segment(0.5),
+            0 | 2 | 4 | 8 | 10 => scene.live().wait_segment(0.5),
             1 | 3 => {
-                let target = live.copy_family(&self.card).map_err(message)?;
+                let target = scene.copy_family(&self.card).map_err(message)?;
                 let (dx, radius) = if self.stage == 1 {
                     (4.0, 18.0)
                 } else {
                     (-4.0, 0.0)
                 };
-                live.shift_family(target.root(), dx, 0.0).map_err(message)?;
-                live.set_effect(
-                    target.root(),
-                    "glass",
-                    EffectUpdate::default().radius(Pixels(radius)),
-                )
-                .map_err(message)?;
-                live.declare_and_activate_composition(
+                scene
+                    .live()
+                    .shift_family(target.root(), dx, 0.0)
+                    .map_err(message)?;
+                scene
+                    .set_effect(
+                        target.root(),
+                        "glass",
+                        EffectUpdate::default().radius(Pixels(radius)),
+                    )
+                    .map_err(message)?;
+                scene.live().declare_and_activate_composition(
                     &AnimationCompositionRequest::FamilyMethodTargetTo {
                         source: &self.card,
                         target_state: target.root(),
@@ -48,20 +51,21 @@ impl LiveContinuation for GlassLens {
                 )
             }
             5 => {
-                live.remove_effect(&self.card, "glass").map_err(message)?;
-                live.wait_segment(0.5)
+                scene.remove_effect(&self.card, "glass").map_err(message)?;
+                scene.live().wait_segment(0.5)
             }
             6 => {
-                live.add_effect(
-                    &self.card,
-                    BackdropBlur::new(EffectUpdate::default().radius(Pixels(12.0)))
-                        .map_err(message)?,
-                    "glass",
-                )
-                .map_err(message)?;
-                live.wait_segment(0.5)
+                scene
+                    .add_effect(
+                        &self.card,
+                        BackdropBlur::new(EffectUpdate::default().radius(Pixels(12.0)))
+                            .map_err(message)?,
+                        "glass",
+                    )
+                    .map_err(message)?;
+                scene.live().wait_segment(0.5)
             }
-            7 | 9 => live.declare_and_activate_composition(
+            7 | 9 => scene.live().declare_and_activate_composition(
                 &AnimationCompositionRequest::Dissolve {
                     target: (&self.card).into(),
                     direction: if self.stage == 7 {
