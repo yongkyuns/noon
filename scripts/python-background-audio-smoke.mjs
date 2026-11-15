@@ -99,17 +99,17 @@ async function command(method, ...args) {
   return page.evaluate(({ method, args }) => audioQualification.execution[method](...args), { method, args });
 }
 
-async function waitReady() {
+async function waitReady(durationSeconds = 30) {
   await page.waitForFunction(() => {
     const patch = document.querySelector("#patch-status");
     if (patch?.dataset.state === "error") throw new Error(patch.value || patch.textContent);
     return patch?.dataset.state === "applied" && !window.__noonExampleGallery?.runInFlight;
   }, null, { timeout: 180_000 });
-  await waitForBrowserObservation(page, async () => {
+  await waitForBrowserObservation(page, async expectedDuration => {
     if (!audioQualification.execution) return false;
     const result = await audioQualification.execution.state();
-    return result.hasAudio === true && result.durationSeconds === 30;
-  });
+    return result.hasAudio === true && result.durationSeconds === expectedDuration;
+  }, durationSeconds);
 }
 
 async function audible() {
@@ -843,6 +843,101 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
     await command("pause");
     await quiet();
     return { fixtureSha256: hash(fixture), prepared, running };
+  });
+
+  await record("prepared narration imports immutable PCM and shares cue, picture, and audio time", async () => {
+    // A deterministic non-speech tone qualifies timing/import behavior. Actual
+    // speech and educational review are separate from this device regression.
+    const directory = path.join(artifacts, "prepared-narration");
+    await mkdir(directory, { recursive: true });
+    const frames = 32_000, rate = 8_000;
+    const wav = Buffer.alloc(44 + frames * 2);
+    wav.write("RIFF", 0); wav.writeUInt32LE(wav.length - 8, 4); wav.write("WAVEfmt ", 8);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28);
+    wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write("data", 36); wav.writeUInt32LE(frames * 2, 40);
+    for (let frame = 0; frame < frames; frame++) wav.writeInt16LE([0, 8192, 0, -8192][frame % 4], 44 + frame * 2);
+    const wavPath = path.join(directory, "tone.wav");
+    const textPath = path.join(directory, "spoken.txt");
+    const cuesPath = path.join(directory, "cues.json");
+    await Promise.all([
+      writeFile(wavPath, wav),
+      writeFile(textPath, "Non-speech tone fixture for narration timing."),
+      writeFile(cuesPath, json([{ name: "move", start_seconds: 0.75, end_seconds: 1.75, provenance: "manual" }])),
+    ]);
+    const preparedPath = execFileSync(process.env.PYTHON ?? "python3", ["-B",
+      path.join(root, "scripts/prepare_narration.py"), "--wav", wavPath,
+      "--spoken-text-file", textPath, "--cues", cuesPath, "--cache-dir", path.join(directory, "cache"),
+    ], { cwd: root, encoding: "utf8", timeout: 30_000 }).trim();
+    const manifestText = await readFile(preparedPath, "utf8");
+    const preparedManifest = JSON.parse(manifestText);
+    const pcm = await readFile(path.resolve(path.dirname(preparedPath), preparedManifest.audio.path));
+    assert.equal(hash(pcm), preparedManifest.audio.sha256);
+    const fixture = `from noon import BLUE, RIGHT, Circle, PreparedNarration, Scene, linear
+
+pcm = bytearray.fromhex(${JSON.stringify(pcm.toString("hex"))})
+narration = PreparedNarration.from_prepared(${JSON.stringify(manifestText)}, pcm)
+assert (narration.duration, narration.cue_start("move"), narration.cue_end("move")) == (4, 0.75, 1.75)
+pcm[:] = b"\\0" * len(pcm)
+assert not any(pcm)
+result = Scene()
+point = Circle(radius=0.25, stroke_width=0).set_fill(BLUE, opacity=1)
+result.add(point)
+x = result.value_tracker(-1)
+result.bind_position(point, x, direction=RIGHT)
+result.declare_wait(1)
+placed = result.narrate(narration)
+assert (placed.start_time, placed.end_time, placed.duration) == (1, 5, 4)
+result.wait_for_narration_cue(placed, "move")
+assert result.time == 1.75
+result.declare_value(x, 1, run_time=1, rate_func=linear)
+result.wait_for_narration(placed)
+assert result.time == 5
+`;
+    await writeFile(path.join(directory, "scene.py"), fixture);
+    const before = await state();
+    await page.evaluate(async source => {
+      document.querySelector("#python-scene-source").value = source;
+      await window.__noonExampleGallery.run();
+    }, fixture);
+    await waitReady(5);
+    const prepared = await state();
+    assert.equal(prepared.transport.playing, false);
+    near(prepared.transport.time, 0, "narration preparation starts paused", 0);
+    assert.equal(prepared.starts.length, before.starts.length, "import/admission never starts audio");
+    assert.equal(prepared.buffers.length, before.buffers.length + 1);
+    assert.deepEqual(prepared.buffers.at(-1), {
+      context: prepared.output.length - 1, channels: 1, frames, sampleRate: rate, duration: 4,
+    });
+    await quiet();
+    const pictures = [];
+    for (const [time, x] of [[1.75, -1], [2.25, 0], [5, 1]]) {
+      await pausedSeek(time);
+      const bytes = await page.locator("#scene").screenshot({ path: path.join(directory, `point-${time}.png`) });
+      pictures.push({ time, point: pointCentroid(bytes, 0, "blue", x), pngSha256: hash(bytes) });
+    }
+    assert.equal((await state()).starts.length, before.starts.length, "paused cue/picture inspection stays silent");
+    await pausedSeek(2.25);
+    const running = await play();
+    const voices = running.starts.slice(before.starts.length);
+    assert.equal(voices.length, 1, "one full recording creates one device source");
+    const voice = voices[0];
+    const anchor = running.anchors.find(item => item.sources.includes(voice.node));
+    assert.ok(anchor, "narration uses an accepted Rust clock observation");
+    const phase = anchor.time + (anchor.receivedEpochMs - anchor.sampledEpochMs) / 1000;
+    assert.ok(phase >= 2.25 && phase < 5);
+    assert.equal(voice.loop, false);
+    near(voice.args[1], phase - 1, "nonzero clip start is removed from the source phase");
+    near(voice.args[2], 5 - phase, "narration ends at its measured shared endpoint");
+    assert.ok(running.output.some(output => output.rms > 1e-5 && output.peak > 1e-4),
+      "zeroing the input bytearray cannot silence the retained Rust PCM");
+    await command("pause");
+    const paused = await state();
+    await quiet();
+    near((await state()).transport.time, paused.transport.time, "pause holds the narration and picture time", 0);
+    return { fixtureSha256: hash(fixture), manifestSha256: hash(manifestText),
+      audioId: preparedManifest.audio.asset_id, pcmSha256: hash(pcm), pictures, prepared, running, paused };
   });
 
   await record("original 34.65-second Fourier soundtrack preview uses the finite viewer route", async () => {

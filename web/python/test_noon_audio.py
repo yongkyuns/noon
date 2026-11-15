@@ -23,11 +23,21 @@ class AudioFacadeTests(unittest.TestCase):
         self.clip_handle = types.SimpleNamespace(startTime=1.0, endTime=3.0, duration=2.0)
         self.context = Mock()
         self.context.audio.return_value = self.clip_handle
+        self.prepared_handle = types.SimpleNamespace(
+            durationSeconds=2.0, spokenText="Double the input.",
+            captionText="y = 2x", transcriptStatus="supplied-unverified",
+            cueStart=Mock(return_value=0.25), cueEnd=Mock(return_value=1.75),
+        )
+        self.narration_factory = Mock()
+        self.narration_factory.fromPrepared.return_value = self.prepared_handle
+        self.placement = types.SimpleNamespace(startTime=1.0, endTime=3.0, durationSeconds=2.0)
+        self.context.narrate.return_value = self.placement
         self.scene = noon.Scene()
         self.scene._canonical_authoring_context = self.context
         js = types.ModuleType("js")
         js.noonAudioSource = self.host
         js.noonAudioClipOptions = self.options_factory
+        js.noonPreparedNarration = self.narration_factory
         js.noonResolveAnimationOptions = Mock()
         ffi = types.ModuleType("pyodide.ffi")
         ffi.to_js = lambda view: view
@@ -182,6 +192,101 @@ class AudioFacadeTests(unittest.TestCase):
         target._scene = noon.Scene()
         with self.assertRaises(ValueError):
             self.scene.on_click_playback(target, noon.PlaybackControl.RESTART)
+
+    def test_prepared_narration_passes_manifest_and_one_byte_buffer_to_rust(self):
+        pcm = bytearray(b"\0\0\x80?\0\0\x80\xbf")
+        narration = noon.PreparedNarration.from_prepared("manifest is validated by Rust", pcm)
+        manifest, payload = self.narration_factory.fromPrepared.call_args.args
+        self.assertEqual(manifest, "manifest is validated by Rust")
+        self.assertEqual(payload.tobytes(), pcm)
+        self.assertIs(payload.obj, pcm)
+        self.assertEqual(payload.format, "B")
+        self.assertEqual((narration.duration, narration.spoken_text, narration.caption_text,
+                          narration.transcript_status),
+                         (2.0, "Double the input.", "y = 2x", "supplied-unverified"))
+        self.assertIs(narration._handle, self.prepared_handle)
+        self.assertIs(copy.copy(narration), narration)
+        self.assertIs(copy.deepcopy(narration), narration)
+        self.assertFalse(hasattr(narration, "__dict__"))
+        with self.assertRaises(AttributeError):
+            narration.duration = 12
+
+    def test_prepared_narration_rejects_wrong_payload_types_without_parsing_metadata(self):
+        for manifest, pcm in [({}, b""), (b"{}", b""), ("{}", 12), ("{}", "samples"),
+                              ("{}", array("f", [0.0])),
+                              ("{}", memoryview(b"1234")[::2])]:
+            with self.subTest(manifest=manifest, pcm=pcm), self.assertRaises(TypeError):
+                noon.PreparedNarration.from_prepared(manifest, pcm)
+        self.narration_factory.fromPrepared.assert_not_called()
+        failure = ValueError("Rust rejected a mismatched PCM identity")
+        self.narration_factory.fromPrepared.side_effect = failure
+        with self.assertRaises(ValueError) as caught:
+            noon.PreparedNarration.from_prepared("{}", b"pcm")
+        self.assertIs(caught.exception, failure)
+
+    def test_narration_cue_queries_preserve_shared_values_and_errors(self):
+        narration = noon.PreparedNarration.from_prepared("{}", b"pcm")
+        self.assertEqual(narration.cue_start("move"), 0.25)
+        self.assertEqual(narration.cue_end("move"), 1.75)
+        self.prepared_handle.cueStart.assert_called_once_with("move")
+        self.prepared_handle.cueEnd.assert_called_once_with("move")
+        failure = ValueError("unknown narration cue")
+        self.prepared_handle.cueStart.side_effect = failure
+        with self.assertRaises(ValueError) as caught:
+            narration.cue_start("missing")
+        self.assertIs(caught.exception, failure)
+        with self.assertRaises(TypeError):
+            narration.cue_end(4)
+
+    def test_narration_placement_and_waits_forward_only_shared_handles(self):
+        narration = noon.PreparedNarration.from_prepared("{}", b"pcm")
+        placed = self.scene.narrate(narration)
+        self.context.narrate.assert_called_once_with(self.prepared_handle)
+        self.assertIsInstance(placed, noon.NarrationHandle)
+        self.assertEqual((placed.start_time, placed.end_time, placed.duration), (1.0, 3.0, 2.0))
+        self.assertIs(self.scene.wait_for_narration_cue(placed, "move"), self.scene)
+        self.context.waitForNarrationCue.assert_called_once_with(self.placement, "move")
+        self.assertIs(self.scene.wait_for_narration(placed), self.scene)
+        self.context.waitForNarration.assert_called_once_with(self.placement)
+        self.context.ordinaryWait.assert_not_called()
+        self.context.beginOrdinaryWait.assert_not_called()
+        self.context.createExecutionPlayer.assert_not_called()
+        self.assertFalse(hasattr(self.scene, "_time"))
+        self.assertFalse(hasattr(placed, "__dict__"))
+        self.assertIs(copy.copy(placed), placed)
+        self.assertIs(copy.deepcopy(placed), placed)
+
+    def test_narration_waits_preserve_foreign_or_stale_rejection(self):
+        placed = noon.NarrationHandle._from_handle(self.placement)
+        failure = ReferenceError("Rust rejected the stale narration placement")
+        self.context.waitForNarration.side_effect = failure
+        with self.assertRaises(ReferenceError) as caught:
+            self.scene.wait_for_narration(placed)
+        self.assertIs(caught.exception, failure)
+        self.context.waitForNarrationCue.side_effect = failure
+        with self.assertRaises(ReferenceError) as caught:
+            self.scene.wait_for_narration_cue(placed, "move")
+        self.assertIs(caught.exception, failure)
+
+    def test_narration_argument_types_fail_before_scene_calls(self):
+        with self.assertRaises(TypeError):
+            self.scene.narrate(self.source())
+        with self.assertRaises(TypeError):
+            self.scene.wait_for_narration(self.source())
+        with self.assertRaises(TypeError):
+            self.scene.wait_for_narration_cue(self.source(), "move")
+        with self.assertRaises(TypeError):
+            self.scene.wait_for_narration_cue(noon.NarrationHandle._from_handle(self.placement), 1)
+        self.context.narrate.assert_not_called()
+        self.context.waitForNarration.assert_not_called()
+        self.context.waitForNarrationCue.assert_not_called()
+
+    def test_narration_import_reports_an_unavailable_host_without_a_fallback(self):
+        host = types.ModuleType("_noon_host")
+        host.byte_buffer = bytes
+        with patch.dict(sys.modules, {"_noon_host": host}):
+            with self.assertRaisesRegex(NotImplementedError, "not available in this host"):
+                noon.PreparedNarration.from_prepared("{}", b"pcm")
 
 
 if __name__ == "__main__":

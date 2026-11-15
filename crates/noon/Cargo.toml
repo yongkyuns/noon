@@ -13,6 +13,8 @@ wgsl-effects = ["noon-core/wgsl-effects"]
 # Experimental #2211; not enabled by default.
 prepared-prefix = ["noon-runtime/prepared-prefix"]
 image-decode = ["dep:image"]
+# Explicit persisted-media preparation; ordinary typed narration needs no JSON.
+narration-import = ["dep:serde", "dep:serde_json", "dep:sha2"]
 # Convenience product configuration. Geometry-only consumers disable defaults.
 default = ["native-text", "typst", "bundled-fonts", "image-decode", "code"]
 native-text = ["dep:noon-text", "dep:swash"]
@@ -41,7 +43,9 @@ required-features = ["typst", "bundled-fonts"]
 
 [dependencies]
 num-bigint = { version = "=0.4.8", default-features = false }
-serde_json = { version = "1", optional = true }
+serde_json = { version = "1", features = ["float_roundtrip"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+sha2 = { version = "=0.11.1", optional = true }
 noon-compile = { version = "0.1.0", path = "../noon-compile" }
 noon-core = { version = "0.1.0", path = "../noon-core" }
 noon-geometry = { version = "0.1.0", path = "../noon-geometry" }

@@ -145,6 +145,16 @@ The executable background-music example renders the shared Rust scene at
 cargo run --release -p noon-export --example render_audio_video -- scene-with-music.mp4
 ```
 
+The same executable accepts three prepared narration manifests with
+`--features narration-import` and
+`--narration POSITIVE_MANIFEST NEGATIVE_MANIFEST ZERO_MANIFEST` after the output
+path. It renders the existing **Double the input** illustration using shared
+Rust narration/cue waits and a silent 0.75-second final picture hold. Asset file
+lookup is bounded preparation in the example; the engine importer receives
+bytes and returns typed immutable audio. See the
+[paired lesson](../../web/python/examples/background_music_lesson.md#prepared-narration-variant)
+for recording preparation and the optional reproducible speech fixture.
+
 It uses *A Small Discovery*, the project's quiet original score. The composition
 and generated audio carry the scoped CC0 dedication in
 [`render_background_music/README.md`](../noon/examples/render_background_music/README.md).

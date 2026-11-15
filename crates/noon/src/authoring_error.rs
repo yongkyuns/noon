@@ -137,6 +137,8 @@ pub enum AuthoringError {
     AudioResource(noon_core::AudioResourceError),
     /// A finite authored clip has invalid timing, trim, gain, or fades.
     AudioClip(noon_core::AudioClipError),
+    /// Prepared narration metadata, placement, or cue authoring was rejected.
+    Narration(crate::NarrationError),
     /// Authored and published effect generations disagree for a coherent capture.
     EffectCaptureMismatch {
         owner: noon_core::SemanticNodeId,
@@ -347,6 +349,7 @@ impl std::fmt::Display for AuthoringError {
             Self::PaintTransition(error) => error.fmt(f),
             Self::AudioResource(error) => error.fmt(f),
             Self::AudioClip(error) => error.fmt(f),
+            Self::Narration(error) => error.fmt(f),
             Self::EffectParameter(error) => error.fmt(f),
             Self::EffectCaptureMismatch { owner } => write!(f, "effect capture for {owner:?} requires the exact published attachment generations"),
             Self::EffectNotFound { owner, name } => write!(f, "object {owner:?} has no effect named {name:?}"),
@@ -504,6 +507,7 @@ impl std::error::Error for AuthoringError {
             #[cfg(feature = "image-decode")]
             Self::ImageDecode(error) => Some(error),
             Self::AudioResource(error) => Some(error),
+            Self::Narration(error) => Some(error),
             Self::AudioClip(error) => Some(error),
             Self::EffectParameter(error) => Some(error),
             Self::ImageResource(error) => Some(error),
@@ -576,6 +580,12 @@ impl From<noon_core::AudioResourceError> for AuthoringError {
 impl From<noon_core::AudioClipError> for AuthoringError {
     fn from(error: noon_core::AudioClipError) -> Self {
         Self::AudioClip(error)
+    }
+}
+
+impl From<crate::NarrationError> for AuthoringError {
+    fn from(error: crate::NarrationError) -> Self {
+        Self::Narration(error)
     }
 }
 

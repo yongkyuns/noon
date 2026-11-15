@@ -16,6 +16,7 @@ COMMANDS = (
     "scripts/noon-capabilities.py", "scripts/build-web-demo.sh",
     "scripts/check.sh", "scripts/manim-tutorial-smoke.mjs",
     "scripts/prepare_narration.py",
+    "crates/noon-export/examples/narration/prepare.py",
     "tools/noon-mcp/bin/noon-preview.mjs",
     "tools/noon-mcp/src/server.mjs",
     "tools/noon-mcp/scripts/setup-preview-runtime.mjs",

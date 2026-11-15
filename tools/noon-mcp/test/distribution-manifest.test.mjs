@@ -47,7 +47,7 @@ test("distribution manifest pins package, skill, capability and runner identitie
   assert.equal(first.environment.trustedCheckoutRequired, true);
 
   assert.equal(first.skill.name, "noon-authoring");
-  assert.equal(first.skill.version, "0.3.0");
+  assert.equal(first.skill.version, "0.4.0");
   assertSha(first.skill.sha256, "skill");
   for (const reference of ["education.md", "teaching-patterns.md", "examples.md"]) {
     const name = `skills/noon-authoring/references/${reference}`;

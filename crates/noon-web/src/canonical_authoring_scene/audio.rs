@@ -2,7 +2,7 @@
 
 use super::CanonicalAuthoringScene;
 use crate::{authoring_audio::AuthoringAudioClipHandle, authoring_error::AuthoringFailure};
-use noon::{AudioClipOptions, AudioResource, PlaybackControl};
+use noon::{AudioClipOptions, AudioResource, NarrationHandle, PlaybackControl, PreparedNarration};
 use std::rc::Rc;
 
 impl CanonicalAuthoringScene {
@@ -30,6 +30,33 @@ impl CanonicalAuthoringScene {
         })
     }
 
+    pub(crate) fn narrate(
+        &mut self,
+        narration: &PreparedNarration,
+    ) -> Result<NarrationHandle, AuthoringFailure> {
+        self.require_pre_execution_media_authoring()?;
+        self.scene.narrate(narration).map_err(Into::into)
+    }
+
+    pub(crate) fn wait_for_narration(
+        &mut self,
+        narration: &NarrationHandle,
+    ) -> Result<(), AuthoringFailure> {
+        self.require_pre_execution_media_authoring()?;
+        self.scene.wait_for_narration(narration).map_err(Into::into)
+    }
+
+    pub(crate) fn wait_for_narration_cue(
+        &mut self,
+        narration: &NarrationHandle,
+        name: &str,
+    ) -> Result<(), AuthoringFailure> {
+        self.require_pre_execution_media_authoring()?;
+        self.scene
+            .wait_for_narration_cue(narration, name)
+            .map_err(Into::into)
+    }
+
     pub(crate) fn on_click_playback(
         &mut self,
         target: &noon::Mobject,
@@ -48,6 +75,93 @@ mod tests {
     use crate::authoring_audio::pcm_resource;
     use noon::{RateFunction, SectionType, SemanticVec3};
     use noon_core::{ObjectId, SemanticMutationTransaction};
+
+    fn narration() -> PreparedNarration {
+        PreparedNarration::new(
+            pcm_resource(vec![0.25; 16_000], 8_000, 1).unwrap(),
+            "Double the input.",
+            "y = 2x",
+            vec![noon::NarrationCue::manual("move", 0.25, 1.75).unwrap()],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn narration_wrapper_uses_shared_clip_cursor_and_pcm_without_a_player() {
+        let source = narration();
+        let mut context = CanonicalAuthoringScene::default();
+        let dot = context.scene.circle(0.2).unwrap();
+        context.bind_mobject(ObjectId::new(0), &dot).unwrap();
+        context.authored_wait(1.0).unwrap();
+        let placed = context.narrate(&source).unwrap();
+        assert_eq!(context.scene.time(), 1.0);
+        assert_eq!((placed.start_time(), placed.end_time()), (1.0, 3.0));
+        context.wait_for_narration_cue(&placed, "move").unwrap();
+        assert_eq!(context.scene.time(), 1.25);
+        context.authored_wait(0.5).unwrap();
+        context.wait_for_narration(&placed).unwrap();
+        assert_eq!(context.scene.time(), 3.0);
+        context.wait_for_narration_cue(&placed, "move").unwrap();
+        context.wait_for_narration(&placed).unwrap();
+        assert_eq!(context.scene.time(), 3.0);
+        assert!(context.player_ownership.is_unstarted());
+        let mut session = context.lower_execution().unwrap();
+        session.seek(1.5).unwrap();
+        let clip = session.audio_playback().unwrap().next().unwrap();
+        assert_eq!(clip.source_offset, 0.5);
+        assert_eq!(
+            clip.pcm.samples().as_ptr(),
+            source.audio().samples().as_ptr()
+        );
+        session.seek(3.0).unwrap();
+        assert!(session.audio_playback().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn narration_wrapper_preserves_foreign_stale_and_unknown_cue_failures() {
+        let mut context = CanonicalAuthoringScene::default();
+        let placed = context.narrate(&narration()).unwrap();
+        let mut foreign = CanonicalAuthoringScene::default();
+        assert!(foreign.wait_for_narration(&placed).is_err());
+        assert_eq!(foreign.scene.time(), 0.0);
+        assert!(context.wait_for_narration_cue(&placed, "missing").is_err());
+        assert_eq!(context.scene.time(), 0.0);
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.remove_node(placed.node_id());
+        transaction
+            .apply(&mut context.scene.integration_store().borrow_mut())
+            .unwrap();
+        assert!(context.wait_for_narration(&placed).is_err());
+        assert!(context.wait_for_narration_cue(&placed, "move").is_err());
+        assert_eq!(context.scene.time(), 0.0);
+    }
+
+    #[test]
+    fn narration_declarations_keep_active_transferred_and_returned_profile_gates() {
+        let source = narration();
+        let placed = CanonicalAuthoringScene::default().narrate(&source).unwrap();
+        let mut context = CanonicalAuthoringScene::default();
+        let dot = context.scene.circle(0.2).unwrap();
+        context.bind_mobject(ObjectId::new(0), &dot).unwrap();
+        context.live_player(1.0).unwrap();
+        let revision = context.scene.revision();
+        let reject = |context: &mut CanonicalAuthoringScene| {
+            for error in [
+                context.narrate(&source).unwrap_err(),
+                context.wait_for_narration(&placed).unwrap_err(),
+                context.wait_for_narration_cue(&placed, "move").unwrap_err(),
+            ] {
+                assert_eq!(error.code, "authoring.finite_media_after_execution");
+            }
+            assert_eq!(context.scene.revision(), revision);
+            assert_eq!(context.scene.time(), 0.0);
+        };
+        reject(&mut context);
+        let player = context.take_execution_player(1.0, 17).unwrap();
+        reject(&mut context);
+        context.return_execution_player(player).unwrap();
+        reject(&mut context);
+    }
 
     #[test]
     fn finite_clip_uses_shared_identity_options_pcm_and_cursor() {

@@ -4,7 +4,9 @@
 //! These wrappers retain no playback clock, mixer, or mutable clip state.
 
 use crate::authoring_error::AuthoringFailure;
-use noon::{AudioClipDefinition, AudioResource, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET};
+use noon::{
+    AudioClipDefinition, AudioResource, PreparedNarration, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
+};
 use noon_core::{SemanticNodeId, SemanticStore};
 use std::{cell::RefCell, rc::Rc};
 
@@ -35,6 +37,15 @@ pub(crate) fn small_discovery() -> Result<AudioResource, AuthoringFailure> {
     )
     .map_err(noon::AuthoringError::from)
     .map_err(Into::into)
+}
+
+pub(crate) fn prepared_narration(
+    manifest: &str,
+    pcm: &[u8],
+) -> Result<PreparedNarration, AuthoringFailure> {
+    PreparedNarration::from_prepared(manifest, pcm)
+        .map_err(noon::AuthoringError::from)
+        .map_err(Into::into)
 }
 
 /// An alias of one scene-global generational clip identity, never a clip copy.
@@ -101,6 +112,84 @@ mod wasm {
         #[wasm_bindgen(getter)]
         pub fn frames(&self) -> usize {
             self.resource.frames()
+        }
+    }
+
+    /// Verified external media, imported once and shared by narration clips.
+    #[wasm_bindgen]
+    pub struct WasmPreparedNarration {
+        pub(crate) narration: PreparedNarration,
+    }
+
+    #[wasm_bindgen]
+    impl WasmPreparedNarration {
+        #[wasm_bindgen(js_name = fromPrepared)]
+        pub fn from_prepared(manifest: &str, pcm: Vec<u8>) -> Result<Self, JsValue> {
+            prepared_narration(manifest, &pcm)
+                .map(|narration| Self { narration })
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(getter, js_name = durationSeconds)]
+        pub fn duration_seconds(&self) -> f64 {
+            self.narration.duration_seconds()
+        }
+
+        #[wasm_bindgen(getter, js_name = spokenText)]
+        pub fn spoken_text(&self) -> String {
+            self.narration.spoken_text().to_owned()
+        }
+
+        #[wasm_bindgen(getter, js_name = captionText)]
+        pub fn caption_text(&self) -> String {
+            self.narration.caption_text().to_owned()
+        }
+
+        #[wasm_bindgen(getter, js_name = transcriptStatus)]
+        pub fn transcript_status(&self) -> String {
+            self.narration.transcript_status().as_str().to_owned()
+        }
+
+        #[wasm_bindgen(js_name = cueStart)]
+        pub fn cue_start(&self, name: &str) -> Result<f64, JsValue> {
+            self.narration
+                .cue(name)
+                .map(|cue| cue.start_seconds())
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = cueEnd)]
+        pub fn cue_end(&self, name: &str) -> Result<f64, JsValue> {
+            self.narration
+                .cue(name)
+                .map(|cue| cue.end_seconds())
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)
+        }
+    }
+
+    /// Recorded clip placement; waits validate its shared semantic identity.
+    #[wasm_bindgen]
+    pub struct WasmNarrationHandle {
+        pub(crate) handle: noon::NarrationHandle,
+    }
+
+    #[wasm_bindgen]
+    impl WasmNarrationHandle {
+        #[wasm_bindgen(getter, js_name = startTime)]
+        pub fn start_time(&self) -> f64 {
+            self.handle.start_time()
+        }
+
+        #[wasm_bindgen(getter, js_name = endTime)]
+        pub fn end_time(&self) -> f64 {
+            self.handle.end_time()
+        }
+
+        #[wasm_bindgen(getter, js_name = durationSeconds)]
+        pub fn duration_seconds(&self) -> f64 {
+            self.handle.duration_seconds()
         }
     }
 
@@ -179,6 +268,16 @@ pub use wasm::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_import_preserves_the_shared_invalid_media_diagnostic() {
+        let direct = PreparedNarration::from_prepared("{}", &[]).unwrap_err();
+        let expected = AuthoringFailure::from(noon::AuthoringError::from(direct));
+        let wrapped = prepared_narration("{}", &[]).unwrap_err();
+        assert_eq!(wrapped.category, expected.category);
+        assert_eq!(wrapped.code, expected.code);
+        assert_eq!(wrapped.message, expected.message);
+    }
 
     #[test]
     fn source_admission_uses_shared_format_and_finite_pcm_validation() {

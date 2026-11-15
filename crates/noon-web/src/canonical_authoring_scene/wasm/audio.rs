@@ -4,12 +4,41 @@ use super::{CanonicalAuthoringSceneContext, WasmValueTrackerHandle};
 use crate::{
     authoring_error::{js_error, AuthoringFailure},
     WasmAudioClipHandle, WasmAudioClipOptions, WasmAudioSource, WasmAuthoringMobjectHandle,
+    WasmNarrationHandle, WasmPreparedNarration,
 };
 use noon::{PlaybackControl, RateFunction};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
+    pub fn narrate(
+        &mut self,
+        narration: &WasmPreparedNarration,
+    ) -> Result<WasmNarrationHandle, JsValue> {
+        self.inner
+            .narrate(&narration.narration)
+            .map(|handle| WasmNarrationHandle { handle })
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = waitForNarration)]
+    pub fn wait_for_narration(&mut self, narration: &WasmNarrationHandle) -> Result<(), JsValue> {
+        self.inner
+            .wait_for_narration(&narration.handle)
+            .map_err(js_error)
+    }
+
+    #[wasm_bindgen(js_name = waitForNarrationCue)]
+    pub fn wait_for_narration_cue(
+        &mut self,
+        narration: &WasmNarrationHandle,
+        name: &str,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .wait_for_narration_cue(&narration.handle, name)
+            .map_err(js_error)
+    }
+
     pub fn audio(
         &mut self,
         source: &WasmAudioSource,

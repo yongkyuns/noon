@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/native-export-output.yml'
       - 'scripts/verify-native-export.py'
+      - 'scripts/prepare_narration.py'
       - 'scripts/ci-install-reference-deps.sh'
       - 'scripts/ci_reference_apt_sources.py'
       - 'scripts/test_ci_install_reference_deps.py'
@@ -21,6 +22,7 @@ on:
     paths:
       - '.github/workflows/native-export-output.yml'
       - 'scripts/verify-native-export.py'
+      - 'scripts/prepare_narration.py'
       - 'scripts/ci-install-reference-deps.sh'
       - 'scripts/ci_reference_apt_sources.py'
       - 'scripts/test_ci_install_reference_deps.py'
@@ -104,6 +106,7 @@ jobs:
           mkdir -p output-proof/source
           cp -r crates/noon-export output-proof/source/
           cp scripts/verify-native-export.py output-proof/source/
+          cp scripts/prepare_narration.py output-proof/source/
           cargo fmt --all
           git diff --binary > output-proof/rustfmt.patch
       - name: Retain evidence, including failures

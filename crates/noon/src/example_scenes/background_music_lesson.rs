@@ -6,8 +6,8 @@
 //! this ordinary Scene directly.
 
 use crate::{
-    AudioClipOptions, AudioResource, Color, Mobject, RateFunction, Scene, SectionType,
-    SemanticVec3, Text, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
+    AudioClipOptions, AudioResource, Color, Mobject, PreparedNarration, RateFunction, Scene,
+    SectionType, SemanticVec3, Text, ValueTracker, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
 };
 
 use super::background_audio::{music, SAMPLE_RATE};
@@ -34,16 +34,7 @@ const GOLD: Color = Color::from_hex(0xF2C66D);
 /// Complete finite lesson, suitable for `Scene::execution_session` and MP4 export.
 pub fn scene() -> BuildResult<Scene> {
     let mut scene = Scene::new();
-    let [input, output] = illustration(&mut scene)?;
-    let tracker = scene.value_tracker(0.0)?;
-    for (point, multiplier, y) in [(&input, 1.0, INPUT_Y), (&output, 2.0, OUTPUT_Y)] {
-        let position = scene.position_from_tracker(
-            &tracker,
-            SemanticVec3::new(multiplier, 0.0, 0.0),
-            SemanticVec3::new(ORIGIN_X, y, 0.0),
-        )?;
-        scene.bind_position(point, &position)?;
-    }
+    let tracker = tracked_illustration(&mut scene, true)?;
     for (name, target) in SECTIONS {
         scene.next_section(name, SectionType::Normal)?;
         scene.wait(1.0)?;
@@ -73,10 +64,58 @@ pub fn scene() -> BuildResult<Scene> {
     Ok(scene)
 }
 
+/// The same lesson, paced by three accepted recordings and their manual `move`
+/// cues. Each movement keeps its natural two-second duration. Speech completion
+/// adds only a remaining wait, followed by an inspection gap between sections.
+///
+/// This is a complete finite Scene, not a running source continuation. The final
+/// picture hold belongs to the export/viewer policy; a trailing authoring-cursor
+/// wait alone does not extend immutable execution. No music is added to this
+/// variant, leaving the spoken explanation clear.
+pub fn scene_with_narration(narrations: &[PreparedNarration; 3]) -> BuildResult<Scene> {
+    for passage in narrations {
+        passage.cue("move")?;
+    }
+    let mut scene = Scene::new();
+    let tracker = tracked_illustration(&mut scene, false)?;
+    for (index, ((name, target), passage)) in SECTIONS.into_iter().zip(narrations).enumerate() {
+        scene.next_section(name, SectionType::Normal)?;
+        let speech = scene.narrate(passage)?;
+        scene.wait_for_narration_cue(&speech, "move")?;
+        scene
+            .play_value(&tracker, target)
+            .rate_func(RateFunction::Linear)
+            .run_time(2.0)?;
+        scene.wait_for_narration(&speech)?;
+        if index + 1 < narrations.len() {
+            scene.wait(0.75)?;
+        }
+    }
+    Ok(scene)
+}
+
+fn tracked_illustration(scene: &mut Scene, show_outcomes: bool) -> BuildResult<ValueTracker> {
+    let [input, output] = illustration_with_outcomes(scene, show_outcomes)?;
+    let tracker = scene.value_tracker(0.0)?;
+    for (point, multiplier, y) in [(&input, 1.0, INPUT_Y), (&output, 2.0, OUTPUT_Y)] {
+        let position = scene.position_from_tracker(
+            &tracker,
+            SemanticVec3::new(multiplier, 0.0, 0.0),
+            SemanticVec3::new(ORIGIN_X, y, 0.0),
+        )?;
+        scene.bind_position(point, &position)?;
+    }
+    Ok(tracker)
+}
+
 /// Paint the paired lesson and return its two normal semantic point handles.
 /// Keeping the illustration independent makes the binding qualification compare
 /// the two authoring entrypoints against the same rendered composition.
 pub fn illustration(scene: &mut Scene) -> BuildResult<[Mobject; 2]> {
+    illustration_with_outcomes(scene, true)
+}
+
+fn illustration_with_outcomes(scene: &mut Scene, show_outcomes: bool) -> BuildResult<[Mobject; 2]> {
     label(scene, "Double the input", 42.0, 0.0, 3.05, INK)?;
     label(
         scene,
@@ -119,7 +158,19 @@ pub fn illustration(scene: &mut Scene) -> BuildResult<[Mobject; 2]> {
         (4.3, "03  ZERO", "0 stays 0"),
     ] {
         label(scene, heading, 18.0, x, -2.95, BLUE)?;
-        label(scene, explanation, 18.0, x, -3.35, MUTED)?;
+        if show_outcomes {
+            label(scene, explanation, 18.0, x, -3.35, MUTED)?;
+        }
+    }
+    if !show_outcomes {
+        label(
+            scene,
+            "Predict the output before the points move.",
+            24.0,
+            0.0,
+            -3.35,
+            MUTED,
+        )?;
     }
     let mut points = Vec::with_capacity(2);
     for (y, tint) in [(INPUT_Y, BLUE), (OUTPUT_Y, GOLD)] {

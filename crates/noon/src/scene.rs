@@ -3,6 +3,7 @@ mod audio;
 mod execution;
 mod family;
 mod image;
+mod narration;
 pub(crate) mod object_edits;
 mod sections;
 use crate::{
@@ -10,6 +11,7 @@ use crate::{
     SceneMembershipRequest, ValueTracker,
 };
 pub use execution::{host_execution, SceneExecution, SceneExecutionError};
+pub use narration::NarrationHandle;
 use noon_core::{
     AnimationOptions, RateFunction, SemanticClickIndicate, SemanticMutationImpact,
     SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticNodeCreation,

@@ -14,6 +14,7 @@ native-text = ["noon/native-text"]
 typst = ["noon/typst"]
 bundled-fonts = ["noon/bundled-fonts"]
 image-decode = ["noon/image-decode"]
+narration-import = ["noon/narration-import"]
 latex = ["noon/latex"]
 wgsl-effects = ["noon/wgsl-effects"]
 

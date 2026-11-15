@@ -191,6 +191,7 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::AudioClip(_) => {
                 Self::new("invalid_input", "authoring.audio_clip", message)
             }
+            AuthoringError::Narration(cause) => cause.into(),
             AuthoringError::EffectParameter(_) => {
                 Self::new("invalid_input", "effect.invalid_parameter", message)
             }
@@ -453,6 +454,26 @@ impl From<AuthoringError> for AuthoringFailure {
             // with a reviewed projection, not silently acquire a guessed class.
             other => Self::unclassified("authoring.unclassified", &other),
         }
+    }
+}
+
+impl From<crate::NarrationError> for AuthoringFailure {
+    fn from(error: crate::NarrationError) -> Self {
+        use crate::NarrationError;
+        let (category, code) = match &error {
+            NarrationError::ForeignScene => ("foreign_handle", "narration.foreign_scene"),
+            NarrationError::ChangedClip => ("stale_handle", "narration.changed_clip"),
+            NarrationError::RunningWait => ("unsupported_operation", "narration.running_wait"),
+            NarrationError::UnknownCue(_) => ("invalid_input", "narration.unknown_cue"),
+            NarrationError::InvalidTimeline => ("invalid_input", "narration.invalid_timeline"),
+            NarrationError::AudioResource(_) => ("invalid_input", "narration.audio_resource"),
+            NarrationError::InvalidText(_)
+            | NarrationError::TooManyCues(_)
+            | NarrationError::InvalidCue(_)
+            | NarrationError::DuplicateCue(_)
+            | NarrationError::InvalidManifest(_) => ("invalid_input", "narration.invalid_input"),
+        };
+        Self::new(category, code, error)
     }
 }
 
