@@ -59,6 +59,10 @@ test('integration cannot ignore pending or failed path-selected checks', () => {
   assert.match(admission, /^      - label = merge-train$/m);
   const merge = conditionSection('merge_conditions');
   assert.ok(merge.split('\n').includes('      - "-check-failure *= @github-actions/**"'));
-  assert.ok(merge.split('\n').includes('      - "-check-pending *= @github-actions/**"'));
+  // A negated pending-check name pattern caused Mergify to dequeue a draft
+  // immediately while its GitHub Actions jobs were merely queued. Count all
+  // pending checks instead; this is at least as strict as the app-only guard.
+  assert.ok(merge.split('\n').includes('      - "#check-pending = 0"'));
+  assert.doesNotMatch(merge, /-check-pending/);
   assert.doesNotMatch(config, /branch_protection_injection_mode:|skip_intermediate_results:/);
 });
