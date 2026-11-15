@@ -280,6 +280,25 @@ class SkillTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing or unconfined link"):
             self.checker.validate_skill(self.root, self.report())
 
+    def test_skill_heading_links_follow_current_cards(self):
+        card = self.skill / "references/education.md"
+        card.write_text("# Educational scenes\n\n## Preserve identity\n\n## Preserve identity\n", encoding="utf-8")
+        with (self.skill / "SKILL.md").open("a", encoding="utf-8") as out:
+            out.write("[Pattern](references/education.md#preserve-identity-1)\n")
+        self.assertEqual(self.checker.validate_skill(self.root, self.report()), 1)
+        card.write_text("# Educational scenes\n\n## Compare cases\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "missing Markdown heading"):
+            self.checker.validate_skill(self.root, self.report())
+
+    def test_skill_same_page_heading_ignores_fenced_code(self):
+        with (self.skill / "SKILL.md").open("a", encoding="utf-8") as out:
+            out.write("\n[Example](#example)\n\n```python\n# Example\n```\n")
+        with self.assertRaisesRegex(ValueError, "missing Markdown heading"):
+            self.checker.validate_skill(self.root, self.report())
+        with (self.skill / "SKILL.md").open("a", encoding="utf-8") as out:
+            out.write("\n## Example\n")
+        self.assertEqual(self.checker.validate_skill(self.root, self.report()), 1)
+
     def test_skill_wrong_name_fails(self):
         path = self.skill / "SKILL.md"
         path.write_text(path.read_text().replace("name: noon-authoring", "name: manim"), encoding="utf-8")

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -68,6 +68,25 @@ async function regularFile(root, relative) {
 
 async function fileSha256(root, relative) {
   return sha256(await readFile(await regularFile(root, relative)));
+}
+
+// References change agent behavior just as the root instructions do. Record the
+// whole skill bundle so an evaluation cannot reuse an identity after a card edit.
+export async function skillSourceHashes(repoRoot, relative = "skills/noon-authoring") {
+  const result = {};
+  async function visit(directory) {
+    const entries = await readdir(path.join(repoRoot, directory), { withFileTypes: true });
+    entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+    for (const entry of entries) {
+      const child = `${directory}/${entry.name}`;
+      if (entry.isSymbolicLink()) throw new Error(`symlink in skill bundle: ${child}`);
+      if (entry.isDirectory()) await visit(child);
+      else if (entry.isFile()) result[child] = await fileSha256(repoRoot, child);
+      else throw new Error(`non-file skill input: ${child}`);
+    }
+  }
+  await visit(relative);
+  return result;
 }
 
 async function jsonFile(root, relative) {
@@ -186,6 +205,7 @@ export async function buildDistributionManifest({
   const skillPath = "skills/noon-authoring/SKILL.md";
   const skillText = await readFile(await regularFile(repoReal, skillPath), "utf8");
   const skillVersion = requiredMatch(skillText, /^\s{2}version:\s*["']([^"']+)["']\s*$/m, "skill version");
+  const skillSources = await skillSourceHashes(repoReal);
 
   const dockerfile = await readFile(await regularFile(packageReal, "preview.Dockerfile"), "utf8");
   const runtime = {
@@ -199,8 +219,9 @@ export async function buildDistributionManifest({
   const sourceSha256 = {};
   for (const relative of PACKAGE_SOURCES) sourceSha256[`tools/noon-mcp/${relative}`] = await fileSha256(packageReal, relative);
   for (const relative of CHECKOUT_RUNNER_SOURCES) sourceSha256[relative] = await fileSha256(repoReal, relative);
-  sourceSha256[skillPath] = await fileSha256(repoReal, skillPath);
+  Object.assign(sourceSha256, skillSources);
   sourceSha256["scripts/noon-capabilities.py"] = await fileSha256(repoReal, "scripts/noon-capabilities.py");
+  sourceSha256["scripts/prepare_narration.py"] = await fileSha256(repoReal, "scripts/prepare_narration.py");
 
   return Object.freeze({
     schemaVersion: DISTRIBUTION_MANIFEST_SCHEMA_VERSION,
@@ -231,6 +252,7 @@ export async function buildDistributionManifest({
       version: skillVersion,
       path: skillPath,
       sha256: sourceSha256[skillPath],
+      sourceSha256: skillSources,
     },
     capabilities: {
       schemaVersion: capability.schema_version,

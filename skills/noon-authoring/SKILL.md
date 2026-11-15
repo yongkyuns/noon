@@ -1,9 +1,9 @@
 ---
 name: noon-authoring
-description: Author and review Noon animation scenes using capability-qualified ManimCE-style Python or the shared Rust API. Use when a user asks to create, explain, repair, or verify a Noon animation, or when scene source imports noon. Not a generic ManimGL skill or a contract for modifying Noon internals.
+description: Author and review educational Noon animation scenes using capability-qualified ManimCE-style Python or the shared Rust API. Use when a user asks to create, explain, storyboard, repair, or verify a Noon animation, or when scene source imports noon. Not a generic ManimGL skill or a contract for modifying Noon internals.
 compatibility: Requires a trusted Noon repository checkout, Python 3.12+, and Node 22+ for local capability/MCP tooling. Isolated preview additionally requires Docker, a built current browser package, and the repository-pinned preview runtime; capability discovery alone does not render or install dependencies.
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 # Noon authoring
@@ -37,22 +37,38 @@ about an installed binary, the current GPU, or a live session. See
 
 ## Author and inspect
 
-1. State the important visual states and transitions: what appears, what moves,
-   what transforms, and what disappears. Include labels, layout, and holds.
-2. Choose a relevant [existing example](references/examples.md), query its current
-   classification, and read its actual source. Retain its provenance when reusing it.
-   Prefer a narrow proven pattern to an unsupported general recipe.
-3. Write ordinary `from noon import *` Python for the supported CE-like surface, or
+1. State the audience, one learning outcome, the question or misconception, and
+   the visible evidence that answers it. Identify computed, measured, and
+   illustrative quantities. Use the [educational brief](references/education.md)
+   for explanations; keep this short for a small requested edit.
+2. Select one or two [teaching patterns](references/teaching-patterns.md) by the
+   explanatory job, then choose a relevant [existing example](references/examples.md),
+   query its current classification, and read its actual source. Retain its provenance
+   when reusing it.
+   An external study or showcase source is not automatically a ready MCP reference.
+3. Plan the important visual states and transitions with the narration or captions:
+   what changes, what stays visible, where attention belongs, and when to hold.
+   Give motion, effects, and music a specific explanatory purpose. Keep identity,
+   labels, units, and scale consistent; do not make motion imply a false mechanism.
+4. Write ordinary `from noon import *` Python for the supported CE-like surface, or
    use the current shared Rust API. Keep the editable source as the deliverable.
    Do not import `manimlib`, invoke `manim`/`manimgl`, or silently switch renderers.
-4. Prefer the qualified local preview CLI or configured Noon MCP tools below when
+5. Prefer the qualified local preview CLI or configured Noon MCP tools below when
    available. Inspect the intended initial state, transition interiors, completion
    boundaries, and final membership. A final blank frame after `FadeOut` can be
    correct; a successful run alone is not visual verification. Apply the
-   [verification checks](references/verification.md).
-5. Revise source based on actual diagnostics and frames. Preserve the original
+   [verification checks](references/verification.md) and review actual playback
+   for pacing and audio correspondence when that route supports it.
+6. Revise source based on actual diagnostics and frames. Preserve the original
    mathematical and animation semantics; never conceal an unsupported operation by
-   replacing `MathTex` with `Text` or removing an updater.
+   replacing `MathTex` with `Text` or removing an updater. Associate feedback with
+   the source revision, interval, and visible target; compare that interval after
+   the edit. Follow the [narration and revision guidance](references/education.md#narration-and-revision)
+   without claiming unimplemented audio or annotation APIs.
+
+For speech assets, read [narration preparation](references/narration.md). Preparing
+and caching a recording does not establish its admission into an ordinary scene,
+audio preview, or export; verify the selected route separately.
 
 ## Qualified local preview route
 
@@ -160,3 +176,6 @@ Return the source, exact validation performed, observed frames/artifacts when
 available, and remaining limitations. Keep declared compatibility, tests actually
 run, and visual observations separate. No automatic fixes, hidden backend changes,
 or claims of full parity from class names or an uninspected final image.
+For an explanation, include its learning outcome and an explanation or prediction
+question. Report learner feedback only when it was actually obtained; a readable
+render and an agent review do not establish comprehension.
