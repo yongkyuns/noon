@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Optionally reproduce the Double the input lesson's original speech fixtures.
+"""Reproduce the Double the input lesson's technical speech/timing fixtures.
 
 Requires FFmpeg with its Flite filter and built-in slt voice. Creates a NEW output
 directory. Phrase boundaries are manual editorial cues from concatenated PCM
-frames, not word alignment or listening qualification. Existing Noon preparation
-owns all import and cache behavior; this script does not implement a provider.
+frames, not word alignment or listening qualification. The Flite voice was
+rejected for lesson narration; use this helper only for timing/export checks.
+Shared Rust preparation owns import and cache behavior; this script only
+orchestrates FFmpeg and the Rust CLI and does not implement a provider.
 """
 import argparse
 import hashlib
@@ -67,7 +69,14 @@ def main():
     args = parser.parse_args()
     root = args.output_directory.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    prepare = Path(__file__).resolve().parents[4] / "scripts" / "prepare_narration.py"
+    checkout = Path(__file__).resolve().parents[4]
+    prepare = ["cargo", "run", "--quiet", "--locked", "-p", "noon",
+               "--no-default-features", "--features", "narration-native",
+               "--bin", "prepare_narration", "--"]
+    sources = [checkout / "crates/noon/src/bin/prepare_narration.rs",
+               checkout / "crates/noon/src/narration.rs", checkout / "crates/noon/Cargo.toml",
+               checkout / "Cargo.lock", *sorted((checkout / "crates/noon/src/narration").rglob("*.rs"))]
+    preparation_source_sha256 = {str(path.relative_to(checkout)): sha256(path) for path in sources}
     version = subprocess.check_output(["ffmpeg", "-version"], text=True).splitlines()[0]
     summary = []
     for name, texts, caption, pause in PASSAGES:
@@ -108,11 +117,11 @@ def main():
         (section / "spoken.txt").write_text(" ".join(texts) + "\n", encoding="utf-8")
         (section / "captions.txt").write_text(caption + "\n", encoding="utf-8")
         write_json(section / "cues.json", cues)
-        command = [sys.executable, "-B", str(prepare), "--wav", str(wav_path),
+        command = [*prepare, "--wav", str(wav_path),
                    "--spoken-text-file", str(section / "spoken.txt"),
                    "--caption-text-file", str(section / "captions.txt"),
                    "--cues", str(section / "cues.json"), "--cache-dir", str(root / "cache")]
-        manifest = Path(subprocess.check_output(command, text=True).strip())
+        manifest = Path(subprocess.check_output(command, cwd=checkout, text=True).strip())
         relative_manifest = str(manifest.relative_to(root))
         write_json(section / "provenance.json", {
             "original_text": True, "synthetic_speech": True, "voice": "Flite slt",
@@ -121,8 +130,9 @@ def main():
             "phrases": phrases, "layout": layout, "cues": cues,
             "cue_method": "Manual phrase intervals from exact concatenated PCM frame boundaries",
             "word_alignment": False, "human_listening": False, "voice_quality_verified": False,
+            "lesson_voice_rejected": True,
             "wav_sha256": sha256(wav_path), "generator_sha256": sha256(Path(__file__)),
-            "preparation_command": command, "preparation_script_sha256": sha256(prepare),
+            "preparation_command": command, "preparation_source_sha256": preparation_source_sha256,
             "manifest": relative_manifest, "manifest_sha256": sha256(manifest),
         })
         summary.append({"name": name, "manifest": relative_manifest,

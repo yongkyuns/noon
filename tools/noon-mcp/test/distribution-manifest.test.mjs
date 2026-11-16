@@ -47,7 +47,7 @@ test("distribution manifest pins package, skill, capability and runner identitie
   assert.equal(first.environment.trustedCheckoutRequired, true);
 
   assert.equal(first.skill.name, "noon-authoring");
-  assert.equal(first.skill.version, "0.4.0");
+  assert.equal(first.skill.version, "0.5.0");
   assertSha(first.skill.sha256, "skill");
   for (const reference of ["education.md", "teaching-patterns.md", "examples.md"]) {
     const name = `skills/noon-authoring/references/${reference}`;
@@ -79,7 +79,8 @@ test("distribution manifest pins package, skill, capability and runner identitie
     "web/authoring-diagnostic.js",
     "web/runtime-build-verifier.js",
     "skills/noon-authoring/SKILL.md",
-    "scripts/prepare_narration.py",
+    "crates/noon/src/bin/prepare_narration.rs",
+    "crates/noon/src/narration/preparation.rs",
   ]) assertSha(first.runner.sourceSha256[required], required);
   assertSha(first.notices.sha256, "third-party notices");
 });

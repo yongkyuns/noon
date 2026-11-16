@@ -61,15 +61,21 @@ the points move. The default 30-second music lesson keeps its existing source
 behavior and soundtrack.
 
 The [narration guide](../../../skills/noon-authoring/references/narration.md)
-covers byte import, typed Rust construction, cache reuse, and host restrictions.
-An optional original speech fixture is reproducible with:
+covers shared Rust WAV preparation, typed construction, cache reuse, and host
+restrictions. Python's `PreparedNarration.from_wav` forwards to the same Rust
+decoder; native applications can use `NarrationPreparer` and pass its typed
+result directly into the scene. An optional technical speech fixture is
+reproducible with:
 
 ```bash
 python3 crates/noon-export/examples/narration/prepare.py output/narration-lesson
 ```
 
-The script requires FFmpeg with Flite `slt`, uses a new destination directory,
-and reports three manifests. Supply their paths to the existing native exporter:
+The script requires FFmpeg with Flite `slt` and the repository-pinned Rust
+toolchain, uses a new destination directory, invokes the Rust preparation CLI,
+and reports three manifests. This Flite voice was rejected for lesson narration;
+the helper is retained for timing/export reproduction. Supply the manifest paths
+to the existing native exporter:
 
 ```bash
 cargo run --locked --release -p noon-export --features narration-import \

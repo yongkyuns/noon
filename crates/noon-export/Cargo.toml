@@ -15,6 +15,8 @@ typst = ["noon/typst"]
 bundled-fonts = ["noon/bundled-fonts"]
 image-decode = ["noon/image-decode"]
 narration-import = ["noon/narration-import"]
+narration-preparation = ["noon/narration-preparation"]
+narration-native = ["narration-preparation", "narration-import", "noon/narration-native"]
 latex = ["noon/latex"]
 wgsl-effects = ["noon/wgsl-effects"]
 

@@ -155,6 +155,17 @@ bytes and returns typed immutable audio. See the
 [paired lesson](../../web/python/examples/background_music_lesson.md#prepared-narration-variant)
 for recording preparation and the optional reproducible speech fixture.
 
+Native Rust applications can enable `narration-native` and use
+`NarrationPreparer::prepare_wav` or `prepare_speech` before authoring. These return
+the typed narration together with its persisted manifest path; pass the narration
+directly to `Scene::narrate`. The `narration-preparation` feature also exposes
+`PreparedNarration::from_wav` without a filesystem or provider. Shared Rust owns
+decoding, identities and validation on native and WASM. The native end-to-end
+regression prepares and caches WAV bytes, revises captions, and exports full,
+visually revised and cropped MP4s without a Python process or JSON roundtrip
+between preparation and Scene admission. The bundled Flite helper remains a
+technical fixture; its voice was rejected for lesson narration.
+
 It uses *A Small Discovery*, the project's quiet original score. The composition
 and generated audio carry the scoped CC0 dedication in
 [`render_background_music/README.md`](../noon/examples/render_background_music/README.md).

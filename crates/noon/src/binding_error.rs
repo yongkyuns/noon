@@ -471,6 +471,7 @@ impl From<crate::NarrationError> for AuthoringFailure {
             | NarrationError::TooManyCues(_)
             | NarrationError::InvalidCue(_)
             | NarrationError::DuplicateCue(_)
+            | NarrationError::InvalidPreparation(_)
             | NarrationError::InvalidManifest(_) => ("invalid_input", "narration.invalid_input"),
         };
         Self::new(category, code, error)

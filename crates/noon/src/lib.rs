@@ -243,7 +243,7 @@ mod live_session;
 mod matrix_authoring;
 #[cfg(feature = "latex")]
 mod matrix_display;
-mod narration;
+pub mod narration;
 mod native_signal_authoring;
 #[cfg(feature = "latex")]
 mod numeric_authoring;

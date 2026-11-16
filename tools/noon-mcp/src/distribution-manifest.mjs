@@ -73,16 +73,20 @@ async function fileSha256(root, relative) {
 // References change agent behavior just as the root instructions do. Record the
 // whole skill bundle so an evaluation cannot reuse an identity after a card edit.
 export async function skillSourceHashes(repoRoot, relative = "skills/noon-authoring") {
+  return sourceDirectoryHashes(repoRoot, relative, "skill bundle");
+}
+
+async function sourceDirectoryHashes(repoRoot, relative, label) {
   const result = {};
   async function visit(directory) {
     const entries = await readdir(path.join(repoRoot, directory), { withFileTypes: true });
     entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
     for (const entry of entries) {
       const child = `${directory}/${entry.name}`;
-      if (entry.isSymbolicLink()) throw new Error(`symlink in skill bundle: ${child}`);
+      if (entry.isSymbolicLink()) throw new Error(`symlink in ${label}: ${child}`);
       if (entry.isDirectory()) await visit(child);
       else if (entry.isFile()) result[child] = await fileSha256(repoRoot, child);
-      else throw new Error(`non-file skill input: ${child}`);
+      else throw new Error(`non-file ${label} input: ${child}`);
     }
   }
   await visit(relative);
@@ -221,7 +225,12 @@ export async function buildDistributionManifest({
   for (const relative of CHECKOUT_RUNNER_SOURCES) sourceSha256[relative] = await fileSha256(repoReal, relative);
   Object.assign(sourceSha256, skillSources);
   sourceSha256["scripts/noon-capabilities.py"] = await fileSha256(repoReal, "scripts/noon-capabilities.py");
-  sourceSha256["scripts/prepare_narration.py"] = await fileSha256(repoReal, "scripts/prepare_narration.py");
+  for (const relative of ["Cargo.lock", "crates/noon/Cargo.toml",
+    "crates/noon/src/narration.rs", "crates/noon/src/bin/prepare_narration.rs"]) {
+    sourceSha256[relative] = await fileSha256(repoReal, relative);
+  }
+  Object.assign(sourceSha256, await sourceDirectoryHashes(repoReal,
+    "crates/noon/src/narration", "narration preparation"));
 
   return Object.freeze({
     schemaVersion: DISTRIBUTION_MANIFEST_SCHEMA_VERSION,

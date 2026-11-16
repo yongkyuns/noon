@@ -141,8 +141,8 @@ class AudioClip:
 class PreparedNarration:
     """Verified immutable narration prepared before scene authoring.
 
-    The shared Rust importer validates the external manifest, PCM identity,
-    duration, and manual cues. This proxy performs no file access, decoding,
+    Shared Rust prepares WAV bytes or validates a persisted manifest and PCM,
+    including identity, duration, and manual cues. This proxy performs no file access, decoding,
     speech generation, alignment, or timing calculations. The first language
     profile is a complete immutable browser Scene; native CPython admission is
     not provided by this wrapper.
@@ -150,7 +150,42 @@ class PreparedNarration:
     __slots__ = ("_handle",)
 
     def __init__(self):
-        raise TypeError("use PreparedNarration.from_prepared()")
+        raise TypeError("use PreparedNarration.from_wav() or PreparedNarration.from_prepared()")
+
+    @classmethod
+    def from_wav(cls, wav, spoken_text, *, caption_text=None, cues=()):
+        """Prepare complete PCM16 WAV bytes through shared Rust before playback.
+
+        cues contains (name, start_seconds, end_seconds) manual intervals.
+        Rust measures duration and validates all media and cue semantics; a
+        supplied transcript is not automatically verified against the recording.
+        """
+        if not isinstance(spoken_text, str):
+            raise TypeError("spoken_text must be a string")
+        if caption_text is not None and not isinstance(caption_text, str):
+            raise TypeError("caption_text must be a string or None")
+        view = memoryview(wav)
+        if not view.c_contiguous or view.itemsize != 1:
+            raise TypeError("wav must be a contiguous byte buffer")
+        names, starts, ends = [], array("d"), array("d")
+        for name, start, end in cues:
+            if not isinstance(name, str):
+                raise TypeError("cue name must be a string")
+            names.append(name)
+            starts.append(_number(start, "cue start"))
+            ends.append(_number(end, "cue end"))
+        from _noon_host import array_value, byte_buffer
+        try:
+            from _noon_host import noonPreparedNarration
+        except ImportError as error:
+            raise NotImplementedError("prepared narration is not available in this host") from error
+        narration = object.__new__(cls)
+        narration._handle = engine_call(
+            noonPreparedNarration.fromWav, byte_buffer(view.cast("B")), spoken_text,
+            caption_text, array_value(names), array_value(starts), array_value(ends),
+            operation="PreparedNarration.from_wav",
+        )
+        return narration
 
     @classmethod
     def from_prepared(cls, manifest, pcm):

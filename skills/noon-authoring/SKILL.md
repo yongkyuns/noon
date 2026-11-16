@@ -1,9 +1,9 @@
 ---
 name: noon-authoring
 description: Author and review educational Noon animation scenes using capability-qualified ManimCE-style Python or the shared Rust API. Use when a user asks to create, explain, storyboard, repair, or verify a Noon animation, or when scene source imports noon. Not a generic ManimGL skill or a contract for modifying Noon internals.
-compatibility: Requires a trusted Noon repository checkout, Python 3.12+, and Node 22+ for local capability/MCP tooling. Isolated preview additionally requires Docker, a built current browser package, and the repository-pinned preview runtime; capability discovery alone does not render or install dependencies.
+compatibility: Requires a trusted Noon repository checkout, Python 3.12+, and Node 22+ for local capability/MCP tooling. Native narration preparation requires the repository-pinned Rust toolchain. Isolated preview additionally requires Docker, a built current browser package, and the repository-pinned preview runtime; capability discovery alone does not render or install dependencies.
 metadata:
-  version: "0.4.0"
+  version: "0.5.0"
 ---
 
 # Noon authoring

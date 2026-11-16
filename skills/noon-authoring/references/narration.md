@@ -8,6 +8,7 @@ the resulting audio.
 ## Contents
 
 - [Write for the explanation](#write-for-the-explanation)
+- [Prepare through shared Rust](#prepare-through-shared-rust)
 - [Import a recording](#import-a-recording)
 - [Generate one passage](#generate-one-passage)
 - [Review captions and phrase cues](#review-captions-and-phrase-cues)
@@ -38,12 +39,54 @@ continuity, pace, and correspondence. A supplied transcript is not an automatica
 verified transcript. Keep the accepted recording instead of depending on a seed
 or a later request to reproduce the same voice performance.
 
+## Prepare through shared Rust
+
+The `noon` crate owns narration request validation, WAV decoding, content identity,
+caption/cue validation, and construction of the immutable `PreparedNarration`.
+Enable `narration-preparation` for this shared native/direct-WASM API:
+
+```rust
+use noon::narration::preparation::PreparationOptions;
+use noon::{NarrationCue, PreparedNarration};
+
+let passage = PreparedNarration::from_wav(
+    wav_bytes,
+    "Each lane requests a different word.",
+    PreparationOptions {
+        caption_text: Some("Different words, same bank".into()),
+        cues: vec![NarrationCue::manual("show_shared_bank", 1.2, 2.1)?],
+    },
+)?;
+let speech = scene.narrate(&passage)?;
+scene.wait_for_narration_cue(&speech, "show_shared_bank")?;
+```
+
+Use offsets you have reviewed in the actual recording. The code accepts complete
+WAV bytes and returns a typed value directly. Network and file access happen
+before Scene admission. Native applications can enable `narration-native` to add
+the blocking cache/provider adapter:
+
+```rust
+use noon::narration::preparation::native::NarrationPreparer;
+
+let preparer = NarrationPreparer::new("output/narration-cache");
+let prepared = preparer.prepare_wav(wav_bytes, spoken_text, options)?;
+let speech = scene.narrate(&prepared.narration)?;
+```
+
+`prepared.manifest_path` is the persisted interchange artifact. Ordinary native
+authoring uses `prepared.narration` in memory. `prepare_speech(&request, options)`
+uses a typed `SpeechRequest` and the same cache. Browser hosts supply bytes to the
+shared preparation API; native filesystem/credential/HTTPS access is an optional
+Rust adapter, outside the execution and audio callbacks.
+
 ## Import a recording
 
 From the trusted Noon checkout, supply your WAV recording and UTF-8 spoken text:
 
 ```bash
-python3 -B scripts/prepare_narration.py \
+cargo run --quiet --locked -p noon --no-default-features \
+  --features narration-native --bin prepare_narration -- \
   --wav narration.wav \
   --spoken-text-file narration.txt \
   --cache-dir output/narration-cache
@@ -80,7 +123,8 @@ Supply an explicit voice available to your account and model in a request file:
 Configure `ELEVENLABS_API_KEY` in your local preparation environment, then run:
 
 ```bash
-python3 -B scripts/prepare_narration.py \
+cargo run --quiet --locked -p noon --no-default-features \
+  --features narration-native --bin prepare_narration -- \
   --request narration-request.json \
   --cache-dir output/narration-cache
 ```
@@ -109,7 +153,8 @@ generated speech when presenting the resulting lesson.
 Supply separate caption text and reviewed cue offsets when ready:
 
 ```bash
-python3 -B scripts/prepare_narration.py \
+cargo run --quiet --locked -p noon --no-default-features \
+  --features narration-native --bin prepare_narration -- \
   --wav narration.wav \
   --spoken-text-file narration.txt \
   --caption-text-file captions.txt \
@@ -187,11 +232,16 @@ remain preparation work. A typed `PreparedNarration::new` constructor accepts
 an existing `AudioResource`, text, and `NarrationCue::manual` values without
 enabling JSON or an importer in a native/direct-WASM Rust application.
 
-The Python proxy reaches those same Rust operations for a completed immutable
-scene:
+The Python proxy can prepare WAV bytes through the same Rust decoder for a
+completed immutable scene:
 
 ```python
-passage = PreparedNarration.from_prepared(manifest_text, pcm_bytes)
+passage = PreparedNarration.from_wav(
+    wav_bytes,
+    "Each lane requests a different word.",
+    caption_text="Different words, same bank",
+    cues=[("show_shared_bank", 1.2, 2.1)],
+)
 result = Scene()
 speech = result.narrate(passage)
 result.wait_for_narration_cue(speech, "show_shared_bank")
@@ -199,10 +249,12 @@ result.wait_for_narration_cue(speech, "show_shared_bank")
 result.wait_for_narration(speech)
 ```
 
-The bytes must already be available in the authoring context. This snippet does
-not load local paths into a browser automatically. Python performs argument
-coercion and forwards handles; Rust owns parsing, cue validation, clip admission,
-and time. Caption text is accessible separately but is not automatically drawn
+The external cache importer is also available as
+`PreparedNarration.from_prepared(manifest_text, pcm_bytes)`. The bytes must already
+be available in the authoring context; neither method loads local paths into a
+browser automatically. Python performs argument coercion and forwards handles;
+Rust owns decoding, identity, parsing, cue validation, clip admission, and time.
+Caption text is accessible separately but is not automatically drawn
 or converted into timed subtitles. Manual cue provenance remains manual.
 
 Keep inspection gaps between passages on the existing authored cursor. For a
@@ -220,10 +272,12 @@ same two-second point movements, remaining narration waits, and 0.75-second
 inspection gaps between sections. Static numerical answer footers are hidden
 in this variant so the prediction question has space to work.
 
-For a reproducible synthetic-speech example, an optional preparation script uses
-FFmpeg's installed Flite `slt` voice. It writes original spoken text, WAVs, manual
+For technical timing/export reproduction, an optional fixture script uses
+FFmpeg's installed Flite `slt` voice. This voice was rejected for lesson narration;
+it must not serve as a voice-quality audition or an accepted lesson preview.
+The fixture writes original spoken text, WAVs, manual
 phrase cues, and generation provenance into a new output directory, then calls
-the same preparation/cache tool:
+the Rust preparation/cache CLI:
 
 ```bash
 python3 crates/noon-export/examples/narration/prepare.py output/narration-lesson

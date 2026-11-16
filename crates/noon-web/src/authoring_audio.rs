@@ -4,8 +4,10 @@
 //! These wrappers retain no playback clock, mixer, or mutable clip state.
 
 use crate::authoring_error::AuthoringFailure;
+use noon::narration::preparation::PreparationOptions;
 use noon::{
-    AudioClipDefinition, AudioResource, PreparedNarration, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
+    AudioClipDefinition, AudioResource, NarrationCue, PreparedNarration,
+    DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
 };
 use noon_core::{SemanticNodeId, SemanticStore};
 use std::{cell::RefCell, rc::Rc};
@@ -45,6 +47,29 @@ pub(crate) fn prepared_narration(
 ) -> Result<PreparedNarration, AuthoringFailure> {
     PreparedNarration::from_prepared(manifest, pcm)
         .map_err(noon::AuthoringError::from)
+        .map_err(Into::into)
+}
+
+pub(crate) fn prepare_wav_narration(
+    wav: &[u8],
+    spoken_text: &str,
+    caption_text: Option<String>,
+    cue_names: Vec<String>,
+    cue_starts: Vec<f64>,
+    cue_ends: Vec<f64>,
+) -> Result<PreparedNarration, AuthoringFailure> {
+    if cue_names.len() != cue_starts.len() || cue_names.len() != cue_ends.len() {
+        return Err(
+            noon::NarrationError::InvalidPreparation("cue arrays must have equal lengths").into(),
+        );
+    }
+    let cues = cue_names
+        .into_iter()
+        .zip(cue_starts)
+        .zip(cue_ends)
+        .map(|((name, start), end)| NarrationCue::manual(name, start, end))
+        .collect::<Result<Vec<_>, _>>()?;
+    PreparedNarration::from_wav(wav, spoken_text, PreparationOptions { caption_text, cues })
         .map_err(Into::into)
 }
 
@@ -123,6 +148,27 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmPreparedNarration {
+        #[wasm_bindgen(js_name = fromWav)]
+        pub fn from_wav(
+            wav: Vec<u8>,
+            spoken_text: &str,
+            caption_text: Option<String>,
+            cue_names: Vec<String>,
+            cue_starts: Vec<f64>,
+            cue_ends: Vec<f64>,
+        ) -> Result<Self, JsValue> {
+            prepare_wav_narration(
+                &wav,
+                spoken_text,
+                caption_text,
+                cue_names,
+                cue_starts,
+                cue_ends,
+            )
+            .map(|narration| Self { narration })
+            .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = fromPrepared)]
         pub fn from_prepared(manifest: &str, pcm: Vec<u8>) -> Result<Self, JsValue> {
             prepared_narration(manifest, &pcm)
@@ -268,6 +314,90 @@ pub use wasm::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wav() -> Vec<u8> {
+        let samples = [-32_768_i16, -16_384, 0, 16_384];
+        let data_bytes = (samples.len() * 2) as u32;
+        let mut bytes = Vec::from(&b"RIFF"[..]);
+        bytes.extend((36 + data_bytes).to_le_bytes());
+        bytes.extend(b"WAVEfmt ");
+        bytes.extend(16_u32.to_le_bytes());
+        bytes.extend(1_u16.to_le_bytes());
+        bytes.extend(1_u16.to_le_bytes());
+        bytes.extend(8_000_u32.to_le_bytes());
+        bytes.extend(16_000_u32.to_le_bytes());
+        bytes.extend(2_u16.to_le_bytes());
+        bytes.extend(16_u16.to_le_bytes());
+        bytes.extend(b"data");
+        bytes.extend(data_bytes.to_le_bytes());
+        for sample in samples {
+            bytes.extend(sample.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn wav_preparation_wrapper_preserves_shared_samples_identity_and_cues() {
+        let bytes = wav();
+        let direct = PreparedNarration::from_wav(
+            &bytes,
+            "Double the input.",
+            PreparationOptions {
+                caption_text: Some("y = 2x".to_owned()),
+                cues: vec![NarrationCue::manual("move", 0.000125, 0.0005).unwrap()],
+            },
+        )
+        .unwrap();
+        let wrapped = prepare_wav_narration(
+            &bytes,
+            "Double the input.",
+            Some("y = 2x".to_owned()),
+            vec!["move".to_owned()],
+            vec![0.000125],
+            vec![0.0005],
+        )
+        .unwrap();
+        assert_eq!(wrapped.audio().samples(), &[-1.0, -0.5, 0.0, 0.5]);
+        assert_eq!(wrapped.audio().samples(), direct.audio().samples());
+        assert_eq!(wrapped.audio_id(), direct.audio_id());
+        assert_eq!(wrapped.request_id(), direct.request_id());
+        assert_eq!(wrapped.duration_seconds(), direct.duration_seconds());
+        assert_eq!(wrapped.caption_text(), direct.caption_text());
+        assert_eq!(wrapped.transcript_status(), direct.transcript_status());
+        assert_eq!(wrapped.cues(), direct.cues());
+    }
+
+    #[test]
+    fn wav_preparation_preserves_errors_and_rejects_mismatched_cue_arguments() {
+        let direct =
+            PreparedNarration::from_wav(&[], "text", PreparationOptions::default()).unwrap_err();
+        let expected = AuthoringFailure::from(direct);
+        let wrapped = prepare_wav_narration(&[], "text", None, vec![], vec![], vec![]).unwrap_err();
+        assert_eq!(wrapped.category, expected.category);
+        assert_eq!(wrapped.code, expected.code);
+        assert_eq!(wrapped.message, expected.message);
+        let mismatch = prepare_wav_narration(
+            &wav(),
+            "text",
+            None,
+            vec!["move".to_owned()],
+            vec![],
+            vec![0.1],
+        )
+        .unwrap_err();
+        assert_eq!(mismatch.category, "invalid_input");
+        // Equal-shaped arguments still use the shared cue constructor.
+        let invalid = prepare_wav_narration(
+            &wav(),
+            "text",
+            None,
+            vec!["move".to_owned()],
+            vec![f64::NAN],
+            vec![0.1],
+        )
+        .unwrap_err();
+        assert_eq!(invalid.category, "invalid_input");
+    }
 
     #[test]
     fn prepared_import_preserves_the_shared_invalid_media_diagnostic() {

@@ -30,6 +30,7 @@ class AudioFacadeTests(unittest.TestCase):
         )
         self.narration_factory = Mock()
         self.narration_factory.fromPrepared.return_value = self.prepared_handle
+        self.narration_factory.fromWav.return_value = self.prepared_handle
         self.placement = types.SimpleNamespace(startTime=1.0, endTime=3.0, durationSeconds=2.0)
         self.context.narrate.return_value = self.placement
         self.scene = noon.Scene()
@@ -193,6 +194,49 @@ class AudioFacadeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.scene.on_click_playback(target, noon.PlaybackControl.RESTART)
 
+    def test_wav_preparation_forwards_bytes_text_and_cue_arguments_without_decoding(self):
+        # Arbitrary bytes intentionally demonstrate that decoding belongs to Rust.
+        wav = b"Rust validates the WAV"
+        narration = noon.PreparedNarration.from_wav(
+            wav, "Double the input.", caption_text="y = 2x",
+            cues=[("move", 0.25, 1.75)],
+        )
+        payload, spoken, caption, names, starts, ends = self.narration_factory.fromWav.call_args.args
+        self.assertEqual(bytes(payload), wav)
+        self.assertEqual((spoken, caption, list(names)), ("Double the input.", "y = 2x", ["move"]))
+        self.assertEqual(list(starts), [0.25])
+        self.assertEqual(list(ends), [1.75])
+        self.assertIs(narration._handle, self.prepared_handle)
+        self.assertEqual(narration.duration, 2.0)
+        self.assertEqual(narration.transcript_status, "supplied-unverified")
+        self.assertIs(copy.copy(narration), narration)
+        self.assertIs(copy.deepcopy(narration), narration)
+
+    def test_wav_preparation_defaults_and_shared_rejections_are_preserved(self):
+        noon.PreparedNarration.from_wav(b"wav", "text")
+        _, _, caption, names, starts, ends = self.narration_factory.fromWav.call_args.args
+        self.assertIsNone(caption)
+        self.assertEqual((list(names), list(starts), list(ends)), ([], [], []))
+        failure = ValueError("Rust rejected a truncated WAV")
+        self.narration_factory.fromWav.side_effect = failure
+        with self.assertRaises(ValueError) as observed:
+            noon.PreparedNarration.from_wav(b"bad", "text", cues=[("move", math.nan, 1)])
+        self.assertIs(observed.exception, failure)
+
+    def test_wav_preparation_rejects_only_python_argument_shape_before_rust(self):
+        for arguments, options in [
+            ((b"wav", 2), {}),
+            ((b"wav", "text"), {"caption_text": 2}),
+            ((array("f", [1]), "text"), {}),
+            ((memoryview(b"abcd")[::2], "text"), {}),
+            ((b"wav", "text"), {"cues": [(1, 0, 1)]}),
+            ((b"wav", "text"), {"cues": [("move", True, 1)]}),
+            ((b"wav", "text"), {"cues": [("move", 0, "1")]}),
+        ]:
+            with self.subTest(arguments=arguments, options=options), self.assertRaises(TypeError):
+                noon.PreparedNarration.from_wav(*arguments, **options)
+        self.narration_factory.fromWav.assert_not_called()
+
     def test_prepared_narration_passes_manifest_and_one_byte_buffer_to_rust(self):
         pcm = bytearray(b"\0\0\x80?\0\0\x80\xbf")
         narration = noon.PreparedNarration.from_prepared("manifest is validated by Rust", pcm)
@@ -284,9 +328,12 @@ class AudioFacadeTests(unittest.TestCase):
     def test_narration_import_reports_an_unavailable_host_without_a_fallback(self):
         host = types.ModuleType("_noon_host")
         host.byte_buffer = bytes
+        host.array_value = list
         with patch.dict(sys.modules, {"_noon_host": host}):
             with self.assertRaisesRegex(NotImplementedError, "not available in this host"):
                 noon.PreparedNarration.from_prepared("{}", b"pcm")
+            with self.assertRaisesRegex(NotImplementedError, "not available in this host"):
+                noon.PreparedNarration.from_wav(b"wav", "text")
 
 
 if __name__ == "__main__":

@@ -1,15 +1,20 @@
 //! Prepared speech and manual phrase metadata, independent of scene execution.
 //!
-//! PCM is prepared once. Narration does not synthesize speech, align words, own
-//! a clock, or add another scene representation. Scene admission uses the same
-//! immutable audio resource and semantic clip boundary as any other soundtrack.
+//! PCM is prepared once, before execution. A prepared value and its Scene
+//! placement never synthesize speech, align words, or own another clock or scene
+//! representation. Optional preparation helpers live beside this authoring API;
+//! Scene admission uses the normal immutable audio and semantic clip boundary.
 
 use std::{collections::HashSet, sync::Arc};
 
 use crate::{AudioResource, AudioResourceError, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET};
 
 #[cfg(feature = "narration-import")]
+mod codec;
+#[cfg(feature = "narration-import")]
 mod import;
+#[cfg(feature = "narration-preparation")]
+pub mod preparation;
 #[cfg(test)]
 mod tests;
 
@@ -141,25 +146,7 @@ impl PreparedNarration {
                 },
             ));
         }
-        if cues.len() > MAX_CUES {
-            return Err(NarrationError::TooManyCues(cues.len()));
-        }
-        let mut names = HashSet::with_capacity(cues.len());
-        let mut previous_start = 0.0;
-        for cue in &cues {
-            if !names.insert(cue.name.as_str()) {
-                return Err(NarrationError::DuplicateCue(cue.name.clone()));
-            }
-            if cue.start_seconds < previous_start {
-                return Err(NarrationError::InvalidCue("cue starts must be ordered"));
-            }
-            if cue.end_seconds > audio.duration_seconds() {
-                return Err(NarrationError::InvalidCue(
-                    "cue interval exceeds the actual audio duration",
-                ));
-            }
-            previous_start = cue.start_seconds;
-        }
+        validate_cues(&cues, Some(audio.duration_seconds()))?;
         Ok(Self {
             audio,
             metadata: Arc::new(NarrationMetadata {
@@ -201,7 +188,7 @@ impl PreparedNarration {
         self.metadata.cue(name)
     }
 
-    /// Persisted audio identity, available only for an imported cache manifest.
+    /// Content identity, available for prepared WAV or imported cached audio.
     pub fn audio_id(&self) -> Option<&str> {
         self.metadata.audio_id.as_deref()
     }
@@ -210,6 +197,32 @@ impl PreparedNarration {
     pub fn request_id(&self) -> Option<&str> {
         self.metadata.request_id.as_deref()
     }
+}
+
+pub(crate) fn validate_cues(
+    cues: &[NarrationCue],
+    duration: Option<f64>,
+) -> Result<(), NarrationError> {
+    if cues.len() > MAX_CUES {
+        return Err(NarrationError::TooManyCues(cues.len()));
+    }
+    let mut names = HashSet::with_capacity(cues.len());
+    let mut previous_start = 0.0;
+    for cue in cues {
+        if !names.insert(cue.name.as_str()) {
+            return Err(NarrationError::DuplicateCue(cue.name.clone()));
+        }
+        if cue.start_seconds < previous_start {
+            return Err(NarrationError::InvalidCue("cue starts must be ordered"));
+        }
+        if duration.is_some_and(|duration| cue.end_seconds > duration) {
+            return Err(NarrationError::InvalidCue(
+                "cue interval exceeds the actual audio duration",
+            ));
+        }
+        previous_start = cue.start_seconds;
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_text(
@@ -242,6 +255,7 @@ pub enum NarrationError {
     DuplicateCue(String),
     UnknownCue(String),
     InvalidManifest(&'static str),
+    InvalidPreparation(&'static str),
     AudioResource(AudioResourceError),
     ForeignScene,
     ChangedClip,
@@ -258,6 +272,7 @@ impl std::fmt::Display for NarrationError {
             Self::DuplicateCue(name) => write!(formatter, "duplicate narration cue {name:?}"),
             Self::UnknownCue(name) => write!(formatter, "unknown narration cue {name:?}"),
             Self::InvalidManifest(reason) => write!(formatter, "invalid prepared narration: {reason}"),
+            Self::InvalidPreparation(reason) => write!(formatter, "narration preparation failed: {reason}"),
             Self::AudioResource(error) => error.fmt(formatter),
             Self::ForeignScene => formatter.write_str("narration belongs to another Scene"),
             Self::ChangedClip => formatter.write_str("narration clip changed after placement; its recorded cues no longer apply"),

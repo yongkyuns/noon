@@ -749,61 +749,61 @@ fn finite_movies_keep_audio_phase_gaps_crop_holds_and_exact_presentation_endpoin
     }
 }
 
-#[cfg(feature = "narration-import")]
+#[cfg(feature = "narration-native")]
 #[test]
-#[ignore = "requires Python, software Vulkan, FFmpeg and ffprobe; verifies the real preparation/import/export boundary"]
+#[ignore = "requires software Vulkan, FFmpeg and ffprobe; verifies typed Rust preparation through export"]
 fn prepared_narration_survives_visual_revision_crop_and_silent_final_hold() {
-    use noon::PreparedNarration;
+    use noon::narration::preparation::native::NarrationPreparer;
+    use noon::narration::preparation::PreparationOptions;
+    use noon::NarrationCue;
 
     let directory = TestDirectory::new("prepared-narration", true);
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    // Exercise the actual producer, including a caption-only revision. This
-    // tone is a deterministic timing oracle, not a generated-voice quality test.
-    let produced = command_output(
-        Command::new("python3")
-            .args([
-                "-B",
-                "-c",
-                r#"
-import json, math, pathlib, struct, sys, wave
-sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'scripts'))
-from prepare_narration import prepare_narration
-root = pathlib.Path(sys.argv[2])
-wav = root / 'source.wav'
-samples = []
-for frame in range(12000):
-    t = frame / 24000
-    envelope = min(t / .01, (.5 - t) / .01, 1)
-    samples.append(int(32767 * .25 * envelope * math.sin(2 * math.pi * 500 * t)))
-with wave.open(str(wav), 'wb') as stream:
-    stream.setparams((1, 2, 24000, 0, 'NONE', 'not compressed'))
-    stream.writeframes(struct.pack('<12000h', *samples))
-cues = [{'name': 'move', 'start_seconds': .1, 'end_seconds': .2, 'provenance': 'manual'}]
-paths = [str(prepare_narration(root / 'cache', wav_path=wav,
-    spoken_text='Timing fixture; no speech transcript is verified.',
-    caption_text=caption, cues=cues)) for caption in ['Double the input', '2x']]
-print(json.dumps(paths))
-"#,
-            ])
-            .arg(&root)
-            .arg(&directory.path),
-    );
-    let paths: Vec<PathBuf> = serde_json::from_slice(&produced).unwrap();
-    assert_eq!(paths.len(), 2);
-    assert_ne!(paths[0], paths[1]);
-    let load = |path: &Path| {
-        let manifest = fs::read_to_string(path).unwrap();
-        let metadata: serde_json::Value = serde_json::from_str(&manifest).unwrap();
-        let pcm = fs::read(
-            path.parent()
-                .unwrap()
-                .join(metadata["audio"]["path"].as_str().unwrap()),
-        )
-        .unwrap();
-        PreparedNarration::from_prepared(&manifest, &pcm).unwrap()
+    // A complete WAV fixture enters the same shared Rust preparation used by
+    // authoring. No Python process or serialized scene/media roundtrip sits
+    // between preparation, Scene admission, execution and MP4 export. The tone
+    // is a timing oracle, not a generated-voice quality test.
+    let frames = 12_000_u32;
+    let rate = 24_000_u32;
+    let mut wav = Vec::with_capacity(44 + frames as usize * 2);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + frames * 2).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&rate.to_le_bytes());
+    wav.extend_from_slice(&(rate * 2).to_le_bytes());
+    wav.extend_from_slice(&2_u16.to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(frames * 2).to_le_bytes());
+    for frame in 0..frames {
+        let time = f64::from(frame) / f64::from(rate);
+        let envelope = (time / 0.01).min((0.5 - time) / 0.01).min(1.0);
+        let sample =
+            (32767.0 * 0.25 * envelope * (std::f64::consts::TAU * 500.0 * time).sin()) as i16;
+        wav.extend_from_slice(&sample.to_le_bytes());
+    }
+    let preparer = NarrationPreparer::new(directory.path.join("cache"));
+    let prepare = |caption: &str| {
+        preparer
+            .prepare_wav(
+                &wav,
+                "Timing fixture; no speech transcript is verified.",
+                PreparationOptions {
+                    caption_text: Some(caption.to_owned()),
+                    cues: vec![NarrationCue::manual("move", 0.1, 0.2).unwrap()],
+                },
+            )
+            .unwrap()
     };
-    let narration = load(&paths[0]);
-    let revised_caption = load(&paths[1]);
+    let prepared = prepare("Double the input");
+    let revised = prepare("2x");
+    assert_ne!(prepared.manifest_path, revised.manifest_path);
+    assert!(prepared.manifest_path.is_file());
+    assert!(revised.manifest_path.is_file());
+    let narration = prepared.narration;
+    let revised_caption = revised.narration;
     assert_eq!(narration.duration_seconds(), 0.5);
     assert_eq!(narration.audio_id(), revised_caption.audio_id());
     assert_eq!(
