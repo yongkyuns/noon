@@ -204,9 +204,6 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
     const previousGeneration = await page.evaluate(
       () => window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? 0,
     );
-    // Failure-only evidence can distinguish an unadvanced Run from a stale
-    // patch receipt without altering the timed measurement or admission gate.
-    evidence.previousRunGeneration = previousGeneration;
     await page.locator("#replace-scene").click();
     // Run may replace its canvas during startup; the preview frame is stable.
     await page.locator(".canvas-frame").scrollIntoViewIfNeeded();
