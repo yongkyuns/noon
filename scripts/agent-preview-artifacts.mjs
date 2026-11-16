@@ -100,6 +100,22 @@ function copyBytes(bytes) {
   return copy;
 }
 
+// Verify a persisted capture using the same bounded framing rules as retention.
+// This checks byte identity and dimensions, not pixel decoding or provenance
+// authenticity. It grants no access to a live artifact scope.
+export function inspectCapturedPng(bytes) {
+  check(types.isUint8Array(bytes) && Buffer.isBuffer(bytes) &&
+    !types.isSharedArrayBuffer(typedArrayBuffer.call(bytes)), "INVALID_INPUT", "png must be an unshared Buffer");
+  const byteLength = typedArrayByteLength.call(bytes);
+  check(byteLength > 0 && byteLength <= DEFAULT_LIMITS.maxArtifactBytes,
+    "PAYLOAD_LIMIT", "frame exceeds encoded byte limit");
+  const png = copyBytes(bytes);
+  return Object.freeze({
+    ...pngDimensions(png, DEFAULT_LIMITS), byteLength,
+    sha256: createHash("sha256").update(png).digest("hex"),
+  });
+}
+
 /**
  * Optional host artifact ownership, NOT runner session/scene state or execution.
  * A trusted adapter supplies already-captured PNGs and observed provenance.

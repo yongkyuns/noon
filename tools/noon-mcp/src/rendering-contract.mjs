@@ -1,9 +1,11 @@
 import { Buffer } from "node:buffer";
 import * as z from "zod/v4";
 
+import { feedbackInputSchema } from "./frame-feedback.mjs";
+
 // Public MCP rendering schemas. Execution remains delegated to the shared
 // AgentPreviewService; these contracts bound only the external transport input.
-export const RENDERING_CONTRACT_VERSION = 1;
+export const RENDERING_CONTRACT_VERSION = 2;
 export const MAX_RENDER_SOURCE_BYTES = 1_000_000;
 export const MAX_RENDER_TIME_SECONDS = 600;
 // AgentPreviewService retains 32 frames per session by default and open_scene
@@ -12,7 +14,7 @@ export const MAX_RENDER_TIME_SECONDS = 600;
 // capacity across repeated calls before any forward-only advancement.
 export const MAX_RENDER_SAMPLES_PER_CALL = 31;
 
-const sessionHandle = z.string()
+const opaqueHandle = z.string()
   .min(16)
   .max(128)
   .regex(/^[A-Za-z0-9._~-]+$/);
@@ -37,7 +39,7 @@ const sampleSchedule = z.array(renderTime).min(1).max(MAX_RENDER_SAMPLES_PER_CAL
     }
   });
 
-const sessionOnly = z.strictObject({ session: sessionHandle });
+const sessionOnly = z.strictObject({ session: opaqueHandle });
 
 export const renderingToolContracts = Object.freeze({
   noon_open_scene: Object.freeze({
@@ -55,7 +57,7 @@ export const renderingToolContracts = Object.freeze({
   }),
   noon_sample_frames: Object.freeze({
     description: "Advance one owned Noon preview session through a forward-only sampling schedule.",
-    inputSchema: z.strictObject({ session: sessionHandle, times: sampleSchedule }),
+    inputSchema: z.strictObject({ session: opaqueHandle, times: sampleSchedule }),
     annotations: Object.freeze({
       readOnlyHint: false,
       destructiveHint: false,
@@ -66,6 +68,20 @@ export const renderingToolContracts = Object.freeze({
   noon_inspect: Object.freeze({
     description: "Read the last coherent observations supported by one owned Noon preview session.",
     inputSchema: sessionOnly,
+    annotations: Object.freeze({
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    }),
+  }),
+  noon_annotate_frame: Object.freeze({
+    description: "Create pending review feedback for one owned retained frame, preserving its source, build, run and image identity without advancing or editing the scene.",
+    inputSchema: z.strictObject({
+      session: opaqueHandle,
+      artifactId: opaqueHandle,
+      ...feedbackInputSchema.shape,
+    }),
     annotations: Object.freeze({
       readOnlyHint: true,
       destructiveHint: false,

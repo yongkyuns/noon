@@ -94,13 +94,20 @@ For visual-only or cue-only revisions, retain accepted speech. If spoken wording
 pronunciation, voice, or delivery changes, replace the affected audio and review
 alignment, captions, and dependent later timing. Keep unrelated passages reusable.
 
-Record feedback in the available review surface or task notes using the source
-revision, actual render/build identity when available, authored interval, screenshot
-or region, visible object/cue, observed problem, and desired improvement. Recheck
-the target after edits; line numbers, regions, or object references can become
-stale. Rehearse the affected interval through a fresh bounded run under the current
-forward-only agent preview contract. This workflow does not imply a persistent
-annotation UI, arbitrary live rollback, or cross-edit object reconciliation.
+Use `noon_annotate_frame` for a retained preview artifact, or the offline
+`noon-feedback` CLI for an existing preview manifest. State the observed problem,
+desired correction, and meaning/state to preserve; select an interval containing
+the published capture time and, when useful, a normalized image region. The tool
+retains the actual source/build/run/time/image evidence instead of asking you to
+reconstruct it. See [captured frame feedback](verification.md#captured-frame-feedback).
+
+Check the original source association before editing. Changed source makes the
+feedback stale; load the preserved source and inspect the target rather than
+silently reusing a timestamp or rectangle. Rehearse the affected interval through
+a fresh bounded run, select the candidate capture, and retain the before/after
+comparison. Keep feedback pending until reviewed. Stills cannot prove pacing,
+speech correspondence, or learner understanding. This workflow does not imply a
+persistent annotation UI, arbitrary live rollback, or cross-edit object reconciliation.
 
 ## Worked example: One Extra Column
 

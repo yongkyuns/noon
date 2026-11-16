@@ -253,6 +253,51 @@ test("provider workflow retains cached five-by-two qualification and example reg
   assert.match(probe, /python3 scripts\/provider_features_test\.py ProviderExampleTests/);
 });
 
+test("agent discovery selects narration and checkout package inputs on PRs and master pushes", async () => {
+  const [workflow, manifestSource] = await Promise.all([
+    readFile(new URL("authoring-agent-discovery.yml", workflowDir), "utf8"),
+    readFile(new URL("../tools/noon-mcp/src/distribution-manifest.mjs", import.meta.url), "utf8"),
+  ]);
+  const checkoutSources = manifestSource.match(/const CHECKOUT_RUNNER_SOURCES = Object\.freeze\(\[([\s\S]*?)\]\);/)?.[1];
+  assert.ok(checkoutSources, "distribution manifest must declare its checkout runner inputs");
+  const checkoutInputs = [...checkoutSources.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  assert.ok(checkoutInputs.length > 0, "checkout runner input inventory must not be empty");
+
+  for (const event of ["pull_request", "push"]) {
+    const section = workflow.split(`\n  ${event}:\n`)[1]?.split(/^(?:\S|  \S)/m)[0];
+    assert.ok(section, `agent discovery must select ${event}`);
+    const lines = section.split("\n").filter((line) => line.trim() && !line.trimStart().startsWith("#"));
+    if (event === "push") assert.equal(lines.shift(), "    branches: [master]");
+    assert.equal(lines.shift(), "    paths:", `${event} must retain its path filter`);
+    const paths = lines.map((line) => {
+      const match = /^      - "([A-Za-z0-9_./*-]+)"$/.exec(line);
+      assert.ok(match, `unsupported agent discovery path filter: ${line}`);
+      return match[1];
+    });
+    const selects = (changed) => paths.some((pattern) => {
+      if (pattern.endsWith("*") && !pattern.endsWith("**")) {
+        const prefix = pattern.slice(0, -1);
+        assert.match(prefix, /^[A-Za-z0-9_./-]+$/);
+        return changed.startsWith(prefix) && !changed.slice(prefix.length).includes("/");
+      }
+      return providerPathMatches(pattern, changed);
+    });
+    for (const changed of [
+      ...checkoutInputs,
+      "Cargo.lock", "crates/noon/Cargo.toml", "crates/noon/src/narration.rs",
+      "crates/noon/src/bin/prepare_narration.rs",
+      "crates/noon/src/narration/preparation.rs",
+      "crates/noon/src/narration/preparation/native/provider.rs",
+      "crates/noon/src/narration/future/nested/input.rs",
+      "web/ci-workflow-topology.test.mjs",
+    ]) assert.equal(selects(changed), true, `${event} skips package input ${changed}`);
+    for (const changed of [
+      "Cargo.lock.bak", "crates/noon/src/lib.rs", "crates/noon/src/narration-other/input.rs",
+      "scripts/unrelated.mjs", "scripts/agent-preview-artifacts.mjs.bak", "README.md",
+    ]) assert.equal(selects(changed), false, `${event} unnecessarily selects ${changed}`);
+  }
+});
+
 
 test("architecture diagrams stay a read-only check with independently preserved artifacts", async () => {
   const workflow = await readFile(new URL("architecture-diagrams.yml", workflowDir), "utf8");

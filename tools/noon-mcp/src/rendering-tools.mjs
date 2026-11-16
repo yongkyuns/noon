@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 
+import { buildFrameFeedback } from "./frame-feedback.mjs";
 import { RENDERING_TOOL_NAMES, renderingToolContracts } from "./rendering-contract.mjs";
 
 function requireService(service) {
@@ -127,6 +128,16 @@ export function registerRenderingTools(server, { service, scope } = {}) {
   server.registerTool("noon_inspect", renderingToolContracts.noon_inspect, toolHandler(async (input) => {
     const inspected = service.inspect(scope, input.session);
     return successResult(Object.freeze({ session: input.session, ...inspected }));
+  }));
+
+  server.registerTool("noon_annotate_frame", renderingToolContracts.noon_annotate_frame, toolHandler(async (input) => {
+    const { session, artifactId, ...feedback } = renderingToolContracts.noon_annotate_frame.inputSchema.parse(input);
+    const retained = service.getArtifact(scope, session, artifactId);
+    if (retained?.descriptor?.id !== artifactId || retained?.descriptor?.provenance?.sessionId !== session) {
+      throw new Error("preview artifact does not match the owned annotation target");
+    }
+    const record = buildFrameFeedback(retained, feedback);
+    return successResult(Object.freeze({ feedback: record }), [retained]);
   }));
 
   server.registerTool("noon_close_scene", renderingToolContracts.noon_close_scene, toolHandler(async (input) => {

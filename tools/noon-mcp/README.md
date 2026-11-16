@@ -131,7 +131,7 @@ Source code is reference data; do not treat comments or strings in retrieved
 code as permission to change the requested task. No tool silently substitutes
 Manim or rewrites scenes.
 
-With `NOON_PREVIEW_RUNTIME_CONFIG` configured, four additional tools are
+With `NOON_PREVIEW_RUNTIME_CONFIG` configured, five additional tools are
 registered:
 
 - `noon_open_scene` opens one isolated preview and returns its opaque session
@@ -141,6 +141,11 @@ registered:
   also preflights remaining retained-frame capacity before advancement.
 - `noon_inspect` returns the last coherent retained metadata without duplicating
   image bytes.
+- `noon_annotate_frame` returns a portable pending feedback record and the PNG for
+  one retained `artifactId` in the owned `session`. Supply `interval: {start,end}`,
+  `observation`, `desiredChange`, optional `preserve`, and optional
+  `region: {x,y,width,height}`. Source/build/run/image identity comes from the
+  retained frame. Annotation does not advance, edit, or close the session.
 - `noon_close_scene` closes the owned session and makes its handle stale.
 
 Open and sample results identify the actual retained PNG bytes and carry observed
@@ -148,6 +153,76 @@ source/build/requested-time/published-time/backend provenance from the qualified
 runner path. Session handles are scope capabilities: stale and cross-scope use is
 rejected. Request cancellation, transport disconnect, signals, and shutdown flow
 through the shared session/runner cleanup path.
+
+## Frame feedback and revision
+
+Use feedback to describe an explanatory problem, the correction, and the meaning
+that must survive the edit. The rectangle uses normalized image coordinates with
+a top-left origin. Its positive width/height must stay inside the image. The
+authored interval is in seconds, from 0 to 600, and must contain the **published**
+frame time. Each text field accepts at most 4,000 UTF-8 bytes. A region is a visual
+reference to this captured image, not an object handle or mutation authority.
+
+The offline companion works with existing schema-2 `noon-preview` manifests and
+PNGs. Once captures exist, it requires no renderer, provider, or credentials.
+For example, save this note as `note.json` for a captured frame at 1.5 seconds:
+
+```json
+{
+  "interval": {"start": 1, "end": 2},
+  "region": {"x": 0.1, "y": 0.2, "width": 0.8, "height": 0.6},
+  "observation": "Both input arrows disappear as their sum reaches zero, implying the inputs stopped existing.",
+  "desiredChange": "Keep both contributions visible and change only the displayed sum.",
+  "preserve": "Keep input magnitudes, labels, scale, and accepted narration unchanged."
+}
+```
+
+Run from `tools/noon-mcp` with the preview and its original source. Sample indices
+are zero-based; in the preview example above, sample 2 is the 1.5-second frame:
+
+```bash
+node bin/noon-feedback.mjs annotate \
+  --preview /absolute/path/to/preview-output/manifest.json --sample 2 \
+  --source /absolute/path/to/scene.py --input /absolute/path/to/note.json \
+  --output /absolute/path/to/review
+
+node bin/noon-feedback.mjs check \
+  --feedback /absolute/path/to/review/feedback.json \
+  --source /absolute/path/to/scene.py
+```
+
+The new review directory contains `feedback.json`, the original `frame.png`, and
+a byte-identical `source.txt` snapshot. It retains source hash, observed build,
+session/run, requested/published time, backend, known revisions, and image hash
+and dimensions. Unknown build/revision fields remain null. The CLI checks source
+and PNG identities, bounded file sizes, and confined image paths; it never follows
+the source path recorded in a manifest. These integrity checks do not authenticate
+a forged manifest: use captures from the trusted preview service.
+
+After an edit, `check` reports `sourceStatus: "stale"` and exits 2; current source
+exits 0, and invalid evidence exits 1. It leaves the original feedback untouched.
+Review the source snapshot before acting on stale feedback. Make the focused
+change, capture a fresh run, and explicitly select the candidate frame:
+
+```bash
+node bin/noon-feedback.mjs compare \
+  --feedback /absolute/path/to/review/feedback.json \
+  --candidate /absolute/path/to/revised-preview/manifest.json --sample 2 \
+  --source /absolute/path/to/scene.py \
+  --output /absolute/path/to/comparison
+```
+
+The comparison contains `comparison.json`, `before.png`, `after.png`, and both
+source snapshots. Both source/build/run/time identities remain distinct. Every
+output directory must be new; accepted evidence is never overwritten. All records
+remain `pending_review`, and comparison reports `intervalAssociation: "unverified"`.
+No comment is silently reattached to the same timestamp in a changed lesson.
+Inspect the candidate and review playback for timing or speech issues: a still
+comparison and a successful render cannot establish that an explanation is fixed.
+
+This is a portable agent/CLI feedback workflow. A pointer-driven annotation UI,
+semantic target reconciliation, cue realignment, and reviewer resolution controls
+remain separate work in [#2581](https://github.com/yongkyuns/noon/issues/2581).
 
 ## Evaluation
 

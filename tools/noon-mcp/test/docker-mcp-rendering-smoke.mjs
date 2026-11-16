@@ -248,7 +248,12 @@ async function renderRun(client, actualSource, expectedSourceSha256) {
       expectedBackend: frame.snapshot.frame.rendererBackend,
     })),
   ));
-  return { sessionId, hashes };
+  return {
+    sessionId,
+    hashes,
+    annotationFrame: sampled.structuredContent.frames[0].artifact,
+    annotationPng: imageBytes(sampled)[0],
+  };
 }
 
 async function closeScene(client, sessionId) {
@@ -279,6 +284,7 @@ let primaryClosed = false;
 try {
   const listed = await client.listTools();
   assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
+    "noon_annotate_frame",
     "noon_capabilities",
     "noon_close_scene",
     "noon_inspect",
@@ -322,6 +328,34 @@ try {
   assert.equal(inspected.structuredContent.snapshot.frame.requestedTime, 3);
   assert.equal(inspected.structuredContent.artifact.sha256, baseline.hashes.at(-1));
   assert.equal(inspected.structuredContent.retainedFrames, 4);
+
+  const capturedTime = baseline.annotationFrame.provenance.publishedTime;
+  const note = {
+    interval: { start: Math.max(0, capturedTime - 0.1), end: capturedTime + 0.1 },
+    region: { x: 0, y: 0, width: 1, height: 1 },
+    observation: "Review the shape correspondence in this captured transition.",
+    desiredChange: "Keep the geometric relationship clear throughout the transformation.",
+    preserve: "Keep the existing final circle and authored timing.",
+  };
+  const annotated = await client.callTool({
+    name: "noon_annotate_frame",
+    arguments: { session: baseline.sessionId, artifactId: baseline.annotationFrame.id, ...note },
+  }, { timeout: 10_000 });
+  assertOk(annotated, "annotate historical frame");
+  const feedback = annotated.structuredContent.feedback;
+  assert.equal(feedback.kind, "noon-frame-feedback");
+  assert.equal(feedback.schemaVersion, 1);
+  assert.equal(feedback.status, "pending_review");
+  assert.deepEqual(feedback.feedback, note);
+  const { retentionMs: _retentionMs, ...capturedFrame } = baseline.annotationFrame;
+  assert.deepEqual(feedback.frame, capturedFrame,
+    "feedback must preserve the original captured frame and its source/build/run identity");
+  assert.deepEqual(imageBytes(annotated), [baseline.annotationPng],
+    "annotation must return the original retained PNG instead of recapturing the current frame");
+  const afterAnnotation = await client.callTool({ name: "noon_inspect", arguments: { session: baseline.sessionId } });
+  assertOk(afterAnnotation, "inspect after annotation");
+  assert.deepEqual(afterAnnotation.structuredContent, inspected.structuredContent,
+    "annotating an earlier frame must preserve the current coherent observation and retained-frame count");
 
   const tooMany = await client.callTool({
     name: "noon_sample_frames",
@@ -435,6 +469,9 @@ try {
     baselineFrameSha256: baseline.hashes,
     revisedFrameSha256: revised.hashes,
     temporalTranslationCentroidX: temporalCenters,
+    annotatedFrameSha256: feedback.frame.sha256,
+    annotationStatus: feedback.status,
+    annotationPreservedScene: true,
     sourceFailureRecovered: true,
     cancellationRecovered: true,
     disconnectCleanup: true,
