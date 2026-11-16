@@ -13,6 +13,7 @@ class GroupCoordinateDimensionTests(unittest.TestCase):
         self.group = object.__new__(noon.VGroup)
         self.group._semantic_family_handle = object()
         self.anchor = types.SimpleNamespace(
+            free=lambda: None,
             dimensionLength=lambda dim: 1.0,
             rescaleToFit=lambda *args: self.calls.append(("fit", args)),
         )
@@ -22,7 +23,7 @@ class GroupCoordinateDimensionTests(unittest.TestCase):
             with self.subTest(cls=cls.__name__):
                 group = object.__new__(cls)
                 with patch.object(semantic, "_layout_anchor", return_value=self.anchor), \
-                     patch.object(semantic, "_group_live_layout_context", return_value=None):
+                     patch.object(semantic, "_group_layout_context", return_value=None):
                     group.width = 4
                     group.height = 2
         self.assertEqual(self.calls, [("fit", (4.0, 0, False, 0., 0., 0., False)),
@@ -35,7 +36,7 @@ class GroupCoordinateDimensionTests(unittest.TestCase):
         )
         target = object.__new__(noon.Group)
         target._semantic_family_handle = object()
-        with patch.object(semantic, "_group_live_layout_context", return_value=None), \
+        with patch.object(semantic, "_group_layout_context", return_value=None), \
              patch.object(semantic, "_shared_family_layout", return_value=layout):
             self.assertIs(self.group.set_x(3, noon.RIGHT), self.group)
             self.assertIs(self.group.set_y(-2, noon.DOWN), self.group)
@@ -50,11 +51,11 @@ class GroupCoordinateDimensionTests(unittest.TestCase):
 
     def test_live_group_coordinates_and_dimensions_use_published_context(self):
         context = types.SimpleNamespace(
-            liveMoveFamilyToPoint=lambda *args: self.calls.append(("move", args)),
+            moveFamilyToPoint=lambda *args: self.calls.append(("move", args)),
             queryLayoutDimensionLength=lambda *args: self.calls.append(("length", args)) or 1.0,
-            liveRescaleToFit=lambda *args: self.calls.append(("fit", args)),
+            rescaleToFit=lambda *args: self.calls.append(("fit", args)),
         )
-        with patch.object(semantic, "_group_live_layout_context", return_value=context), \
+        with patch.object(semantic, "_group_layout_context", return_value=context), \
              patch.object(semantic, "_layout_anchor", return_value=self.anchor):
             self.group.set_coord(5, 0, noon.LEFT)
             self.group.height = 3

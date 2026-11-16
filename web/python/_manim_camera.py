@@ -27,7 +27,7 @@ class _CameraFrame(_compat.Rectangle):
         if not isinstance(profile, str):
             raise TypeError("view color profile must be a string")
         handle = _semantic_handles._handle_for(self)
-        context = _semantic_handles._live_mutation_context(self)
+        context = _semantic_handles._path_authoring_context(self)
         if context is None:
             engine_call(handle.setViewColorProfile, profile)
         else:

@@ -48,8 +48,20 @@ Python source executes once and prepares the existing bounded deterministic
 Rust history. The native renderer samples that history with Noon's shared output
 frame policy. Rendering or encoding speed does not change authored time, skip
 frames or execute Python again. MP4 uses SDR H.264/YUV420p and requires even
-dimensions. This initial native Python profile does not export audio or
-unrecorded Python callbacks/external input; those sources fail explicitly.
+dimensions. Fully predeclared scenes can export their authored soundtrack as
+48 kHz stereo AAC. Export requires deterministic source timing. For native
+window playback with audio, build with `python scripts/build-native-python.py
+--audio`. This enables the same device backend as the Rust window.
+
+### Native LaTeX
+
+`Tex`, `MathTex`, and DecimalNumber labels use the system `latex` and
+`kpsewhich` executables. Set `NOON_LATEX_FONT_DIR` to the BaKoMa TTF directory
+and `NOON_LATEX_RESOURCE_IDENTITY` to a stable identifier for that compiler
+and font installation. The optional `NOON_LATEX_EXECUTABLE` and
+`NOON_KPSEWHICH_EXECUTABLE` variables override executable discovery. The
+compiler is initialized on first use, including an explicit
+`await prepare_latex()`.
 
 ### Output controls
 

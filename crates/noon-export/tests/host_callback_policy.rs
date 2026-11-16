@@ -5,14 +5,15 @@
 
 use std::{cell::RefCell, rc::Rc};
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     CallbackAdvance, CallbackRegionAdvance, ExportFrameOptions, ExportFramePolicy,
     ExportFramePolicyStatus, ExportFrameSummary, ExportStop, FrameRate, HostCallbackId,
     SampleObservation, SemanticMutationTransaction,
 };
 use noon::{
-    ContinuationStep, ExecutionSegment, ExecutionSession, LiveContinuation, LiveSessionError,
-    Mobject, RustHostCallbackTable, Scene, Transform2D,
+    ContinuationStep, ExecutionSegment, LiveContinuation, LiveSessionError, Mobject,
+    RustHostCallbackTable, Scene, Transform2D,
 };
 use noon_export::{capture_frames, Backends, CaptureOptions, SessionCapture};
 
@@ -55,17 +56,16 @@ impl LiveContinuation for Source {
         &mut self,
         scene: &mut noon::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let stage = self.stage;
         self.stage += 1;
         match stage {
-            0 => Ok(ContinuationStep::Await(live.wait_segment(0.105)?)),
+            0 => Ok(ContinuationStep::Await(scene.live().wait_segment(0.105)?)),
             1 => {
-                live.set_translation(&self.marker, 0.5, 1.0)?;
-                Ok(ContinuationStep::Await(live.wait_segment(0.207)?))
+                scene.set_translation(&self.marker, 0.5, 1.0)?;
+                Ok(ContinuationStep::Await(scene.live().wait_segment(0.207)?))
             }
             _ => {
-                live.set_translation(&self.marker, 2.0, -1.0)?;
+                scene.set_translation(&self.marker, 2.0, -1.0)?;
                 Ok(ContinuationStep::Finished)
             }
         }
@@ -236,31 +236,33 @@ fn host_advance(
 
 fn interpreter_style(options: ExportFrameOptions, delayed: bool) -> Run {
     let (scene, marker, trace) = with_callbacks();
-    let mut session = scene.execution_session().unwrap();
-    let mut target = SessionCapture::new(&session, capture_options()).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let mut target = SessionCapture::new(session.session(), capture_options()).unwrap();
     let mut policy = ExportFramePolicy::new(options).unwrap();
     let mut stage = 0;
-    let mut segment = Some(scene.live(&mut session).wait_segment(0.105).unwrap());
+    let mut segment = Some(session.live().wait_segment(0.105).unwrap());
     let mut images = Vec::new();
     for _ in 0..1_000 {
         match policy.status().unwrap() {
             ExportFramePolicyStatus::NeedsSample(requested) => {
                 while let Some(current) = segment {
-                    host_advance(&mut session, current, requested, &trace, delayed);
-                    if session.frame().time < current.end_time() {
+                    host_advance(session.session_mut(), current, requested, &trace, delayed);
+                    if session.session().frame().time < current.end_time() {
                         break;
                     }
-                    scene.live(&mut session).complete_segment(current).unwrap();
-                    let receipt = target.render(&mut session).unwrap();
+                    session.live().complete_segment(current).unwrap();
+                    let receipt = target.render(session.session_mut()).unwrap();
                     assert_eq!(receipt.published_time, current.end_time());
                     if stage == 0 {
                         stage = 1;
-                        let mut live = scene.live(&mut session);
-                        live.set_translation(&marker, 0.5, 1.0).unwrap();
-                        segment = Some(live.wait_segment(0.207).unwrap());
+                        session
+                            .scene_mut()
+                            .set_translation(&marker, 0.5, 1.0)
+                            .unwrap();
+                        segment = Some(session.live().wait_segment(0.207).unwrap());
                     } else {
-                        scene
-                            .live(&mut session)
+                        session
+                            .scene_mut()
                             .set_translation(&marker, 2.0, -1.0)
                             .unwrap();
                         segment = None;
@@ -270,8 +272,8 @@ fn interpreter_style(options: ExportFrameOptions, delayed: bool) -> Run {
                     .observe(
                         SampleObservation {
                             requested_time: requested,
-                            published_time: session.frame().time,
-                            publication: session.publication_context(),
+                            published_time: session.session().frame().time,
+                            publication: session.session().publication_context(),
                         },
                         segment.is_none(),
                     )
@@ -286,7 +288,7 @@ fn interpreter_style(options: ExportFrameOptions, delayed: bool) -> Run {
                     );
                 }
                 if let Some(frame) = sample.frame {
-                    let pixels = target.capture(&mut session).unwrap();
+                    let pixels = target.capture(session.session_mut()).unwrap();
                     assert_eq!(pixels.receipt.publication, sample.observation.publication);
                     assert_eq!(frame.pts, images.len() as u64);
                     images.push(Image {
@@ -298,7 +300,7 @@ fn interpreter_style(options: ExportFrameOptions, delayed: bool) -> Run {
                         rgba: pixels.rgba.to_vec(),
                     });
                 } else {
-                    target.render(&mut session).unwrap();
+                    target.render(session.session_mut()).unwrap();
                 }
                 assert_eq!(
                     trace.borrow().len(),

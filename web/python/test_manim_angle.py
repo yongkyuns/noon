@@ -94,13 +94,13 @@ class AngleAdapters(unittest.TestCase):
         direct_calls=[]
         live_calls=[]
         handle=types.SimpleNamespace(setAngleValue=lambda radians:direct_calls.append(radians))
-        context=types.SimpleNamespace(liveSetAngleValue=lambda target,radians:live_calls.append((target,radians)))
+        context=types.SimpleNamespace(setAngleValue=lambda target,radians:live_calls.append((target,radians)))
         obj=object.__new__(angle.Angle)
         with patch.object(angle._shared,"_handle_for",return_value=handle), \
-             patch.object(angle._shared,"_live_mutation_context",return_value=None):
+             patch.object(angle._shared,"_path_authoring_context",return_value=None):
             obj.angle_value=1.25
         with patch.object(angle._shared,"_handle_for",return_value=handle), \
-             patch.object(angle._shared,"_live_mutation_context",return_value=context):
+             patch.object(angle._shared,"_path_authoring_context",return_value=context):
             obj.angle_value=-0.5
         self.assertEqual(direct_calls,[1.25])
         self.assertEqual(live_calls,[(handle,-0.5)])
@@ -110,7 +110,7 @@ class AngleAdapters(unittest.TestCase):
         handle=types.SimpleNamespace(setAngleValue=lambda radians:calls.append(radians))
         obj=object.__new__(angle.Angle)
         with patch.object(angle._shared,"_handle_for",return_value=handle), \
-             patch.object(angle._shared,"_live_mutation_context",return_value=None):
+             patch.object(angle._shared,"_path_authoring_context",return_value=None):
             with self.assertRaises(ValueError):obj.angle_value=float("nan")
         self.assertEqual(calls,[])
 

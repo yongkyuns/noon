@@ -1,7 +1,7 @@
 """Typed argument adaptation for shared persistent vector edits."""
 import noon as _base
 from _noon_errors import engine_call
-from _manim_semantic_handles import _handle_for, _live_mutation_context, _live_constructor_context
+from _manim_semantic_handles import _handle_for, _path_authoring_context
 
 
 def set_points_as_corners(value, points):
@@ -22,12 +22,11 @@ def set_points_as_corners(value, points):
         return edit_points(
             value,
             "setPointsAsCornersWithSamples",
-            "liveSetPointsAsCornersWithSamples",
             points,
             array=True,
             suffix=(to_js(sample_values),),
         )
-    return edit_points(value, "setPointsAsCorners", "liveSetPointsAsCorners", points, array=True)
+    return edit_points(value, "setPointsAsCorners", points, array=True)
 
 
 def set_points_smoothly(value, points):
@@ -36,11 +35,11 @@ def set_points_smoothly(value, points):
 
 
 def clear_points(value):
-    return edit_points(value, "clearPoints", "liveClearPoints", ())
+    return edit_points(value, "clearPoints", ())
 
 
 def set_points(value, points):
-    return edit_points(value, "setPoints", "liveSetPoints", points, array=True)
+    return edit_points(value, "setPoints", points, array=True)
 
 
 def apply_over_attr_arrays(value, func):
@@ -83,7 +82,6 @@ def apply_over_attr_arrays(value, func):
         edit_points(
             value,
             "setPoints",
-            "liveSetPoints",
             mapped,
             array=True,
         )
@@ -295,7 +293,7 @@ def append_points(value, points):
     # semantic prefix through the ordinary atomic path transaction.
     prepared = np.empty((len(points), getattr(value, "dim", 3)))
     prepared[:] = points
-    return edit_points(value, "appendPoints", "liveAppendPoints", prepared, array=True)
+    return edit_points(value, "appendPoints", prepared, array=True)
 
 
 def start_new_path(value, point):
@@ -308,11 +306,10 @@ def start_new_path(value, point):
     if not -(1 << 31) <= stride < (1 << 31):
         raise ValueError("n_points_per_curve exceeds the supported path stride")
     if stride == 4:
-        return edit_points(value, "startNewPath", "liveStartNewPath", (point,))
+        return edit_points(value, "startNewPath", (point,))
     return edit_points(
         value,
         "startNewPathWithStride",
-        "liveStartNewPathWithStride",
         (point,),
         suffix=(stride,),
     )
@@ -364,7 +361,6 @@ def add_points_as_corners(value, points):
         return edit_points(
             value,
             "addPointsAsCorners",
-            "liveAddPointsAsCorners",
             points,
             array=True,
         )
@@ -389,7 +385,6 @@ def add_points_as_corners(value, points):
     return edit_points(
         value,
         "addPointsAsCornersWithStride",
-        "liveAddPointsAsCornersWithStride",
         points,
         array=True,
         suffix=(stride, to_js(sample_values)),
@@ -415,7 +410,6 @@ def add_smooth_curve_to(value, *points):
     return edit_points(
         value,
         "addSmoothCurveTo",
-        "liveAddSmoothCurveTo",
         points,
         array=True,
         suffix=_curve_append_suffix(stride),
@@ -434,14 +428,12 @@ def add_line_to(value, point):
         return edit_points(
             value,
             "addLineToWithSamples",
-            "liveAddLineToWithSamples",
             (point,),
             suffix=(stride, to_js(sample_values)),
         )
     return edit_points(
         value,
         "addLineTo",
-        "liveAddLineTo",
         (point,),
         suffix=_curve_append_suffix(stride),
     )
@@ -452,7 +444,6 @@ def add_quadratic_bezier_curve_to(value, control, anchor):
     return edit_points(
         value,
         "addQuadraticBezierCurveTo",
-        "liveAddQuadraticBezierCurveTo",
         (control, anchor),
         suffix=_curve_append_suffix(stride),
     )
@@ -463,7 +454,6 @@ def add_cubic_bezier_curve_to(value, control1, control2, anchor):
     return edit_points(
         value,
         "addCubicBezierCurveTo",
-        "liveAddCubicBezierCurveTo",
         (control1, control2, anchor),
         suffix=_curve_append_suffix(stride),
     )
@@ -552,7 +542,7 @@ def scale_handle_to_anchor_distances(value, factor):
     handle = _handle_for(value)
     if handle is None:
         raise RuntimeError("path editing requires a shared semantic handle")
-    context = _live_mutation_context(value) or _live_constructor_context("path")
+    context = _path_authoring_context(value)
     if context is None:
         engine_call(
             handle.scaleHandleToAnchorDistances,
@@ -561,7 +551,7 @@ def scale_handle_to_anchor_distances(value, factor):
         )
     else:
         engine_call(
-            context.liveScaleHandleToAnchorDistances,
+            context.scaleHandleToAnchorDistances,
             handle,
             factor,
             operation="VMobject.scale_handle_to_anchor_distances",
@@ -584,7 +574,6 @@ def set_anchors_and_handles(value, anchors1, handles1, handles2, anchors2):
     return edit_points(
         value,
         "setCubicBezierCurves",
-        "liveSetCubicBezierCurves",
         [point for curve in curves for point in curve],
         array=True,
     )
@@ -601,11 +590,7 @@ def append_vectorized_mobject(value, source):
     handle, source_handle = _handle_for(value), _handle_for(source)
     if handle is None or source_handle is None:
         raise RuntimeError("path editing requires shared semantic handles")
-    context = (
-        _live_mutation_context(value)
-        or _live_mutation_context(source)
-        or _live_constructor_context("path")
-    )
+    context = _path_authoring_context(value, source)
     if context is None:
         method = (
             handle.appendVectorizedMobject
@@ -620,9 +605,9 @@ def append_vectorized_mobject(value, source):
         )
     else:
         method = (
-            context.liveAppendVectorizedMobject
+            context.appendVectorizedMobject
             if stride == 4
-            else context.liveAppendVectorizedMobjectWithStride
+            else context.appendVectorizedMobjectWithStride
         )
         engine_call(
             method,
@@ -650,7 +635,6 @@ def close_path(value):
         return edit_points(
             value,
             "closePathWithStride",
-            "liveClosePathWithStride",
             (),
             suffix=(stride, tolerance, to_js(sample_values)),
         )
@@ -701,11 +685,11 @@ def _empty_point_array_shape(points):
     return None
 
 
-def edit_points(value, method, live_method, points, *, array=False, suffix=()):
+def edit_points(value, method, points, *, array=False, suffix=()):
     _check_path_edit_phase()
     empty_shape = _empty_point_array_shape(points) if method == "setPoints" else None
     if empty_shape is not None:
-        method, live_method = "setEmptyPointArray", "liveSetEmptyPointArray"
+        method = "setEmptyPointArray"
     raw_points = method in ("setPoints", "appendPoints")
     xyz_points = raw_points or method in (
         "setPointsAsCorners", "setPointsAsCornersWithSamples",
@@ -731,21 +715,19 @@ def edit_points(value, method, live_method, points, *, array=False, suffix=()):
     handle = value._semantic_family_handle if shared_family else _handle_for(value)
     if handle is None:
         raise RuntimeError("path editing requires a shared semantic handle")
-    if shared_family:
-        if method == "setPoints":
-            live_method = "liveSetFamilyPoints"
-        elif method == "appendPoints":
-            live_method = "liveAppendFamilyPoints"
-        elif method == "clearPoints":
-            live_method = "liveClearFamilyPoints"
-        elif method == "setEmptyPointArray":
-            live_method = "liveSetFamilyEmptyPointArray"
-        else:
-            raise NotImplementedError("this family root path edit requires shared Rust support")
     if raw_points:
         method += "3D"
-        live_method += "3D"
-    context = _live_mutation_context(value) or _live_constructor_context("path")
+    scene_method = method
+    if shared_family:
+        scene_method = {
+            "setPoints3D": "setFamilyPoints3D",
+            "appendPoints3D": "appendFamilyPoints3D",
+            "clearPoints": "clearFamilyPoints",
+            "setEmptyPointArray": "setFamilyEmptyPointArray",
+        }.get(method)
+        if scene_method is None:
+            raise NotImplementedError("this family root path edit requires shared Rust support")
+    context = _path_authoring_context(value)
     if context is None:
         engine_call(
             getattr(handle, method),
@@ -755,7 +737,7 @@ def edit_points(value, method, live_method, points, *, array=False, suffix=()):
         )
     else:
         engine_call(
-            getattr(context, live_method),
+            getattr(context, scene_method),
             handle,
             *values,
             *suffix,
@@ -774,11 +756,11 @@ def pointwise_become_partial(value, source, a, b):
     handle, source_handle = _handle_for(value), _handle_for(source)
     if handle is None or source_handle is None:
         raise RuntimeError("partial path editing requires shared semantic handles")
-    context = _live_mutation_context(value) or _live_mutation_context(source) or _live_constructor_context("path")
+    context = _path_authoring_context(value, source)
     if context is None:
         engine_call(handle.pointwiseBecomePartial, source_handle, float(a), float(b), operation="VMobject.pointwise_become_partial")
     else:
-        engine_call(context.livePointwiseBecomePartial, handle, source_handle, float(a), float(b), operation="VMobject.pointwise_become_partial")
+        engine_call(context.pointwiseBecomePartial, handle, source_handle, float(a), float(b), operation="VMobject.pointwise_become_partial")
     return value
 
 
@@ -793,11 +775,11 @@ def insert_n_curves(value, n):
     handle = _handle_for(value)
     if handle is None:
         raise RuntimeError("path editing requires a shared semantic handle")
-    context = _live_mutation_context(value) or _live_constructor_context("path")
+    context = _path_authoring_context(value)
     if context is None:
         engine_call(handle.insertNCurves, count, operation="VMobject.insert_n_curves")
     else:
-        engine_call(context.liveInsertNCurves, handle, count, operation="VMobject.insert_n_curves")
+        engine_call(context.insertNCurves, handle, count, operation="VMobject.insert_n_curves")
     return value
 
 
@@ -812,11 +794,11 @@ def change_anchor_mode(value, mode):
     if handle is None:
         raise RuntimeError("path editing requires a shared semantic handle")
     from _manim_semantic_handles import _group_target_context
-    context = _group_target_context(value) if family else (_live_mutation_context(value) or _live_constructor_context("path"))
+    context = _path_authoring_context(value) or (_group_target_context(value) if family else None)
     if context is None:
         engine_call(handle.makeSmooth if mode == "smooth" else handle.makeJagged)
     else:
-        method = context.liveChangeFamilyAnchorMode if family else context.liveChangeAnchorMode
+        method = context.changeFamilyAnchorMode if family else context.changeAnchorMode
         engine_call(method, handle, mode == "smooth")
     return value
 
@@ -840,11 +822,7 @@ def reverse_points(value):
     if handle is None:
         raise RuntimeError("family point editing requires a shared Rust semantic handle")
     from _manim_semantic_handles import _group_target_context
-    context = (
-        _group_target_context(value)
-        if family
-        else (_live_mutation_context(value) or _live_constructor_context("path"))
-    )
+    context = _path_authoring_context(value) or (_group_target_context(value) if family else None)
     if context is None:
         engine_call(
             handle.reversePoints,
@@ -852,7 +830,7 @@ def reverse_points(value):
         )
     else:
         engine_call(
-            context.liveReverseFamilyPoints if family else context.liveReversePoints,
+            context.reverseFamilyPoints if family else context.reversePoints,
             handle,
             operation="Mobject.reverse_points",
         )
@@ -890,11 +868,7 @@ def repeat_points(value, count):
     if handle is None:
         raise RuntimeError("family point editing requires a shared Rust semantic handle")
     from _manim_semantic_handles import _group_target_context
-    context = (
-        _group_target_context(value)
-        if family
-        else (_live_mutation_context(value) or _live_constructor_context("path"))
-    )
+    context = _path_authoring_context(value) or (_group_target_context(value) if family else None)
     if context is None:
         engine_call(
             handle.repeatPoints,
@@ -902,7 +876,7 @@ def repeat_points(value, count):
             operation="Mobject.repeat",
         )
     else:
-        method = context.liveRepeatFamilyPoints if family else context.liveRepeatPoints
+        method = context.repeatFamilyPoints if family else context.repeatPoints
         engine_call(method, handle, repeat_count, operation="Mobject.repeat")
     return value
 
@@ -927,21 +901,20 @@ def align_points(value, other):
         # point/layout calculation is needed for this shared operation.
         left = engine_call(left.layoutAnchor, None)
         right = engine_call(right.layoutAnchor, None)
-        context = (_live_mutation_context(value) or _live_mutation_context(other)
-                   or _live_constructor_context("path"))
+        context = _path_authoring_context(value, other)
         if context is None:
             engine_call(left.alignPathPoints, right, operation="VMobject.align_points")
         else:
-            engine_call(context.liveAlignRootPoints, left, right, operation="VMobject.align_points")
+            engine_call(context.alignRootPoints, left, right, operation="VMobject.align_points")
         return value
     handle, other_handle = _handle_for(value), _handle_for(other)
     if handle is None or other_handle is None:
         raise RuntimeError("path alignment requires shared semantic handles")
-    context = _live_mutation_context(value) or _live_mutation_context(other) or _live_constructor_context("path")
+    context = _path_authoring_context(value, other)
     if context is None:
         engine_call(handle.alignPoints, other_handle, operation="VMobject.align_points")
     else:
-        engine_call(context.liveAlignPoints, handle, other_handle, operation="VMobject.align_points")
+        engine_call(context.alignPoints, handle, other_handle, operation="VMobject.align_points")
     return value
 
 

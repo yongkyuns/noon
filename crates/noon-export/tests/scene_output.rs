@@ -55,22 +55,33 @@ fn fixture(sealed: bool, audio: bool) -> SceneExecution {
             )
             .unwrap();
     }
-    let mut session = scene.execution_session().unwrap();
-    session.begin_replay_retention(Default::default()).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    session
+        .session_mut()
+        .begin_replay_retention(Default::default())
+        .unwrap();
     {
-        let mut live = scene.live(&mut session);
-        let wait = live.wait_segment(0.1).unwrap();
-        live.advance_segment_to(wait, wait.end_time()).unwrap();
-        live.complete_segment(wait).unwrap();
-        live.set_translation(&marker, 1.0, 0.0).unwrap();
-        let wait = live.wait_segment(0.13).unwrap();
-        live.advance_segment_to(wait, wait.end_time()).unwrap();
-        live.complete_segment(wait).unwrap();
+        let wait = session.live().wait_segment(0.1).unwrap();
+        session
+            .live()
+            .advance_segment_to(wait, wait.end_time())
+            .unwrap();
+        session.live().complete_segment(wait).unwrap();
+        session
+            .scene_mut()
+            .set_translation(&marker, 1.0, 0.0)
+            .unwrap();
+        let wait = session.live().wait_segment(0.13).unwrap();
+        session
+            .live()
+            .advance_segment_to(wait, wait.end_time())
+            .unwrap();
+        session.live().complete_segment(wait).unwrap();
     }
     if sealed {
-        session.seal_replay_for_viewer().unwrap();
+        session.session_mut().seal_replay_for_viewer().unwrap();
     }
-    scene.into_execution_with_session(session).unwrap()
+    session
 }
 
 fn frames() -> ExportFrameOptions {

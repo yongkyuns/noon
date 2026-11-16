@@ -1,8 +1,9 @@
 #![cfg(all(feature = "prepared-prefix", feature = "typst"))]
 mod raster_support;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::{
     effects::{EffectUpdate, Pixels},
-    AnimationOptions, Color, ExecutionSession, MathTypst, PrefixReader, RateFunction, Scene,
+    AnimationOptions, Color, MathTypst, PrefixReader, RateFunction, Scene,
 };
 use noon_runtime::{FrameState, PrefixError, ReplayLimits};
 

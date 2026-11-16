@@ -90,7 +90,6 @@ pub enum CoordinateAuthoringError {
     Coordinate(CoordinateError),
     Authoring(AuthoringError),
     Plot(PlotAuthoringError),
-    Live(crate::LiveSessionError),
     InvalidOptions(&'static str),
     InvalidTopology,
 }
@@ -101,7 +100,6 @@ impl std::fmt::Display for CoordinateAuthoringError {
             Self::Coordinate(error) => std::fmt::Display::fmt(error, formatter),
             Self::Authoring(error) => std::fmt::Display::fmt(error, formatter),
             Self::Plot(error) => std::fmt::Display::fmt(error, formatter),
-            Self::Live(error) => std::fmt::Display::fmt(error, formatter),
             Self::InvalidOptions(reason) => formatter.write_str(reason),
             Self::InvalidTopology => formatter.write_str("coordinate family topology is invalid"),
         }
@@ -114,7 +112,6 @@ impl std::error::Error for CoordinateAuthoringError {
             Self::Coordinate(error) => Some(error),
             Self::Authoring(error) => Some(error),
             Self::Plot(error) => Some(error),
-            Self::Live(error) => Some(error),
             Self::InvalidOptions(_) | Self::InvalidTopology => None,
         }
     }
@@ -133,12 +130,6 @@ impl From<AuthoringError> for CoordinateAuthoringError {
 impl From<PlotAuthoringError> for CoordinateAuthoringError {
     fn from(error: PlotAuthoringError) -> Self {
         Self::Plot(error)
-    }
-}
-
-impl From<crate::LiveSessionError> for CoordinateAuthoringError {
-    fn from(error: crate::LiveSessionError) -> Self {
-        Self::Live(error)
     }
 }
 
@@ -447,22 +438,6 @@ impl ManimNumberLine {
         self.snapshot_with(&mut Mobject::path_query)
     }
 
-    /// Read current path endpoints and transforms from one immutable execution
-    /// borrow. A stale/foreign execution or unsupported path override is an error;
-    /// this method never falls back to authored state.
-    pub fn effective_frame(
-        &self,
-        execution: &ExecutionSession,
-    ) -> Result<NumberLineFrame, CoordinateAuthoringError> {
-        self.snapshot_with(&mut |shaft| {
-            crate::path_queries::effective_path_query(
-                self.family.integration_store(),
-                execution,
-                shaft,
-            )
-        })
-    }
-
     pub(crate) fn snapshot_with(
         &self,
         query: &mut impl FnMut(&Mobject) -> Result<PathQuery, AuthoringError>,
@@ -542,21 +517,6 @@ impl ManimAxes {
         self.snapshot_with(&mut Mobject::path_query)
     }
 
-    /// Both axes use the same immutable execution borrow. No host callback or
-    /// publication occurs between their observations, and no ranges are cached.
-    pub fn effective_frame(
-        &self,
-        execution: &ExecutionSession,
-    ) -> Result<AxesFrame, CoordinateAuthoringError> {
-        self.snapshot_with(&mut |shaft| {
-            crate::path_queries::effective_path_query(
-                self.family.integration_store(),
-                execution,
-                shaft,
-            )
-        })
-    }
-
     pub fn plot_sampling(
         &self,
         range: Option<&[f64]>,
@@ -579,27 +539,12 @@ impl ManimAxes {
         Ok(self.authored_frame()?.coords_to_point(input, ordinate)?)
     }
 
-    /// The live counterpart of [`Self::input_to_graph_point`], observing both
-    /// shafts from the same effective publication after evaluating the callable.
-    pub fn effective_input_to_graph_point(
-        &self,
-        execution: &ExecutionSession,
-        input: f64,
-        function: impl FnOnce(f64) -> f64,
-    ) -> Result<[f64; 2], CoordinateAuthoringError> {
-        let ordinate = function(input);
-        Ok(self
-            .effective_frame(execution)?
-            .coords_to_point(input, ordinate)?)
-    }
-
     /// Construct a detached static y=f(x) path in this axes' semantic store.
     ///
     /// The authored coordinate frame is captured once before the callback runs,
     /// and the callback is evaluated only while preparing the ordinary retained
-    /// path. Add the returned [`Mobject`] to any family explicitly. Runtime
-    /// effective coordinates remain an explicit `effective_frame` capture rather
-    /// than an implicit live graph model.
+    /// path. Add the returned [`Mobject`] to any family explicitly.
+    /// Use `Scene::axes_frame` to capture the current runtime coordinates.
     pub fn plot(
         &self,
         function: impl FnMut(f64) -> f64,
@@ -648,24 +593,24 @@ impl ManimAxes {
         x_range: Option<[f64; 2]>,
         bounded_graph: Option<&Mobject>,
     ) -> Result<Mobject, CoordinateAuthoringError> {
-        self.require_graph_store(graph)?;
-        if let Some(bound) = bounded_graph {
-            self.require_graph_store(bound)?;
-        }
-        let frame = self.authored_frame()?;
-        let graph_path = graph.path_query()?;
-        let bounded_path = bounded_graph.map(Mobject::path_query).transpose()?;
-        let options = ManimGeometryOptions::axes_area(
-            frame,
-            graph,
-            &graph_path,
-            x_range,
-            bounded_graph.zip(bounded_path.as_ref()),
-        )?;
+        let options = self.area_options(graph, x_range, bounded_graph)?;
         Ok(Mobject::from_manim_geometry(
             Rc::clone(self.family.integration_store()),
             options,
         )?)
+    }
+
+    fn area_options(
+        &self,
+        graph: &Mobject,
+        x_range: Option<[f64; 2]>,
+        bounded_graph: Option<&Mobject>,
+    ) -> Result<ManimGeometryOptions, CoordinateAuthoringError> {
+        self.require_graph_store(graph)?;
+        if let Some(bound) = bounded_graph {
+            self.require_graph_store(bound)?;
+        }
+        ManimGeometryOptions::axes_area(self.authored_frame()?, graph, x_range, bounded_graph)
     }
 
     /// Create a family of ordinary closed rectangle paths.  Partitioning is
@@ -756,6 +701,40 @@ impl Scene {
         )?)
     }
 
+    /// Observe a Scene-owned number line in setup or playback.
+    pub fn number_line_frame(
+        &self,
+        line: &ManimNumberLine,
+    ) -> Result<NumberLineFrame, CoordinateAuthoringError> {
+        crate::MobjectTarget::from(line.family()).require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            self.effective_number_line_frame(line)
+        } else {
+            line.authored_frame()
+        }
+    }
+
+    /// Observe a Scene-owned pair of coordinate shafts in setup or playback.
+    pub fn axes_frame(&self, axes: &ManimAxes) -> Result<AxesFrame, CoordinateAuthoringError> {
+        crate::MobjectTarget::from(axes.family()).require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            self.effective_axes_frame(axes)
+        } else {
+            axes.authored_frame()
+        }
+    }
+
+    /// Evaluate a scalar callable once and map it through this Scene's axes.
+    pub fn input_to_graph_point(
+        &self,
+        axes: &ManimAxes,
+        input: f64,
+        function: impl FnOnce(f64) -> f64,
+    ) -> Result<[f64; 2], CoordinateAuthoringError> {
+        let ordinate = function(input);
+        Ok(self.axes_frame(axes)?.coords_to_point(input, ordinate)?)
+    }
+
     /// Read the current shaft, or its validated authored path while detached.
     pub fn effective_number_line_frame(
         &self,
@@ -801,42 +780,87 @@ impl Scene {
         x_range: Option<[f64; 2]>,
         bounded_graph: Option<&Mobject>,
     ) -> Result<Mobject, CoordinateAuthoringError> {
-        if !Rc::ptr_eq(self.integration_store(), axes.family().integration_store())
-            || !Rc::ptr_eq(self.integration_store(), graph.integration_store())
-            || bounded_graph.is_some_and(|bound| {
-                !Rc::ptr_eq(self.integration_store(), bound.integration_store())
-            })
-        {
-            return Err(AuthoringError::ForeignStore.into());
+        let options = self.effective_axes_area_options(axes, graph, x_range, bounded_graph)?;
+        Ok(self.geometry(options)?)
+    }
+
+    /// Capture a closed graph area without publishing it. Hosts can customize
+    /// the returned geometry options before creating the object through Scene.
+    pub fn axes_area_options(
+        &self,
+        axes: &ManimAxes,
+        graph: &Mobject,
+        x_range: Option<[f64; 2]>,
+        bounded_graph: Option<&Mobject>,
+    ) -> Result<ManimGeometryOptions, CoordinateAuthoringError> {
+        if self.running_execution().is_some() {
+            return self.effective_axes_area_options(axes, graph, x_range, bounded_graph);
         }
-        let frame = self.effective_axes_frame(axes)?;
-        let graph_path = self.effective_path_query(graph)?;
-        let bounded_path = bounded_graph
-            .map(|bound| self.effective_path_query(bound))
-            .transpose()?;
-        let options = ManimGeometryOptions::axes_area(
+        crate::MobjectTarget::from(axes.family()).require_store(self.integration_store())?;
+        axes.area_options(graph, x_range, bounded_graph)
+    }
+
+    fn effective_axes_area_options(
+        &self,
+        axes: &ManimAxes,
+        graph: &Mobject,
+        x_range: Option<[f64; 2]>,
+        bounded_graph: Option<&Mobject>,
+    ) -> Result<ManimGeometryOptions, CoordinateAuthoringError> {
+        let store = self.integration_store();
+        crate::MobjectTarget::from(graph).require_store(store)?;
+        if let Some(bound) = bounded_graph {
+            crate::MobjectTarget::from(bound).require_store(store)?;
+        }
+        let execution = self.coordinate_query_execution(axes.family())?;
+        let mut query = |object: &Mobject| coordinate_path_query(store, execution, object);
+        let frame = axes.snapshot_with(&mut query)?;
+        let graph_path = query(graph)?;
+        let bounded_path = bounded_graph.map(query).transpose()?;
+        area::axes_area(
             frame,
             graph,
             &graph_path,
             x_range,
             bounded_graph.zip(bounded_path.as_ref()),
-        )?;
-        Ok(self.geometry(options)?)
+        )
     }
 
-    /// Capture the axes and graph paths from one Runtime publication, prepare
-    /// every rectangle without rereading authored state, then publish the whole
-    /// family through one Scene-owned resource/semantic transaction.
+    /// Prepare one Riemann snapshot from authored or currently published paths.
+    /// Host callables run after capture and before `publish_riemann_plan`.
+    pub fn riemann_plan(
+        &self,
+        axes: &ManimAxes,
+        graph: &Mobject,
+        options: RiemannRectangleOptions,
+    ) -> Result<RiemannRectanglePlan, CoordinateAuthoringError> {
+        if self.running_execution().is_some() {
+            return self.effective_riemann_plan(axes, graph, options);
+        }
+        crate::MobjectTarget::from(axes.family()).require_store(self.integration_store())?;
+        Ok(axes.riemann_plan(graph, options)?.for_scene(self.root()))
+    }
+
+    /// Publish all rectangles from a snapshot prepared by this Scene.
+    pub fn publish_riemann_plan(
+        &mut self,
+        plan: &RiemannRectanglePlan,
+        top_values: Option<&[f64]>,
+        baseline_values: Option<&[f64]>,
+    ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        plan.require_scene(self)?;
+        Ok(self.path_family(plan.paths(top_values, baseline_values)?)?)
+    }
+
+    /// Materialize rectangles from the current Runtime publication.
     pub fn effective_riemann_rectangles(
         &mut self,
         axes: &ManimAxes,
         graph: &Mobject,
         options: RiemannRectangleOptions,
     ) -> Result<MobjectFamily, CoordinateAuthoringError> {
-        let paths = self
-            .effective_riemann_plan(axes, graph, options)?
-            .paths(None, None)?;
-        self.path_family(paths).map_err(Into::into)
+        let plan = self.effective_riemann_plan(axes, graph, options)?;
+        self.publish_riemann_plan(&plan, None, None)
     }
 
     /// Immutable effective source snapshot for exact scalar callback evaluation.
@@ -846,34 +870,25 @@ impl Scene {
         graph: &Mobject,
         options: RiemannRectangleOptions,
     ) -> Result<RiemannRectanglePlan, CoordinateAuthoringError> {
-        if !Rc::ptr_eq(self.integration_store(), axes.family().integration_store())
-            || !Rc::ptr_eq(self.integration_store(), graph.integration_store())
-        {
-            return Err(AuthoringError::ForeignStore.into());
-        }
+        let store = self.integration_store();
+        crate::MobjectTarget::from(graph).require_store(store)?;
+        let execution = self.coordinate_query_execution(axes.family())?;
+        let mut query = |object: &Mobject| coordinate_path_query(store, execution, object);
+        let frame = axes.snapshot_with(&mut query)?;
+        let graph_path = query(graph)?;
         let bounded = options
             .bounded_graph
-            .map(|id| Mobject::from_node(Rc::clone(self.integration_store()), id))
+            .map(|id| Mobject::from_node(Rc::clone(store), id))
             .transpose()?;
-        if bounded
-            .as_ref()
-            .is_some_and(|bound| !Rc::ptr_eq(self.integration_store(), bound.integration_store()))
-        {
-            return Err(AuthoringError::ForeignStore.into());
-        }
-        let frame = self.effective_axes_frame(axes)?;
-        let graph_path = self.effective_path_query(graph)?;
-        let bounded_path = bounded
-            .as_ref()
-            .map(|bound| self.effective_path_query(bound))
-            .transpose()?;
-        RiemannRectanglePlan::from_snapshot(
+        let bounded_path = bounded.as_ref().map(query).transpose()?;
+        Ok(RiemannRectanglePlan::from_snapshot(
             frame,
             graph,
             &graph_path,
             bounded.as_ref().zip(bounded_path.as_ref()),
             options,
-        )
+        )?
+        .for_scene(self.root()))
     }
 }
 
@@ -892,16 +907,25 @@ pub(crate) fn coordinate_path_query(
 }
 
 impl ManimGeometryOptions {
-    /// Prepare an ordinary closed graph-area path from one captured coordinate
-    /// frame. This retains no callback and owns no scene identity.
+    /// Prepare a closed area path from a captured authored frame.
     pub fn axes_area(
         frame: AxesFrame,
         graph: &Mobject,
-        graph_path: &PathQuery,
         x_range: Option<[f64; 2]>,
-        bounded: Option<(&Mobject, &PathQuery)>,
+        bounded_graph: Option<&Mobject>,
     ) -> Result<Self, CoordinateAuthoringError> {
-        area::axes_area(frame, graph, graph_path, x_range, bounded)
+        if let Some(bound) = bounded_graph {
+            graph.require_same_store(bound)?;
+        }
+        let graph_path = graph.path_query()?;
+        let bounded_path = bounded_graph.map(Mobject::path_query).transpose()?;
+        area::axes_area(
+            frame,
+            graph,
+            &graph_path,
+            x_range,
+            bounded_graph.zip(bounded_path.as_ref()),
+        )
     }
 
     /// Prepare y=f(x) in a captured coordinate frame. Capture once before calling
@@ -936,20 +960,6 @@ impl ManimGeometryOptions {
             mapped.push(frame.coords_to_point(x, y)?);
         }
         Ok(Self::sampled_plot(&mapped)?)
-    }
-}
-
-impl ManimAxes {
-    /// Prepare rectangle paths from already captured axes and graph snapshots.
-    /// Publication remains owned by `Scene` or `LiveSession`.
-    pub fn riemann_rectangle_paths(
-        frame: AxesFrame,
-        graph: &Mobject,
-        graph_path: &PathQuery,
-        bounded: Option<(&Mobject, &PathQuery)>,
-        options: RiemannRectangleOptions,
-    ) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
-        area::prepare_riemann_paths(frame, graph, graph_path, bounded, options)
     }
 }
 

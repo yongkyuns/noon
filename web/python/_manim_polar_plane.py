@@ -70,7 +70,7 @@ class PolarPlane(_plot.Axes):
         except BaseException:
             options.free()
             raise
-        handle = engine_call(context.liveCreateCoordinates if context is not None else _plot._create_coordinates, options)
+        handle = engine_call(context.createCoordinates if context is not None else _plot._create_coordinates, options)
         members = [_lines(engine_call(handle.polarPlanePart, i)) for i in (0, 1)]
         members.extend(_plot._attach_number_line(object.__new__(_plot.NumberLine), engine_call(handle.polarPlanePart, i)) for i in (2, 3))
         _plot._family(self, handle, members)
@@ -91,7 +91,7 @@ class PolarPlane(_plot.Axes):
     def y_axis(self): return self.submobjects[3]
 
     def _polar_frame(self):
-        context = _plot._coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        context = _plot._coordinate_context(self, self.x_axis.shaft, self.y_axis.shaft)
         if context is not None:
             return engine_call(context.queryPolarPlaneFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.polarPlaneFrame)

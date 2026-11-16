@@ -11,10 +11,9 @@ pub struct OrdinaryFocusOn {
 impl LiveContinuation for OrdinaryFocusOn {
     type Error = String;
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let result = match self.stage {
-            0 => live.wait_segment(0.25),
-            1 => live.declare_and_activate_focus_on(
+            0 => scene.live().wait_segment(0.25),
+            1 => scene.live().declare_and_activate_focus_on(
                 FocusOnOptions {
                     point: (2.0, 1.0),
                     opacity: 0.8,
@@ -30,13 +29,13 @@ impl LiveContinuation for OrdinaryFocusOn {
                     .rate_func(RateFunction::Linear),
             ),
             2 => {
-                if !live
-                    .contains(&self.square)
+                if !scene
+                    .contains_direct(&self.square)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("FocusOn removed unrelated scene content".into());
                 }
-                live.wait_segment(0.25)
+                scene.live().wait_segment(0.25)
             }
             3 => {
                 self.stage = 4;

@@ -24,29 +24,22 @@ impl Scene {
         resource: AudioResource,
         options: AudioClipOptions,
     ) -> Result<SemanticNodeId, AuthoringError> {
+        self.require_resource_admission()?;
         let root = self.root;
-        let mut store = self.store.borrow_mut();
-        if let Some(execution) = self.execution.as_ref() {
-            execution.require_resource_creation_at_root(&store, root)?;
-        }
-        let (result, token) = store.with_audio_resource(resource, |store, handle| {
-            let definition = AudioClipDefinition::new(
-                handle,
-                store
-                    .audio_resources()
-                    .get(handle)
-                    .expect("audio resource is admitted for this transaction"),
-                options,
-            )?;
-            let mut transaction = SemanticMutationTransaction::new();
-            let token = transaction.create_audio_clip(root, definition);
-            let result = match self.execution.as_mut() {
-                Some(execution) => {
-                    execution.apply_semantic_transaction_at_root(store, root, transaction)?
-                }
-                None => transaction.apply(store)?,
-            };
-            Ok::<_, AuthoringError>((result, token))
+        let (result, token) = self.with_semantic_publication(|store, publish| {
+            store.with_audio_resource(resource, |store, handle| {
+                let definition = AudioClipDefinition::new(
+                    handle,
+                    store
+                        .audio_resources()
+                        .get(handle)
+                        .expect("audio resource is admitted for this transaction"),
+                    options,
+                )?;
+                let mut transaction = SemanticMutationTransaction::new();
+                let token = transaction.create_audio_clip(root, definition);
+                Ok::<_, AuthoringError>((publish(store, transaction)?, token))
+            })
         })?;
         result
             .resolve(token)

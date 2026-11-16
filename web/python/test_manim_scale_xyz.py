@@ -25,9 +25,9 @@ class ScaleXYZTests(unittest.TestCase):
                     source._semantic_handle_fresh = True
                     if family:
                         source._semantic_family_handle = handle
-                    context = types.SimpleNamespace(liveScaleLayout3d=lambda selected, *args: (
+                    context = types.SimpleNamespace(scaleLayout3d=lambda selected, *args: (
                         self.assertIs(selected, anchor), calls.append(args))) if live else None
-                    resolver = "_group_live_layout_context" if family else "_live_mutation_context"
+                    resolver = "_group_layout_context" if family else "_path_authoring_context"
                     with patch.object(semantic, resolver, return_value=context):
                         self.assertIs(source.scale(2), source)
                         source.scale([-.7, 1.3, 2.5], about_point=(1, -2, 4.25))

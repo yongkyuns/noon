@@ -11,7 +11,7 @@ fn retained_path(options: Options) -> VectorPath {
     let object =
         Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), options).unwrap();
     scene.add(&object).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = noon::integration::scene_execution::lower(&scene).unwrap();
     match session.frame().render_geometry(0).unwrap() {
         GeometryRef::VectorPath(path) => path.as_ref().clone(),
         GeometryRef::External(id) => {
@@ -212,15 +212,16 @@ fn arc_family_and_live_layout_share_anchor_centers_and_handle_extents() {
     close64(group.layout().unwrap().center().0, -1.332546237637556);
     close64(group.layout().unwrap().width(), 1.1650965988224176);
     scene.add_many(&[(&group).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    let initial = live.effective_layout(&arc).unwrap();
-    let family = live.effective_family_layout(&group).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let initial = session.scene().effective_layout(&arc).unwrap();
+    let family = session.scene().effective_family_layout(&group).unwrap();
     close64(initial.center.0, family.center.0);
     close64(initial.width, family.width);
-    live.rescale_to_fit(&(&group).into(), 2., noon::LayoutDimension::Width, false)
+    session
+        .scene_mut()
+        .rescale_to_fit(&(&group).into(), 2., noon::LayoutDimension::Width, false)
         .unwrap();
-    let after = live.effective_family_layout(&group).unwrap();
+    let after = session.scene().effective_family_layout(&group).unwrap();
     close64(after.center.0, initial.center.0);
     close64(after.center.1, initial.center.1);
     close64(after.width, 2.);

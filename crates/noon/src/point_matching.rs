@@ -1,10 +1,6 @@
 //! Point matching replaces geometry through one shared semantic transaction.
-use crate::{AuthoringError, ExecutionSession, Mobject, UnsupportedAuthoringOperation};
-use noon_core::{
-    SemanticMutationTransaction, SemanticNodeId, SemanticObjectContent, SemanticObjectState,
-    SemanticStore,
-};
-use std::{cell::RefCell, rc::Rc};
+use crate::{AuthoringError, Mobject, UnsupportedAuthoringOperation};
+use noon_core::{SemanticMutationTransaction, SemanticObjectContent, SemanticObjectState};
 
 pub(crate) fn matched_state(
     mut source: SemanticObjectState,
@@ -36,28 +32,6 @@ pub(crate) fn prepare_match_points(
         &after,
     );
     Ok(transaction)
-}
-
-pub(crate) fn publish_match_points(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    source: &Mobject,
-    target: &Mobject,
-) -> Result<(), AuthoringError> {
-    if !Rc::ptr_eq(store, source.integration_store())
-        || !Rc::ptr_eq(store, target.integration_store())
-    {
-        return Err(AuthoringError::ForeignStore);
-    }
-    source.validate()?;
-    target.validate()?;
-    crate::effective_capture::capture_mobject_state(store, execution, source)?;
-    let target_state = crate::effective_capture::capture_mobject_state(store, execution, target)?;
-    let transaction = prepare_match_points(source, target_state)?;
-    crate::Scene::publish_running_transaction(store, root, execution, transaction)
-        .map(|_| ())
-        .map_err(AuthoringError::from)
 }
 
 impl Mobject {

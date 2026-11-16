@@ -1,7 +1,8 @@
 //! Thin browser host adapter for the shared real-LaTeX authoring path.
 use crate::{authoring_error::js_error, WasmAuthoringMobjectHandle, WasmAuthoringStore};
 use js_sys::Uint8Array;
-use noon::{DviFontResource, LatexBackend, LatexFormat, MathTex, Tex};
+use noon::integration::{latex_member_colors, LatexInput};
+use noon::{DviFontResource, LatexBackend, LatexFormat};
 use std::{collections::BTreeMap, rc::Rc};
 use wasm_bindgen::prelude::*;
 
@@ -86,12 +87,6 @@ impl LatexBackend for WasmLatexCompiler {
     }
 }
 
-#[derive(Clone)]
-pub(crate) enum AuthoredLatex {
-    Text(Tex),
-    Math(MathTex),
-}
-
 #[wasm_bindgen]
 pub struct WasmLatexPartsHandle {
     parts: noon::LatexParts,
@@ -150,7 +145,7 @@ impl WasmLatexPartsHandle {
     /// that member. The complete vector is validated and published atomically.
     #[wasm_bindgen(js_name = setMemberColors)]
     pub fn set_member_colors(&self, values: &[f64]) -> Result<(), JsValue> {
-        let colors = member_colors(values)?;
+        let colors = latex_member_colors(values).map_err(js_error)?;
         self.parts
             .set_current_member_colors(&colors)
             .map_err(js_error)
@@ -167,36 +162,9 @@ impl WasmLatexPartsHandle {
     }
 }
 
-pub(crate) fn member_colors(values: &[f64]) -> Result<Vec<Option<noon::Color>>, JsValue> {
-    if values.len() % 4 != 0 {
-        return Err(JsValue::from_str(
-            "member colors require complete RGBA tuples",
-        ));
-    }
-    values
-        .chunks_exact(4)
-        .map(|rgba| {
-            if rgba[0].is_nan() {
-                Ok(None)
-            } else {
-                Ok(Some(noon::Color::rgba(
-                    crate::authoring_mobject::text_authoring_f32("member red", rgba[0])
-                        .map_err(js_error)?,
-                    crate::authoring_mobject::text_authoring_f32("member green", rgba[1])
-                        .map_err(js_error)?,
-                    crate::authoring_mobject::text_authoring_f32("member blue", rgba[2])
-                        .map_err(js_error)?,
-                    crate::authoring_mobject::text_authoring_f32("member alpha", rgba[3])
-                        .map_err(js_error)?,
-                )))
-            }
-        })
-        .collect()
-}
-
 #[wasm_bindgen]
 pub struct WasmLatexOptions {
-    pub(crate) text: AuthoredLatex,
+    pub(crate) text: LatexInput,
 }
 
 #[wasm_bindgen]
@@ -209,31 +177,9 @@ impl WasmLatexOptions {
         color: &[f64],
         opacity: f64,
     ) -> Result<Self, JsValue> {
-        let number = crate::authoring_mobject::text_authoring_f32;
-        let font_size = number("font size", font_size).map_err(js_error)?;
-        let opacity = number("opacity", opacity).map_err(js_error)?;
-        let colors = crate::authoring_mobject::gradient_colors(color).map_err(js_error)?;
-        let [color] = colors.as_slice() else {
-            return Err(JsValue::from_str("One LaTeX color is required"));
-        };
-        let text = if math {
-            AuthoredLatex::Math(
-                MathTex::new(source)
-                    .map_err(js_error)?
-                    .with_font_size(font_size)
-                    .color(*color)
-                    .set_opacity(opacity),
-            )
-        } else {
-            AuthoredLatex::Text(
-                Tex::new(source)
-                    .map_err(js_error)?
-                    .with_font_size(font_size)
-                    .color(*color)
-                    .set_opacity(opacity),
-            )
-        };
-        Ok(Self { text })
+        LatexInput::new(source, math, font_size, color, opacity)
+            .map(|text| Self { text })
+            .map_err(js_error)
     }
 
     /// Construct from explicit Tex or MathTex string arguments. Argument
@@ -246,46 +192,18 @@ impl WasmLatexOptions {
         color: &[f64],
         opacity: f64,
     ) -> Result<Self, JsValue> {
-        let number = crate::authoring_mobject::text_authoring_f32;
-        let font_size = number("font size", font_size).map_err(js_error)?;
-        let opacity = number("opacity", opacity).map_err(js_error)?;
-        let colors = crate::authoring_mobject::gradient_colors(color).map_err(js_error)?;
-        let [color] = colors.as_slice() else {
-            return Err(JsValue::from_str("One LaTeX color is required"));
-        };
-        let text = if math {
-            AuthoredLatex::Math(
-                MathTex::from_strings(strings)
-                    .map_err(js_error)?
-                    .with_font_size(font_size)
-                    .color(*color)
-                    .set_opacity(opacity),
-            )
-        } else {
-            AuthoredLatex::Text(
-                Tex::from_strings(strings)
-                    .map_err(js_error)?
-                    .with_font_size(font_size)
-                    .color(*color)
-                    .set_opacity(opacity),
-            )
-        };
-        Ok(Self { text })
+        LatexInput::from_strings(strings, math, font_size, color, opacity)
+            .map(|text| Self { text })
+            .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = isolateSubstrings)]
     pub fn isolate_substrings(&mut self, substrings: Vec<String>) -> Result<(), JsValue> {
-        let refined = match self.text.clone() {
-            AuthoredLatex::Text(text) => AuthoredLatex::Text(
-                text.with_isolated_substrings(&substrings)
-                    .map_err(js_error)?,
-            ),
-            AuthoredLatex::Math(text) => AuthoredLatex::Math(
-                text.with_isolated_substrings(&substrings)
-                    .map_err(js_error)?,
-            ),
-        };
-        self.text = refined;
+        self.text = self
+            .text
+            .clone()
+            .with_isolated_substrings(&substrings)
+            .map_err(js_error)?;
         Ok(())
     }
 }
@@ -298,13 +216,11 @@ impl WasmAuthoringStore {
         options: WasmLatexOptions,
         compiler: &mut WasmLatexCompiler,
     ) -> Result<WasmLatexPartsHandle, JsValue> {
-        let store = Rc::clone(&self.semantics);
-        match options.text {
-            AuthoredLatex::Text(text) => noon::LatexParts::from_tex(store, text, compiler),
-            AuthoredLatex::Math(text) => noon::LatexParts::from_math_tex(store, text, compiler),
-        }
-        .map(WasmLatexPartsHandle::new)
-        .map_err(js_error)
+        options
+            .text
+            .publish_detached(Rc::clone(&self.semantics), compiler)
+            .map(WasmLatexPartsHandle::new)
+            .map_err(js_error)
     }
 }
 

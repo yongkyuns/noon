@@ -11,8 +11,8 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     authoring_error::{js_error, AuthoringFailure},
-    WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmAuthoringStore,
-    WasmManimGeometryOptions,
+    CanonicalAuthoringSceneContext, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle,
+    WasmAuthoringStore, WasmManimGeometryOptions,
 };
 
 const SVG_DEFAULT_TRANSPORT_TAG: &str = "noon.svg-default.v1";
@@ -78,6 +78,32 @@ impl WasmAuthoringStore {
         family
             .map(WasmAuthoringFamilyHandle::from_semantic_family)
             .map_err(js_error)
+    }
+}
+
+#[wasm_bindgen]
+impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = createSvgFromString)]
+    pub fn create_svg_from_string(
+        &mut self,
+        source: &str,
+        should_center: bool,
+        height: Option<f64>,
+        width_or_defaults: JsValue,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let request = parse_width_or_defaults(width_or_defaults)?;
+        let options = noon::SvgImportOptions {
+            should_center,
+            height,
+            width: request.width,
+        };
+        let scene = self.inner.local_authoring_scene().map_err(js_error)?;
+        match request.svg_default {
+            Some(style) => scene.svg_from_str_with_options_and_svg_default(source, options, style),
+            None => scene.svg_from_str_with_options(source, options),
+        }
+        .map(WasmAuthoringFamilyHandle::from_semantic_family)
+        .map_err(js_error)
     }
 }
 

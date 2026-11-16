@@ -5,12 +5,13 @@
 //! families. No callback, runtime loop, or renderer-owned vector-field model
 //! survives construction.
 
-use crate::arrow_authoring::create_arrow_batch_family;
-use crate::{AuthoringError, ManimArrow, ManimArrowOptions, MobjectFamily};
+use crate::arrow_authoring::{publish_arrow_batch_family, resolve_arrow_batch_family};
+use crate::{AuthoringError, ManimArrow, ManimArrowOptions, MobjectFamily, Scene};
 use noon_core::{Color, SemanticStore, BLUE_E, GREEN, RED, YELLOW};
 use noon_geometry::{
     plan_static_arrow_vector_field, plan_static_arrow_vector_field_with_length,
     StaticVectorFieldError, StaticVectorFieldPlan, VectorFieldPoint, VectorFieldRanges2D,
+    VectorFieldSample,
 };
 use std::{cell::RefCell, fmt, rc::Rc};
 
@@ -25,6 +26,14 @@ pub enum ArrowVectorFieldAuthoringError {
     Authoring(AuthoringError),
     InvalidColorConfiguration(&'static str),
     NonFiniteColorSchemeOutput { sample_index: usize },
+    SampleOutOfRange(usize),
+    MissingVector(usize),
+    MissingLength(usize),
+    MissingColorValue(usize),
+    DefaultLength,
+    DefaultColorScheme,
+    NotGradient,
+    InvalidColor,
 }
 
 impl fmt::Display for ArrowVectorFieldAuthoringError {
@@ -42,6 +51,14 @@ impl fmt::Display for ArrowVectorFieldAuthoringError {
                     "invalid static vector-field color configuration: {reason}"
                 )
             }
+            Self::SampleOutOfRange(index) => write!(formatter, "vector-field sample index {index} is out of range"),
+            Self::MissingVector(index) => write!(formatter, "vector-field sample {index} has no callback result"),
+            Self::MissingLength(index) => write!(formatter, "vector-field sample {index} has no custom display length"),
+            Self::MissingColorValue(index) => write!(formatter, "vector-field sample {index} has no custom color-scheme value"),
+            Self::DefaultLength => formatter.write_str("display lengths may only be supplied for a custom length function"),
+            Self::DefaultColorScheme => formatter.write_str("color values may only be supplied for a custom color scheme"),
+            Self::NotGradient => formatter.write_str("gradient stops require an ArrowVectorField color gradient"),
+            Self::InvalidColor => formatter.write_str("vector-field color components must be finite"),
             Self::NonFiniteColorSchemeOutput { sample_index } => write!(
                 formatter,
                 "static vector-field color scheme returned a non-finite value at sample {sample_index}"
@@ -55,7 +72,7 @@ impl std::error::Error for ArrowVectorFieldAuthoringError {
         match self {
             Self::Planning(error) => Some(error),
             Self::Authoring(error) => Some(error),
-            Self::InvalidColorConfiguration(_) | Self::NonFiniteColorSchemeOutput { .. } => None,
+            _ => None,
         }
     }
 }
@@ -83,7 +100,7 @@ pub struct ManimArrowVectorField {
     vectors: Vec<ManimArrow>,
 }
 
-enum ColorPolicy<'a> {
+pub(super) enum ColorPolicy<'a> {
     Default,
     Single(Color),
     Gradient {
@@ -282,64 +299,98 @@ impl ManimArrowVectorField {
     fn from_plan_with_coloring(
         store: Rc<RefCell<SemanticStore>>,
         plan: &StaticVectorFieldPlan,
-        mut coloring: ColorPolicy<'_>,
+        coloring: ColorPolicy<'_>,
     ) -> Result<Self, ArrowVectorFieldAuthoringError> {
-        if let ColorPolicy::Gradient {
-            colors, min, max, ..
-        } = &coloring
-        {
-            validate_gradient(colors, *min, *max)?;
-        }
+        Self::publish(store, arrow_options(&plan.samples, coloring)?)
+    }
 
-        // Build every inert Arrow request before touching the semantic store. The
-        // batch seam then preflights every Arrow and admits all tip resources before
-        // one transaction publishes the nested field family.
-        let mut options = Vec::with_capacity(plan.samples.len());
-        for (sample_index, sample) in plan.samples.iter().enumerate() {
-            let mut vector =
-                ManimArrowOptions::vector(sample.display_vector.x, sample.display_vector.y)?;
-            vector.set_translation(sample.point.x, sample.point.y)?;
-            let color =
-                match &mut coloring {
-                    ColorPolicy::Default => gradient_color(
-                        &DEFAULT_COLORS,
-                        DEFAULT_MIN_COLOR_SCHEME_VALUE,
-                        DEFAULT_MAX_COLOR_SCHEME_VALUE,
-                        sample.raw_norm,
-                    ),
-                    ColorPolicy::Single(color) => *color,
-                    ColorPolicy::Gradient {
-                        colors,
-                        min,
-                        max,
-                        scheme,
-                    } => {
-                        let value =
-                            if let Some(scheme) = scheme.as_deref_mut() {
-                                let value = scheme(sample.raw_vector);
-                                if !value.is_finite() {
-                                    return Err(ArrowVectorFieldAuthoringError::
-                                        NonFiniteColorSchemeOutput { sample_index });
-                                }
-                                value
-                            } else {
-                                sample.raw_norm
-                            };
-                        gradient_color(colors, *min, *max, value)
-                    }
-                };
-            vector.set_color(
-                f64::from(color.red),
-                f64::from(color.green),
-                f64::from(color.blue),
-                f64::from(color.alpha),
-            )?;
-            options.push(vector);
-        }
-
-        let (family, vectors) = create_arrow_batch_family(store, options)?;
+    pub(crate) fn publish(
+        store: Rc<RefCell<SemanticStore>>,
+        options: Vec<ManimArrowOptions>,
+    ) -> Result<Self, ArrowVectorFieldAuthoringError> {
+        let committed =
+            publish_arrow_batch_family(&mut store.borrow_mut(), options, |store, transaction| {
+                transaction.apply(store).map_err(AuthoringError::from)
+            })?;
+        let (family, vectors) = resolve_arrow_batch_family(store, committed)?;
         Ok(Self { family, vectors })
     }
+}
+
+impl Scene {
+    /// Prepare and publish an ArrowVectorField through this Scene.
+    /// Sampling callbacks finish before publication, and membership is explicit.
+    pub fn manim_arrow_vector_field(
+        &mut self,
+        options: crate::ArrowVectorFieldOptions,
+    ) -> Result<ManimArrowVectorField, ArrowVectorFieldAuthoringError> {
+        let arrows = options.prepare()?;
+        self.require_resource_admission()?;
+        let committed = self.with_semantic_publication(|store, publish| {
+            publish_arrow_batch_family(store, arrows, publish)
+        })?;
+        let (family, vectors) =
+            resolve_arrow_batch_family(Rc::clone(self.integration_store()), committed)?;
+        Ok(ManimArrowVectorField { family, vectors })
+    }
+}
+
+pub(super) fn arrow_options(
+    samples: &[VectorFieldSample],
+    mut coloring: ColorPolicy<'_>,
+) -> Result<Vec<ManimArrowOptions>, ArrowVectorFieldAuthoringError> {
+    if let ColorPolicy::Gradient {
+        colors, min, max, ..
+    } = &coloring
+    {
+        validate_gradient(colors, *min, *max)?;
+    }
+
+    // Build every inert Arrow request before touching the semantic store. The
+    // batch seam then preflights every Arrow and admits all tip resources before
+    // one transaction publishes the nested field family.
+    let mut options = Vec::with_capacity(samples.len());
+    for (sample_index, sample) in samples.iter().enumerate() {
+        let mut vector =
+            ManimArrowOptions::vector(sample.display_vector.x, sample.display_vector.y)?;
+        vector.set_translation(sample.point.x, sample.point.y)?;
+        let color = match &mut coloring {
+            ColorPolicy::Default => gradient_color(
+                &DEFAULT_COLORS,
+                DEFAULT_MIN_COLOR_SCHEME_VALUE,
+                DEFAULT_MAX_COLOR_SCHEME_VALUE,
+                sample.raw_norm,
+            ),
+            ColorPolicy::Single(color) => *color,
+            ColorPolicy::Gradient {
+                colors,
+                min,
+                max,
+                scheme,
+            } => {
+                let value = if let Some(scheme) = scheme.as_deref_mut() {
+                    let value = scheme(sample.raw_vector);
+                    if !value.is_finite() {
+                        return Err(ArrowVectorFieldAuthoringError::NonFiniteColorSchemeOutput {
+                            sample_index,
+                        });
+                    }
+                    value
+                } else {
+                    sample.raw_norm
+                };
+                gradient_color(colors, *min, *max, value)
+            }
+        };
+        vector.set_color(
+            f64::from(color.red),
+            f64::from(color.green),
+            f64::from(color.blue),
+            f64::from(color.alpha),
+        )?;
+        options.push(vector);
+    }
+    Ok(options)
 }
 
 fn validate_gradient(
@@ -391,7 +442,6 @@ fn gradient_color(colors: &[Color], min: f64, max: f64, value: f64) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Scene;
     use noon_core::{SemanticPaint, SemanticVec3, BLUE, PURPLE};
     use noon_geometry::VectorFieldAxisRange;
 
@@ -645,6 +695,39 @@ mod tests {
                 .stats(),
             before_resources
         );
+    }
+
+    #[test]
+    fn scene_field_incomplete_draft_leaves_publication_unchanged() {
+        let mut scene = Scene::new();
+        let range = Some(VectorFieldAxisRange::new(0.0, 0.0, 1.0));
+        let mut options = crate::ArrowVectorFieldOptions::new(range, range, true).unwrap();
+        options.set_vector(0, 1.0, 0.0).unwrap();
+        let revision = scene.revision();
+        let resources = scene
+            .integration_store()
+            .borrow()
+            .geometry_resources()
+            .stats();
+
+        assert!(matches!(
+            scene.manim_arrow_vector_field(options.clone()),
+            Err(ArrowVectorFieldAuthoringError::MissingLength(0))
+        ));
+        assert_eq!(scene.revision(), revision);
+        assert_eq!(
+            scene
+                .integration_store()
+                .borrow()
+                .geometry_resources()
+                .stats(),
+            resources
+        );
+
+        options.set_display_length(0, 0.75).unwrap();
+        let field = scene.manim_arrow_vector_field(options).unwrap();
+        assert_eq!(field.vectors()[0].manim_length().unwrap(), 0.75);
+        scene.add_many(&[field.family().into()]).unwrap();
     }
 
     #[test]

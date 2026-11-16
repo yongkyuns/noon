@@ -45,11 +45,11 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             .complete_segment(wait)
             .map_err(|e| e.to_string())?;
         session
-            .live()
+            .scene_mut()
             .set_family_color(&family, 0.2, 0.6, 1.0, 1.0)
             .map_err(|e| e.to_string())?;
         session
-            .live()
+            .scene_mut()
             .set_family_opacity(&family, 0.5)
             .map_err(|e| e.to_string())?;
         for root in [&family, &nested] {
@@ -64,7 +64,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         }
         for object in [&a, &b] {
             let effective = session
-                .live()
+                .scene()
                 .effective(object)
                 .map_err(|e| e.to_string())?;
             assert_eq!(effective.fill_opacity(), 0.5);
@@ -75,7 +75,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             .fade(&a, 0.5)
             .map_err(|e| e.to_string())?;
         session
-            .live()
+            .scene_mut()
             .fade_family(&family, 0.5)
             .map_err(|e| e.to_string())?;
         for root in [&family, &nested] {
@@ -90,14 +90,14 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         }
         for (object, opacity) in [(&a, 0.0625), (&b, 0.25)] {
             let effective = session
-                .live()
+                .scene()
                 .effective(object)
                 .map_err(|e| e.to_string())?;
             assert_eq!(effective.fill_opacity(), opacity);
             assert_eq!(effective.stroke_opacity(), opacity);
         }
         session
-            .live()
+            .scene_mut()
             .fade_to_family(&family, Color::rgb(1.0, 0.0, 0.0), 0.5)
             .map_err(|e| e.to_string())?;
         for (object, color, opacity) in [
@@ -105,7 +105,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             (&b, Color::rgba(0.6, 0.3, 0.5, 0.25), 0.25),
         ] {
             let effective = session
-                .live()
+                .scene()
                 .effective(object)
                 .map_err(|e| e.to_string())?;
             assert_eq!(effective.style.fill, Some(color));

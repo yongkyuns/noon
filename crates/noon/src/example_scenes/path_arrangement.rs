@@ -19,12 +19,12 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         grid.layout()?
             .move_to(FamilyLayoutTarget::Point(2., 0.), (0., 0.), (1., 1.))?;
         scene.add_many(&[(&row).into(), (&grid).into()])?;
-        let mut session = scene.execution_session()?;
-        let mut live = scene.live(&mut session);
+        let mut execution = scene.into_execution()?;
+        let mut live = execution.live();
         let wait = live.wait_segment(0.2)?;
         live.advance_segment_to(wait, wait.end_time())?;
         live.complete_segment(wait)?;
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(execution)
     };
     build().map_err(|error| error.to_string())
 }

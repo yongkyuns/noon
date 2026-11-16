@@ -498,7 +498,7 @@ async function start() {
     const context = authoring.createSceneContext();
     const circle = authoring.createManimCircle(0.75);
     context.beginLiveExecution(2);
-    context.liveAdd("1", circle);
+    context.bindMobject("1", circle);
     const player = context.createExecutionPlayer(2, 17);
     const resourceBundle = player.resourceBundleBytes();
     const initialDelta = player.initialDeltaJson();
@@ -600,7 +600,7 @@ async function start() {
       context = authoring.createSceneContext();
       circle = authoring.createManimCircle(0.75);
       context.beginLiveExecution(2);
-      context.liveAdd("1", circle);
+      context.bindMobject("1", circle);
       player = context.createExecutionPlayer(2, 23);
       const resourceBundle = player.resourceBundleBytes();
       const initialDelta = player.initialDeltaJson();

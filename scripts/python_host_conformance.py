@@ -74,7 +74,8 @@ def lifecycle_guards() -> dict:
     handle = a.geometry(GeometryOptions.circle(0.5))
     foreign_context = b.context()
     assert handle.centerCoordinates() == (0.0, 0.0)
-    for query in (foreign_context.containsMobject, foreign_context.queryMobjectCenter):
+    for query in (foreign_context.containsMobject, foreign_context.containsDirectMobject,
+                  foreign_context.queryMobjectCenter):
         try:
             engine_call(query, handle)
         except NoonForeignHandleError:

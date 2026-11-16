@@ -16,13 +16,13 @@ mod wasm {
         self, BrowserPointerBinding, BrowserPointerInput, BrowserPointerKind, BrowserPointerTarget,
     };
     use crate::direct_pointer_presentation::DirectPointerPresentation;
+    use noon::integration::scene_execution::ExecutionSession;
     use noon::integration::{
         ForwardSample, ForwardSampleStatus, NativePointerInputPublication, NativePointerInputToken,
         PointerSelectionPresentation, RendererPublication,
     };
     use noon::{
-        ExecutionSession, LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable,
-        SceneExecution,
+        LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable, SceneExecution,
     };
     use noon_core::{
         Camera2DState, NativeEventOccurrence, NativeEventSource, NativeInputValue, NativePointerId,

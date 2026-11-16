@@ -2,7 +2,9 @@
 //! of the same white text supplies qualified glyph coverage only; this test does
 //! not claim a new independent font rasterizer. Color decode/source-over is f64.
 use super::super::{decode, read, srgb_decode};
-use noon::{ExecutionSession, Mobject, Scene, Text};
+use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{Mobject, Scene, Text};
 use noon_core::{SemanticMutationTransaction, Vec2, ViewColorProfile};
 use noon_render_wgpu::{
     text::TextDeviceMetrics, Camera2D, GpuRenderer, RetainedFramePreparer, RetainedTextGpuState,
@@ -27,11 +29,12 @@ fn scene(colored: bool) -> (Scene, Mobject, ExecutionSession) {
     }
     label.disable_stroke().unwrap();
     scene.add(&label).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     if colored {
         let mut tx = SemanticMutationTransaction::new();
         tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
-        scene.live(&mut session).apply(tx).unwrap();
+        scene_execution::publish_at_root(scene.integration_store(), scene.root(), &mut session, tx)
+            .unwrap();
     }
     (scene, label, session)
 }
@@ -120,7 +123,7 @@ fn authored_text_linear_tint_composes_with_geometry_and_restores_without_raster_
     let (coverage, _) = compatibility.render(&device, &queue, &mut source);
     assert!(coverage.as_chunks::<4>().0.iter().any(|p| p[3] != 0));
     let (scene, label, session) = scene(true);
-    let mut running = scene.into_execution_with_session(session).unwrap();
+    let mut running = scene_execution::consume_with_session(scene, session).unwrap();
     let mut linear = Raster::new(&device, &queue, wgpu::TextureFormat::Rgba16Float);
     let artifact =
         std::env::var_os("NOON_RETAINED_TEXT_ARTIFACT_DIR").map(std::path::PathBuf::from);

@@ -7,11 +7,10 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         let mut scene = Scene::new();
         let mut path = scene.geometry(ManimGeometryOptions::path(VectorPath::new())?)?;
         path.set_stroke_color(88. / 255., 196. / 255., 221. / 255., 1.)?;
-        path.set_points_as_corners(&[
-            Vec2::new(-3., -1.),
-            Vec2::new(-2., 1.),
-            Vec2::new(-1., -1.),
-        ])?;
+        scene.set_points_as_corners(
+            &path,
+            &[Vec2::new(-3., -1.), Vec2::new(-2., 1.), Vec2::new(-1., -1.)],
+        )?;
         let mut original = path.copy_handle()?;
         original.shift(0., 2.5)?;
         scene.add_many(&[(&path).into(), (&original).into()])?;
@@ -24,12 +23,15 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             f64::from(noon_core::YELLOW.blue),
             0.3,
         )?;
-        polygon.set_points_as_corners(&[
-            Vec2::new(1., -1.),
-            Vec2::new(3., -1.),
-            Vec2::new(2., 1.),
-            Vec2::new(1., -1.),
-        ])?;
+        scene.set_points_as_corners(
+            &polygon,
+            &[
+                Vec2::new(1., -1.),
+                Vec2::new(3., -1.),
+                Vec2::new(2., 1.),
+                Vec2::new(1., -1.),
+            ],
+        )?;
         scene.add(&polygon)?;
         let mut running = scene.into_execution()?;
         running.scene_mut().set_points_as_corners(

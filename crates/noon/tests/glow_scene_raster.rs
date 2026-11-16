@@ -1,8 +1,10 @@
 //! Public authoring -> Scene execution -> ordinary retained wgpu rendering.
 //! The independent filter reference uses only a separate no-effect Scene image.
+use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::{
     effects::{EffectUpdate, Pixels},
-    AnimationOptions, Color, ExecutionSession, Mobject, RateFunction, Scene,
+    AnimationOptions, Color, Mobject, RateFunction, Scene,
 };
 use noon_core::Vec2;
 use noon_render_wgpu::{
@@ -496,10 +498,9 @@ fn public_scene_glow_pixels_and_lifecycle() {
     let (scene, source, animation) = scene(true);
     let (plain_scene, _, plain_animation) = self::scene(false);
     let mut session = scene.into_execution().unwrap();
-    let mut plain = plain_scene.execution_session().unwrap();
+    let mut plain = scene_execution::lower(&plain_scene).unwrap();
     let segment = session.live().play_animation(&animation).unwrap();
-    let plain_segment = plain_scene
-        .live(&mut plain)
+    let plain_segment = scene_execution::borrow_uninstalled(&plain_scene, &mut plain)
         .play_animation(&plain_animation)
         .unwrap();
     let mut surface = Surface::new(&device, &queue);
@@ -508,8 +509,7 @@ fn public_scene_glow_pixels_and_lifecycle() {
     let mut max_error = 0;
     for time in [0.0, 0.25, 0.5, 0.75, 1.0] {
         session.live().advance_segment_to(segment, time).unwrap();
-        plain_scene
-            .live(&mut plain)
+        scene_execution::borrow_uninstalled(&plain_scene, &mut plain)
             .advance_segment_to(plain_segment, time)
             .unwrap();
         let actual = surface.render(&device, &queue, session.session_mut());
@@ -575,10 +575,9 @@ fn public_scene_glow_pixels_and_lifecycle() {
         let (scene, source, animation) = self::scene(true);
         let (plain_scene, _, plain_animation) = self::scene(false);
         let mut session = scene.into_execution().unwrap();
-        let mut plain = plain_scene.execution_session().unwrap();
+        let mut plain = scene_execution::lower(&plain_scene).unwrap();
         let segment = session.live().play_animation(&animation).unwrap();
-        let plain_segment = plain_scene
-            .live(&mut plain)
+        let plain_segment = scene_execution::borrow_uninstalled(&plain_scene, &mut plain)
             .play_animation(&plain_animation)
             .unwrap();
         let mut surface = Surface::with_logical_viewport(&device, &queue, logical);
@@ -586,8 +585,7 @@ fn public_scene_glow_pixels_and_lifecycle() {
         let mut last_plain = Vec::new();
         for time in [0.0, 0.5, 1.0] {
             session.live().advance_segment_to(segment, time).unwrap();
-            plain_scene
-                .live(&mut plain)
+            scene_execution::borrow_uninstalled(&plain_scene, &mut plain)
                 .advance_segment_to(plain_segment, time)
                 .unwrap();
             let actual = surface.render(&device, &queue, session.session_mut());
@@ -665,7 +663,7 @@ fn authored_glow_pulse_pixels_restore_and_replay() {
         (scene, source)
     };
     let (plain_scene, _) = make_scene(false);
-    let mut plain = plain_scene.execution_session().unwrap();
+    let mut plain = scene_execution::lower(&plain_scene).unwrap();
     let ordinary = Surface::new(&device, &queue).render(&device, &queue, &mut plain);
     let times = [0.0, 0.25, 0.5, 0.75, 1.0];
     // Literal independent samples: ThereAndBack uses smooth(0/.5/1), while
@@ -709,19 +707,17 @@ fn authored_glow_pulse_pixels_restore_and_replay() {
             let (scene, source) = make_scene(attached);
             let original = source.get_effect("glow").ok();
             let original_definition = original.as_ref().map(|h| h.authored_definition().unwrap());
-            let mut session = scene.execution_session().unwrap();
+            let mut session = scene_execution::lower(&scene).unwrap();
             let mut surface = Surface::new(&device, &queue);
             let baseline_pixels = surface.render(&device, &queue, &mut session);
             assert!(error(&baseline_pixels, &baseline_oracle) <= 2);
-            let segment = scene
-                .live(&mut session)
+            let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
                 .declare_and_activate_glow_pulse(&source, 2.0, options.run_time(1.0))
                 .unwrap();
             let pulse_binding = source.get_effect("glow").unwrap();
             let mut frames = Vec::new();
             for (index, time) in times.into_iter().enumerate() {
-                scene
-                    .live(&mut session)
+                scene_execution::borrow_uninstalled(&scene, &mut session)
                     .advance_segment_to(segment, time)
                     .unwrap();
                 let actual = surface.render(&device, &queue, &mut session);
@@ -763,7 +759,9 @@ fn authored_glow_pulse_pixels_restore_and_replay() {
                     "attached={attached} {label}: rewind differs from forward playback"
                 );
             }
-            scene.live(&mut session).complete_segment(segment).unwrap();
+            scene_execution::borrow_uninstalled(&scene, &mut session)
+                .complete_segment(segment)
+                .unwrap();
             assert_eq!(
                 surface.render(&device, &queue, &mut session),
                 baseline_pixels,
@@ -1113,7 +1111,7 @@ fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {
             let (scene, source) = drawable_scene(kind, true, 1.0);
             let (plain_scene, plain_source) = drawable_scene(kind, false, 1.0);
             let mut session = scene.into_execution().unwrap();
-            let mut plain = plain_scene.execution_session().unwrap();
+            let mut plain = scene_execution::lower(&plain_scene).unwrap();
             let segment = if write {
                 session
                     .live()
@@ -1123,12 +1121,10 @@ fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {
             }
             .unwrap();
             let plain_segment = if write {
-                plain_scene
-                    .live(&mut plain)
+                scene_execution::borrow_uninstalled(&plain_scene, &mut plain)
                     .declare_and_activate_text_write(&plain_source, false, options)
             } else {
-                plain_scene
-                    .live(&mut plain)
+                scene_execution::borrow_uninstalled(&plain_scene, &mut plain)
                     .declare_and_activate_create(&plain_source, options)
             }
             .unwrap();
@@ -1137,8 +1133,7 @@ fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {
             let mut last_plain = Vec::new();
             for time in [0.0, 0.125, 0.5, 0.875, 1.0] {
                 session.live().advance_segment_to(segment, time).unwrap();
-                plain_scene
-                    .live(&mut plain)
+                scene_execution::borrow_uninstalled(&plain_scene, &mut plain)
                     .advance_segment_to(plain_segment, time)
                     .unwrap();
                 let actual = surface.render(&device, &queue, session.session_mut());
@@ -1159,8 +1154,7 @@ fn generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once() {
                 );
             }
             session.live().complete_segment(segment).unwrap();
-            plain_scene
-                .live(&mut plain)
+            scene_execution::borrow_uninstalled(&plain_scene, &mut plain)
                 .complete_segment(plain_segment)
                 .unwrap();
             session
@@ -1677,16 +1671,14 @@ fn image_glow_keeps_foreground_painter_order() {
         add_foreground(&mut foreground_scene);
 
         let mut session = scene.into_execution().unwrap();
-        let mut plain = plain_scene.execution_session().unwrap();
-        let mut neutral = neutral_scene.execution_session().unwrap();
-        let mut foreground_session = foreground_scene.execution_session().unwrap();
+        let mut plain = scene_execution::lower(&plain_scene).unwrap();
+        let mut neutral = scene_execution::lower(&neutral_scene).unwrap();
+        let mut foreground_session = scene_execution::lower(&foreground_scene).unwrap();
         let segment = session.live().play_animation(&animation).unwrap();
-        let plain_segment = plain_scene
-            .live(&mut plain)
+        let plain_segment = scene_execution::borrow_uninstalled(&plain_scene, &mut plain)
             .play_animation(&plain_animation)
             .unwrap();
-        let neutral_segment = neutral_scene
-            .live(&mut neutral)
+        let neutral_segment = scene_execution::borrow_uninstalled(&neutral_scene, &mut neutral)
             .play_animation(&neutral_animation)
             .unwrap();
         let mut surface = Surface::new(&device, &queue);
@@ -1702,12 +1694,10 @@ fn image_glow_keeps_foreground_painter_order() {
         let mut last_neutral = Vec::new();
         for time in [0.5, 1.0] {
             session.live().advance_segment_to(segment, time).unwrap();
-            plain_scene
-                .live(&mut plain)
+            scene_execution::borrow_uninstalled(&plain_scene, &mut plain)
                 .advance_segment_to(plain_segment, time)
                 .unwrap();
-            neutral_scene
-                .live(&mut neutral)
+            scene_execution::borrow_uninstalled(&neutral_scene, &mut neutral)
                 .advance_segment_to(neutral_segment, time)
                 .unwrap();
             let ordinary =
@@ -1803,11 +1793,10 @@ fn image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle() {
             let resource = source.state().unwrap().content.image().unwrap().resource();
             let mut session = scene.into_execution().unwrap();
             let mut plain = plain_scene.into_execution().unwrap();
-            let mut mask = mask_scene.execution_session().unwrap();
+            let mut mask = scene_execution::lower(&mask_scene).unwrap();
             let segment = session.live().play_animation(&animation).unwrap();
             let plain_segment = plain.live().play_animation(&plain_animation).unwrap();
-            let mask_segment = mask_scene
-                .live(&mut mask)
+            let mask_segment = scene_execution::borrow_uninstalled(&mask_scene, &mut mask)
                 .play_animation(&mask_animation)
                 .unwrap();
             let mut surface = Surface::new(&device, &queue);
@@ -1821,8 +1810,7 @@ fn image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle() {
                     .live()
                     .advance_segment_to(plain_segment, time)
                     .unwrap();
-                mask_scene
-                    .live(&mut mask)
+                scene_execution::borrow_uninstalled(&mask_scene, &mut mask)
                     .advance_segment_to(mask_segment, time)
                     .unwrap();
                 let ordinary = reference.render_on(
@@ -1895,8 +1883,7 @@ fn image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle() {
             }
             session.live().complete_segment(segment).unwrap();
             plain.live().complete_segment(plain_segment).unwrap();
-            mask_scene
-                .live(&mut mask)
+            scene_execution::borrow_uninstalled(&mask_scene, &mut mask)
                 .complete_segment(mask_segment)
                 .unwrap();
             let background = wgpu::Color {
@@ -2115,7 +2102,7 @@ fn offscreen_image_glow_uses_global_pixel_crop() {
                     rejected_wrong_crop += 1;
                 }
                 let ordinary_scene = fractional_edge_image(bounds, sampling, None);
-                let mut ordinary_session = ordinary_scene.execution_session().unwrap();
+                let mut ordinary_session = scene_execution::lower(&ordinary_scene).unwrap();
                 let mut ordinary_surface = Surface::new(&device, &queue);
                 let ordinary = ordinary_surface.render_on(
                     &device,
@@ -2128,7 +2115,7 @@ fn offscreen_image_glow_uses_global_pixel_crop() {
                     "ordinary {sampling:?} bounds={bounds:?} differs from analytic coverage"
                 );
                 let glow_scene = fractional_edge_image(bounds, sampling, Some(mode));
-                let mut glow_session = glow_scene.execution_session().unwrap();
+                let mut glow_session = scene_execution::lower(&glow_scene).unwrap();
                 let mut glow_surface = Surface::new(&device, &queue);
                 let actual = glow_surface.render_on(
                     &device,
@@ -2185,7 +2172,7 @@ fn public_ordered_leaf_stack_matches_independent_source_operators_and_neutral_re
     let ordinary = Surface::new(&device, &queue).render_on(
         &device,
         &queue,
-        &mut plain_scene.execution_session().unwrap(),
+        &mut scene_execution::lower(&plain_scene).unwrap(),
         wgpu::Color::TRANSPARENT,
     );
     let glow =
@@ -2301,7 +2288,7 @@ fn public_ordered_leaf_stack_matches_independent_source_operators_and_neutral_re
             let plain = Surface::new(&device, &queue).render_on(
                 &device,
                 &queue,
-                &mut plain_scene.execution_session().unwrap(),
+                &mut scene_execution::lower(&plain_scene).unwrap(),
                 wgpu::Color::TRANSPARENT,
             );
             assert_eq!(
@@ -2501,7 +2488,7 @@ fn public_scene_blur_rgba_pixels_seek_neutral_and_removal() {
     let profile_count = profiles.len() * 2;
     for profile in profiles {
         let (plain_scene, _, _) = blur_fixture(profile, false, 1.0, true);
-        let mut plain = plain_scene.execution_session().unwrap();
+        let mut plain = scene_execution::lower(&plain_scene).unwrap();
         let ordinary = Surface::new(&device, &queue).render_on(
             &device,
             &queue,
@@ -2664,7 +2651,7 @@ fn public_shadow_pixels_offset_animation_hard_shadow_and_retirement() {
     let mut maximum_error = 0;
     for profile in 0..profiles {
         let (plain_scene, _, _) = blur_fixture(profile, false, 1.0, true);
-        let mut plain = plain_scene.execution_session().unwrap();
+        let mut plain = scene_execution::lower(&plain_scene).unwrap();
         let ordinary = Surface::new(&device, &queue).render_on(
             &device,
             &queue,
@@ -2686,7 +2673,7 @@ fn public_shadow_pixels_offset_animation_hard_shadow_and_retirement() {
                     EffectOffset::Scene(v.map(|c| c / 10.0))
                 }
             };
-            let (scene, mut source, _) = blur_fixture(profile, false, opacity, pixels);
+            let (mut scene, mut source, _) = blur_fixture(profile, false, opacity, pixels);
             source
                 .add_effect(
                     Shadow::new(
@@ -2959,7 +2946,7 @@ fn offscreen_shadow_support_and_foreground_painter_order_match_extended_field() 
         foreground.disable_stroke().unwrap();
         foreground.set_fill(0.0, 1.0, 0.0, 1.0).unwrap();
         scene.add(&foreground).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let mut surface = Surface::new(&device, &queue);
         let actual = surface.render_on(
             &device,
@@ -3006,7 +2993,7 @@ fn shadow_scene_and_output_units_reprepare_under_view_changes() {
     let mut maximum_error = 0;
     for pixels in [true, false] {
         let (plain_scene, _, _) = blur_fixture(2, false, 1.0, pixels);
-        let mut plain = plain_scene.execution_session().unwrap();
+        let mut plain = scene_execution::lower(&plain_scene).unwrap();
         let (scene, mut source, _) = blur_fixture(2, false, 0.37, pixels);
         source
             .add_effect(
@@ -3027,7 +3014,7 @@ fn shadow_scene_and_output_units_reprepare_under_view_changes() {
                 "depth",
             )
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let mut plain_surface = Surface::new(&device, &queue);
         let mut surface = Surface::new(&device, &queue);
         let context = session.publication_context();
@@ -3139,10 +3126,12 @@ fn public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse() {
                             .set_fill_image_mapping(&source, mapping, Some(0.7))
                             .unwrap();
                         if pose == 3 {
-                            let mut live = execution.live();
-                            live.set_scale(&source, -0.9, 1.2).unwrap();
-                            live.set_rotation(&source, 0.413).unwrap();
-                            live.shift(&source, 0.17, -0.23).unwrap();
+                            let scene = execution.scene_mut();
+                            scene.set_scale(&source, -0.9, 1.2).unwrap();
+                            scene.set_rotation(&source, 0.413).unwrap();
+                            scene
+                                .shift_3d(&source, noon::SemanticVec3::new(0.17, -0.23, 0.0))
+                                .unwrap();
                         }
                         let pixels = surface.render_on(
                             &device,
@@ -3255,7 +3244,7 @@ fn public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse() {
                     }
                     assert_eq!(surface.renderer.image_residency_stats().textures, 1);
                     assert_eq!(surface.renderer.image_residency_stats().pixel_bytes, 24);
-                    execution.live().remove(&bitmap).unwrap();
+                    execution.scene_mut().remove(&bitmap).unwrap();
                     surface.render(&device, &queue, execution.session_mut());
                     assert_eq!(surface.upload_stats.images.textures_retired, 0);
                     assert_eq!(surface.renderer.image_residency_stats().textures, 1);
@@ -3435,7 +3424,7 @@ fn continuous_fill_filter_capture(fixture: ContinuousFillFixture) {
         let mut plain_execution = plain_scene.into_execution().unwrap();
         let mut reference = Surface::new(&device, &queue);
         let (mask_scene, _) = make(1.0, true);
-        let mut mask = mask_scene.execution_session().unwrap();
+        let mut mask = scene_execution::lower(&mask_scene).unwrap();
         let mask_pixels = Surface::new(&device, &queue).render_on(
             &device,
             &queue,
@@ -3693,8 +3682,8 @@ fn continuous_fill_coverage_and_strokes(fixture: ContinuousFillFixture) {
                 scene.add(&source).unwrap();
                 scene
             };
-            let mut image = make(true).execution_session().unwrap();
-            let mut ordinary = make(false).execution_session().unwrap();
+            let mut image = scene_execution::lower(&make(true)).unwrap();
+            let mut ordinary = scene_execution::lower(&make(false)).unwrap();
             let image = Surface::new(&device, &queue).render_on(
                 &device,
                 &queue,

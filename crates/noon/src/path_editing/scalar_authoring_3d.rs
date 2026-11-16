@@ -135,9 +135,7 @@ impl crate::Scene {
         object: &Mobject,
         edit: Edit<'_, SemanticVec3>,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(store, root, execution, object, PathEdit::Scalar3d(edit))
-        })
+        self.edit_object_path(object, PathEdit::Scalar3d(edit))
     }
     /// Begin a world-space subpath without lowering its anchor to renderer precision.
     pub fn start_new_path_3d(
@@ -333,14 +331,9 @@ impl crate::Scene {
         anchor: SemanticVec3,
         stride: i32,
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::Quadratic3dWithStride(control, anchor, stride),
-            )
-        })
+        self.edit_object_path(
+            object,
+            PathEdit::Quadratic3dWithStride(control, anchor, stride),
+        )
     }
 }

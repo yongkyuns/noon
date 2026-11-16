@@ -8,12 +8,13 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     ExportEndReason, ExportFrameOptions, ExportStop, FrameRate, HostCallbackId,
     SemanticMutationTransaction,
 };
 use noon::{
-    AnimationOptions, AudioClipOptions, AudioResource, ExecutionSession, RateFunction, Scene,
+    AnimationOptions, AudioClipOptions, AudioResource, RateFunction, Scene,
     SemanticAnimationCompositionKind, SemanticVec3,
 };
 use noon_core::{
@@ -143,9 +144,13 @@ fn fixture(visual_duration: f64, tone: Option<Tone>) -> ExecutionSession {
             )
             .unwrap();
     }
-    scene
-        .execution_session_with_animation_root(&animation)
-        .unwrap()
+    let execution = ExecutionSession::from_semantic_root_with_animation_root(
+        &scene.integration_store().borrow(),
+        scene.root(),
+        animation.node_id(),
+    )
+    .unwrap();
+    execution
 }
 
 fn frame_options() -> ExportFrameOptions {
@@ -232,7 +237,7 @@ fn callback_driven_sessions_do_not_enter_the_immutable_export_profile() {
     transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
     let publication = session.publication_context();
     assert!(matches!(
         export_session_file(

@@ -1,7 +1,7 @@
 //! Shared Manim-style cyclic target construction for flat semantic families.
 
 use crate::{
-    AuthoringError, FamilyCopy, LiveSessionError, Mobject, MobjectFamily, MobjectTarget, Scene,
+    AuthoringError, FamilyCopy, Mobject, MobjectFamily, MobjectTarget, Scene,
     UnsupportedAuthoringOperation,
 };
 use noon_core::{
@@ -92,7 +92,7 @@ impl Scene {
     pub fn cyclic_replace_target(
         &mut self,
         family: &MobjectFamily,
-    ) -> Result<FamilyCopy, LiveSessionError> {
+    ) -> Result<FamilyCopy, AuthoringError> {
         self.cyclic_replace_target_with_references(family, &[])
     }
 
@@ -100,12 +100,10 @@ impl Scene {
         &mut self,
         family: &MobjectFamily,
         references: &[MobjectTarget<'_>],
-    ) -> Result<FamilyCopy, LiveSessionError> {
+    ) -> Result<FamilyCopy, AuthoringError> {
         MobjectTarget::from(family).require_store(self.integration_store())?;
         let Some((store, root, execution)) = crate::scene::host_execution::parts_mut(self) else {
-            return family
-                .cyclic_replace_target_with_references(references)
-                .map_err(Into::into);
+            return family.cyclic_replace_target_with_references(references);
         };
         crate::effective_capture::require_target_capture(execution, &store.borrow())?;
         let members = members(family)?;
@@ -136,9 +134,7 @@ impl Scene {
         )?;
         stage_cyclic_positions(&mut transaction, &pending, &positions);
         let result = Scene::publish_running_transaction(store, root, execution, transaction)?;
-        pending
-            .resolve(&result, MobjectFamily::from_node)
-            .map_err(Into::into)
+        pending.resolve(&result, MobjectFamily::from_node)
     }
 }
 

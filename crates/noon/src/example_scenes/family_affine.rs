@@ -23,23 +23,35 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     scene
         .add_many(&[(&family).into()])
         .map_err(|error| error.to_string())?;
-    let mut session = scene.execution_session().map_err(|e| e.to_string())?;
+    let mut session = scene.into_execution().map_err(|e| e.to_string())?;
     {
-        let mut live = scene.live(&mut session);
-        let wait = live.wait_segment(0.1).map_err(|e| e.to_string())?;
-        live.advance_segment_to(wait, wait.end_time())
+        let wait = session
+            .live()
+            .wait_segment(0.1)
             .map_err(|e| e.to_string())?;
-        live.complete_segment(wait).map_err(|e| e.to_string())?;
-        live.rotate_family(
-            &family,
-            std::f64::consts::FRAC_PI_2,
-            ManimRotationPivot::Center,
-        )
-        .map_err(|e| e.to_string())?;
-        live.scale_family(&family, 0.5, 1.0)
+        session
+            .live()
+            .advance_segment_to(wait, wait.end_time())
+            .map_err(|e| e.to_string())?;
+        session
+            .live()
+            .complete_segment(wait)
+            .map_err(|e| e.to_string())?;
+        session
+            .scene_mut()
+            .rotate_family(
+                &family,
+                std::f64::consts::FRAC_PI_2,
+                ManimRotationPivot::Center,
+            )
+            .map_err(|e| e.to_string())?;
+        session
+            .scene_mut()
+            .scale_family(&family, 0.5, 1.0)
             .map_err(|e| e.to_string())?;
         assert!(
-            (live
+            (session
+                .scene()
                 .effective(&a)
                 .map_err(|e| e.to_string())?
                 .transform
@@ -50,7 +62,8 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 < 1e-6
         );
         assert!(
-            (live
+            (session
+                .scene()
                 .effective(&b)
                 .map_err(|e| e.to_string())?
                 .transform
@@ -60,12 +73,18 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 .abs()
                 < 1e-6
         );
-        let wait = live.wait_segment(0.1).map_err(|e| e.to_string())?;
-        live.advance_segment_to(wait, wait.end_time())
+        let wait = session
+            .live()
+            .wait_segment(0.1)
             .map_err(|e| e.to_string())?;
-        live.complete_segment(wait).map_err(|e| e.to_string())?;
+        session
+            .live()
+            .advance_segment_to(wait, wait.end_time())
+            .map_err(|e| e.to_string())?;
+        session
+            .live()
+            .complete_segment(wait)
+            .map_err(|e| e.to_string())?;
     }
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(session)
 }

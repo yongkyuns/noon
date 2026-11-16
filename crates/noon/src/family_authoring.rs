@@ -215,20 +215,28 @@ impl MobjectTarget<'_> {
         suspended: bool,
         recursive: bool,
     ) -> Result<(), AuthoringError> {
+        self.updater_suspension_transaction(suspended, recursive, None)?
+            .apply(&mut self.integration_store().borrow_mut())
+            .map(|_| ())
+            .map_err(AuthoringError::from)
+    }
+
+    pub(crate) fn updater_suspension_transaction(
+        &self,
+        suspended: bool,
+        recursive: bool,
+        scene_root: Option<SemanticNodeId>,
+    ) -> Result<SemanticMutationTransaction, AuthoringError> {
         self.validate()?;
-        let store = self.integration_store();
-        let mut store = store.borrow_mut();
+        let store = self.integration_store().borrow();
         let nodes = if recursive {
-            store
-                .ordered_last_occurrence_authoring_nodes(self.node_id())
-                .map_err(AuthoringError::from)?
+            store.ordered_last_occurrence_authoring_nodes(self.node_id())?
         } else {
             vec![self.node_id()]
         };
         if nodes
             .iter()
-            .copied()
-            .any(|node| node_or_ancestor_is_scene_owned(&store, node))
+            .any(|&node| node_or_ancestor_is_scene_owned(&store, node, scene_root))
         {
             return Err(AuthoringError::Unsupported(
                 crate::UnsupportedAuthoringOperation::UpdaterSuspensionLive,
@@ -238,10 +246,7 @@ impl MobjectTarget<'_> {
         for node in nodes {
             transaction.set_updating_suspended(node, suspended);
         }
-        transaction
-            .apply(&mut store)
-            .map(|_| ())
-            .map_err(AuthoringError::from)
+        Ok(transaction)
     }
 
     pub fn sheen_direction(&self) -> Result<SemanticSheenDirection, AuthoringError> {
@@ -371,7 +376,11 @@ impl MobjectTarget<'_> {
     }
 }
 
-fn node_or_ancestor_is_scene_owned(store: &SemanticStore, node: SemanticNodeId) -> bool {
+fn node_or_ancestor_is_scene_owned(
+    store: &SemanticStore,
+    node: SemanticNodeId,
+    scene_root: Option<SemanticNodeId>,
+) -> bool {
     let mut pending = vec![node];
     let mut seen = BTreeSet::new();
     while let Some(node) = pending.pop() {
@@ -381,7 +390,7 @@ fn node_or_ancestor_is_scene_owned(store: &SemanticStore, node: SemanticNodeId) 
         let Some(value) = store.node(node) else {
             return true;
         };
-        if value.is_scene_owned() {
+        if Some(node) == scene_root || value.is_scene_owned() {
             return true;
         }
         pending.extend(value.parents().iter().copied());
@@ -473,21 +482,7 @@ fn last_occurrences(members: &[MobjectTarget<'_>]) -> Vec<usize> {
     indices
 }
 
-/// Construct the same pending semantic family for authored and live publication.
-pub(crate) fn family_creation_transaction(
-    store: &Rc<RefCell<SemanticStore>>,
-    members: &[MobjectTarget<'_>],
-    z_index: f64,
-) -> Result<
-    (
-        SemanticMutationTransaction,
-        noon_core::SemanticLocalNodeToken,
-    ),
-    AuthoringError,
-> {
-    family_creation_presentation_transaction(store, members, z_index, crate::Color::WHITE, true)
-}
-
+/// Prepare detached family creation and root presentation in one transaction.
 pub(crate) fn family_creation_presentation_transaction(
     store: &Rc<RefCell<SemanticStore>>,
     members: &[MobjectTarget<'_>],
@@ -858,9 +853,8 @@ impl MobjectFamily {
     /// Raw shared arena access for explicit integration, not live mutation.
     ///
     /// External edits can invalidate generational handles and leave an existing
-    /// execution session on a stale scene revision. Use `Scene::live` and its
-    /// coherent publication operations for edits after lowering. No revision
-    /// validation is bypassed by this accessor; see [`crate::integration`].
+    /// execution session on a stale scene revision. Use the owning Scene for
+    /// persistent edits after lowering. See [`crate::integration`].
     pub fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         &self.store
     }
@@ -993,6 +987,39 @@ mod tests {
         );
         assert!(first.updating_suspended().unwrap());
         assert!(second.updating_suspended().unwrap());
+    }
+
+    #[test]
+    fn scene_suspension_preserves_the_running_revision_for_detached_edits() {
+        let mut scene = Scene::new();
+        let leaf = scene.circle(0.2).unwrap();
+        let family = scene.family(&[(&leaf).into()]).unwrap();
+        let bound = scene.square(0.4).unwrap();
+        scene.add(&bound).unwrap();
+        scene.set_updating_suspended(&family, true, true).unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+        let before = scene.revision();
+
+        scene.set_updating_suspended(&family, false, true).unwrap();
+        assert!(!leaf.updating_suspended().unwrap());
+        assert_eq!(scene.revision(), before.checked_next().unwrap());
+        scene.set_translation(&bound, 2.0, 0.0).unwrap();
+        assert_eq!(
+            scene.effective(&bound).unwrap().transform.translation.x,
+            2.0
+        );
+
+        let detached_alias = scene.family(&[(&leaf).into(), (&bound).into()]).unwrap();
+        let before = scene.revision();
+        assert!(matches!(
+            scene.set_updating_suspended(&detached_alias, true, true),
+            Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::UpdaterSuspensionLive
+            ))
+        ));
+        assert_eq!(scene.revision(), before);
+        assert!(!leaf.updating_suspended().unwrap());
     }
 
     #[test]

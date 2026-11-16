@@ -18,16 +18,15 @@ class ZIndexTests(unittest.TestCase):
                 anchor, context = Mock(), (Mock() if live else None)
                 anchor.zIndex.return_value = 7.0 if live else -2.5
                 if live:
-                    context.liveZIndex.return_value = -2.5
+                    context.zIndex.return_value = -2.5
                 with patch.object(handles, "_layout_anchor", return_value=anchor), \
-                     patch.object(handles, "_live_mutation_context", return_value=context), \
-                     patch.object(handles, "_group_live_layout_context", return_value=context):
+                     patch.object(handles, "_layout_authoring_context", return_value=context):
                     self.assertEqual(value.z_index, -2.5)
                     self.assertIs(value.set_z_index(3.25), value)
                     value.z_index = -1.5
                 owner = context if live else anchor
                 prefix = (anchor,) if live else ()
-                self.assertEqual(getattr(owner, "liveSetZIndex" if live else "setZIndex").call_args_list,
+                self.assertEqual(owner.setZIndex.call_args_list,
                                  [call(*prefix, 3.25, True), call(*prefix, -1.5, False)])
                 self.assertNotIn("z_index", value.__dict__)
 
@@ -56,10 +55,11 @@ class ZIndexTests(unittest.TestCase):
             with patch.object(handles, "_create_family_handle", create), \
                  patch.object(handles, "_new_membership_batch", Mock()), \
                  patch.object(handles, "_family_membership_batch", return_value=batch), \
-                 patch.object(handles, "_live_constructor_context", return_value=context):
+                 patch.object(handles, "_path_authoring_context", return_value=context):
                 family = compat.VGroup(z_index=-3.5)
-                operation = context.liveCreateFamily if live else create
-                operation.assert_called_once_with(batch, -3.5, True)
+                operation = context.createFamily if live else create
+                rgba = (1.0, 1.0, 1.0, 1.0) if live else ()
+                operation.assert_called_once_with(batch, -3.5, True, *rgba)
                 self.assertNotIn("z_index", family.__dict__)
                 operation.reset_mock()
                 with self.assertRaises(ValueError):

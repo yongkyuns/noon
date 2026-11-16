@@ -40,17 +40,16 @@ impl LiveContinuation for Source {
         &mut self,
         scene: &mut noon::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let stage = self.stage;
         self.stage += 1;
         match stage {
-            0 => Ok(ContinuationStep::Await(live.wait_segment(0.105)?)),
+            0 => Ok(ContinuationStep::Await(scene.live().wait_segment(0.105)?)),
             1 => {
-                live.set_translation(&self.marker, 0.5, 1.0)?;
-                Ok(ContinuationStep::Await(live.wait_segment(0.207)?))
+                scene.set_translation(&self.marker, 0.5, 1.0)?;
+                Ok(ContinuationStep::Await(scene.live().wait_segment(0.207)?))
             }
             _ => {
-                live.set_translation(&self.marker, 2.0, -1.0)?;
+                scene.set_translation(&self.marker, 2.0, -1.0)?;
                 Ok(ContinuationStep::Finished)
             }
         }
@@ -80,11 +79,11 @@ fn direct(options: ExportFrameOptions) -> (Vec<Vec<u8>>, ExportFrameSummary) {
 
 fn external(options: ExportFrameOptions) -> (Vec<Vec<u8>>, ExportFrameSummary) {
     let (scene, marker) = scene();
-    let mut session = scene.execution_session().unwrap();
-    let mut target = SessionCapture::new(&session, capture_options()).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let mut target = SessionCapture::new(session.session(), capture_options()).unwrap();
     let mut policy = ExportFramePolicy::new(options).unwrap();
     let mut stage = 0;
-    let mut segment = Some(scene.live(&mut session).wait_segment(0.105).unwrap());
+    let mut segment = Some(session.live().wait_segment(0.105).unwrap());
     let mut frames = Vec::new();
     for _ in 0..1_000 {
         match policy.status().unwrap() {
@@ -94,22 +93,25 @@ fn external(options: ExportFrameOptions) -> (Vec<Vec<u8>>, ExportFrameSummary) {
                 // the policy does not round endpoints onto the output grid.
                 while let Some(current) = segment {
                     session
+                        .live()
                         .advance_segment_to(current, requested.min(current.end_time()))
                         .unwrap();
-                    if session.frame().time < current.end_time() {
+                    if session.session().frame().time < current.end_time() {
                         break;
                     }
-                    scene.live(&mut session).complete_segment(current).unwrap();
-                    let receipt = target.render(&mut session).unwrap();
+                    session.live().complete_segment(current).unwrap();
+                    let receipt = target.render(session.session_mut()).unwrap();
                     assert_eq!(receipt.published_time, current.end_time());
                     if stage == 0 {
                         stage = 1;
-                        let mut live = scene.live(&mut session);
-                        live.set_translation(&marker, 0.5, 1.0).unwrap();
-                        segment = Some(live.wait_segment(0.207).unwrap());
+                        session
+                            .scene_mut()
+                            .set_translation(&marker, 0.5, 1.0)
+                            .unwrap();
+                        segment = Some(session.live().wait_segment(0.207).unwrap());
                     } else {
-                        scene
-                            .live(&mut session)
+                        session
+                            .scene_mut()
                             .set_translation(&marker, 2.0, -1.0)
                             .unwrap();
                         segment = None;
@@ -119,8 +121,8 @@ fn external(options: ExportFrameOptions) -> (Vec<Vec<u8>>, ExportFrameSummary) {
                     .observe(
                         SampleObservation {
                             requested_time: requested,
-                            published_time: session.frame().time,
-                            publication: session.publication_context(),
+                            published_time: session.session().frame().time,
+                            publication: session.session().publication_context(),
                         },
                         segment.is_none(),
                     )
@@ -128,7 +130,7 @@ fn external(options: ExportFrameOptions) -> (Vec<Vec<u8>>, ExportFrameSummary) {
             }
             ExportFramePolicyStatus::SampleReady(sample) => {
                 if let Some(frame) = sample.frame {
-                    let pixels = target.capture(&mut session).unwrap();
+                    let pixels = target.capture(session.session_mut()).unwrap();
                     assert_eq!(pixels.receipt.publication, sample.observation.publication);
                     assert_eq!(
                         pixels.receipt.published_time,
@@ -137,7 +139,7 @@ fn external(options: ExportFrameOptions) -> (Vec<Vec<u8>>, ExportFrameSummary) {
                     assert_eq!(frame.pts, frames.len() as u64);
                     frames.push(pixels.rgba.to_vec());
                 } else {
-                    target.render(&mut session).unwrap();
+                    target.render(session.session_mut()).unwrap();
                 }
                 policy.acknowledge_sample(sample).unwrap();
             }

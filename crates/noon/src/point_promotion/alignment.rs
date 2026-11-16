@@ -144,21 +144,21 @@ mod default_point_alignment_tests {
                     .unwrap();
                 scene.add(&left).unwrap();
                 scene.add(&right).unwrap();
-                let mut session = scene.execution_session().unwrap();
-                let publication = session.publication_context();
-                let revision = scene.revision();
-                let result = scene
-                    .live(&mut session)
+                let mut session = scene.into_execution().unwrap();
+                let publication = session.session().publication_context();
+                let revision = session.scene().revision();
+                let result = session
+                    .scene_mut()
                     .align_own_points((&left).into(), (&right).into(), &[], &[])
                     .unwrap();
                 if left_count == right_count {
                     assert!(result.is_none());
-                    assert_eq!(session.publication_context(), publication);
-                    assert_eq!(scene.revision(), revision);
+                    assert_eq!(session.session().publication_context(), publication);
+                    assert_eq!(session.scene().revision(), revision);
                 } else {
                     assert!(result.is_some());
-                    assert_ne!(session.publication_context(), publication);
-                    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+                    assert_ne!(session.session().publication_context(), publication);
+                    assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
                     assert_eq!(left.get_num_points().unwrap(), 0);
                     assert_eq!(right.get_num_points().unwrap(), 0);
                 }
@@ -169,10 +169,12 @@ mod default_point_alignment_tests {
         let foreign = Scene::new()
             .path(VectorPath::new(), Default::default())
             .unwrap();
-        let before = scene.revision();
-        assert!(MobjectTarget::from(&left)
-            .align_own_points((&foreign).into())
+        let mut running = scene.into_execution().unwrap();
+        let before = running.scene().revision();
+        assert!(running
+            .scene_mut()
+            .align_own_points((&left).into(), (&foreign).into(), &[], &[])
             .is_err());
-        assert_eq!(scene.revision(), before);
+        assert_eq!(running.scene().revision(), before);
     }
 }

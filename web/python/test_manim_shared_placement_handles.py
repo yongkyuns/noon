@@ -133,16 +133,14 @@ class ManimSharedPlacementHandleTests(unittest.TestCase):
             class FakeLiveContext:
                 def __init__(self):
                     self.calls = []
-                def liveExecutionOwnership(self): return "returned"
-                def liveMoveToLayout(self, *args): self.calls.append(("layout", args))
-                def liveMoveToPoint(self, *args): self.calls.append(("point", args))
-                def liveAlignMobjectOnFrame(self, *args): self.calls.append(("frame", args))
+                def moveToLayout(self, *args): self.calls.append(("layout", args))
+                def moveToPoint(self, *args): self.calls.append(("point", args))
+                def alignMobjectOnFrame(self, *args): self.calls.append(("frame", args))
 
             live_context = FakeLiveContext()
-            handles._live_mutation_context = lambda value: live_context
-            handles._live_constructor_context = lambda *args: None
             live_target = Square(2.0)
             live_receiver = Square(1.0)
+            live_receiver._canonical_live_target_context = live_context
             assert live_receiver.align_to(live_target, RIGHT + UP) is live_receiver
             assert live_context.calls[-1][0] == "layout"
             assert live_context.calls[-1][1] == (

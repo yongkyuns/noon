@@ -62,16 +62,22 @@ fn family_flip_visits_aliases_once_and_invalid_or_foreign_edits_are_atomic() {
         .add_many(&[(&family).into(), (&unrelated).into()])
         .unwrap();
     let untouched = unrelated.state().unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
+    let mut session = scene.into_execution().unwrap();
     let anchor = LayoutAnchor::from(&family);
-    let result = live
+    let result = session
+        .scene_mut()
         .flip_layout(&anchor, SemanticVec3::new(0., 1., 0.), Pivot::Center)
         .unwrap();
     // Two unique leaves each change their affine fields, never a duplicated alias write.
     assert!(result.impacts().len() <= 6);
-    close(live.effective_layout(&a).unwrap().center, (1., 1.));
-    close(live.effective_layout(&b).unwrap().center, (-2., -1.));
+    close(
+        session.scene().effective_layout(&a).unwrap().center,
+        (1., 1.),
+    );
+    close(
+        session.scene().effective_layout(&b).unwrap().center,
+        (-2., -1.),
+    );
     assert_eq!(unrelated.state().unwrap(), untouched);
     let before = [a.state().unwrap(), b.state().unwrap()];
     for axis in [
@@ -79,11 +85,15 @@ fn family_flip_visits_aliases_once_and_invalid_or_foreign_edits_are_atomic() {
         SemanticVec3::new(1., 0., 1.),
         SemanticVec3::new(f64::NAN, 1., 0.),
     ] {
-        assert!(live.flip_layout(&anchor, axis, Pivot::Center).is_err());
+        assert!(session
+            .scene_mut()
+            .flip_layout(&anchor, axis, Pivot::Center)
+            .is_err());
         assert_eq!([a.state().unwrap(), b.state().unwrap()], before);
     }
     let foreign = Scene::new().square(1.).unwrap();
-    assert!(live
+    assert!(session
+        .scene_mut()
         .rotate_layout(&LayoutAnchor::from(&foreign), 1., Pivot::Center)
         .is_err());
     assert_eq!([a.state().unwrap(), b.state().unwrap()], before);
@@ -94,21 +104,24 @@ fn live_offset_line_rotation_resolves_center_edge_and_origin_in_shared_rust() {
     let mut scene = Scene::new();
     let line = scene.line((1., 0.), (3., 0.)).unwrap();
     scene.add(&line).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
+    let mut session = scene.into_execution().unwrap();
     let anchor = LayoutAnchor::from(&line);
-    live.rotate(&line, FRAC_PI_2).unwrap();
-    let endpoints = live.effective_line_endpoints(&line).unwrap();
+    session.scene_mut().rotate(&line, FRAC_PI_2).unwrap();
+    let endpoints = session.scene().effective_line_endpoints(&line).unwrap();
     close(endpoints.start, (2., -1.));
     close(endpoints.end, (2., 1.));
-    live.rotate_layout(&anchor, FRAC_PI_2, Pivot::Point(0., 0.))
+    session
+        .scene_mut()
+        .rotate_layout(&anchor, FRAC_PI_2, Pivot::Point(0., 0.))
         .unwrap();
-    let endpoints = live.effective_line_endpoints(&line).unwrap();
+    let endpoints = session.scene().effective_line_endpoints(&line).unwrap();
     close(endpoints.start, (1., 2.));
     close(endpoints.end, (-1., 2.));
-    live.rotate_layout(&anchor, FRAC_PI_2, Pivot::Edge(1., 0.))
+    session
+        .scene_mut()
+        .rotate_layout(&anchor, FRAC_PI_2, Pivot::Edge(1., 0.))
         .unwrap();
-    let endpoints = live.effective_line_endpoints(&line).unwrap();
+    let endpoints = session.scene().effective_line_endpoints(&line).unwrap();
     close(endpoints.start, (1., 2.));
     close(endpoints.end, (1., 0.));
 }

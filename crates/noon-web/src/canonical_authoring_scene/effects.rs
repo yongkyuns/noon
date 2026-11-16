@@ -31,15 +31,6 @@ impl WasmStagedEffectPublication {
 
 #[cfg(target_arch = "wasm32")]
 impl CanonicalAuthoringSceneContext {
-    fn edit_effect(
-        &mut self,
-        edit: impl FnOnce(&mut noon::Scene) -> Result<(), noon::AuthoringError>,
-    ) -> Result<(), JsValue> {
-        let player = self.inner.active_live_player().map_err(js_error)?;
-        edit(player.scene_mut())
-            .map_err(|error| js_error(crate::AuthoringFailure::from_scene_mutation(error, true)))
-    }
-
     fn prepare_membership_target(
         &mut self,
         target: noon::MobjectTarget<'_>,
@@ -126,70 +117,84 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = liveSetGlow)]
-    pub fn live_set_glow(
+    #[wasm_bindgen(js_name = setGlow)]
+    pub fn set_glow(
         &mut self,
         object: &WasmAuthoringMobjectHandle,
         update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| scene.set_glow(object.semantic_mobject(), update.value.clone()))
+        self.inner
+            .edit_scene(|scene| scene.set_glow(object.semantic_mobject(), update.value.clone()))
+            .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveAddEffect)]
-    pub fn live_add_effect(
+    #[wasm_bindgen(js_name = addEffect)]
+    pub fn add_effect(
         &mut self,
         object: &WasmAuthoringMobjectHandle,
         definition: &WasmEffectDefinition,
         name: &str,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| {
-            scene.add_effect(object.semantic_mobject(), definition.definition(), name)
-        })
+        self.inner
+            .edit_scene(|scene| {
+                scene.add_effect(object.semantic_mobject(), definition.definition(), name)
+            })
+            .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveSetEffect)]
-    pub fn live_set_effect(
+    #[wasm_bindgen(js_name = setEffect)]
+    pub fn set_effect(
         &mut self,
         object: &WasmAuthoringMobjectHandle,
         name: &str,
         update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| {
-            scene.set_effect(object.semantic_mobject(), name, update.value.clone())
-        })
+        self.inner
+            .edit_scene(|scene| {
+                scene.set_effect(object.semantic_mobject(), name, update.value.clone())
+            })
+            .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveSetEffectHandle)]
-    pub fn live_set_effect_handle(
+    #[wasm_bindgen(js_name = setEffectHandle)]
+    pub fn set_effect_handle(
         &mut self,
         object: &WasmAuthoringMobjectHandle,
         effect: &WasmEffectHandle,
         update: &WasmEffectUpdate,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| {
-            scene.set_effect(
-                object.semantic_mobject(),
-                &effect.handle,
-                update.value.clone(),
-            )
-        })
+        self.inner
+            .edit_scene(|scene| {
+                scene.set_effect(
+                    object.semantic_mobject(),
+                    &effect.handle,
+                    update.value.clone(),
+                )
+            })
+            .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveRemoveEffect)]
-    pub fn live_remove_effect(
+    #[wasm_bindgen(js_name = removeEffect)]
+    pub fn remove_effect(
         &mut self,
         object: &WasmAuthoringMobjectHandle,
         name: &str,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| scene.remove_effect(object.semantic_mobject(), name))
+        self.inner
+            .edit_scene(|scene| scene.remove_effect(object.semantic_mobject(), name))
+            .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveRemoveEffectHandle)]
-    pub fn live_remove_effect_handle(
+    #[wasm_bindgen(js_name = removeEffectHandle)]
+    pub fn remove_effect_handle(
         &mut self,
         object: &WasmAuthoringMobjectHandle,
         effect: &WasmEffectHandle,
     ) -> Result<(), JsValue> {
-        self.edit_effect(|scene| scene.remove_effect(object.semantic_mobject(), &effect.handle))
+        self.inner
+            .edit_scene(|scene| scene.remove_effect(object.semantic_mobject(), &effect.handle))
+            .map_err(js_error)
     }
-    #[wasm_bindgen(js_name = liveRemoveGlow)]
-    pub fn live_remove_glow(&mut self, object: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
-        self.edit_effect(|scene| scene.remove_glow(object.semantic_mobject()))
+    #[wasm_bindgen(js_name = removeGlow)]
+    pub fn remove_glow(&mut self, object: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
+        self.inner
+            .edit_scene(|scene| scene.remove_glow(object.semantic_mobject()))
+            .map_err(js_error)
     }
 }
 
@@ -434,7 +439,8 @@ mod tests {
         context
             .active_live_player()
             .unwrap()
-            .live_set_translation(&dot, 2.0, 0.0)
+            .scene_mut()
+            .set_translation(&dot, 2.0, 0.0)
             .unwrap();
         assert_eq!(context.mobject_layout(&dot).unwrap().0, 2.0);
     }
@@ -487,7 +493,10 @@ mod playback_tests {
                 .unwrap(),
             original.authored_definition().unwrap()
         );
-        player.live_set_translation(&target, 2.0, 0.0).unwrap();
+        player
+            .scene_mut()
+            .set_translation(&target, 2.0, 0.0)
+            .unwrap();
         player
             .scene_mut()
             .set_glow(

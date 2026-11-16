@@ -2,6 +2,7 @@
 use crate::engine_error;
 use noon::{SemanticVec3, Vec2};
 use pyo3::prelude::*;
+use pyo3::types::{PyList, PyTuple};
 pub(crate) fn point_3d(x: f64, y: f64, z: f64) -> PyResult<SemanticVec3> {
     let point = SemanticVec3::new(x, y, z);
     point
@@ -75,6 +76,20 @@ pub(crate) fn point_array_shape(values: &[f64]) -> PyResult<noon_core::PointArra
         .map_err(noon::AuthoringError::from)
         .map_err(engine_error)
 }
+pub(crate) fn point_reduction_tree(
+    py: Python<'_>,
+    tree: noon::PointReductionTree,
+) -> PyResult<Bound<'_, PyTuple>> {
+    let points = PyList::new(py, flat_points_3d(tree.points))?;
+    let children = tree
+        .children
+        .into_iter()
+        .map(|child| point_reduction_tree(py, child))
+        .collect::<PyResult<Vec<_>>>()?;
+    let children = PyList::new(py, children)?;
+    PyTuple::new(py, [points, children])
+}
+
 pub(crate) fn flat_points_3d(points: Vec<SemanticVec3>) -> Vec<f64> {
     points.into_iter().flat_map(|v| [v.x, v.y, v.z]).collect()
 }

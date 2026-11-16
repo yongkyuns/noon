@@ -98,7 +98,6 @@ impl From<crate::TableAuthoringError> for AuthoringFailure {
             #[cfg(feature = "latex")]
             Numeric(error) => error.into(),
             Semantic(error) => error.into(),
-            LiveSession(error) => Self::unclassified("table.live_session", &error),
         }
     }
 }
@@ -114,7 +113,6 @@ impl From<crate::CodeAuthoringError> for AuthoringFailure {
             Text(error) => error.into(),
             TextPart(error) => error.into(),
             Semantic(error) => error.into(),
-            LiveSession(error) => error.into(),
             Io(error) => Self::unclassified("code.io", &error),
         }
     }
@@ -133,7 +131,6 @@ impl From<crate::MatrixAuthoringError> for AuthoringFailure {
             #[cfg(feature = "latex")]
             Numeric(error) => error.into(),
             Semantic(error) => error.into(),
-            LiveSession(error) => Self::unclassified("matrix.live_session", &error),
         }
     }
 }
@@ -168,16 +165,112 @@ impl From<&str> for AuthoringFailure {
 }
 
 impl AuthoringFailure {
+    /// Keep the existing host diagnostics for operations that capture effective state.
+    pub fn from_scene_capture(error: AuthoringError) -> Self {
+        match error {
+            AuthoringError::ExecutionCallback(cause) => {
+                Self::caused_by("live.callback", cause.to_string(), cause.into())
+            }
+            AuthoringError::ExecutionPublication(cause) => {
+                LiveSessionError::Publication(cause).into()
+            }
+            other => LiveSessionError::from(other).into(),
+        }
+    }
+
+    /// Preserve resource and compiler diagnostics for Scene text publication.
+    #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
+    pub fn from_scene_text(error: crate::TextAuthoringError, running: bool) -> Self {
+        use crate::TextAuthoringError;
+        if !running {
+            return error.into();
+        }
+        match error {
+            TextAuthoringError::Semantic(AuthoringError::ExecutionPublication(error)) => {
+                LiveSessionError::Publication(error)
+            }
+            other => LiveSessionError::Text(other),
+        }
+        .into()
+    }
+
+    /// Preserve numeric resource and formatting diagnostics across Scene phases.
+    #[cfg(feature = "latex")]
+    pub fn from_scene_number(error: crate::NumericAuthoringError, running: bool) -> Self {
+        use crate::NumericAuthoringError;
+        if !running {
+            return error.into();
+        }
+        match error {
+            NumericAuthoringError::Text(error) => Self::from_scene_text(error, true),
+            NumericAuthoringError::Semantic(error) => Self::from(error),
+            other => LiveSessionError::Mobject(other.to_string()).into(),
+        }
+    }
+
+    /// Project vector-field preparation and Scene publication with the existing host codes.
+    pub fn from_scene_vector_field(
+        error: crate::ArrowVectorFieldAuthoringError,
+        running: bool,
+    ) -> Self {
+        match error {
+            crate::ArrowVectorFieldAuthoringError::Authoring(error) => {
+                Self::from_scene_mutation(error, running)
+            }
+            error => error.into(),
+        }
+    }
+
     /// Project a Scene mutation through the host's existing running error codes.
     pub fn from_scene_mutation(error: AuthoringError, running: bool) -> Self {
         if !running {
             return error.into();
         }
         match error {
+            error @ AuthoringError::ExecutionCallback(_) => return Self::from_scene_capture(error),
             AuthoringError::ExecutionPublication(error) => LiveSessionError::Publication(error),
+            AuthoringError::ExecutionAnimation(error) => LiveSessionError::Activation(error),
             other => other.into(),
         }
         .into()
+    }
+}
+
+impl From<crate::ArrowVectorFieldAuthoringError> for AuthoringFailure {
+    fn from(error: crate::ArrowVectorFieldAuthoringError) -> Self {
+        use crate::{ArrowVectorFieldAuthoringError as E, StaticVectorFieldError as Planning};
+        let code = match error {
+            E::Authoring(error) => return error.into(),
+            E::Planning(error) => {
+                let code = match error {
+                    Planning::InvalidRange { .. } => "vector_field.invalid_range",
+                    Planning::SampleCountOverflow => "vector_field.sample_count_overflow",
+                    Planning::NonFiniteFieldOutput { .. } => "vector_field.non_finite_output",
+                    Planning::NonFiniteDisplayedLength { .. } => "vector_field.non_finite_length",
+                };
+                return Self::new("invalid_input", code, error);
+            }
+            E::InvalidColorConfiguration(reason) => {
+                return Self::new(
+                    "invalid_input",
+                    "vector_field.invalid_color_configuration",
+                    reason,
+                );
+            }
+            E::NonFiniteColorSchemeOutput { sample_index } => {
+                return Self::new("invalid_input", "vector_field.non_finite_color_scheme",
+                    format!("vector-field color scheme returned a non-finite value at sample {sample_index}"));
+            }
+            E::SampleOutOfRange(_) => "vector_field.sample_index",
+            E::MissingVector(_) => "vector_field.missing_vector",
+            E::MissingLength(_) => "vector_field.missing_length",
+            E::MissingColorValue(_) => "vector_field.missing_color_value",
+            E::DefaultLength => "vector_field.default_length",
+            E::DefaultColorScheme => "vector_field.default_color_scheme",
+            E::NotGradient => "vector_field.not_gradient",
+            E::InvalidColor => "vector_field.invalid_color",
+        };
+        Self::new("invalid_input", code, error)
     }
 }
 
@@ -214,6 +307,9 @@ impl From<AuthoringError> for AuthoringFailure {
             }
             AuthoringError::Transaction(cause) => {
                 Self::caused_by("authoring.transaction", message, cause.into())
+            }
+            AuthoringError::ExecutionCallback(cause) => {
+                Self::caused_by("authoring.execution_callback", message, cause.into())
             }
             AuthoringError::ExecutionAnimation(cause) => Self::caused_by(
                 "authoring.execution_animation",
@@ -281,6 +377,11 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::InvalidCameraMotionInput(_) => {
                 Self::new("invalid_input", "camera.invalid_motion", message)
             }
+            AuthoringError::InvalidAnimationDeclaration(_) => Self::new(
+                "invalid_input",
+                "authoring.invalid_animation_declaration",
+                message,
+            ),
             AuthoringError::CameraMotionAlreadyActive => {
                 Self::new("lifecycle", "camera.motion_active", message)
             }
@@ -905,7 +1006,6 @@ impl From<noon_compile::SemanticPublicationLoweringError> for AuthoringFailure {
             E::PlaybackControlUnavailable { .. } => "lowering.playback_control_unavailable",
             E::UnsupportedMutation { .. } => "lowering.unsupported_mutation",
             E::UnsupportedReactiveMembership { .. } => "lowering.unsupported_reactive_membership",
-            E::UnsupportedTextMembership { .. } => "lowering.unsupported_text_membership",
             E::UnsupportedCameraMembership { .. } => "lowering.unsupported_camera_membership",
             E::UnsupportedNodeRemoval { .. } => "lowering.unsupported_node_removal",
             E::Value(noon_compile::SemanticLoweringError::UnsupportedEffectProfile { .. }) => {
@@ -1033,7 +1133,6 @@ impl From<LiveSessionError> for AuthoringFailure {
                 | AuthoringError::InvalidClickActionDeclaration { .. }),
             ) => cause.into(),
             E::Authoring(cause) => Self::caused_by("live.authoring", message, cause.into()),
-            E::Callback(cause) => Self::caused_by("live.callback", message, cause.into()),
             #[cfg(any(feature = "native-text", feature = "typst", feature = "latex"))]
             E::Text(cause) => Self::caused_by("live.text", message, cause.into()),
             E::ForeignMobjectStore => Self::new("foreign_handle", "live.foreign_store", message),
@@ -1103,7 +1202,6 @@ impl From<crate::SpatialCompositionError> for AuthoringFailure {
         use crate::SpatialCompositionError::*;
         match error {
             Authoring(error) => error.into(),
-            Live(error) => error.into(),
             FixedFrameRequiresPlanarOrientation => Self::new(
                 "unsupported_operation",
                 "spatial.fixed_frame_orientation",

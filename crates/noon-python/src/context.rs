@@ -8,12 +8,9 @@ use crate::{
     geometry::GeometryOptions,
     mobject::{pivot, LayoutAnchor, LayoutObservation, MobjectHandle},
 };
-use noon::integration::{
-    scene_execution, AuthoringFailure, HostCallbackId, SemanticMutationTransaction, SemanticStore,
-};
-use noon::{
-    ExecutionSegment, ExecutionSession, Mobject, MobjectTarget, Scene, SceneMembershipRequest,
-};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::integration::{scene_execution, AuthoringFailure, HostCallbackId, SemanticStore};
+use noon::{ExecutionSegment, Mobject, MobjectTarget, Scene, SceneMembershipRequest};
 use noon::{Transform2D, Vec2};
 use pyo3::prelude::*;
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
@@ -21,6 +18,8 @@ use std::{cell::RefCell, collections::HashSet, rc::Rc};
 #[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
 pub struct Store {
     pub(crate) semantics: Rc<RefCell<SemanticStore>>,
+    #[cfg(feature = "latex")]
+    pub(crate) latex: crate::latex::LatexCompiler,
 }
 #[pymethods]
 impl Store {
@@ -54,6 +53,8 @@ impl Store {
     fn new() -> Self {
         Self {
             semantics: Rc::new(RefCell::new(SemanticStore::new())),
+            #[cfg(feature = "latex")]
+            latex: Default::default(),
         }
     }
     fn context(&self) -> Context {
@@ -153,6 +154,39 @@ enum NativeFamilyMember {
     Family(noon::MobjectFamily),
 }
 impl MembershipBatch {
+    pub(crate) fn is_add(&self) -> PyResult<bool> {
+        match self.kind.as_str() {
+            "add" => Ok(true),
+            "remove" => Ok(false),
+            _ => Err(engine_error("membership requires add or remove")),
+        }
+    }
+
+    pub(crate) fn add_targets(&self) -> PyResult<Vec<MobjectTarget<'_>>> {
+        if self.kind != "add" {
+            return Err(engine_error("membership operation requires an add batch"));
+        }
+        Ok(self.targets())
+    }
+
+    pub(crate) fn single_member(&self) -> PyResult<MobjectTarget<'_>> {
+        let targets = self.add_targets()?;
+        let [target] = targets.as_slice() else {
+            return Err(engine_error("insertion requires exactly one member"));
+        };
+        Ok(*target)
+    }
+
+    pub(crate) fn edit_children(&self, owner: MobjectTarget<'_>) -> PyResult<Vec<bool>> {
+        let targets = self.targets();
+        if self.is_add()? {
+            owner.add_many(&targets)
+        } else {
+            owner.remove_many(&targets)
+        }
+        .map_err(engine_error)
+    }
+
     pub(crate) fn targets(&self) -> Vec<MobjectTarget<'_>> {
         self.members
             .iter()
@@ -211,6 +245,8 @@ pub struct Context {
     pub(crate) scene: Scene,
     // Host binding provenance only; membership and object state stay in Rust Scene.
     bound_ids: HashSet<noon_core::SemanticNodeId>,
+    // Pointer policy declared before the first segment installs the session.
+    drag_targets: Vec<noon_core::SemanticNodeId>,
     pub(crate) segment: Option<ExecutionSegment>,
     pub(crate) terminal: bool,
     pub(crate) sample_hz: f64,
@@ -226,12 +262,15 @@ pub struct Context {
     pub(crate) requested_sample: Option<f64>,
     pub(crate) pending_ack: Option<noon::integration::CallbackPhaseToken>,
     pub(crate) callback_regions: u64,
+    pub(crate) callback_membership: Option<noon::integration::CallbackMembershipCollector>,
+    pub(crate) callback_geometry_sources: noon_core::GeometryResourceArena,
 }
 impl Context {
     fn new(scene: Scene) -> Self {
         Self {
             scene,
             bound_ids: HashSet::new(),
+            drag_targets: Vec::new(),
             segment: None,
             terminal: false,
             sample_hz: 60.0,
@@ -246,6 +285,8 @@ impl Context {
             requested_sample: None,
             pending_ack: None,
             callback_regions: 0,
+            callback_membership: None,
+            callback_geometry_sources: noon_core::GeometryResourceArena::new(),
         }
     }
     fn staged(
@@ -263,12 +304,15 @@ impl Context {
         })
     }
     fn bootstrap(&self) -> PyResult<ExecutionSession> {
-        let mut session = self
-            .scene
-            .execution_session()
-            .map_err(|e| engine_error(e.to_string()))?;
+        let mut session =
+            scene_execution::lower(&self.scene).map_err(|e| engine_error(e.to_string()))?;
         session.require_effect_resource_preparation();
-        if self.retain_history {
+        // Predeclared audio uses the immutable timeline for preview and export.
+        if !self.drag_targets.is_empty() {
+            session
+                .set_translation_drag_targets(self.drag_targets.iter().copied())
+                .map_err(|error| engine_error(noon::LiveSessionError::TranslationDrag(error)))?;
+        } else if self.retain_history && !session.has_audio() {
             session
                 .begin_replay_retention(Default::default())
                 .map_err(|e| engine_error(e.to_string()))?;
@@ -278,7 +322,9 @@ impl Context {
 
     fn attach_session(&mut self, session: ExecutionSession) -> PyResult<()> {
         scene_execution::attach(&mut self.scene, session)
-            .map_err(|error| engine_error(error.to_string()))
+            .map_err(|error| engine_error(error.to_string()))?;
+        self.drag_targets.clear();
+        Ok(())
     }
 
     fn with_bootstrapped_live<T>(
@@ -289,7 +335,8 @@ impl Context {
             return self.with_live(operation);
         }
         let mut session = self.bootstrap()?;
-        let result = operation(&mut self.scene.live(&mut session)).map_err(engine_error)?;
+        let mut live = scene_execution::borrow_uninstalled(&self.scene, &mut session);
+        let result = operation(&mut live).map_err(engine_error)?;
         self.attach_session(session)?;
         Ok(result)
     }
@@ -302,7 +349,15 @@ impl Context {
         }
         let (_, _, session) = scene_execution::parts_mut(&mut self.scene)
             .expect("viewer bootstrap installed execution");
-        if self.retain_history {
+        let interactive = session.has_translation_drag_targets();
+        if interactive {
+            if session.has_required_callbacks() || session.pending_callback_token().is_some() {
+                return Err(engine_error(
+                    "native translation drag requires completed source without required callbacks",
+                ));
+            }
+            session.discard_replay_retention();
+        } else if session.replay_scope_active() {
             session.seal_replay_for_viewer().map_err(|error| {
                 engine_error(noon::integration::AuthoringFailure::new(
                     "unsupported_operation",
@@ -326,9 +381,11 @@ impl Context {
         let mut execution = scene
             .into_execution()
             .map_err(|e| engine_error(e.to_string()))?;
-        execution
-            .seek(0.0)
-            .map_err(|e| engine_error(e.to_string()))?;
+        if !interactive {
+            execution
+                .seek(0.0)
+                .map_err(|e| engine_error(e.to_string()))?;
+        }
         Ok(execution)
     }
 
@@ -376,8 +433,7 @@ impl Context {
     }
 
     pub(crate) fn live_session(&mut self) -> Option<noon::LiveSession<'_>> {
-        let (store, root, session) = scene_execution::parts_mut(&mut self.scene)?;
-        Some(noon::LiveSession::new(store, root, session))
+        scene_execution::live(&mut self.scene)
     }
 
     pub(crate) fn with_live<T>(
@@ -391,30 +447,129 @@ impl Context {
         operation(&mut live).map_err(engine_error)
     }
 
+    fn observe_effective(&self, target: &MobjectHandle) -> PyResult<noon::EffectiveMobjectState> {
+        self.require_active()?;
+        if !self.has_execution() {
+            return Err(engine_error("no execution session"));
+        }
+        self.scene
+            .effective(&target.handle)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+    }
+
+    fn observe_bound_mobject<T>(
+        &self,
+        target: &MobjectHandle,
+        authored: impl FnOnce(&Mobject) -> Result<T, noon::AuthoringError>,
+        effective: impl FnOnce(&Scene, &Mobject) -> Result<T, noon::AuthoringError>,
+    ) -> PyResult<T> {
+        self.require_active()?;
+        self.same_store(target)?;
+        if !self.bound_ids.contains(&target.handle.node_id()) {
+            return Err(engine_error("mobject is not bound to this canonical Scene"));
+        }
+        if self.has_execution() {
+            effective(&self.scene, &target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+        } else {
+            authored(&target.handle).map_err(engine_error)
+        }
+    }
+
     fn place<T>(
         &mut self,
         operation: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
     ) -> PyResult<()> {
         self.require_active()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        operation(&mut self.scene)
-            .map(|_| ())
-            .map_err(noon::LiveSessionError::from)
-            .map_err(engine_error)
+        let running = self.has_execution();
+        operation(&mut self.scene).map(|_| ()).map_err(|error| {
+            if running {
+                engine_error(noon::LiveSessionError::from(error))
+            } else {
+                engine_error(error)
+            }
+        })
     }
 
-    fn edit_live_appearance(
+    fn promote_own_points(
         &mut self,
-        edit: impl FnOnce(&mut Scene) -> Result<(), noon::AuthoringError>,
-    ) -> PyResult<()> {
-        self.require_active()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
+        target: MobjectTarget<'_>,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.available()?;
+        self.scene
+            .promote_own_points(target, &references.add_targets()?)
+            .map(|copied| crate::family::FamilyCopy { copied })
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
+    }
+
+    fn edit_children(
+        &mut self,
+        owner: MobjectTarget<'_>,
+        batch: &MembershipBatch,
+    ) -> PyResult<Vec<bool>> {
+        self.available()?;
+        let running = self.has_execution();
+        let adding = batch.is_add()?;
+        let members = batch.targets();
+        if adding {
+            self.scene.add_family_members(owner, &members)
+        } else {
+            self.scene.remove_family_members(owner, &members)
         }
-        edit(&mut self.scene)
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+        .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
+    fn prepare_children(
+        &mut self,
+        owner: MobjectTarget<'_>,
+        batch: &MembershipBatch,
+    ) -> PyResult<crate::effects::StagedEffectPublication> {
+        self.available()?;
+        let members = batch.add_targets()?;
+        let pending = self.with_live(|live| {
+            live.prepare_family_membership(owner, &members, true)
+                .map(|(pending, _)| pending)
+        })?;
+        self.staged(pending, batch.bindings.clone())
+    }
+
+    fn observe_points<'a, T>(
+        &self,
+        target: MobjectTarget<'a>,
+        authored: impl FnOnce(&MobjectTarget<'a>) -> Result<T, noon::AuthoringError>,
+        effective: impl FnOnce(&Scene, MobjectTarget<'a>) -> Result<T, noon::AuthoringError>,
+    ) -> PyResult<T> {
+        self.require_active()?;
+        target
+            .require_store(self.scene.integration_store())
+            .map_err(engine_error)?;
+        let value = if self.has_execution() {
+            effective(&self.scene, target)
+        } else {
+            authored(&target)
+        };
+        value.map_err(engine_error)
+    }
+
+    fn critical_point_3d(
+        &self,
+        target: MobjectTarget<'_>,
+        direction: noon::SemanticVec3,
+        vector_boundary: bool,
+    ) -> PyResult<(f64, f64, f64)> {
+        self.observe_points(
+            target,
+            |target| {
+                if vector_boundary {
+                    target.vector_critical_point_3d(direction)
+                } else {
+                    target.critical_point_3d(direction)
+                }
+            },
+            |scene, target| scene.effective_critical_point_3d(target, direction, vector_boundary),
+        )
+        .map(|point| (point.x, point.y, point.z))
     }
 
     fn edit_path(
@@ -424,21 +579,41 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
         edit(&mut self.scene, &target.handle).map_err(engine_error)
     }
-    fn publish(&mut self, transaction: SemanticMutationTransaction) -> PyResult<()> {
+    fn publish_path_edit(
+        &mut self,
+        edit: impl FnOnce(&mut Scene) -> Result<(), noon::AuthoringError>,
+    ) -> PyResult<()> {
         self.require_active()?;
-        if self.has_execution() {
-            self.with_live(|live| live.apply(transaction).map(|_| ()))
-        } else {
-            transaction
-                .apply(&mut self.scene.integration_store().borrow_mut())
-                .map(|_| ())
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        edit(&mut self.scene).map_err(|error| {
+            if running {
+                engine_error(noon::LiveSessionError::from(error))
+            } else {
+                engine_error(error)
+            }
+        })
+    }
+    fn edit_scene_property(
+        &mut self,
+        edit: impl FnOnce(&mut Scene) -> Result<(), noon::AuthoringError>,
+    ) -> PyResult<()> {
+        self.require_active()?;
+        let running = self.has_execution();
+        edit(&mut self.scene)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
+    fn edit_scene<T>(
+        &mut self,
+        edit: impl FnOnce(&mut Scene) -> Result<T, noon::AuthoringError>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let running = self.has_execution();
+        edit(&mut self.scene)
+            .map(|_| ())
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
 }
 #[pymethods]
@@ -482,7 +657,7 @@ impl Context {
             .map_err(engine_error)
     }
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(name="liveSetStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
+    #[pyo3(name="setStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
     fn set_style(
         &mut self,
         source: &MobjectHandle,
@@ -538,10 +713,10 @@ impl Context {
             background_stroke_opacity,
         )
         .map_err(engine_error)?;
-        self.edit_live_appearance(|scene| scene.set_style(&source.handle, update))
+        self.edit_scene(|scene| scene.set_style(&source.handle, update))
     }
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(name="liveSetFamilyStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
+    #[pyo3(name="setFamilyStyle",signature=(source,fill_enabled,fill_red,fill_green,fill_blue,fill_alpha,fill_opacity,stroke_enabled,stroke_red,stroke_green,stroke_blue,stroke_alpha,stroke_width,stroke_opacity,background_stroke_enabled,background_stroke_red,background_stroke_green,background_stroke_blue,background_stroke_alpha,background_stroke_width,background_stroke_opacity))]
     fn set_family_style(
         &mut self,
         source: &crate::family::FamilyHandle,
@@ -597,7 +772,7 @@ impl Context {
             background_stroke_opacity,
         )
         .map_err(engine_error)?;
-        self.with_live(|live| live.set_family_style(&source.family, update).map(|_| ()))
+        self.edit_scene(|scene| scene.set_family_style(&source.family, update).map(|_| ()))
     }
     #[pyo3(name = "createMesh")]
     fn create_mesh(
@@ -624,11 +799,6 @@ impl Context {
         far: f64,
     ) -> PyResult<MobjectHandle> {
         self.available()?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "3D camera must be declared before execution starts",
-            ));
-        }
         let position = noon::integration::spatial_input::vec3(&position, "camera position")
             .map_err(engine_error)?;
         let [w, x, y, z] = rotation.as_slice() else {
@@ -661,11 +831,6 @@ impl Context {
         far: f64,
     ) -> PyResult<MobjectHandle> {
         self.available()?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "3D camera must be declared before execution starts",
-            ));
-        }
         let profile =
             noon::integration::spatial_input::camera_profile(&values).map_err(engine_error)?;
         let object = self
@@ -683,11 +848,6 @@ impl Context {
         intensity: f64,
     ) -> PyResult<MobjectHandle> {
         self.available()?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "3D point lights must be created before execution starts",
-            ));
-        }
         let position = noon::integration::spatial_input::vec3(&position, "light position")
             .map_err(engine_error)?;
         let [r, g, b, a] = rgba.as_slice() else {
@@ -695,10 +855,11 @@ impl Context {
         };
         let color =
             noon::integration::spatial_input::color(*r, *g, *b, *a).map_err(engine_error)?;
+        let running = self.has_execution();
         self.scene
             .point_light_3d(position, color, intensity)
             .map(MobjectHandle::from_semantic_mobject)
-            .map_err(engine_error)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "setWorldTransform")]
     fn set_world_transform(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
@@ -715,14 +876,17 @@ impl Context {
     fn world_transform(&mut self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
         self.require_active()?;
         self.same_store(target)?;
-        let value = if self.has_execution() {
-            self.scene
-                .effective_world_transform(&target.handle)
-                .map_err(noon::LiveSessionError::from)
-                .map_err(engine_error)
-        } else {
-            target.handle.world_transform().map_err(engine_error)
-        }?;
+        let running = self.has_execution();
+        let value = self
+            .scene
+            .world_transform(&target.handle)
+            .map_err(|error| {
+                if running {
+                    engine_error(noon::LiveSessionError::from(error))
+                } else {
+                    engine_error(error)
+                }
+            })?;
         Ok(noon::integration::spatial_input::transform_values(value))
     }
     #[pyo3(name = "effectiveWorldCenter")]
@@ -767,13 +931,7 @@ impl Context {
         let value = self
             .scene
             .effective_camera_profile(&target.handle)
-            .map_err(|error| {
-                if running {
-                    engine_error(noon::LiveSessionError::from(error))
-                } else {
-                    engine_error(error)
-                }
-            })?;
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))?;
         Ok(noon::integration::spatial_input::camera_profile_values(
             value.0,
         ))
@@ -955,60 +1113,112 @@ impl Context {
             .stop_3dillusion_camera_rotation(&target.handle)
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
+    fn audio(
+        &mut self,
+        source: &crate::audio::AudioSource,
+        options: &crate::audio::ClipOptions,
+    ) -> PyResult<crate::audio::AudioClip> {
+        self.available()?;
+        if self.has_execution() {
+            return Err(engine_error(AuthoringFailure::new(
+                "unsupported_operation",
+                "authoring.finite_media_after_execution",
+                "audio and playback-control declarations must precede execution",
+            )));
+        }
+        let node = self
+            .scene
+            .audio(source.0.clone(), options.0)
+            .map_err(engine_error)?;
+        Ok(crate::audio::AudioClip {
+            store: Rc::clone(self.scene.integration_store()),
+            node,
+        })
+    }
+
+    #[pyo3(name = "authoredWait")]
+    fn authored_wait(&mut self, duration: f64) -> PyResult<f64> {
+        self.available()?;
+        if self.has_execution() {
+            return Err(engine_error(
+                "authored waits require a Scene before execution",
+            ));
+        }
+        self.scene.wait(duration).map_err(engine_error)?;
+        Ok(self.scene.time())
+    }
+
+    #[pyo3(name = "declareValue")]
+    fn declare_value(
+        &mut self,
+        tracker: &crate::signals::ValueTrackerHandle,
+        target: f64,
+        duration: f64,
+        easing: &str,
+    ) -> PyResult<()> {
+        self.available()?;
+        if self.has_execution() {
+            return Err(engine_error(
+                "scalar declarations require a Scene before execution",
+            ));
+        }
+        self.scene
+            .play_value(&tracker.value, target)
+            .rate_func(crate::composition::rate(easing)?)
+            .run_time(duration)
+            .map(|_| ())
+            .map_err(engine_error)
+    }
+
+    #[cfg(feature = "latex")]
+    #[pyo3(name = "setLatexMemberColors")]
+    fn set_latex_member_colors(
+        &mut self,
+        handle: &crate::latex::LatexHandle,
+        rgba: Vec<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let colors = noon::integration::latex_member_colors(&rgba).map_err(engine_error)?;
+        let running = self.has_execution();
+        self.scene
+            .set_family_member_colors(handle.0.family(), &colors)
+            .map(|_| ())
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
+    #[cfg(feature = "latex")]
+    #[pyo3(name = "latexFontSize")]
+    fn latex_font_size(&self, handle: &crate::latex::LatexHandle) -> PyResult<f64> {
+        self.require_active()?;
+        self.scene.latex_font_size(&handle.0).map_err(engine_error)
+    }
+
     #[pyo3(name = "createValueTracker")]
     fn create_tracker(&mut self, initial: f64) -> PyResult<crate::signals::ValueTrackerHandle> {
         self.available()?;
-        let value =
-            if let Some((store, root, execution)) = scene_execution::parts_mut(&mut self.scene) {
-                noon::integration::publish_value_tracker_creation(store, root, execution, initial)
-            } else {
-                self.scene.value_tracker(initial)
-            };
-        value
+        self.scene
+            .value_tracker(initial)
             .map(|value| crate::signals::ValueTrackerHandle { value })
             .map_err(engine_error)
     }
     #[pyo3(name = "associateValueTracker")]
     fn associate_tracker(&mut self, tracker: &crate::signals::ValueTrackerHandle) -> PyResult<()> {
         self.available()?;
-        if let Some((store, root, execution)) = scene_execution::parts_mut(&mut self.scene) {
-            noon::integration::publish_value_tracker_association(
-                store,
-                root,
-                execution,
-                &tracker.value,
-            )
-        } else {
-            self.scene.associate_value_tracker(&tracker.value)
-        }
-        .map_err(engine_error)
+        self.scene
+            .associate_value_tracker(&tracker.value)
+            .map_err(engine_error)
     }
     #[pyo3(name = "valueTrackerValue")]
     fn tracker_value(&self, tracker: &crate::signals::ValueTrackerHandle) -> PyResult<f64> {
         self.require_active()?;
-        if !tracker.value.is_in_store(self.scene.integration_store()) {
-            return Err(engine_error(noon::AuthoringError::ForeignStore));
-        }
         self.scene
-            .integration_store()
-            .borrow()
-            .semantic_signal_state(tracker.value.node_id())
-            .map_err(noon::AuthoringError::from)
-            .map_err(engine_error)?;
-        if let Some(execution) = scene_execution::session(&self.scene) {
-            match execution
-                .effective_signal_value(tracker.value.node_id())
-                .ok_or_else(|| {
-                    engine_error("ValueTracker is not lowered into this execution session")
-                })? {
-                noon_core::ReactiveValue::Scalar(value) => Ok(f64::from(*value)),
-                _ => Err(engine_error("ValueTracker runtime signal is not scalar")),
-            }
-        } else {
-            self.scene
-                .value_tracker_value(&tracker.value)
-                .map_err(engine_error)
-        }
+            .value_tracker_value(&tracker.value)
+            .map_err(|error| {
+                engine_error(AuthoringFailure::from_scene_mutation(
+                    error,
+                    self.has_execution(),
+                ))
+            })
     }
     #[pyo3(name = "setValueTracker")]
     fn set_tracker(
@@ -1017,17 +1227,14 @@ impl Context {
         value: f64,
     ) -> PyResult<()> {
         self.available()?;
-        if self.has_execution() {
-            self.with_live(|live| live.set_value(&tracker.value, value))
-        } else {
-            self.scene
-                .set_value(&tracker.value, value)
-                .map_err(engine_error)
-        }
+        let running = self.has_execution();
+        self.scene
+            .set_value(&tracker.value, value)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "trackerPosition")]
     fn tracker_position(
-        &self,
+        &mut self,
         tracker: &crate::signals::ValueTrackerHandle,
         dx: f64,
         dy: f64,
@@ -1035,11 +1242,6 @@ impl Context {
         y: f64,
     ) -> PyResult<crate::signals::TrackerPositionHandle> {
         self.available()?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "native signal bindings must be authored before execution",
-            ));
-        }
         self.scene
             .position_from_tracker(
                 &tracker.value,
@@ -1051,57 +1253,42 @@ impl Context {
     }
     #[pyo3(name = "bindTrackerPosition")]
     fn bind_tracker_position(
-        &self,
+        &mut self,
         target: &MobjectHandle,
         position: &crate::signals::TrackerPositionHandle,
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "native signal bindings must be authored before execution",
-            ));
-        }
         self.scene
             .bind_position(&target.handle, &position.value)
             .map_err(engine_error)
     }
     #[pyo3(name = "bindRotation")]
     fn bind_tracker_rotation(
-        &self,
+        &mut self,
         target: &MobjectHandle,
         tracker: &crate::signals::ValueTrackerHandle,
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "native signal bindings must be authored before execution",
-            ));
-        }
         self.scene
             .bind_rotation(&target.handle, &tracker.value)
             .map_err(engine_error)
     }
     #[pyo3(name = "bindOpacity")]
     fn bind_tracker_opacity(
-        &self,
+        &mut self,
         target: &MobjectHandle,
         tracker: &crate::signals::ValueTrackerHandle,
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "native signal bindings must be authored before execution",
-            ));
-        }
         self.scene
             .bind_opacity(&target.handle, &tracker.value)
             .map_err(engine_error)
     }
 
-    #[pyo3(name = "liveNextLayoutTo")]
+    #[pyo3(name = "nextLayoutTo")]
     fn next_layout_to_anchor(
         &mut self,
         source: &LayoutAnchor,
@@ -1119,7 +1306,7 @@ impl Context {
         self.place(|scene| {
             scene.next_layout_to_aligned(
                 &source.anchor,
-                noon::LiveLayoutTarget::Anchor(&target.anchor),
+                noon::LayoutTarget::Anchor(&target.anchor),
                 &aligner.anchor,
                 noon::ManimNextToArgs {
                     direction: (dx, dy),
@@ -1130,7 +1317,7 @@ impl Context {
             )
         })
     }
-    #[pyo3(name = "liveNextLayoutToPoint")]
+    #[pyo3(name = "nextLayoutToPoint")]
     fn next_layout_to_point(
         &mut self,
         source: &LayoutAnchor,
@@ -1149,7 +1336,7 @@ impl Context {
         self.place(|scene| {
             scene.next_layout_to_aligned(
                 &source.anchor,
-                noon::LiveLayoutTarget::Point(x, y),
+                noon::LayoutTarget::Point(x, y),
                 &aligner.anchor,
                 noon::ManimNextToArgs {
                     direction: (dx, dy),
@@ -1160,7 +1347,7 @@ impl Context {
             )
         })
     }
-    #[pyo3(name = "liveNextLayoutToEdgeInFrame")]
+    #[pyo3(name = "nextLayoutToEdgeInFrame")]
     fn next_layout_edge(
         &mut self,
         source: &LayoutAnchor,
@@ -1173,23 +1360,24 @@ impl Context {
         frame_buff: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| {
-            live.next_layout_to_edge_in_frame(
-                &source.anchor,
-                &target.anchor,
-                (ex, ey),
-                noon::ManimNextToArgs {
-                    direction: (dx, dy),
-                    buff,
-                    aligned_edge: (0., 0.),
-                    mask: (1., 1.),
-                },
-                frame_buff,
-            )
-            .map(|_| ())
+        self.place(|scene| {
+            scene
+                .next_layout_to_edge_in_frame(
+                    &source.anchor,
+                    &target.anchor,
+                    (ex, ey),
+                    noon::ManimNextToArgs {
+                        direction: (dx, dy),
+                        buff,
+                        aligned_edge: (0., 0.),
+                        mask: (1., 1.),
+                    },
+                    frame_buff,
+                )
+                .map(|_| ())
         })
     }
-    #[pyo3(name = "liveArrangeFamily")]
+    #[pyo3(name = "arrangeFamily")]
     fn arrange_family_with_options(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1199,7 +1387,7 @@ impl Context {
         self.same_family_store(target)?;
         self.place(|scene| scene.arrange_family_with_options(&target.family, &options.options))
     }
-    #[pyo3(name = "liveArrangeFamilyInGrid")]
+    #[pyo3(name = "arrangeFamilyInGrid")]
     fn arrange_family_in_grid_with_options(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1211,7 +1399,7 @@ impl Context {
             scene.arrange_family_in_grid_with_options(&target.family, &options.options)
         })
     }
-    #[pyo3(name = "liveMoveFamilyToPoint")]
+    #[pyo3(name = "moveFamilyToPoint")]
     fn move_family_to_point(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1227,13 +1415,13 @@ impl Context {
         self.place(|scene| {
             scene.move_family_to(
                 &target.family,
-                noon::LiveLayoutTarget::Point(x, y),
+                noon::LayoutTarget::Point(x, y),
                 (ex, ey),
                 (mx, my),
             )
         })
     }
-    #[pyo3(name = "liveMoveFamilyToMobject")]
+    #[pyo3(name = "moveFamilyToMobject")]
     fn move_family_to_mobject(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1249,13 +1437,13 @@ impl Context {
         self.place(|scene| {
             scene.move_family_to(
                 &target.family,
-                noon::LiveLayoutTarget::Mobject(&other.handle),
+                noon::LayoutTarget::Mobject(&other.handle),
                 (ex, ey),
                 (mx, my),
             )
         })
     }
-    #[pyo3(name = "liveMoveFamilyToFamily")]
+    #[pyo3(name = "moveFamilyToFamily")]
     fn move_family_to_family(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1271,13 +1459,13 @@ impl Context {
         self.place(|scene| {
             scene.move_family_to(
                 &target.family,
-                noon::LiveLayoutTarget::Family(&other.family),
+                noon::LayoutTarget::Family(&other.family),
                 (ex, ey),
                 (mx, my),
             )
         })
     }
-    #[pyo3(name = "liveAlignFamilyToPoint")]
+    #[pyo3(name = "alignFamilyToPoint")]
     fn align_family_to_point(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1289,14 +1477,10 @@ impl Context {
         self.available()?;
         self.same_family_store(target)?;
         self.place(|scene| {
-            scene.align_family_to(
-                &target.family,
-                noon::LiveLayoutTarget::Point(x, y),
-                (ex, ey),
-            )
+            scene.align_family_to(&target.family, noon::LayoutTarget::Point(x, y), (ex, ey))
         })
     }
-    #[pyo3(name = "liveAlignFamilyToMobject")]
+    #[pyo3(name = "alignFamilyToMobject")]
     fn align_family_to_mobject(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1310,12 +1494,12 @@ impl Context {
         self.place(|scene| {
             scene.align_family_to(
                 &target.family,
-                noon::LiveLayoutTarget::Mobject(&other.handle),
+                noon::LayoutTarget::Mobject(&other.handle),
                 (ex, ey),
             )
         })
     }
-    #[pyo3(name = "liveAlignFamilyToFamily")]
+    #[pyo3(name = "alignFamilyToFamily")]
     fn align_family_to_family(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1329,12 +1513,12 @@ impl Context {
         self.place(|scene| {
             scene.align_family_to(
                 &target.family,
-                noon::LiveLayoutTarget::Family(&other.family),
+                noon::LayoutTarget::Family(&other.family),
                 (ex, ey),
             )
         })
     }
-    #[pyo3(name = "liveAlignFamilyOnFrame")]
+    #[pyo3(name = "alignFamilyOnFrame")]
     fn align_family_on_frame(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1347,7 +1531,7 @@ impl Context {
         self.place(|scene| scene.align_family_on_frame(&target.family, (x, y), buff))
     }
 
-    #[pyo3(name = "liveSetFamilyObjectOpacity")]
+    #[pyo3(name = "setFamilyObjectOpacity")]
     fn family_object_opacity(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1355,8 +1539,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| {
-            live.set_family_object_opacity(&target.family, value)
+        self.edit_scene(|scene| {
+            scene
+                .set_family_object_opacity(&target.family, value)
                 .map(|_| ())
         })
     }
@@ -1364,9 +1549,6 @@ impl Context {
     #[pyo3(name = "createCameraFrame")]
     fn camera_frame(&mut self, _id: &str) -> PyResult<MobjectHandle> {
         self.available()?;
-        if self.has_execution() {
-            return Err(engine_error("camera initialization must precede execution"));
-        }
         let handle = self.scene.camera_frame().map_err(engine_error)?;
         self.bound_ids.insert(handle.node_id());
         Ok(MobjectHandle::from_semantic_mobject(handle))
@@ -1381,13 +1563,13 @@ impl Context {
             .set_view_color_profile(&target.handle, value)
             .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
-    #[pyo3(name = "liveSetEmission")]
+    #[pyo3(name = "setEmission")]
     fn emission(&mut self, target: &MobjectHandle, value: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        self.edit_live_appearance(|scene| scene.set_emission(&target.handle, value))
+        self.edit_scene(|scene| scene.set_emission(&target.handle, value))
     }
-    #[pyo3(name = "liveSetFamilyEmission")]
+    #[pyo3(name = "setFamilyEmission")]
     fn family_emission(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -1398,124 +1580,706 @@ impl Context {
         let emission = noon_core::Emission::new(value)
             .map_err(noon::AuthoringError::Emission)
             .map_err(engine_error)?;
-        self.with_live(|live| {
-            live.set_family_style(
-                &target.family,
-                noon::StyleUpdate {
-                    emission: Some(emission),
-                    ..Default::default()
-                },
-            )
-            .map(|_| ())
+        self.edit_scene(|scene| {
+            scene
+                .set_family_style(
+                    &target.family,
+                    noon::StyleUpdate {
+                        emission: Some(emission),
+                        ..Default::default()
+                    },
+                )
+                .map(|_| ())
         })
     }
 
     #[pyo3(name = "queryNumberPlaneFrame")]
-    fn effective_number_plane_frame(
+    fn query_number_plane_frame(
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<crate::coordinates::AxesObservation> {
         self.require_active()?;
-        self.same_family_store(target)?;
         let plane = noon::ManimNumberPlane::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if self.has_execution() {
-            self.scene.effective_number_plane_frame(&plane)
-        } else {
-            plane.authored_frame()
-        };
-        value
+        self.scene
+            .number_plane_frame(&plane)
             .map(|frame| crate::coordinates::AxesObservation { frame })
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)
     }
     #[pyo3(name = "queryPolarPlaneFrame")]
-    fn effective_polar_plane_frame(
+    fn query_polar_plane_frame(
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<crate::coordinates::PolarObservation> {
         self.require_active()?;
-        self.same_family_store(target)?;
         let plane = noon::ManimPolarPlane::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if self.has_execution() {
-            self.scene.effective_polar_plane_frame(&plane)
-        } else {
-            plane.authored_polar_frame()
-        };
-        value
+        self.scene
+            .polar_plane_frame(&plane)
             .map(|frame| crate::coordinates::PolarObservation { frame })
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)
     }
 
     #[pyo3(name = "queryNumberLineFrame")]
-    fn effective_number_line_frame(
-        &mut self,
+    fn query_number_line_frame(
+        &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<crate::coordinates::NumberLineObservation> {
         self.require_active()?;
-        self.same_family_store(target)?;
         let coordinates = noon::ManimNumberLine::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if self.has_execution() {
-            self.scene.effective_number_line_frame(&coordinates)
-        } else {
-            coordinates.authored_frame()
-        };
-        value
+        self.scene
+            .number_line_frame(&coordinates)
             .map(|frame| crate::coordinates::NumberLineObservation { frame })
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)
     }
     #[pyo3(name = "queryAxesFrame")]
-    fn effective_axes_frame(
-        &mut self,
+    fn query_axes_frame(
+        &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<crate::coordinates::AxesObservation> {
         self.require_active()?;
-        self.same_family_store(target)?;
         let coordinates = noon::ManimAxes::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if self.has_execution() {
-            self.scene.effective_axes_frame(&coordinates)
-        } else {
-            coordinates.authored_frame()
-        };
-        value
+        self.scene
+            .axes_frame(&coordinates)
             .map(|frame| crate::coordinates::AxesObservation { frame })
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)
     }
     #[pyo3(name = "queryThreeDAxesFrame")]
-    fn effective_three_d_axes_frame(
-        &mut self,
+    fn query_three_d_axes_frame(
+        &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<crate::coordinates::ThreeDAxesObservation> {
         self.require_active()?;
-        self.same_family_store(target)?;
         let coordinates = noon::ManimThreeDAxes::from_family(target.family.clone())
             .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)?;
-        let value = if self.has_execution() {
-            self.scene
-                .effective_three_d_axes_frame(&coordinates)
-                .map_err(noon::integration::live_coordinate_failure)
-        } else {
-            coordinates
-                .authored_frame()
-                .map_err(noon::integration::coordinate_failure)
-        };
-        value
+        self.scene
+            .three_d_axes_frame(&coordinates)
             .map(|frame| crate::coordinates::ThreeDAxesObservation { frame })
+            .map_err(noon::integration::coordinate_failure)
             .map_err(engine_error)
     }
 
-    #[pyo3(name = "liveCreateCoordinates")]
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "createNumberLineTextLabels")]
+    fn create_number_line_text_labels(
+        &mut self,
+        family: &crate::family::FamilyHandle,
+        values: Vec<f64>,
+        automatic: bool,
+        options: &crate::coordinates::NumberLabelOptions,
+        attach: bool,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        use crate::coordinates::{label_failure, label_numbers};
+        self.available()?;
+        let line =
+            noon::ManimNumberLine::from_family(family.family.clone()).map_err(label_failure)?;
+        self.scene
+            .number_line_labels(
+                &line,
+                label_numbers(&values, automatic)?,
+                &options.options,
+                attach,
+            )
+            .map(crate::family::FamilyHandle::from_semantic_family)
+            .map_err(label_failure)
+    }
+
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "createNumberLineCustomLabels")]
+    fn create_number_line_custom_labels(
+        &mut self,
+        family: &crate::family::FamilyHandle,
+        values: Vec<f64>,
+        texts: Vec<String>,
+        options: &crate::coordinates::NumberLabelOptions,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        use crate::coordinates::{custom_label_values, label_failure};
+        self.available()?;
+        let line =
+            noon::ManimNumberLine::from_family(family.family.clone()).map_err(label_failure)?;
+        self.scene
+            .number_line_custom_labels(
+                &line,
+                &custom_label_values(values, texts)?,
+                &options.options,
+            )
+            .map(crate::family::FamilyHandle::from_semantic_family)
+            .map_err(label_failure)
+    }
+
+    #[cfg(feature = "native-text")]
+    #[pyo3(name = "createCoordinateTextLabels")]
+    #[allow(clippy::too_many_arguments)]
+    fn create_coordinate_text_labels(
+        &mut self,
+        x_axis: &crate::family::FamilyHandle,
+        y_axis: &crate::family::FamilyHandle,
+        x: Vec<f64>,
+        automatic_x: bool,
+        y: Vec<f64>,
+        automatic_y: bool,
+        x_options: &crate::coordinates::NumberLabelOptions,
+        y_options: &crate::coordinates::NumberLabelOptions,
+    ) -> PyResult<(crate::family::FamilyHandle, crate::family::FamilyHandle)> {
+        use crate::coordinates::{label_failure, label_numbers};
+        self.available()?;
+        let x_axis =
+            noon::ManimNumberLine::from_family(x_axis.family.clone()).map_err(label_failure)?;
+        let y_axis =
+            noon::ManimNumberLine::from_family(y_axis.family.clone()).map_err(label_failure)?;
+        let values = [
+            label_numbers(&x, automatic_x)?,
+            label_numbers(&y, automatic_y)?,
+        ];
+        let [x, y] = self
+            .scene
+            .coordinate_text_labels(
+                &x_axis,
+                &y_axis,
+                values,
+                [&x_options.options, &y_options.options],
+            )
+            .map_err(label_failure)?
+            .map(crate::family::FamilyHandle::from_semantic_family);
+        Ok((x, y))
+    }
+
+    #[pyo3(name = "createThreeDAxesLabels")]
+    #[allow(clippy::too_many_arguments)]
+    fn create_three_d_axes_labels(
+        &mut self,
+        axes: &crate::family::FamilyHandle,
+        x: &crate::family::FamilyHandle,
+        y: &crate::family::FamilyHandle,
+        z: &crate::family::FamilyHandle,
+        selected_axes: u32,
+        buff: f64,
+        fixed_orientation: bool,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        let axes = noon::ManimThreeDAxes::from_family(axes.family.clone())
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)?;
+        let labels = noon::integration::three_d_axis_label_targets(
+            [&x.family, &y.family, &z.family],
+            selected_axes,
+        )
+        .map_err(engine_error)?;
+        self.scene
+            .three_d_axis_labels(&axes, &labels, buff, fixed_orientation)
+            .map(crate::family::FamilyHandle::from_semantic_family)
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "mobjectShapeMatcherBounds")]
+    fn mobject_shape_matcher_bounds(&self, target: &MobjectHandle) -> PyResult<[f64; 4]> {
+        self.available()?;
+        self.scene
+            .shape_matcher_bounds((&target.handle).into())
+            .map(crate::geometry::bounds_coordinates)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "familyShapeMatcherBounds")]
+    fn family_shape_matcher_bounds(
+        &self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<[f64; 4]> {
+        self.available()?;
+        self.scene
+            .shape_matcher_bounds((&target.family).into())
+            .map(crate::geometry::bounds_coordinates)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "beginBooleanGeometry")]
+    fn begin_boolean_geometry(
+        &self,
+        name: &str,
+        operands: &crate::geometry::BooleanOperands,
+    ) -> PyResult<crate::geometry::GeometryOptions> {
+        self.available()?;
+        self.scene
+            .boolean_geometry_options(crate::geometry::boolean_operation(name)?, &operands.0)
+            .map(crate::geometry::GeometryOptions::from_options)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "beginUnderline")]
+    fn begin_underline(
+        &self,
+        target: &crate::mobject::MobjectHandle,
+        buff: f64,
+    ) -> PyResult<crate::geometry::GeometryOptions> {
+        self.available()?;
+        self.scene
+            .underline_options(&target.handle, buff)
+            .map(crate::geometry::GeometryOptions::from_options)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "prepareTangentLine")]
+    fn prepare_tangent_line(
+        &self,
+        source: &MobjectHandle,
+        alpha: f64,
+        length: f64,
+        d_alpha: f64,
+    ) -> PyResult<GeometryOptions> {
+        self.available()?;
+        self.scene
+            .tangent_line_options(&source.handle, alpha, length, d_alpha)
+            .map(GeometryOptions::from_options)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
+    }
+
+    #[pyo3(name = "prepareAxesArea")]
+    fn prepare_axes_area(
+        &self,
+        axes: &crate::family::FamilyHandle,
+        graph: &MobjectHandle,
+        range: Vec<f64>,
+        bounded_graph: &MobjectHandle,
+        has_bounded_graph: bool,
+    ) -> PyResult<GeometryOptions> {
+        self.available()?;
+        let axes = noon::ManimAxes::from_family(axes.family.clone())
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)?;
+        let range = noon::integration::plot_optional_range(&range, "area.range", "area")
+            .map_err(engine_error)?;
+        self.scene
+            .axes_area_options(
+                &axes,
+                &graph.handle,
+                range,
+                has_bounded_graph.then_some(&bounded_graph.handle),
+            )
+            .map(GeometryOptions::from_options)
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[cfg(feature = "latex")]
+    #[pyo3(name = "changeBarValues")]
+    fn change_bar_values(
+        &mut self,
+        chart: &mut crate::bar_chart::BarChartHandle,
+        values: Vec<f64>,
+        update_colors: bool,
+    ) -> PyResult<()> {
+        self.available()?;
+        let failure = if self.has_execution() {
+            noon::integration::live_coordinate_publication_failure
+        } else {
+            noon::integration::coordinate_failure
+        };
+        chart
+            .0
+            .change_bar_values(&mut self.scene, &values, update_colors)
+            .map_err(failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "braceGeometryOptions")]
+    fn brace_geometry_options(
+        &self,
+        target: &LayoutAnchor,
+        x: f64,
+        y: f64,
+        buff: f64,
+        sharpness: f64,
+    ) -> PyResult<GeometryOptions> {
+        self.require_active()?;
+        let options = crate::brace::options(x, y, buff, sharpness, 0.0);
+        self.scene
+            .brace_geometry_options(&target.anchor, options)
+            .map(GeometryOptions::from_options)
+            .map_err(|error| crate::brace::failure("brace.prepare", &error))
+    }
+
+    #[pyo3(name = "createBraceLabel")]
+    fn create_brace_label(
+        &mut self,
+        target: &LayoutAnchor,
+        label: &LayoutAnchor,
+        x: f64,
+        y: f64,
+        buff: f64,
+        sharpness: f64,
+        label_buff: f64,
+    ) -> PyResult<crate::brace::BraceLabelHandle> {
+        self.available()?;
+        let options = crate::brace::options(x, y, buff, sharpness, label_buff);
+        noon::BraceLabel::new(
+            &mut self.scene,
+            &target.anchor,
+            label.anchor.clone(),
+            options,
+        )
+        .map(crate::brace::BraceLabelHandle)
+        .map_err(|error| crate::brace::failure("brace.create", &error))
+    }
+
+    #[pyo3(name = "shiftBraceLabel")]
+    fn shift_brace_label(
+        &mut self,
+        brace: &mut crate::brace::BraceLabelHandle,
+        target: &LayoutAnchor,
+    ) -> PyResult<()> {
+        self.available()?;
+        brace
+            .0
+            .shift_brace(&mut self.scene, &target.anchor)
+            .map_err(|error| crate::brace::failure("brace.shift", &error))
+    }
+
+    #[pyo3(name = "replaceBraceLabel")]
+    fn replace_brace_label(
+        &mut self,
+        brace: &mut crate::brace::BraceLabelHandle,
+        label: &LayoutAnchor,
+    ) -> PyResult<()> {
+        self.available()?;
+        brace
+            .0
+            .change_label(&mut self.scene, label.anchor.clone())
+            .map_err(|error| crate::brace::failure("brace.label", &error))
+    }
+
+    #[pyo3(name = "changeBraceLabel")]
+    fn change_brace_label(
+        &mut self,
+        brace: &mut crate::brace::BraceLabelHandle,
+        target: &LayoutAnchor,
+        label: &LayoutAnchor,
+    ) -> PyResult<()> {
+        self.available()?;
+        let code = if self.has_execution() {
+            "brace.change"
+        } else {
+            "brace.replace"
+        };
+        brace
+            .0
+            .change_brace_label(&mut self.scene, &target.anchor, label.anchor.clone())
+            .map_err(|error| crate::brace::failure(code, &error))
+    }
+
+    /// Build an opaque native Graph/DiGraph through the owning Scene.
+    /// Key mapping belongs to the language facade; topology remains in Rust.
+    #[pyo3(name = "createGraph")]
+    fn create_graph(
+        &mut self,
+        directed: bool,
+        vertex_ids: Vec<u32>,
+        positions: Vec<f64>,
+        edge_pairs: Vec<u32>,
+        options: &crate::graph::GraphOptions,
+    ) -> Result<crate::graph::GraphHandle, PyErr> {
+        self.available()?;
+        let vertices =
+            noon::integration::graph::vertices(&vertex_ids, &positions).map_err(engine_error)?;
+        let edges =
+            noon::integration::graph::pairs(&edge_pairs, "Graph edges").map_err(engine_error)?;
+        crate::graph::create_graph(self, directed, vertices, edges, options.options.clone())
+            .map(|inner| crate::graph::GraphHandle { inner })
+            .map_err(engine_error)
+    }
+
+    /// Compute a circular layout before publishing any semantic nodes.
+    #[pyo3(name = "createCircularGraph")]
+    fn create_circular_graph(
+        &mut self,
+        directed: bool,
+        vertex_ids: Vec<u32>,
+        edge_pairs: Vec<u32>,
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+        options: &crate::graph::GraphOptions,
+    ) -> Result<crate::graph::GraphHandle, PyErr> {
+        self.available()?;
+        let edges =
+            noon::integration::graph::pairs(&edge_pairs, "Graph edges").map_err(engine_error)?;
+        let positions = noon::GraphLayoutOptions {
+            layout: noon::GraphLayout::Circular,
+            scale,
+            center: (center_x, center_y),
+            ..Default::default()
+        }
+        .positions(vertex_ids.len(), &[])
+        .map_err(|error| {
+            engine_error(noon::integration::AuthoringFailure::unclassified(
+                "graph.layout",
+                &error,
+            ))
+        })?;
+        let vertices = vertex_ids.iter().copied().zip(positions).collect();
+        crate::graph::create_graph(self, directed, vertices, edges, options.options.clone())
+            .map(|inner| crate::graph::GraphHandle { inner })
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphCopy")]
+    fn graph_copy(
+        &mut self,
+        graph: &crate::graph::GraphHandle,
+    ) -> Result<crate::graph::GraphHandle, PyErr> {
+        self.available()?;
+        crate::graph::copy_graph(self, graph)
+            .map(|inner| crate::graph::GraphHandle { inner })
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphAddVertices")]
+    fn graph_add_vertices(
+        &mut self,
+        graph: &mut crate::graph::GraphHandle,
+        vertex_ids: Vec<u32>,
+        positions: Vec<f64>,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        crate::graph::mutate_graph(
+            self,
+            graph,
+            noon::integration::graph::GraphOperation::AddVertices(
+                noon::integration::graph::vertices(&vertex_ids, &positions)
+                    .map_err(engine_error)?,
+            ),
+        )
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphAddEdges")]
+    fn graph_add_edges(
+        &mut self,
+        graph: &mut crate::graph::GraphHandle,
+        edge_pairs: Vec<u32>,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        crate::graph::mutate_graph(
+            self,
+            graph,
+            noon::integration::graph::GraphOperation::AddEdges(
+                noon::integration::graph::pairs(&edge_pairs, "Graph edges")
+                    .map_err(engine_error)?,
+            ),
+        )
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphCircularLayout")]
+    fn graph_circular_layout(
+        &mut self,
+        graph: &mut crate::graph::GraphHandle,
+        scale: f64,
+        center_x: f64,
+        center_y: f64,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        if !scale.is_finite() || !center_x.is_finite() || !center_y.is_finite() {
+            return Err(engine_error("circular Graph layout values must be finite"));
+        }
+        crate::graph::mutate_graph(
+            self,
+            graph,
+            noon::integration::graph::GraphOperation::Circular {
+                scale,
+                center: (center_x, center_y),
+            },
+        )
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphExplicitLayout")]
+    fn graph_explicit_layout(
+        &mut self,
+        graph: &mut crate::graph::GraphHandle,
+        positions: Vec<f64>,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        let ids = (0..positions.len() / 2)
+            .map(|id| id as u32)
+            .collect::<Vec<_>>();
+        let positions = noon::integration::graph::vertices(&ids, &positions)
+            .map_err(engine_error)?
+            .into_iter()
+            .map(|(_, point)| point)
+            .collect();
+        crate::graph::mutate_graph(
+            self,
+            graph,
+            noon::integration::graph::GraphOperation::Explicit(positions),
+        )
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphRemoveVertices")]
+    fn graph_remove_vertices(
+        &mut self,
+        graph: &mut crate::graph::GraphHandle,
+        vertex_ids: Vec<u32>,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        crate::graph::mutate_graph(
+            self,
+            graph,
+            noon::integration::graph::GraphOperation::RemoveVertices(vertex_ids),
+        )
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "graphRemoveEdges")]
+    fn graph_remove_edges(
+        &mut self,
+        graph: &mut crate::graph::GraphHandle,
+        edge_pairs: Vec<u32>,
+    ) -> Result<(), PyErr> {
+        self.available()?;
+        crate::graph::mutate_graph(
+            self,
+            graph,
+            noon::integration::graph::GraphOperation::RemoveEdges(
+                noon::integration::graph::pairs(&edge_pairs, "Graph edges")
+                    .map_err(engine_error)?,
+            ),
+        )
+        .map_err(engine_error)
+    }
+
+    #[pyo3(name = "createSampleSpace")]
+    fn create_sample_space(
+        &mut self,
+        options: &crate::sample_space::SampleSpaceOptions,
+    ) -> PyResult<crate::sample_space::SampleSpaceHandle> {
+        self.available()?;
+        noon::SampleSpace::new_with_options(&mut self.scene, &options.0)
+            .map(crate::sample_space::SampleSpaceHandle)
+            .map_err(crate::sample_space::failure)
+    }
+
+    #[pyo3(name = "getHorizontalDivision")]
+    fn get_horizontal_division(
+        &mut self,
+        space: &crate::sample_space::SampleSpaceHandle,
+        probabilities: Vec<f64>,
+        rgba: Vec<f64>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        crate::sample_space::family(space.0.get_horizontal_division_in_scene(
+            &mut self.scene,
+            probabilities,
+            &crate::sample_space::colors(rgba)?,
+        ))
+    }
+
+    #[pyo3(name = "getVerticalDivision")]
+    fn get_vertical_division(
+        &mut self,
+        space: &crate::sample_space::SampleSpaceHandle,
+        probabilities: Vec<f64>,
+        rgba: Vec<f64>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        crate::sample_space::family(space.0.get_vertical_division_in_scene(
+            &mut self.scene,
+            probabilities,
+            &crate::sample_space::colors(rgba)?,
+        ))
+    }
+
+    #[pyo3(name = "divideHorizontally")]
+    fn divide_horizontally(
+        &mut self,
+        space: &mut crate::sample_space::SampleSpaceHandle,
+        probabilities: Vec<f64>,
+        rgba: Vec<f64>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        crate::sample_space::family(space.0.divide_horizontally(
+            &mut self.scene,
+            probabilities,
+            &crate::sample_space::colors(rgba)?,
+        ))
+    }
+
+    #[pyo3(name = "divideVertically")]
+    fn divide_vertically(
+        &mut self,
+        space: &mut crate::sample_space::SampleSpaceHandle,
+        probabilities: Vec<f64>,
+        rgba: Vec<f64>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        crate::sample_space::family(space.0.divide_vertically(
+            &mut self.scene,
+            probabilities,
+            &crate::sample_space::colors(rgba)?,
+        ))
+    }
+
+    #[pyo3(name = "prepareRiemannPlan")]
+    fn prepare_riemann_plan(
+        &self,
+        axes: &crate::family::FamilyHandle,
+        graph: &MobjectHandle,
+        mut options: PyRefMut<'_, crate::riemann::RiemannOptions>,
+        bounded: &MobjectHandle,
+        has_bounded: bool,
+    ) -> PyResult<crate::riemann::RiemannPlan> {
+        self.available()?;
+        let axes = crate::riemann::axes(axes)?;
+        let options = options.take(graph, has_bounded.then_some(bounded))?;
+        self.scene
+            .riemann_plan(&axes, &graph.handle, options)
+            .map(crate::riemann::RiemannPlan)
+            .map_err(noon::integration::coordinate_failure)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "publishRiemannPlan")]
+    fn publish_riemann_plan(
+        &mut self,
+        plan: &crate::riemann::RiemannPlan,
+        top: Vec<f64>,
+        baseline: Vec<f64>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        plan.publish_on_scene(&mut self.scene, &top, &baseline)
+    }
+
+    #[pyo3(name = "createSvgFromString", signature = (source, should_center, height, width_or_defaults))]
+    fn create_svg_from_string(
+        &mut self,
+        source: &str,
+        should_center: bool,
+        height: Option<f64>,
+        width_or_defaults: &Bound<'_, PyAny>,
+    ) -> PyResult<crate::family::FamilyHandle> {
+        self.available()?;
+        crate::svg::on_scene(
+            &mut self.scene,
+            source,
+            should_center,
+            height,
+            width_or_defaults,
+        )
+    }
+
+    #[pyo3(name = "createCoordinates")]
     fn coordinates(
         &mut self,
         options: &crate::coordinates::CoordinateOptions,
@@ -1533,10 +2297,9 @@ impl Context {
                 "published association accepts add binding reservations only",
             ));
         }
-        let execution = scene_execution::session(&self.scene).ok_or_else(|| {
-            engine_error("published association requires the local completed execution player")
-        })?;
-        if execution.publication_context().scene_revision() != self.scene.revision() {
+        if scene_execution::session(&self.scene).is_some_and(|execution| {
+            execution.publication_context().scene_revision() != self.scene.revision()
+        }) {
             return Err(engine_error(
                 "published association requires a coherent execution revision",
             ));
@@ -1554,7 +2317,442 @@ impl Context {
         Ok(())
     }
 
-    #[pyo3(name = "liveStretchLayout")]
+    #[pyo3(name = "setFamilyOwnStyle", signature = (source, fill_enabled, fill_red, fill_green, fill_blue, fill_alpha, fill_opacity, stroke_enabled, stroke_red, stroke_green, stroke_blue, stroke_alpha, stroke_width, stroke_opacity))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_family_own_style(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let update = noon::integration::style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        self.same_family_store(source)?;
+        self.edit_scene(|scene| scene.set_family_own_style(&source.family, update))
+    }
+
+    #[pyo3(name = "setFamilyOwnStyleWithBackgroundStroke", signature = (source, fill_enabled, fill_red, fill_green, fill_blue, fill_alpha, fill_opacity, stroke_enabled, stroke_red, stroke_green, stroke_blue, stroke_alpha, stroke_width, stroke_opacity, background_stroke_color_enabled, background_stroke_red, background_stroke_green, background_stroke_blue, background_stroke_alpha, background_stroke_width, background_stroke_opacity))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_family_own_style_with_background_stroke(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        fill_enabled: bool,
+        fill_red: f64,
+        fill_green: f64,
+        fill_blue: f64,
+        fill_alpha: f64,
+        fill_opacity: Option<f64>,
+        stroke_enabled: bool,
+        stroke_red: f64,
+        stroke_green: f64,
+        stroke_blue: f64,
+        stroke_alpha: f64,
+        stroke_width: Option<f64>,
+        stroke_opacity: Option<f64>,
+        background_stroke_color_enabled: bool,
+        background_stroke_red: f64,
+        background_stroke_green: f64,
+        background_stroke_blue: f64,
+        background_stroke_alpha: f64,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let update = noon::integration::style_update(
+            fill_enabled,
+            fill_red,
+            fill_green,
+            fill_blue,
+            fill_alpha,
+            fill_opacity,
+            stroke_enabled,
+            stroke_red,
+            stroke_green,
+            stroke_blue,
+            stroke_alpha,
+            stroke_width,
+            stroke_opacity,
+        )
+        .map_err(engine_error)?;
+        let background_stroke_color = noon::integration::family_color(
+            background_stroke_color_enabled,
+            background_stroke_red,
+            background_stroke_green,
+            background_stroke_blue,
+            background_stroke_alpha,
+        )
+        .map_err(engine_error)?;
+        self.same_family_store(source)?;
+        self.edit_scene(|scene| {
+            scene.set_family_own_style_with_background_stroke(
+                &source.family,
+                update,
+                background_stroke_color,
+                background_stroke_width,
+                background_stroke_opacity,
+            )
+        })
+    }
+
+    #[pyo3(name = "setFamilyOwnOpacity")]
+    fn set_family_own_opacity(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        opacity: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(source)?;
+        self.edit_scene(|scene| scene.set_family_own_opacity(&source.family, opacity))
+    }
+
+    #[pyo3(name = "fadeFamilyOwn")]
+    fn fade_family_own(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        darkness: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(source)?;
+        self.edit_scene(|scene| scene.fade_family_own(&source.family, darkness))
+    }
+
+    #[pyo3(name = "setMobjectSheenDirection")]
+    fn set_mobject_sheen_direction(
+        &mut self,
+        source: &MobjectHandle,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimensions: u8,
+        family: bool,
+    ) -> PyResult<()> {
+        let direction =
+            noon::SemanticSheenDirection::new(noon::SemanticVec3::new(x, y, z), dimensions);
+        let target = MobjectTarget::from(&source.handle);
+        self.edit_scene(|scene| scene.set_sheen_direction(&target, direction, family))
+    }
+
+    #[pyo3(name = "rotateMobjectSheenDirection")]
+    fn rotate_mobject_sheen_direction(
+        &mut self,
+        source: &MobjectHandle,
+        angle: f64,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        family: bool,
+    ) -> PyResult<()> {
+        let axis = noon::SemanticVec3::new(axis_x, axis_y, axis_z);
+        let target = MobjectTarget::from(&source.handle);
+        self.edit_scene(|scene| scene.rotate_sheen_direction(&target, angle, axis, family))
+    }
+
+    #[pyo3(name = "setFamilySheenDirection")]
+    fn set_family_sheen_direction(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        x: f64,
+        y: f64,
+        z: f64,
+        dimensions: u8,
+        family: bool,
+    ) -> PyResult<()> {
+        let direction =
+            noon::SemanticSheenDirection::new(noon::SemanticVec3::new(x, y, z), dimensions);
+        let target = MobjectTarget::from(&source.family);
+        self.edit_scene(|scene| scene.set_sheen_direction(&target, direction, family))
+    }
+
+    #[pyo3(name = "rotateFamilySheenDirection")]
+    fn rotate_family_sheen_direction(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        angle: f64,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        family: bool,
+    ) -> PyResult<()> {
+        let axis = noon::SemanticVec3::new(axis_x, axis_y, axis_z);
+        let target = MobjectTarget::from(&source.family);
+        self.edit_scene(|scene| scene.rotate_sheen_direction(&target, angle, axis, family))
+    }
+
+    #[pyo3(name = "setFamilyOwnStrokeCap")]
+    fn set_family_own_stroke_cap(
+        &mut self,
+        source: &crate::family::FamilyHandle,
+        cap: &str,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(source)?;
+        self.edit_scene(|scene| scene.set_family_own_stroke_cap(&source.family, cap))
+    }
+
+    #[pyo3(name = "setStrokeCap")]
+    fn set_stroke_cap(&mut self, handle: &MobjectHandle, cap: &str) -> PyResult<()> {
+        self.available()?;
+        self.same_store(handle)?;
+        self.edit_scene(|scene| scene.set_stroke_cap(&handle.handle, cap))
+    }
+
+    #[pyo3(name = "queryMobjectStrokeCap")]
+    fn query_stroke_cap(&self, target: &MobjectHandle) -> PyResult<&'static str> {
+        self.require_active()?;
+        self.same_store(target)?;
+        let cap = if self.has_execution() {
+            self.scene.effective_stroke_cap(&target.handle)
+        } else {
+            target.handle.stroke_cap()
+        };
+        cap.map(|cap| cap.as_str()).map_err(engine_error)
+    }
+
+    fn fade(&mut self, target: &MobjectHandle, darkness: f64) -> PyResult<()> {
+        self.available()?;
+        self.edit_scene(|scene| scene.fade(&target.handle, darkness))
+    }
+
+    #[pyo3(name = "fadeFamily")]
+    fn fade_family(&mut self, target: &crate::family::FamilyHandle, darkness: f64) -> PyResult<()> {
+        self.available()?;
+        self.edit_scene(|scene| scene.fade_family(&target.family, darkness))
+    }
+
+    #[pyo3(name = "interpolateMobjectStyle")]
+    fn interpolate_manim_style(
+        &mut self,
+        receiver: &MobjectHandle,
+        start: &MobjectHandle,
+        end: &MobjectHandle,
+        alpha: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.edit_scene(|scene| {
+            scene.interpolate_manim_style(&receiver.handle, &start.handle, &end.handle, alpha)
+        })
+    }
+
+    #[pyo3(name = "interpolateMobject")]
+    fn interpolate_manim(
+        &mut self,
+        receiver: &MobjectHandle,
+        start: &MobjectHandle,
+        end: &MobjectHandle,
+        alpha: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.edit_scene(|scene| {
+            scene.interpolate_manim(&receiver.handle, &start.handle, &end.handle, alpha)
+        })
+    }
+
+    #[pyo3(name = "interpolateFamilyManimStyle")]
+    fn interpolate_family_manim_style(
+        &mut self,
+        receiver: &crate::family::FamilyHandle,
+        start: &crate::family::FamilyHandle,
+        end: &crate::family::FamilyHandle,
+        alpha: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.edit_scene(|scene| {
+            scene.interpolate_family_manim_style(
+                &receiver.family,
+                &start.family,
+                &end.family,
+                alpha,
+            )
+        })
+    }
+
+    #[pyo3(name = "fadeTo")]
+    fn fade_to(
+        &mut self,
+        target: &MobjectHandle,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        amount: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        let color = noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32);
+        self.edit_scene(|scene| scene.fade_to(&target.handle, color, amount))
+    }
+
+    #[pyo3(name = "fadeToFamily")]
+    fn fade_to_family(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        amount: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        let color = noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32);
+        self.edit_scene(|scene| scene.fade_to_family(&target.family, color, amount))
+    }
+
+    #[pyo3(name = "matchStyle")]
+    fn match_style(&mut self, receiver: &MobjectHandle, donor: &MobjectHandle) -> PyResult<()> {
+        self.available()?;
+        self.scene
+            .match_style(&receiver.handle, &donor.handle)
+            .map(|_| ())
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
+    }
+
+    #[pyo3(name = "matchFamilyStyle")]
+    fn match_family_style(
+        &mut self,
+        receiver: &crate::family::FamilyHandle,
+        donor: &crate::family::FamilyHandle,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.scene
+            .match_family_style(&receiver.family, &donor.family)
+            .map(|_| ())
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
+    }
+
+    #[pyo3(name = "applyMatrixFamily")]
+    fn apply_matrix_family(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        values: Vec<f64>,
+        rows: usize,
+        columns: usize,
+        x: f64,
+        y: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.place(|scene| {
+            scene.apply_matrix_to_family(&target.family, &values, rows, columns, x, y)
+        })
+    }
+
+    #[pyo3(name = "createManimArrow")]
+    fn create_arrow(
+        &mut self,
+        py: Python<'_>,
+        request: crate::arrow::ArrowRequest<'_>,
+    ) -> PyResult<Py<PyAny>> {
+        self.available()?;
+        let running = self.has_execution();
+        request.publish_in_scene(py, &mut self.scene, running)
+    }
+
+    #[pyo3(name = "scaleArrow")]
+    fn scale_arrow(
+        &mut self,
+        arrow: &crate::arrow::ArrowHandle,
+        factor: f64,
+        scale_tips: bool,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.scene
+            .scale_arrow(&arrow.0, factor, scale_tips)
+            .map_err(crate::arrow::scale_error)
+    }
+
+    #[pyo3(name = "bindClickIndicate")]
+    #[allow(clippy::too_many_arguments)]
+    fn bind_click_indicate(
+        &mut self,
+        target: &MobjectHandle,
+        scale_factor: f64,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
+        duration: f64,
+        easing: &str,
+        lag_ratio: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        let color = callback_color(
+            "indication color",
+            Some(red),
+            Some(green),
+            Some(blue),
+            Some(alpha),
+        )?
+        .expect("all indication color channels were supplied");
+        let options = noon::AnimationOptions::new()
+            .run_time(duration)
+            .rate_func(crate::composition::rate(easing)?)
+            .lag_ratio(lag_ratio);
+        let running = self.has_execution();
+        self.scene
+            .on_click_indicate(
+                &target.handle,
+                noon::IndicateOptions::new(scale_factor, color),
+                options,
+            )
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
+    #[pyo3(name = "bindClickGlowPulse")]
+    fn bind_click_glow_pulse(
+        &mut self,
+        target: &MobjectHandle,
+        intensity: f64,
+        duration: f64,
+        easing: &str,
+        lag_ratio: f64,
+        reverse_rate_function: bool,
+    ) -> PyResult<()> {
+        self.available()?;
+        let options = noon::AnimationOptions::new()
+            .run_time(duration)
+            .rate_func(crate::composition::rate(easing)?)
+            .lag_ratio(lag_ratio)
+            .reverse_rate_function(reverse_rate_function);
+        let running = self.has_execution();
+        self.scene
+            .on_click_glow_pulse(&target.handle, intensity, options)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
+    #[pyo3(name = "clearClickAction")]
+    fn clear_click_action(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.available()?;
+        let running = self.has_execution();
+        self.scene
+            .on_click(&target.handle, None)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
+    #[pyo3(name = "stretchLayout")]
     fn stretch_layout(
         &mut self,
         target: &LayoutAnchor,
@@ -1566,164 +2764,314 @@ impl Context {
         point: bool,
     ) -> PyResult<()> {
         let dimension = dimension.try_into().map_err(engine_error)?;
-        self.with_live(|live| {
-            live.stretch(
+        self.place(|scene| {
+            scene.stretch(
                 &target.anchor,
                 factor,
                 dimension,
                 crate::mobject::pivot_3d(x, y, z, point),
             )
-            .map(|_| ())
         })
     }
-    #[pyo3(name = "livePrependFamilyMembers")]
+    #[pyo3(name = "prependFamilyMembers")]
     fn prepend_family_members(
         &mut self,
         target: &crate::family::FamilyHandle,
         batch: &MembershipBatch,
     ) -> PyResult<()> {
         self.same_family_store(target)?;
-        if batch.kind != "add" {
-            return Err(engine_error("member prepend requires an add batch"));
-        }
-        self.with_live(|live| live.prepend_family_members(&target.family, &batch.targets()))
+        let members = batch.add_targets()?;
+        self.edit_scene(|scene| scene.prepend_family_members(&target.family, &members))
     }
-    #[pyo3(name = "livePrependObjectMembers")]
+    #[pyo3(name = "prependObjectMembers")]
     fn prepend_handle_members(
         &mut self,
         target: &MobjectHandle,
         batch: &MembershipBatch,
     ) -> PyResult<()> {
         self.same_store(target)?;
-        if batch.kind != "add" {
-            return Err(engine_error("member prepend requires an add batch"));
-        }
-        self.with_live(|live| live.prepend_family_members(&target.handle, &batch.targets()))
+        let members = batch.add_targets()?;
+        self.edit_scene(|scene| scene.prepend_family_members(&target.handle, &members))
+    }
+
+    #[pyo3(name = "queryMobjectPathBoundaryPoints3D")]
+    fn mobject_path_boundary_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
+        self.observe_points(
+            (&target.handle).into(),
+            MobjectTarget::path_boundary_points_3d,
+            Scene::effective_path_boundary_points_3d,
+        )
+        .map(crate::path_input::flat_points_3d)
     }
 
     #[pyo3(name = "queryMobjectVectorBoundaryPoints3D")]
     fn mobject_vector_boundary_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
-        self.require_active()?;
-        self.same_store(target)?;
-        let target = noon::MobjectTarget::from(&target.handle);
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_vector_boundary_points_3d(
-                self.scene.integration_store(),
-                execution,
-                target,
-            )
-        } else {
-            target.vector_boundary_points_3d()
-        };
-        value
-            .map(crate::path_input::flat_points_3d)
-            .map_err(engine_error)
+        self.observe_points(
+            (&target.handle).into(),
+            MobjectTarget::vector_boundary_points_3d,
+            Scene::effective_vector_boundary_points_3d,
+        )
+        .map(crate::path_input::flat_points_3d)
     }
+
     #[pyo3(name = "queryMobjectAllPoints3D")]
     fn mobject_all_points_3d(&self, target: &MobjectHandle) -> PyResult<Vec<f64>> {
-        self.require_active()?;
-        self.same_store(target)?;
-        let target = noon::MobjectTarget::from(&target.handle);
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_all_points_3d(
-                self.scene.integration_store(),
-                execution,
-                target,
-            )
-        } else {
-            target.all_points_3d()
-        };
-        value
-            .map(crate::path_input::flat_points_3d)
-            .map_err(engine_error)
+        self.observe_points(
+            (&target.handle).into(),
+            MobjectTarget::all_points_3d,
+            Scene::effective_all_points_3d,
+        )
+        .map(crate::path_input::flat_points_3d)
     }
+
+    #[pyo3(name = "queryMobjectExtremumAlongDim")]
+    fn mobject_extremum_along_dim(
+        &self,
+        target: &MobjectHandle,
+        dim: usize,
+        key: f64,
+    ) -> PyResult<f64> {
+        self.observe_points(
+            (&target.handle).into(),
+            |target| target.extremum_along_dim(dim, key),
+            |scene, target| scene.effective_extremum_along_dim(target, dim, key),
+        )
+    }
+
+    #[pyo3(name = "queryMobjectLengthOverDim")]
+    fn mobject_length_over_dim(&self, target: &MobjectHandle, dim: usize) -> PyResult<f64> {
+        self.observe_points(
+            (&target.handle).into(),
+            |target| target.length_over_dim(dim),
+            |scene, target| scene.effective_length_over_dim(target, dim),
+        )
+    }
+
+    #[pyo3(name = "queryMobjectCenterOfMass")]
+    fn mobject_center_of_mass(&self, target: &MobjectHandle) -> PyResult<(f64, f64)> {
+        self.observe_points(
+            (&target.handle).into(),
+            MobjectTarget::center_of_mass,
+            Scene::effective_center_of_mass,
+        )
+    }
+
+    #[pyo3(name = "queryMobjectBoundaryPoint")]
+    fn mobject_boundary_point(
+        &self,
+        target: &MobjectHandle,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> PyResult<(f64, f64)> {
+        self.observe_points(
+            (&target.handle).into(),
+            |target| target.boundary_point(direction_x, direction_y),
+            |scene, target| scene.effective_boundary_point(target, direction_x, direction_y),
+        )
+    }
+
+    #[pyo3(name = "queryMobjectPathBoundaryExtremumAlongDim")]
+    fn mobject_path_boundary_extremum_along_dim(
+        &self,
+        target: &MobjectHandle,
+        dim: usize,
+        key: f64,
+    ) -> PyResult<f64> {
+        self.observe_points(
+            (&target.handle).into(),
+            |target| target.path_boundary_extremum_along_dim(dim, key),
+            |scene, target| scene.effective_path_boundary_extremum_along_dim(target, dim, key),
+        )
+    }
+
+    #[pyo3(name = "queryMobjectPathBoundaryPoint")]
+    fn mobject_path_boundary_point(
+        &self,
+        target: &MobjectHandle,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> PyResult<(f64, f64)> {
+        self.observe_points(
+            (&target.handle).into(),
+            |target| target.path_boundary_point(direction_x, direction_y),
+            |scene, target| scene.effective_path_boundary_point(target, direction_x, direction_y),
+        )
+    }
+
+    #[pyo3(name = "queryFamilyPathBoundaryPoints3D")]
+    fn family_path_boundary_points_3d(
+        &self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<Vec<f64>> {
+        self.observe_points(
+            (&target.family).into(),
+            MobjectTarget::path_boundary_points_3d,
+            Scene::effective_path_boundary_points_3d,
+        )
+        .map(crate::path_input::flat_points_3d)
+    }
+
     #[pyo3(name = "queryFamilyVectorBoundaryPoints3D")]
     fn family_vector_boundary_points_3d(
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<Vec<f64>> {
-        self.require_active()?;
-        self.same_family_store(target)?;
-        let target = noon::MobjectTarget::from(&target.family);
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_vector_boundary_points_3d(
-                self.scene.integration_store(),
-                execution,
-                target,
-            )
-        } else {
-            target.vector_boundary_points_3d()
-        };
-        value
-            .map(crate::path_input::flat_points_3d)
-            .map_err(engine_error)
+        self.observe_points(
+            (&target.family).into(),
+            MobjectTarget::vector_boundary_points_3d,
+            Scene::effective_vector_boundary_points_3d,
+        )
+        .map(crate::path_input::flat_points_3d)
     }
+
     #[pyo3(name = "queryFamilyAllPoints3D")]
     fn family_all_points_3d(&self, target: &crate::family::FamilyHandle) -> PyResult<Vec<f64>> {
-        self.require_active()?;
+        self.observe_points(
+            (&target.family).into(),
+            MobjectTarget::all_points_3d,
+            Scene::effective_all_points_3d,
+        )
+        .map(crate::path_input::flat_points_3d)
+    }
+
+    #[pyo3(name = "queryFamilyExtremumAlongDim")]
+    fn family_extremum_along_dim(
+        &self,
+        target: &crate::family::FamilyHandle,
+        dim: usize,
+        key: f64,
+    ) -> PyResult<f64> {
+        self.observe_points(
+            (&target.family).into(),
+            |target| target.extremum_along_dim(dim, key),
+            |scene, target| scene.effective_extremum_along_dim(target, dim, key),
+        )
+    }
+
+    #[pyo3(name = "queryFamilyLengthOverDim")]
+    fn family_length_over_dim(
+        &self,
+        target: &crate::family::FamilyHandle,
+        dim: usize,
+    ) -> PyResult<f64> {
+        self.observe_points(
+            (&target.family).into(),
+            |target| target.length_over_dim(dim),
+            |scene, target| scene.effective_length_over_dim(target, dim),
+        )
+    }
+
+    #[pyo3(name = "queryFamilyCenterOfMass")]
+    fn family_center_of_mass(&self, target: &crate::family::FamilyHandle) -> PyResult<(f64, f64)> {
+        self.observe_points(
+            (&target.family).into(),
+            MobjectTarget::center_of_mass,
+            Scene::effective_center_of_mass,
+        )
+    }
+
+    #[pyo3(name = "queryFamilyBoundaryPoint")]
+    fn family_boundary_point(
+        &self,
+        target: &crate::family::FamilyHandle,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> PyResult<(f64, f64)> {
+        self.observe_points(
+            (&target.family).into(),
+            |target| target.boundary_point(direction_x, direction_y),
+            |scene, target| scene.effective_boundary_point(target, direction_x, direction_y),
+        )
+    }
+
+    #[pyo3(name = "prepareFamilySubsetDisplay")]
+    fn prepare_family_subset_display(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<()> {
+        self.available()?;
         self.same_family_store(target)?;
-        let target = noon::MobjectTarget::from(&target.family);
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_all_points_3d(
-                self.scene.integration_store(),
-                execution,
-                target,
-            )
-        } else {
-            target.all_points_3d()
-        };
-        value
-            .map(crate::path_input::flat_points_3d)
+        self.scene
+            .prepare_family_subset_display(&target.family)
+            .map(|_| ())
             .map_err(engine_error)
     }
+
+    #[pyo3(name = "queryMobjectPointReductionTree")]
+    fn mobject_point_reduction_tree<'py>(
+        &self,
+        py: Python<'py>,
+        target: &MobjectHandle,
+    ) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        let tree = self.observe_points(
+            (&target.handle).into(),
+            MobjectTarget::point_reduction_tree,
+            Scene::effective_point_reduction_tree,
+        )?;
+        crate::path_input::point_reduction_tree(py, tree)
+    }
+
+    #[pyo3(name = "queryFamilyPointReductionTree")]
+    fn family_point_reduction_tree<'py>(
+        &self,
+        py: Python<'py>,
+        target: &crate::family::FamilyHandle,
+    ) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
+        let tree = self.observe_points(
+            (&target.family).into(),
+            MobjectTarget::point_reduction_tree,
+            Scene::effective_point_reduction_tree,
+        )?;
+        crate::path_input::point_reduction_tree(py, tree)
+    }
+
     #[pyo3(name = "queryMobjectPointCount")]
-    fn point_count(&mut self, target: &MobjectHandle) -> PyResult<usize> {
+    fn point_count(&self, target: &MobjectHandle) -> PyResult<usize> {
         self.require_active()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            self.scene
-                .effective_mobject_point_count(&target.handle)
-                .map_err(noon::LiveSessionError::from)
-                .map_err(engine_error)
-        } else {
-            target.handle.get_num_points().map_err(engine_error)
-        }
+        self.scene
+            .own_point_count((&target.handle).into())
+            .map_err(|error| {
+                if self.has_execution() {
+                    engine_error(noon::LiveSessionError::from(error))
+                } else {
+                    engine_error(error)
+                }
+            })
+    }
+
+    #[pyo3(name = "queryFamilyPointCount")]
+    fn family_point_count(&self, target: &crate::family::FamilyHandle) -> PyResult<usize> {
+        self.require_active()?;
+        self.scene
+            .own_point_count((&target.family).into())
+            .map_err(engine_error)
     }
 
     #[pyo3(name = "queryMobjectPointArray")]
     fn object_point_array(&self, target: &MobjectHandle) -> PyResult<(Vec<f64>, Vec<usize>)> {
-        self.require_active()?;
-        self.same_store(target)?;
-        let target = noon::MobjectTarget::from(&target.handle);
-        let value = if self.has_execution() {
-            self.scene.effective_point_array(target)
-        } else {
-            target.point_array()
-        };
-        value
-            .map(crate::path_input::point_array)
-            .map_err(engine_error)
+        self.observe_points(
+            (&target.handle).into(),
+            MobjectTarget::point_array,
+            Scene::effective_point_array,
+        )
+        .map(crate::path_input::point_array)
     }
     #[pyo3(name = "queryFamilyPointArray")]
     fn family_point_array(
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<(Vec<f64>, Vec<usize>)> {
-        self.require_active()?;
-        self.same_family_store(target)?;
-        let target = noon::MobjectTarget::from(&target.family);
-        let value = if self.has_execution() {
-            self.scene.effective_point_array(target)
-        } else {
-            target.point_array()
-        };
-        value
-            .map(crate::path_input::point_array)
-            .map_err(engine_error)
+        self.observe_points(
+            (&target.family).into(),
+            MobjectTarget::point_array,
+            Scene::effective_point_array,
+        )
+        .map(crate::path_input::point_array)
     }
 
-    #[pyo3(name="liveSetFillImage",signature=(target,paint,opacity))]
-    fn live_fill_image(
+    #[pyo3(name="setFillImage",signature=(target,paint,opacity))]
+    fn set_fill_image(
         &mut self,
         target: &MobjectHandle,
         paint: &crate::paints::ImagePaintOptions,
@@ -1731,17 +3079,13 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        self.scene
-            .set_fill_image(&target.handle, paint.options.clone(), opacity)
-            .map(|_| ())
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+        self.edit_scene(|scene| {
+            scene.set_fill_image(&target.handle, paint.options.clone(), opacity)
+        })
     }
 
-    #[pyo3(name="liveSetFillImageMapping",signature=(target,paint,opacity))]
-    fn live_fill_image_mapping(
+    #[pyo3(name="setFillImageMapping",signature=(target,paint,opacity))]
+    fn set_fill_image_mapping(
         &mut self,
         target: &MobjectHandle,
         paint: &crate::paints::ImageMapping,
@@ -1749,17 +3093,11 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        self.scene
-            .set_fill_image_mapping(&target.handle, paint.value, opacity)
-            .map(|_| ())
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+        self.edit_scene(|scene| scene.set_fill_image_mapping(&target.handle, paint.value, opacity))
     }
 
-    #[pyo3(name="liveSetFillGradient", signature=(target,paint,opacity))]
-    fn live_fill_gradient(
+    #[pyo3(name="setFillGradient", signature=(target,paint,opacity))]
+    fn set_fill_gradient(
         &mut self,
         target: &MobjectHandle,
         paint: &crate::paints::LinearGradient,
@@ -1770,8 +3108,8 @@ impl Context {
         self.place(|scene| scene.set_fill_gradient(&target.handle, paint.value.clone(), opacity))
     }
 
-    #[pyo3(name="liveSetFillRadialGradient", signature=(target,paint,opacity))]
-    fn live_fill_radial_gradient(
+    #[pyo3(name="setFillRadialGradient", signature=(target,paint,opacity))]
+    fn set_fill_radial_gradient(
         &mut self,
         target: &MobjectHandle,
         paint: &crate::paints::RadialGradient,
@@ -1784,8 +3122,8 @@ impl Context {
         })
     }
 
-    #[pyo3(name="liveSetFillNoise", signature=(target,paint,opacity))]
-    fn live_fill_noise(
+    #[pyo3(name="setFillNoise", signature=(target,paint,opacity))]
+    fn set_fill_noise(
         &mut self,
         target: &MobjectHandle,
         paint: &crate::paints::NoisePaint,
@@ -1796,8 +3134,8 @@ impl Context {
         self.place(|scene| scene.set_fill_noise(&target.handle, paint.value.clone(), opacity))
     }
 
-    #[pyo3(name="liveSetFillHatch", signature=(target,paint,opacity))]
-    fn live_fill_hatch(
+    #[pyo3(name="setFillHatch", signature=(target,paint,opacity))]
+    fn set_fill_hatch(
         &mut self,
         target: &MobjectHandle,
         paint: &crate::paints::HatchPaint,
@@ -1808,178 +3146,159 @@ impl Context {
         self.place(|scene| scene.set_fill_hatch(&target.handle, paint.value.clone(), opacity))
     }
 
-    #[pyo3(name = "liveSetGlow")]
+    #[pyo3(name = "setGlow")]
     fn _set_glow(
         &mut self,
         target: &MobjectHandle,
         update: &crate::effects::EffectUpdate,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_live_appearance(|scene| scene.set_glow(&target.handle, update.value.clone()))
+        self.edit_scene(|scene| scene.set_glow(&target.handle, update.value.clone()))
     }
 
-    #[pyo3(name = "liveRemoveGlow")]
+    #[pyo3(name = "removeGlow")]
     fn _remove_glow(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_live_appearance(|scene| scene.remove_glow(&target.handle))
+        self.edit_scene(|scene| scene.remove_glow(&target.handle))
     }
 
-    #[pyo3(name = "liveAddEffect")]
+    #[pyo3(name = "addEffect")]
     fn _add_effect(
         &mut self,
         target: &MobjectHandle,
         definition: &crate::effects::EffectDefinition,
         name: &str,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_live_appearance(|scene| {
-            scene.add_effect(&target.handle, definition.definition(), name)
-        })
+        self.edit_scene(|scene| scene.add_effect(&target.handle, definition.definition(), name))
     }
 
-    #[pyo3(name = "liveSetEffect")]
+    #[pyo3(name = "setEffect")]
     fn _set_effect(
         &mut self,
         target: &MobjectHandle,
         name: &str,
         update: &crate::effects::EffectUpdate,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_live_appearance(|scene| {
-            scene.set_effect(&target.handle, name, update.value.clone())
-        })
+        self.edit_scene(|scene| scene.set_effect(&target.handle, name, update.value.clone()))
     }
 
-    #[pyo3(name = "liveSetEffectHandle")]
+    #[pyo3(name = "setEffectHandle")]
     fn _set_effect_handle(
         &mut self,
         target: &MobjectHandle,
         handle: &crate::effects::EffectHandle,
         update: &crate::effects::EffectUpdate,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_live_appearance(|scene| {
+        self.edit_scene(|scene| {
             scene.set_effect(&target.handle, &handle.handle, update.value.clone())
         })
     }
 
-    #[pyo3(name = "liveRemoveEffect")]
+    #[pyo3(name = "removeEffect")]
     fn _remove_effect(&mut self, target: &MobjectHandle, name: &str) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_live_appearance(|scene| scene.remove_effect(&target.handle, name))
+        self.edit_scene(|scene| scene.remove_effect(&target.handle, name))
     }
 
-    #[pyo3(name = "liveRemoveEffectHandle")]
+    #[pyo3(name = "removeEffectHandle")]
     fn _remove_effect_handle(
         &mut self,
         target: &MobjectHandle,
         handle: &crate::effects::EffectHandle,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        self.edit_live_appearance(|scene| scene.remove_effect(&target.handle, &handle.handle))
+        self.edit_scene(|scene| scene.remove_effect(&target.handle, &handle.handle))
     }
 
-    #[pyo3(name = "liveSetFamilyGlow")]
+    #[pyo3(name = "setFamilyGlow")]
     fn family_set_glow(
         &mut self,
         target: &crate::family::FamilyHandle,
         update: &crate::effects::EffectUpdate,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_live_appearance(|scene| scene.set_glow(&target.family, update.value.clone()))
+        self.edit_scene(|scene| scene.set_glow(&target.family, update.value.clone()))
     }
 
-    #[pyo3(name = "liveRemoveFamilyGlow")]
+    #[pyo3(name = "removeFamilyGlow")]
     fn family_remove_glow(&mut self, target: &crate::family::FamilyHandle) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_live_appearance(|scene| scene.remove_glow(&target.family))
+        self.edit_scene(|scene| scene.remove_glow(&target.family))
     }
 
-    #[pyo3(name = "liveAddFamilyEffect")]
+    #[pyo3(name = "addFamilyEffect")]
     fn family_add_effect(
         &mut self,
         target: &crate::family::FamilyHandle,
         definition: &crate::effects::EffectDefinition,
         name: &str,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_live_appearance(|scene| {
-            scene.add_effect(&target.family, definition.definition(), name)
-        })
+        self.edit_scene(|scene| scene.add_effect(&target.family, definition.definition(), name))
     }
 
-    #[pyo3(name = "liveSetFamilyEffect")]
+    #[pyo3(name = "setFamilyEffect")]
     fn family_set_effect(
         &mut self,
         target: &crate::family::FamilyHandle,
         name: &str,
         update: &crate::effects::EffectUpdate,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_live_appearance(|scene| {
-            scene.set_effect(&target.family, name, update.value.clone())
-        })
+        self.edit_scene(|scene| scene.set_effect(&target.family, name, update.value.clone()))
     }
 
-    #[pyo3(name = "liveSetFamilyEffectHandle")]
+    #[pyo3(name = "setFamilyEffectHandle")]
     fn family_set_effect_handle(
         &mut self,
         target: &crate::family::FamilyHandle,
         handle: &crate::effects::EffectHandle,
         update: &crate::effects::EffectUpdate,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_live_appearance(|scene| {
+        self.edit_scene(|scene| {
             scene.set_effect(&target.family, &handle.handle, update.value.clone())
         })
     }
 
-    #[pyo3(name = "liveRemoveFamilyEffect")]
+    #[pyo3(name = "removeFamilyEffect")]
     fn family_remove_effect(
         &mut self,
         target: &crate::family::FamilyHandle,
         name: &str,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_live_appearance(|scene| scene.remove_effect(&target.family, name))
+        self.edit_scene(|scene| scene.remove_effect(&target.family, name))
     }
 
-    #[pyo3(name = "liveRemoveFamilyEffectHandle")]
+    #[pyo3(name = "removeFamilyEffectHandle")]
     fn family_remove_effect_handle(
         &mut self,
         target: &crate::family::FamilyHandle,
         handle: &crate::effects::EffectHandle,
     ) -> PyResult<()> {
-        self.available()?;
         self.same_family_store(target)?;
-        self.edit_live_appearance(|scene| scene.remove_effect(&target.family, &handle.handle))
+        self.edit_scene(|scene| scene.remove_effect(&target.family, &handle.handle))
     }
 
     #[pyo3(name = "queryLayoutDimensionLength")]
     fn layout_dimension_length(&mut self, source: &LayoutAnchor, dimension: u32) -> PyResult<f64> {
         self.require_active()?;
         let dimension = dimension.try_into().map_err(engine_error)?;
-        if self.has_execution() {
-            self.with_live(|live| live.dimension_length(&source.anchor, dimension))
-        } else {
-            source
-                .anchor
-                .dimension_length(dimension)
-                .map_err(engine_error)
-        }
+        self.scene
+            .layout_dimension_length(&source.anchor, dimension)
+            .map_err(|error| {
+                if !self.has_execution() {
+                    engine_error(error)
+                } else if dimension == noon::LayoutDimension::Depth {
+                    engine_error(AuthoringFailure::from_scene_mutation(error, true))
+                } else {
+                    engine_error(noon::LiveSessionError::from(error))
+                }
+            })
     }
     #[pyo3(name = "queryMobjectDimension")]
     fn mobject_dimension(&mut self, target: &MobjectHandle, dimension: u32) -> PyResult<f64> {
@@ -1990,7 +3309,7 @@ impl Context {
         )
     }
 
-    #[pyo3(name = "liveScaleLayout3d")]
+    #[pyo3(name = "scaleLayout3d")]
     #[allow(clippy::too_many_arguments)]
     fn scale_layout_3d(
         &mut self,
@@ -2004,30 +3323,22 @@ impl Context {
         point: bool,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| {
-            live.scale_layout_3d(
+        self.place(|scene| {
+            scene.scale_layout_3d(
                 &source.anchor,
                 noon::SemanticVec3::new(sx, sy, sz),
                 crate::mobject::pivot_3d(x, y, z, point),
             )
-            .map(|_| ())
         })
     }
 
     #[pyo3(name = "queryMobjectRequiresContentBoundary")]
     fn mobject_requires_content_boundary(&self, target: &MobjectHandle) -> PyResult<bool> {
-        self.require_active()?;
-        self.same_store(target)?;
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_requires_content_boundary(
-                self.scene.integration_store(),
-                execution,
-                noon::MobjectTarget::from(&target.handle),
-            )
-        } else {
-            noon::MobjectTarget::from(&target.handle).requires_content_boundary()
-        };
-        value.map_err(engine_error)
+        self.observe_points(
+            (&target.handle).into(),
+            MobjectTarget::requires_content_boundary,
+            Scene::effective_requires_content_boundary,
+        )
     }
 
     #[pyo3(name = "queryMobjectCriticalPoint3D")]
@@ -2039,28 +3350,11 @@ impl Context {
         z: f64,
         vector_boundary: bool,
     ) -> PyResult<(f64, f64, f64)> {
-        self.require_active()?;
-        self.same_store(target)?;
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_critical_point_3d(
-                self.scene.integration_store(),
-                execution,
-                noon::MobjectTarget::from(&target.handle),
-                noon::SemanticVec3::new(x, y, z),
-                vector_boundary,
-            )
-        } else {
-            {
-                let target = noon::MobjectTarget::from(&target.handle);
-                let direction = noon::SemanticVec3::new(x, y, z);
-                if vector_boundary {
-                    target.vector_critical_point_3d(direction)
-                } else {
-                    target.critical_point_3d(direction)
-                }
-            }
-        };
-        value.map(|p| (p.x, p.y, p.z)).map_err(engine_error)
+        self.critical_point_3d(
+            (&target.handle).into(),
+            noon::SemanticVec3::new(x, y, z),
+            vector_boundary,
+        )
     }
 
     #[pyo3(name = "queryFamilyRequiresContentBoundary")]
@@ -2068,18 +3362,11 @@ impl Context {
         &self,
         target: &crate::family::FamilyHandle,
     ) -> PyResult<bool> {
-        self.require_active()?;
-        self.same_family_store(target)?;
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_requires_content_boundary(
-                self.scene.integration_store(),
-                execution,
-                noon::MobjectTarget::from(&target.family),
-            )
-        } else {
-            noon::MobjectTarget::from(&target.family).requires_content_boundary()
-        };
-        value.map_err(engine_error)
+        self.observe_points(
+            (&target.family).into(),
+            MobjectTarget::requires_content_boundary,
+            Scene::effective_requires_content_boundary,
+        )
     }
 
     #[pyo3(name = "queryFamilyCriticalPoint3D")]
@@ -2091,28 +3378,11 @@ impl Context {
         z: f64,
         vector_boundary: bool,
     ) -> PyResult<(f64, f64, f64)> {
-        self.require_active()?;
-        self.same_family_store(target)?;
-        let value = if let Some(execution) = scene_execution::session(&self.scene) {
-            noon::integration::effective_critical_point_3d(
-                self.scene.integration_store(),
-                execution,
-                noon::MobjectTarget::from(&target.family),
-                noon::SemanticVec3::new(x, y, z),
-                vector_boundary,
-            )
-        } else {
-            {
-                let target = noon::MobjectTarget::from(&target.family);
-                let direction = noon::SemanticVec3::new(x, y, z);
-                if vector_boundary {
-                    target.vector_critical_point_3d(direction)
-                } else {
-                    target.critical_point_3d(direction)
-                }
-            }
-        };
-        value.map(|p| (p.x, p.y, p.z)).map_err(engine_error)
+        self.critical_point_3d(
+            (&target.family).into(),
+            noon::SemanticVec3::new(x, y, z),
+            vector_boundary,
+        )
     }
 
     #[pyo3(name = "queryLayoutContentCriticalPoint3D")]
@@ -2125,20 +3395,54 @@ impl Context {
     ) -> PyResult<(f64, f64, f64)> {
         self.require_active()?;
         let direction = noon::SemanticVec3::new(x, y, z);
-        if self.has_execution() {
-            self.with_live(|live| live.layout_critical_point_3d(&anchor.anchor, direction))
-                .map(|p| (p.x, p.y, p.z))
-        } else {
-            anchor
-                .anchor
-                .critical_point_3d(direction)
-                .map(|p| (p.x, p.y, p.z))
-                .map_err(engine_error)
-        }
+        self.scene
+            .layout_critical_point_3d(&anchor.anchor, direction)
+            .map(|p| (p.x, p.y, p.z))
+            .map_err(|error| {
+                if self.has_execution() {
+                    engine_error(noon::LiveSessionError::from(error))
+                } else {
+                    engine_error(error)
+                }
+            })
     }
 
     fn prepare_view(&mut self) -> PyResult<crate::viewer::PreparedScene> {
         self.prepare_viewer().map(crate::viewer::PreparedScene::new)
+    }
+
+    #[pyo3(name = "setTranslationDragTargets")]
+    fn set_translation_drag_targets(&mut self, batch: &MembershipBatch) -> PyResult<()> {
+        self.available()?;
+        let mut nodes = Vec::new();
+        let mut seen = HashSet::new();
+        for target in batch.add_targets()? {
+            let MobjectTarget::Object(object) = target else {
+                return Err(engine_error("translation drag requires leaf mobjects"));
+            };
+            if !Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
+                return Err(engine_error(noon::AuthoringError::ForeignStore));
+            }
+            object.validate().map_err(engine_error)?;
+            let node = object.node_id();
+            if !self.bound_ids.contains(&node) {
+                return Err(engine_error(
+                    "translation drag target is not bound to this canonical Scene",
+                ));
+            }
+            if !seen.insert(node) {
+                return Err(engine_error("translation drag targets must be unique"));
+            }
+            nodes.push(node);
+        }
+        if let Some((_, _, session)) = scene_execution::parts_mut(&mut self.scene) {
+            session
+                .set_translation_drag_targets(nodes)
+                .map_err(|error| engine_error(noon::LiveSessionError::TranslationDrag(error)))?;
+        } else {
+            self.drag_targets = nodes;
+        }
+        Ok(())
     }
     #[pyo3(name = "requiresLiveMutationRouting")]
     fn requires_live_mutation_routing(&self) -> PyResult<bool> {
@@ -2146,9 +3450,9 @@ impl Context {
         Ok(self.has_execution())
     }
     #[cfg(feature = "native-text")]
-    #[pyo3(name = "liveCreateManimText", signature = (source, family, size, spacing, r, g, b, a, opacity, colors=None, face=None))]
+    #[pyo3(name = "createManimText", signature = (source, family, size, spacing, r, g, b, a, opacity, colors=None, face=None))]
     #[allow(clippy::too_many_arguments)]
-    fn live_text(
+    fn create_text(
         &mut self,
         source: &str,
         family: &str,
@@ -2162,14 +3466,14 @@ impl Context {
         colors: Option<PyRefMut<'_, crate::text::TextColorBatch>>,
         face: Option<PyRef<'_, crate::text::FontFace>>,
     ) -> PyResult<MobjectHandle> {
-        crate::text::live(
+        crate::text::in_scene(
             self, source, family, size, spacing, r, g, b, a, opacity, colors, face, false,
         )
     }
     #[cfg(feature = "native-text")]
-    #[pyo3(name = "liveCreateManimMarkupText", signature = (source, family, size, spacing, r, g, b, a, opacity, face=None))]
+    #[pyo3(name = "createManimMarkupText", signature = (source, family, size, spacing, r, g, b, a, opacity, face=None))]
     #[allow(clippy::too_many_arguments)]
-    fn live_markup_text(
+    fn create_markup_text(
         &mut self,
         source: &str,
         family: &str,
@@ -2182,27 +3486,17 @@ impl Context {
         opacity: f64,
         face: Option<PyRef<'_, crate::text::FontFace>>,
     ) -> PyResult<MobjectHandle> {
-        crate::text::live(
+        crate::text::in_scene(
             self, source, family, size, spacing, r, g, b, a, opacity, None, face, true,
         )
     }
-    #[pyo3(name = "liveSetAngleValue")]
+    #[pyo3(name = "setAngleValue")]
     fn set_angle_value(&mut self, target: &MobjectHandle, radians: f64) -> PyResult<()> {
-        self.available()?;
         self.same_store(target)?;
-        if self.has_execution() {
-            self.with_live(|live| live.set_angle_value(&target.handle, radians))
-                .map(|_| ())
-        } else {
-            target
-                .handle
-                .clone()
-                .set_angle_value(radians)
-                .map_err(engine_error)
-        }
+        self.edit_scene(|scene| scene.set_angle_value(&target.handle, radians))
     }
     #[cfg(feature = "typst")]
-    #[pyo3(name = "liveCreateManimTypst")]
+    #[pyo3(name = "createManimTypst")]
     #[allow(clippy::too_many_arguments)]
     fn typst(
         &mut self,
@@ -2215,7 +3509,7 @@ impl Context {
         alpha: f64,
         opacity: f64,
     ) -> PyResult<MobjectHandle> {
-        crate::typst::live(self, source, math, size, red, green, blue, alpha, opacity)
+        crate::typst::in_scene(self, source, math, size, red, green, blue, alpha, opacity)
     }
     #[pyo3(name = "liveExecutionOwnership")]
     fn ownership(&self) -> PyResult<&'static str> {
@@ -2325,42 +3619,41 @@ impl Context {
             domain
                 .apply_scene(&mut self.scene, &targets)
                 .map_err(engine_error)?;
-        } else if let Some(mut live) = self.live_session() {
-            match live.edit_membership(request) {
+        } else {
+            let running = self.has_execution();
+            match self.scene.edit_membership(request) {
                 Ok(_) => {}
-                Err(noon::LiveSessionError::Publication(
+                Err(noon::AuthoringError::ExecutionPublication(
                     noon::ExecutionSessionPublicationError::ExternalEffectPreparationRequired,
                 )) => {
-                    let pending = live.prepare_membership(request).map_err(engine_error)?;
+                    let pending = self.with_live(|live| live.prepare_membership(request))?;
                     return self.staged(pending, batch.bindings.clone()).map(Some);
                 }
-                Err(error) => return Err(engine_error(error)),
+                Err(error) => {
+                    return Err(engine_error(AuthoringFailure::from_scene_mutation(
+                        error, running,
+                    )));
+                }
             }
-        } else {
-            self.scene.edit_membership(request).map_err(engine_error)?;
         }
         self.bound_ids
             .extend(batch.bindings.iter().map(|handle| handle.node_id()));
         Ok(None)
     }
     #[pyo3(name = "containsMobject")]
-    fn contains(&mut self, target: &MobjectHandle) -> PyResult<bool> {
+    fn contains(&self, target: &MobjectHandle) -> PyResult<bool> {
         self.require_active()?;
-        self.same_store(target)?;
-        if self.has_execution() {
-            self.with_live(|live| live.contains(&target.handle))
-        } else {
-            noon_core::semantic_scene_root_contains(
-                &self.scene.integration_store().borrow(),
-                self.scene.root(),
-                target.handle.node_id(),
-            )
-            .map_err(engine_error)
-        }
+        self.scene.contains(&target.handle).map_err(engine_error)
     }
-    #[pyo3(name = "liveContainsMobject")]
-    fn live_contains(&mut self, target: &MobjectHandle) -> PyResult<bool> {
-        self.contains(target)
+    #[pyo3(name = "containsDirectMobject")]
+    fn contains_direct(&self, target: &MobjectHandle) -> PyResult<bool> {
+        self.require_active()?;
+        self.scene.contains_direct(&target.handle).map_err(|error| {
+            engine_error(AuthoringFailure::from_scene_mutation(
+                error,
+                self.has_execution(),
+            ))
+        })
     }
     #[pyo3(name = "rootMembershipKeys")]
     fn membership(&self) -> PyResult<Vec<String>> {
@@ -2395,14 +3688,7 @@ impl Context {
     #[pyo3(name = "bindMobject")]
     fn bind(&mut self, _id: &str, target: &MobjectHandle) -> PyResult<()> {
         self.available()?;
-        self.scene.add(&target.handle).map_err(engine_error)?;
-        self.bound_ids.insert(target.handle.node_id());
-        Ok(())
-    }
-    #[pyo3(name = "liveAdd")]
-    fn live_add(&mut self, _id: &str, target: &MobjectHandle) -> PyResult<()> {
-        self.available()?;
-        self.with_live(|live| live.add(&target.handle).map(|_| ()))?;
+        self.edit_scene(|scene| scene.add(&target.handle))?;
         self.bound_ids.insert(target.handle.node_id());
         Ok(())
     }
@@ -2428,60 +3714,48 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<crate::family::ColorObservation> {
-        self.require_active()?;
-        self.same_store(target)?;
-        if !self.bound_ids.contains(&target.handle.node_id()) {
-            return Err(engine_error("mobject is not bound to this canonical Scene"));
-        }
-        let color = if self.has_execution() {
-            self.scene
-                .effective_manim_color(&target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
-        } else {
-            target.handle.manim_color().map_err(engine_error)?
-        };
-        Ok(color.into())
+        self.observe_bound_mobject(target, Mobject::manim_color, Scene::effective_manim_color)
+            .map(Into::into)
     }
-    #[pyo3(name = "liveCreateFamily")]
+    #[pyo3(name = "createFamily")]
     fn create_family(
         &mut self,
         batch: &MembershipBatch,
         z_index: f64,
         draw_enabled: bool,
-    ) -> PyResult<crate::family::FamilyHandle> {
-        self.create_family_with_color(batch, z_index, 1.0, 1.0, 1.0, 1.0, draw_enabled)
-    }
-    #[pyo3(name = "liveCreateFamilyWithColor")]
-    #[allow(clippy::too_many_arguments)]
-    fn create_family_with_color(
-        &mut self,
-        batch: &MembershipBatch,
-        z_index: f64,
-        r: f64,
-        g: f64,
-        b: f64,
-        a: f64,
-        draw_enabled: bool,
+        red: f64,
+        green: f64,
+        blue: f64,
+        alpha: f64,
     ) -> PyResult<crate::family::FamilyHandle> {
         self.available()?;
-        if batch.kind != "add" {
-            return Err(engine_error("family creation requires an add batch"));
-        }
-        let (store, root, execution) = scene_execution::parts_mut(&mut self.scene)
-            .ok_or_else(|| engine_error("no execution session"))?;
-        noon::integration::publish_family_creation_with_presentation(
-            store,
-            root,
-            execution,
-            &batch.targets(),
-            z_index,
-            noon::Color::rgba(r as f32, g as f32, b as f32, a as f32),
-            draw_enabled,
-        )
-        .map(|family| crate::family::FamilyHandle { family })
-        .map_err(engine_error)
+        let color = noon::integration::family_color(true, red, green, blue, alpha)
+            .map_err(engine_error)?
+            .expect("required family color");
+        self.scene
+            .family_with_presentation(&batch.add_targets()?, z_index, color, draw_enabled)
+            .map(|family| crate::family::FamilyHandle { family })
+            .map_err(engine_error)
     }
-    #[pyo3(name = "liveCopyFamily")]
+    #[pyo3(name = "promoteFamilyOwnPoints")]
+    fn promote_family_own_points(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.promote_own_points((&target.family).into(), references)
+    }
+
+    #[pyo3(name = "promoteMobjectOwnPoints")]
+    fn promote_mobject_own_points(
+        &mut self,
+        target: &MobjectHandle,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.promote_own_points((&target.handle).into(), references)
+    }
+
+    #[pyo3(name = "copyFamily")]
     fn copy_family(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -2492,55 +3766,132 @@ impl Context {
         if references.kind != "add" {
             return Err(engine_error("family copy references require an add batch"));
         }
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
         self.scene
             .copy_family_with_references(&target.family, &references.targets())
-            .map(|copied| crate::family::FamilyCopy { copied })
-            .map_err(engine_error)
+            .map(|copied| crate::family::FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
-    #[pyo3(name = "liveEditFamilyMembership")]
+    #[pyo3(name = "cyclicReplaceTarget")]
+    fn cyclic_replace_target(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.available()?;
+        self.scene
+            .cyclic_replace_target_with_references(&target.family, &references.add_targets()?)
+            .map(|copied| crate::family::FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
+    }
+    #[pyo3(name = "editFamilyMembership")]
     fn edit_family(
         &mut self,
         target: &crate::family::FamilyHandle,
         batch: &MembershipBatch,
     ) -> PyResult<Vec<bool>> {
-        self.available()?;
         self.same_family_store(target)?;
-        match batch.kind.as_str() {
-            "add" => {
-                self.with_live(|live| live.add_family_members(&target.family, &batch.targets()))
-            }
-            "remove" => {
-                self.with_live(|live| live.remove_family_members(&target.family, &batch.targets()))
-            }
-            _ => Err(engine_error("unsupported family membership operation")),
-        }
+        self.edit_children((&target.family).into(), batch)
     }
-    #[pyo3(name = "liveShiftFamily")]
+
+    #[pyo3(name = "editObjectMembership")]
+    fn edit_object_membership(
+        &mut self,
+        target: &MobjectHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<Vec<bool>> {
+        self.same_store(target)?;
+        self.edit_children((&target.handle).into(), batch)
+    }
+
+    #[pyo3(name = "insertFamilyMember")]
+    fn insert_family_member(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        index: usize,
+        batch: &MembershipBatch,
+    ) -> PyResult<()> {
+        self.same_family_store(target)?;
+        let member = batch.single_member()?;
+        self.edit_scene(|scene| scene.insert_family_member(&target.family, index, member))
+    }
+
+    #[pyo3(name = "insertObjectMember")]
+    fn insert_object_member(
+        &mut self,
+        target: &MobjectHandle,
+        index: usize,
+        batch: &MembershipBatch,
+    ) -> PyResult<()> {
+        self.same_store(target)?;
+        let member = batch.single_member()?;
+        self.edit_scene(|scene| scene.insert_family_member(&target.handle, index, member))
+    }
+
+    #[pyo3(name = "replaceFamilyMembers")]
+    fn replace_family_members(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<()> {
+        self.same_family_store(target)?;
+        let members = batch.add_targets()?;
+        self.edit_scene(|scene| scene.replace_members((&target.family).into(), &members))
+    }
+
+    #[pyo3(name = "replaceObjectMembers")]
+    fn replace_object_members(
+        &mut self,
+        target: &MobjectHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<()> {
+        self.same_store(target)?;
+        let members = batch.add_targets()?;
+        self.edit_scene(|scene| scene.replace_members((&target.handle).into(), &members))
+    }
+
+    #[pyo3(name = "invertFamilyMembers")]
+    fn invert_family_members(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        recursive: bool,
+    ) -> PyResult<()> {
+        self.same_family_store(target)?;
+        self.edit_scene(|scene| scene.invert_family_members(&target.family, recursive))
+    }
+
+    #[pyo3(name = "copyMobjectFamily")]
+    fn copy_mobject_family(
+        &mut self,
+        target: &MobjectHandle,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.available()?;
+        self.same_store(target)?;
+        self.scene
+            .copy_mobject_with_references(&target.handle, &references.add_targets()?)
+            .map(|copied| crate::family::FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
+    }
+
+    #[pyo3(name = "shiftFamily", signature = (target, x, y, z=0.0))]
     fn shift_family(
         &mut self,
         target: &crate::family::FamilyHandle,
         x: f64,
         y: f64,
+        z: f64,
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.place(|scene| scene.shift_family(&target.family, x, y))
+        self.place(|scene| scene.shift_family_3d(&target.family, noon::SemanticVec3::new(x, y, z)))
     }
-    #[pyo3(name = "liveScaleFamily")]
-    fn scale_family(
-        &mut self,
-        target: &crate::family::FamilyHandle,
-        x: f64,
-        y: f64,
-    ) -> PyResult<()> {
-        self.available()?;
-        self.same_family_store(target)?;
-        self.with_live(|live| live.scale_family(&target.family, x, y).map(|_| ()))
-    }
-    #[pyo3(name = "liveSetFamilyFill", signature = (target, has_color, red, green, blue, alpha, opacity=None))]
+    #[pyo3(name = "setFamilyFill", signature = (target, has_color, red, green, blue, alpha, opacity=None))]
     #[allow(clippy::too_many_arguments)]
     fn family_fill(
         &mut self,
@@ -2556,12 +3907,9 @@ impl Context {
         self.same_family_store(target)?;
         let color = noon::integration::family_color(has_color, red, green, blue, alpha)
             .map_err(engine_error)?;
-        self.with_live(|live| {
-            live.set_family_fill(&target.family, color, opacity)
-                .map(|_| ())
-        })
+        self.edit_scene(|scene| scene.set_family_fill(&target.family, color, opacity))
     }
-    #[pyo3(name = "liveSetFamilyStroke", signature = (target, has_color, red, green, blue, alpha, width=None, opacity=None))]
+    #[pyo3(name = "setFamilyStroke", signature = (target, has_color, red, green, blue, alpha, width=None, opacity=None))]
     #[allow(clippy::too_many_arguments)]
     fn family_stroke(
         &mut self,
@@ -2578,12 +3926,9 @@ impl Context {
         self.same_family_store(target)?;
         let color = noon::integration::family_color(has_color, red, green, blue, alpha)
             .map_err(engine_error)?;
-        self.with_live(|live| {
-            live.set_family_stroke(&target.family, color, width, opacity)
-                .map(|_| ())
-        })
+        self.edit_scene(|scene| scene.set_family_stroke(&target.family, color, width, opacity))
     }
-    #[pyo3(name = "liveSetFamilyOpacity")]
+    #[pyo3(name = "setFamilyOpacity")]
     fn family_opacity(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -2591,9 +3936,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| live.set_family_opacity(&target.family, opacity).map(|_| ()))
+        self.edit_scene(|scene| scene.set_family_opacity(&target.family, opacity))
     }
-    #[pyo3(name = "liveSetFamilyColor")]
+    #[pyo3(name = "setFamilyColor")]
     fn family_color(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -2604,12 +3949,9 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| {
-            live.set_family_color(&target.family, r, g, b, a)
-                .map(|_| ())
-        })
+        self.edit_scene(|scene| scene.set_family_color(&target.family, r, g, b, a))
     }
-    #[pyo3(name = "liveSetFamilyOwnColor")]
+    #[pyo3(name = "setFamilyOwnColor")]
     fn family_own_color(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -2620,10 +3962,7 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        self.with_live(|live| {
-            live.set_family_own_color(&target.family, r, g, b, a)
-                .map(|_| ())
-        })
+        self.edit_scene(|scene| scene.set_family_own_color(&target.family, r, g, b, a))
     }
     #[pyo3(name = "queryMobjectCenter")]
     fn center(&mut self, target: &MobjectHandle) -> PyResult<(f64, f64)> {
@@ -2638,7 +3977,9 @@ impl Context {
         self.require_active()?;
         self.same_family_store(target)?;
         if self.has_execution() {
-            self.with_live(|live| live.effective_family_layout(&target.family))
+            self.scene
+                .effective_family_layout(&target.family)
+                .map_err(|error| engine_error(noon::LiveSessionError::from(error)))
                 .map(LayoutObservation::from_effective)
         } else {
             let layout = target.family.layout().map_err(engine_error)?;
@@ -2654,7 +3995,9 @@ impl Context {
         self.require_active()?;
         self.same_store(target)?;
         if self.has_execution() {
-            self.with_live(|live| live.effective_layout(&target.handle))
+            self.scene
+                .effective_layout(&target.handle)
+                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
                 .map(LayoutObservation::from_effective)
         } else {
             Ok(LayoutObservation {
@@ -2664,54 +4007,64 @@ impl Context {
             })
         }
     }
-    #[pyo3(name = "liveTargetEditor")]
+    #[pyo3(name = "targetEditor")]
     fn target(&mut self, source: &MobjectHandle) -> PyResult<MobjectHandle> {
         self.available()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
         self.scene
             .target_editor(&source.handle)
             .map(MobjectHandle::from_semantic_mobject)
-            .map_err(engine_error)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
-    #[pyo3(name = "liveCreateManimGeometry")]
+    #[pyo3(name = "createManimGeometry")]
     fn geometry(&mut self, options: &GeometryOptions) -> PyResult<MobjectHandle> {
         self.available()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
+        let running = self.has_execution();
         self.scene
             .geometry(options.options.clone())
             .map(MobjectHandle::from_semantic_mobject)
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
-    #[pyo3(name = "liveCreateImage")]
+    #[pyo3(name = "createImage")]
     fn image(
         &mut self,
         mut options: PyRefMut<'_, crate::image::ImageOptions>,
     ) -> PyResult<MobjectHandle> {
-        crate::image::live(self, &mut options)
+        crate::image::create_in_scene(self, &mut options)
     }
-    #[pyo3(name = "liveSetImageSampling")]
+    #[pyo3(name = "setUpdatingSuspended")]
+    fn set_updating_suspended(
+        &mut self,
+        target: &MobjectHandle,
+        suspended: bool,
+        recursive: bool,
+    ) -> PyResult<()> {
+        self.edit_scene(|scene| scene.set_updating_suspended(&target.handle, suspended, recursive))
+    }
+
+    #[pyo3(name = "setFamilyUpdatingSuspended")]
+    fn set_family_updating_suspended(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        suspended: bool,
+        recursive: bool,
+    ) -> PyResult<()> {
+        self.edit_scene(|scene| scene.set_updating_suspended(&target.family, suspended, recursive))
+    }
+
+    #[pyo3(name = "setImageSampling")]
     fn set_image_sampling(&mut self, target: &MobjectHandle, value: &str) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
         let sampling = noon::integration::image_sampling(value).map_err(engine_error)?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        self.scene
-            .set_image_sampling(&target.handle, sampling)
-            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
+        self.edit_scene(|scene| scene.set_image_sampling(&target.handle, sampling))
     }
-    #[pyo3(name = "liveChangeAnchorMode")]
+    #[pyo3(name = "changeAnchorMode")]
     fn change_anchor_mode(&mut self, target: &MobjectHandle, smooth: bool) -> PyResult<()> {
         self.edit_path(target, |scene, object| {
             scene.change_anchor_mode(object, smooth)
         })
     }
-    #[pyo3(name = "liveChangeFamilyAnchorMode")]
+    #[pyo3(name = "changeFamilyAnchorMode")]
     fn change_family_anchor_mode(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -2719,9 +4072,6 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
         self.scene
             .change_family_anchor_mode(&target.family, smooth)
             .map_err(engine_error)
@@ -2742,7 +4092,7 @@ impl Context {
             .map(crate::path_query::PathQuery::new)
             .map_err(engine_error)
     }
-    #[pyo3(name = "liveRescaleToFit")]
+    #[pyo3(name = "rescaleToFit")]
     fn rescale_to_fit(
         &mut self,
         target: &LayoutAnchor,
@@ -2755,8 +4105,8 @@ impl Context {
         point: bool,
     ) -> PyResult<()> {
         let dimension = dimension.try_into().map_err(engine_error)?;
-        self.with_live(|live| {
-            live.rescale_to_fit_with_pivot(
+        self.place(|scene| {
+            scene.rescale_to_fit_with_pivot(
                 &target.anchor,
                 length,
                 dimension,
@@ -2765,14 +4115,14 @@ impl Context {
             )
         })
     }
-    #[pyo3(name="liveStartNewPath", signature=(target ,x,y,z))]
+    #[pyo3(name="startNewPath", signature=(target ,x,y,z))]
     fn start_new_path(&mut self, target: &MobjectHandle, x: f64, y: f64, z: f64) -> PyResult<()> {
         let point = crate::path_input::point_3d(x, y, z)?;
         self.edit_path(target, |scene, object| {
             scene.start_new_path_3d(object, point)
         })
     }
-    #[pyo3(name="liveStartNewPathWithStride", signature=(target ,x,y,z,stride))]
+    #[pyo3(name="startNewPathWithStride", signature=(target ,x,y,z,stride))]
     fn start_new_path_stride(
         &mut self,
         target: &MobjectHandle,
@@ -2786,7 +4136,7 @@ impl Context {
             scene.start_new_path_3d_with_stride(object, point, stride)
         })
     }
-    #[pyo3(name="liveAddLineTo", signature=(target ,x,y,z,stride=None))]
+    #[pyo3(name="addLineTo", signature=(target ,x,y,z,stride=None))]
     fn add_line_to(
         &mut self,
         target: &MobjectHandle,
@@ -2800,7 +4150,7 @@ impl Context {
             scene.add_line_to_3d_with_stride(object, point, stride.unwrap_or(4))
         })
     }
-    #[pyo3(name="liveAddLineToWithSamples", signature=(target ,x,y,z,stride,samples))]
+    #[pyo3(name="addLineToWithSamples", signature=(target ,x,y,z,stride,samples))]
     fn add_line_samples(
         &mut self,
         target: &MobjectHandle,
@@ -2818,68 +4168,54 @@ impl Context {
             scene.add_line_to_3d_with_stride_and_samples(object, point, stride, &samples)
         })
     }
-    #[pyo3(name="liveSetPoints", signature=(target ,values))]
-    fn set_points(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
-        let points = crate::path_input::points_f64(&values)?;
-        self.edit_path(target, |scene, object| {
-            scene.set_points_f64(object, &points)
-        })
-    }
-    #[pyo3(name="liveSetPoints3D", signature=(target ,values))]
+    #[pyo3(name="setPoints3D", signature=(target ,values))]
     fn set_points_3d(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
         self.edit_path(target, |scene, object| scene.set_points_3d(object, &points))
     }
-    #[pyo3(name="liveAppendPoints", signature=(target ,values))]
-    fn append_points(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
-        let points = crate::path_input::points_f64(&values)?;
-        self.edit_path(target, |scene, object| {
-            scene.append_points_f64(object, &points)
-        })
-    }
-    #[pyo3(name="liveAppendPoints3D", signature=(target ,values))]
+    #[pyo3(name="appendPoints3D", signature=(target ,values))]
     fn append_points_3d(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
         self.edit_path(target, |scene, object| {
             scene.append_points_3d(object, &points)
         })
     }
-    #[pyo3(name="liveSetPointsAsCorners", signature=(target ,values))]
+    #[pyo3(name="setPointsAsCorners", signature=(target ,values))]
     fn corners(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
         self.edit_path(target, |scene, object| {
             scene.set_points_as_corners_3d(object, &points)
         })
     }
-    #[pyo3(name="liveAddPointsAsCorners", signature=(target ,values))]
+    #[pyo3(name="addPointsAsCorners", signature=(target ,values))]
     fn append_corners(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points_3d(&values)?;
         self.edit_path(target, |scene, object| {
             scene.add_points_as_corners_3d(object, &points)
         })
     }
-    #[pyo3(name="liveAddCubicBezierCurves", signature=(target ,values))]
+    #[pyo3(name="addCubicBezierCurves", signature=(target ,values))]
     fn cubics(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let curves = crate::path_input::cubic_curves_3d(&values)?;
         self.edit_path(target, |scene, object| {
             scene.add_cubic_bezier_curves_3d(object, &curves)
         })
     }
-    #[pyo3(name="liveSetCubicBezierCurves", signature=(target ,values))]
+    #[pyo3(name="setCubicBezierCurves", signature=(target ,values))]
     fn set_cubics(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let curves = crate::path_input::cubic_curves_3d(&values)?;
         self.edit_path(target, |scene, object| {
             scene.set_cubic_bezier_curves_3d(object, &curves)
         })
     }
-    #[pyo3(name="liveSetPointsSmoothly", signature=(target ,values))]
+    #[pyo3(name="setPointsSmoothly", signature=(target ,values))]
     fn smooth_points(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
         let points = crate::path_input::points(&values)?;
         self.edit_path(target, |scene, object| {
             scene.set_points_smoothly(object, &points)
         })
     }
-    #[pyo3(name="liveSetPointsAsCornersWithSamples", signature=(target ,values,samples))]
+    #[pyo3(name="setPointsAsCornersWithSamples", signature=(target ,values,samples))]
     fn corners_samples(
         &mut self,
         target: &MobjectHandle,
@@ -2894,7 +4230,7 @@ impl Context {
             scene.set_points_as_corners_3d_with_samples(object, &points, &samples)
         })
     }
-    #[pyo3(name="liveAddPointsAsCornersWithStride", signature=(target ,values,stride,samples))]
+    #[pyo3(name="addPointsAsCornersWithStride", signature=(target ,values,stride,samples))]
     fn append_corners_stride(
         &mut self,
         target: &MobjectHandle,
@@ -2907,51 +4243,39 @@ impl Context {
             scene.add_points_as_corners_3d_with_stride(object, &points, stride, &samples)
         })
     }
-    #[pyo3(name="liveClearPoints", signature=(target))]
+    #[pyo3(name="clearPoints", signature=(target))]
     fn clear_points(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.edit_path(target, |scene, object| scene.clear_points(object))
     }
-    #[pyo3(name="liveClosePath", signature=(target))]
+    #[pyo3(name="closePath", signature=(target))]
     fn close_path(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.edit_path(target, |scene, object| scene.close_path(object))
     }
-    #[pyo3(name="liveReverseDirection", signature=(target))]
+    #[pyo3(name="reverseDirection", signature=(target))]
     fn reverse_direction(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.edit_path(target, |scene, object| scene.reverse_direction(object))
     }
-    #[pyo3(name="liveReversePoints", signature=(target))]
+    #[pyo3(name="reversePoints", signature=(target))]
     fn reverse_points(&mut self, target: &MobjectHandle) -> PyResult<()> {
         self.edit_path(target, |scene, object| scene.reverse_points(object))
     }
-    #[pyo3(name="liveMakeSmooth", signature=(target))]
-    fn make_smooth(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.edit_path(target, |scene, object| {
-            scene.change_anchor_mode(object, true)
-        })
-    }
-    #[pyo3(name="liveMakeJagged", signature=(target))]
-    fn make_jagged(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.edit_path(target, |scene, object| {
-            scene.change_anchor_mode(object, false)
-        })
-    }
-    #[pyo3(name="liveRepeatPoints", signature=(target ,count))]
+    #[pyo3(name="repeatPoints", signature=(target ,count))]
     fn repeat_points(&mut self, target: &MobjectHandle, count: usize) -> PyResult<()> {
         self.edit_path(target, |scene, object| scene.repeat_points(object, count))
     }
-    #[pyo3(name="liveInsertNCurves", signature=(target ,additional))]
+    #[pyo3(name="insertNCurves", signature=(target ,additional))]
     fn insert_curves(&mut self, target: &MobjectHandle, additional: usize) -> PyResult<()> {
         self.edit_path(target, |scene, object| {
             scene.insert_n_curves(object, additional)
         })
     }
-    #[pyo3(name="liveScaleHandleToAnchorDistances", signature=(target ,factor))]
+    #[pyo3(name="scaleHandleToAnchorDistances", signature=(target ,factor))]
     fn scale_handles(&mut self, target: &MobjectHandle, factor: f64) -> PyResult<()> {
         self.edit_path(target, |scene, object| {
             scene.scale_handle_to_anchor_distances(object, factor)
         })
     }
-    #[pyo3(name="liveClosePathWithStride", signature=(target ,stride,tolerance,samples))]
+    #[pyo3(name="closePathWithStride", signature=(target ,stride,tolerance,samples))]
     fn close_path_stride(
         &mut self,
         target: &MobjectHandle,
@@ -2963,7 +4287,7 @@ impl Context {
             scene.close_path_with_stride(object, stride, tolerance, &samples)
         })
     }
-    #[pyo3(name="livePointwiseBecomePartial", signature=(target ,source,a,b))]
+    #[pyo3(name="pointwiseBecomePartial", signature=(target ,source,a,b))]
     fn partial(
         &mut self,
         target: &MobjectHandle,
@@ -2976,14 +4300,14 @@ impl Context {
             scene.pointwise_become_partial(object, &source.handle, a, b)
         })
     }
-    #[pyo3(name="liveAppendVectorizedMobject", signature=(target ,source))]
+    #[pyo3(name="appendVectorizedMobject", signature=(target ,source))]
     fn append_vector(&mut self, target: &MobjectHandle, source: &MobjectHandle) -> PyResult<()> {
         self.same_store(source)?;
         self.edit_path(target, |scene, object| {
             scene.append_vectorized_mobject(object, &source.handle)
         })
     }
-    #[pyo3(name="liveAppendVectorizedMobjectWithStride", signature=(target ,source,stride))]
+    #[pyo3(name="appendVectorizedMobjectWithStride", signature=(target ,source,stride))]
     fn append_vector_stride(
         &mut self,
         target: &MobjectHandle,
@@ -2995,7 +4319,7 @@ impl Context {
             scene.append_vectorized_mobject_with_stride(object, &source.handle, stride)
         })
     }
-    #[pyo3(name="liveAddQuadraticBezierCurveTo", signature=(target ,control_x,control_y,control_z,anchor_x,anchor_y,anchor_z,stride=None))]
+    #[pyo3(name="addQuadraticBezierCurveTo", signature=(target ,control_x,control_y,control_z,anchor_x,anchor_y,anchor_z,stride=None))]
     fn path_quadratic(
         &mut self,
         target: &MobjectHandle,
@@ -3018,7 +4342,7 @@ impl Context {
             )
         })
     }
-    #[pyo3(name="liveAddCubicBezierCurveTo", signature=(target ,control1_x,control1_y,control1_z,control2_x,control2_y,control2_z,anchor_x,anchor_y,anchor_z,stride=None))]
+    #[pyo3(name="addCubicBezierCurveTo", signature=(target ,control1_x,control1_y,control1_z,control2_x,control2_y,control2_z,anchor_x,anchor_y,anchor_z,stride=None))]
     fn path_cubic(
         &mut self,
         target: &MobjectHandle,
@@ -3046,7 +4370,7 @@ impl Context {
             )
         })
     }
-    #[pyo3(name="liveAddCubicBezierCurve", signature=(target ,anchor1_x,anchor1_y,anchor1_z,handle1_x,handle1_y,handle1_z,handle2_x,handle2_y,handle2_z,anchor2_x,anchor2_y,anchor2_z))]
+    #[pyo3(name="addCubicBezierCurve", signature=(target ,anchor1_x,anchor1_y,anchor1_z,handle1_x,handle1_y,handle1_z,handle2_x,handle2_y,handle2_z,anchor2_x,anchor2_y,anchor2_z))]
     fn path_curve(
         &mut self,
         target: &MobjectHandle,
@@ -3071,7 +4395,7 @@ impl Context {
             scene.add_cubic_bezier_curve_3d(object, anchor1, handle1, handle2, anchor2)
         })
     }
-    #[pyo3(name="liveAddSmoothCurveTo", signature=(target ,values,stride=None))]
+    #[pyo3(name="addSmoothCurveTo", signature=(target ,values,stride=None))]
     fn smooth_curve(
         &mut self,
         target: &MobjectHandle,
@@ -3092,7 +4416,7 @@ impl Context {
             scene.add_smooth_curve_to_with_stride(object, handle2, anchor, stride.unwrap_or(4))
         })
     }
-    #[pyo3(name = "liveSetFamilyPoints3D")]
+    #[pyo3(name = "setFamilyPoints3D")]
     fn set_family_points_3d(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3100,9 +4424,9 @@ impl Context {
     ) -> PyResult<()> {
         self.same_family_store(target)?;
         let values = crate::path_input::points_3d(&values)?;
-        self.place(|scene| scene.set_family_points_3d(&target.family, &values))
+        self.publish_path_edit(|scene| scene.set_family_points_3d(&target.family, &values))
     }
-    #[pyo3(name = "liveAppendFamilyPoints3D")]
+    #[pyo3(name = "appendFamilyPoints3D")]
     fn append_family_points_3d(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3110,14 +4434,14 @@ impl Context {
     ) -> PyResult<()> {
         self.same_family_store(target)?;
         let values = crate::path_input::points_3d(&values)?;
-        self.place(|scene| scene.append_family_points_3d(&target.family, &values))
+        self.publish_path_edit(|scene| scene.append_family_points_3d(&target.family, &values))
     }
-    #[pyo3(name = "liveClearFamilyPoints")]
+    #[pyo3(name = "clearFamilyPoints")]
     fn clear_family_points(&mut self, target: &crate::family::FamilyHandle) -> PyResult<()> {
         self.same_family_store(target)?;
-        self.place(|scene| scene.clear_family_points(&target.family))
+        self.publish_path_edit(|scene| scene.clear_family_points(&target.family))
     }
-    #[pyo3(name = "liveSetFamilyEmptyPointArray")]
+    #[pyo3(name = "setFamilyEmptyPointArray")]
     fn empty_family_array(
         &mut self,
         target: &crate::family::FamilyHandle,
@@ -3125,38 +4449,59 @@ impl Context {
     ) -> PyResult<()> {
         self.same_family_store(target)?;
         let shape = crate::path_input::point_array_shape(&values)?;
-        self.place(|scene| scene.set_empty_point_array((&target.family).into(), shape))
+        self.publish_path_edit(|scene| scene.set_empty_point_array((&target.family).into(), shape))
     }
-    #[pyo3(name = "liveSetEmptyPointArray")]
+    #[pyo3(name = "setEmptyPointArray")]
     fn empty_point_array(&mut self, target: &MobjectHandle, dimensions: Vec<f64>) -> PyResult<()> {
         self.same_store(target)?;
         let shape = crate::path_input::point_array_shape(&dimensions)?;
-        self.place(|scene| scene.set_empty_point_array((&target.handle).into(), shape))
+        self.publish_path_edit(|scene| scene.set_empty_point_array((&target.handle).into(), shape))
     }
-    #[pyo3(name = "liveSubcurve")]
+    #[pyo3(name = "subcurve")]
     fn subcurve(&mut self, target: &MobjectHandle, a: f64, b: f64) -> PyResult<MobjectHandle> {
         self.same_store(target)?;
         self.require_active()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
         self.scene
             .subcurve(&target.handle, a, b)
             .map(MobjectHandle::from_semantic_mobject)
             .map_err(noon::LiveSessionError::from)
             .map_err(engine_error)
     }
-    #[pyo3(name = "liveAlignRootPoints")]
+    #[pyo3(name = "alignRootPoints")]
     fn align_root_points(&mut self, left: &LayoutAnchor, right: &LayoutAnchor) -> PyResult<()> {
-        self.place(|scene| scene.align_path_points(&left.anchor, &right.anchor))
+        self.publish_path_edit(|scene| scene.align_path_points(&left.anchor, &right.anchor))
     }
-    #[pyo3(name = "liveAlignPoints")]
+    #[pyo3(name = "alignPoints")]
     fn align_points(&mut self, left: &MobjectHandle, right: &MobjectHandle) -> PyResult<()> {
         self.same_store(left)?;
         self.same_store(right)?;
-        self.place(|scene| scene.align_points(&left.handle, &right.handle))
+        self.publish_path_edit(|scene| scene.align_points(&left.handle, &right.handle))
     }
-    #[pyo3(name = "liveApplyMatrix")]
+    #[pyo3(name = "matchPoints")]
+    fn match_points(&mut self, source: &MobjectHandle, target: &MobjectHandle) -> PyResult<()> {
+        self.edit_path(source, |scene, source| {
+            scene.match_points(source, &target.handle)
+        })
+    }
+    #[pyo3(name = "reverseFamilyPoints")]
+    fn reverse_family_points(&mut self, family: &crate::family::FamilyHandle) -> PyResult<()> {
+        self.available()?;
+        self.scene
+            .reverse_family_points(&family.family)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "repeatFamilyPoints")]
+    fn repeat_family_points(
+        &mut self,
+        family: &crate::family::FamilyHandle,
+        count: usize,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.scene
+            .repeat_family_points(&family.family, count)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "applyMatrix")]
     #[allow(clippy::too_many_arguments)]
     fn apply_matrix(
         &mut self,
@@ -3170,23 +4515,21 @@ impl Context {
         self.same_store(target)?;
         self.place(|scene| scene.apply_matrix(&target.handle, &values, rows, columns, x, y))
     }
-    #[pyo3(name = "liveShift")]
-    fn shift(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
-        self.available()?;
-        self.with_live(|live| live.shift(&target.handle, x, y).map(|_| ()))
+    #[pyo3(name = "shift", signature = (target, x, y, z = None))]
+    fn shift(&mut self, target: &MobjectHandle, x: f64, y: f64, z: Option<f64>) -> PyResult<()> {
+        self.edit_scene_property(|scene| {
+            scene.shift_3d(
+                &target.handle,
+                noon::SemanticVec3::new(x, y, z.unwrap_or(0.0)),
+            )
+        })
     }
-    #[pyo3(name = "liveScale")]
-    fn scale_mobject(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
-        self.available()?;
-        self.same_store(target)?;
-        self.with_live(|live| live.manim_scale(&target.handle, x, y).map(|_| ()))
-    }
-    #[pyo3(name = "liveSetFill")]
+    #[pyo3(name = "setFill")]
     fn fill(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_live_appearance(|scene| scene.set_fill_rgb(&target.handle, r, g, b, a))
+        self.edit_scene(|scene| scene.set_fill_rgb(&target.handle, r, g, b, a))
     }
-    #[pyo3(name = "liveSetFillColor")]
+    #[pyo3(name = "setFillColor")]
     fn fill_color(
         &mut self,
         target: &MobjectHandle,
@@ -3196,65 +4539,107 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.edit_live_appearance(|scene| scene.set_fill_color(&target.handle, r, g, b, a))
+        self.edit_scene(|scene| scene.set_fill_color(&target.handle, r, g, b, a))
     }
-    #[pyo3(name = "liveSetFillOpacity")]
+    #[pyo3(name = "setFillOpacity")]
     fn fill_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_live_appearance(|scene| scene.set_fill_opacity(&target.handle, a))
+        self.edit_scene(|scene| scene.set_fill_opacity(&target.handle, a))
     }
-    #[pyo3(name = "liveSetColor")]
+    #[pyo3(name = "setColor")]
     fn color(&mut self, target: &MobjectHandle, r: f64, g: f64, b: f64, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_live_appearance(|scene| scene.set_color_rgba(&target.handle, r, g, b, a))
+        self.edit_scene(|scene| scene.set_color_rgba(&target.handle, r, g, b, a))
     }
-    #[pyo3(name = "liveSetOpacity")]
+    #[pyo3(name = "setColorGradient")]
+    fn set_color_gradient(&mut self, target: &MobjectHandle, values: Vec<f64>) -> PyResult<()> {
+        self.available()?;
+        let colors = noon::integration::gradient_colors(&values).map_err(engine_error)?;
+        self.edit_scene(|scene| scene.set_color_by_gradient(&target.handle, &colors))
+    }
+
+    #[pyo3(name = "setFamilyColorGradient")]
+    fn set_family_color_gradient(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        values: Vec<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let colors = noon::integration::gradient_colors(&values).map_err(engine_error)?;
+        self.edit_scene(|scene| scene.set_family_color_by_gradient(&target.family, &colors))
+    }
+
+    #[pyo3(name = "setColorRadialGradient")]
+    fn set_color_radial_gradient(
+        &mut self,
+        target: &MobjectHandle,
+        center_x: f64,
+        center_y: f64,
+        center_z: f64,
+        radius: f64,
+        values: Vec<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let (inner, outer) =
+            noon::integration::radial_gradient_colors(&values).map_err(engine_error)?;
+        self.edit_scene(|scene| {
+            scene.set_color_by_radial_gradient(
+                &target.handle,
+                (center_x, center_y, center_z),
+                radius,
+                inner,
+                outer,
+            )
+        })
+    }
+
+    #[pyo3(name = "setFamilyColorRadialGradient")]
+    fn set_family_color_radial_gradient(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        center_x: f64,
+        center_y: f64,
+        center_z: f64,
+        radius: f64,
+        values: Vec<f64>,
+    ) -> PyResult<()> {
+        self.available()?;
+        let (inner, outer) =
+            noon::integration::radial_gradient_colors(&values).map_err(engine_error)?;
+        self.edit_scene(|scene| {
+            scene.set_family_color_by_radial_gradient(
+                &target.family,
+                (center_x, center_y, center_z),
+                radius,
+                inner,
+                outer,
+            )
+        })
+    }
+
+    #[pyo3(name = "setOpacity")]
     fn opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_live_appearance(|scene| scene.set_opacity(&target.handle, a))
+        self.edit_scene(|scene| scene.set_opacity(&target.handle, a))
     }
-    #[pyo3(name = "liveSetObjectOpacity")]
+    #[pyo3(name = "setObjectOpacity")]
     fn object_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_live_appearance(|scene| scene.set_object_opacity(&target.handle, a))
+        self.edit_scene(|scene| scene.set_object_opacity(&target.handle, a))
     }
-    #[pyo3(name = "liveZIndex")]
+    #[pyo3(name = "zIndex")]
     fn z_index(&self, target: &LayoutAnchor) -> PyResult<f64> {
         self.require_active()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
-        self.scene
-            .effective_z_index(&target.anchor)
-            .map_err(engine_error)
+        self.scene.z_index(&target.anchor).map_err(engine_error)
     }
-    #[pyo3(name = "liveSetZIndex")]
+    #[pyo3(name = "setZIndex")]
     fn set_z_index(&mut self, target: &LayoutAnchor, value: f64, family: bool) -> PyResult<()> {
         self.available()?;
-        if !self.has_execution() {
-            return Err(engine_error("no execution session"));
-        }
         self.scene
             .set_z_index(&target.anchor, value, family)
             .map_err(engine_error)
     }
-    #[pyo3(name = "liveScaleLayout")]
-    fn scale(
-        &mut self,
-        target: &LayoutAnchor,
-        sx: f64,
-        sy: f64,
-        x: f64,
-        y: f64,
-        point: bool,
-    ) -> PyResult<()> {
-        self.available()?;
-        self.with_live(|live| {
-            live.scale_layout(&target.anchor, sx, sy, pivot(x, y, point))
-                .map(|_| ())
-        })
-    }
-    #[pyo3(name = "liveRotateLayout")]
+    #[pyo3(name = "rotateLayout")]
     fn rotate(
         &mut self,
         target: &LayoutAnchor,
@@ -3264,11 +4649,87 @@ impl Context {
         point: bool,
     ) -> PyResult<()> {
         self.available()?;
-        self.with_live(|live| {
-            live.rotate_layout(&target.anchor, angle, pivot(x, y, point))
-                .map(|_| ())
+        self.place(|scene| scene.rotate_layout(&target.anchor, angle, pivot(x, y, point)))
+    }
+    #[pyo3(name = "flipLayout")]
+    #[allow(clippy::too_many_arguments)]
+    fn flip_layout(
+        &mut self,
+        source: &LayoutAnchor,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        x: f64,
+        y: f64,
+        point: bool,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.place(|scene| {
+            scene.flip_layout(
+                &source.anchor,
+                noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                pivot(x, y, point),
+            )
         })
     }
+
+    #[pyo3(name = "replaceLayout")]
+    fn replace_layout(
+        &mut self,
+        source: &LayoutAnchor,
+        target: &LayoutAnchor,
+        dimension: u32,
+        stretch: bool,
+    ) -> PyResult<()> {
+        let dimension = dimension.try_into().map_err(engine_error)?;
+        self.place(|scene| scene.replace_layout(&source.anchor, &target.anchor, dimension, stretch))
+    }
+
+    #[pyo3(name = "surroundCircle")]
+    fn surround_circle(
+        &mut self,
+        source: &LayoutAnchor,
+        target: &LayoutAnchor,
+        dimension: u32,
+        stretch: bool,
+        buffer_factor: f64,
+    ) -> PyResult<()> {
+        self.place(|scene| {
+            scene.surround_circle(
+                &source.anchor,
+                &target.anchor,
+                dimension,
+                stretch,
+                buffer_factor,
+            )
+        })
+    }
+
+    #[pyo3(name = "matchDimSize")]
+    #[allow(clippy::too_many_arguments)]
+    fn match_dim_size(
+        &mut self,
+        source: &LayoutAnchor,
+        target: &LayoutAnchor,
+        dimension: u32,
+        stretch: bool,
+        x: f64,
+        y: f64,
+        z: f64,
+        point: bool,
+    ) -> PyResult<()> {
+        let dimension = dimension.try_into().map_err(engine_error)?;
+        self.place(|scene| {
+            scene.match_dim_size_with_pivot(
+                &source.anchor,
+                &target.anchor,
+                dimension,
+                stretch,
+                crate::mobject::pivot_3d(x, y, z, point),
+            )
+        })
+    }
+
     #[pyo3(name="beginOrdinaryCompositionBuilder",signature=(kind,duration,lag,play_duration))]
     fn composition(
         &self,
@@ -3298,6 +4759,24 @@ impl Context {
         })?;
         self.staged(pending, Vec::new())
     }
+    #[pyo3(name = "prepareFamilyMembership")]
+    fn prepare_family_membership(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<crate::effects::StagedEffectPublication> {
+        self.prepare_children((&target.family).into(), batch)
+    }
+
+    #[pyo3(name = "prepareObjectMembership")]
+    fn prepare_object_membership(
+        &mut self,
+        target: &MobjectHandle,
+        batch: &MembershipBatch,
+    ) -> PyResult<crate::effects::StagedEffectPublication> {
+        self.prepare_children((&target.handle).into(), batch)
+    }
+
     #[pyo3(name = "prepareFamilyEffectAddition")]
     fn prepare_family_effect_addition(
         &mut self,
@@ -3402,7 +4881,7 @@ impl Context {
     }
     #[pyo3(name = "declareLiveTransformTo")]
     fn declare_transform(
-        &self,
+        &mut self,
         source: &MobjectHandle,
         target: &MobjectHandle,
         duration: f64,
@@ -3411,11 +4890,7 @@ impl Context {
         self.available()?;
         self.same_store(source)?;
         self.same_store(target)?;
-        if self.has_execution() {
-            return Err(engine_error(
-                "declare live animations before beginning execution",
-            ));
-        }
+        let running = self.has_execution();
         self.scene
             .declare_transform_to(
                 &source.handle,
@@ -3425,7 +4900,7 @@ impl Context {
                     .rate_func(crate::composition::rate(easing)?),
             )
             .map(|value| crate::composition::DeclaredAnimation { value })
-            .map_err(engine_error)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
     }
     #[pyo3(name = "beginLiveExecution")]
     fn begin_live_execution(&mut self, duration: f64) -> PyResult<()> {
@@ -3516,44 +4991,42 @@ impl Context {
         }
         Ok(())
     }
-    #[pyo3(name = "liveEffectiveMobject")]
-    fn effective_mobject(&mut self, target: &MobjectHandle) -> PyResult<CallbackTransform> {
+    #[pyo3(name = "queryEffectiveTranslation")]
+    fn query_effective_translation(&self, target: &MobjectHandle) -> PyResult<(f64, f64)> {
+        self.require_active()?;
         self.same_store(target)?;
-        self.with_live(|live| live.effective(&target.handle))
-            .map(|value| CallbackTransform {
-                transform: value.transform,
+        self.scene
+            .effective(&target.handle)
+            .map(|value| {
+                (
+                    value.transform.translation.x.into(),
+                    value.transform.translation.y.into(),
+                )
             })
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))
     }
-    #[pyo3(name = "liveSetTranslation")]
+    #[pyo3(name = "setTranslation")]
     fn set_translation(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
         self.same_store(target)?;
-        self.with_live(|live| live.set_translation(&target.handle, x, y).map(|_| ()))
+        self.edit_scene_property(|scene| scene.set_translation(&target.handle, x, y))
     }
-    #[pyo3(name = "liveSetScale")]
+    #[pyo3(name = "setScale")]
     fn set_scale(&mut self, target: &MobjectHandle, x: f64, y: f64) -> PyResult<()> {
         self.same_store(target)?;
-        self.with_live(|live| live.set_scale(&target.handle, x, y).map(|_| ()))
+        self.edit_scene_property(|scene| scene.set_scale(&target.handle, x, y))
     }
-    #[pyo3(name = "liveSetRotation")]
+    #[pyo3(name = "setRotation")]
     fn set_rotation(&mut self, target: &MobjectHandle, angle: f64) -> PyResult<()> {
         self.same_store(target)?;
-        self.with_live(|live| live.set_rotation(&target.handle, angle).map(|_| ()))
+        self.edit_scene_property(|scene| scene.set_rotation(&target.handle, angle))
     }
-    #[pyo3(name = "liveReplaceContent")]
+    #[pyo3(name = "replaceContent")]
     fn replace_content(&mut self, target: &MobjectHandle, source: &MobjectHandle) -> PyResult<()> {
         self.same_store(target)?;
         self.same_store(source)?;
-        self.with_live(|live| {
-            live.replace_content(&target.handle, &source.handle)
-                .map(|_| ())
-        })
+        self.edit_scene_property(|scene| scene.replace_content(&target.handle, &source.handle))
     }
-    #[pyo3(name = "liveRemove")]
-    fn live_remove(&mut self, target: &MobjectHandle) -> PyResult<()> {
-        self.same_store(target)?;
-        self.with_live(|live| live.remove(&target.handle).map(|_| ()))
-    }
-    #[pyo3(name = "liveBecomeMobject")]
+    #[pyo3(name = "becomeMobject")]
     fn become_mobject(
         &mut self,
         target: &MobjectHandle,
@@ -3572,11 +5045,39 @@ impl Context {
             match_center,
             stretch,
         };
-        self.with_live(|live| {
-            live.become_mobject(&target.handle, &source.handle, options)
-                .map(|_| ())
-        })
+        self.scene
+            .become_mobject(&target.handle, &source.handle, options)
+            .map(|_| ())
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
     }
+    #[pyo3(name = "becomeFamily")]
+    fn become_family(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        source: &crate::family::FamilyHandle,
+        match_height: bool,
+        match_width: bool,
+        match_center: bool,
+        stretch: bool,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        self.same_family_store(source)?;
+        self.scene
+            .become_family(
+                &target.family,
+                &source.family,
+                noon::ManimBecomeOptions {
+                    match_height,
+                    match_width,
+                    match_center,
+                    stretch,
+                },
+            )
+            .map(|_| ())
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_capture(error)))
+    }
+
     #[pyo3(name = "beginOrdinaryWait")]
     fn wait(&mut self, duration: f64) -> PyResult<()> {
         self.available()?;
@@ -3599,41 +5100,44 @@ impl Context {
         ) {
             return Err(engine_error(noon::AuthoringError::ForeignStore));
         }
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(
-            target.handle.node_id(),
-            HostCallbackId::new(
-                id.parse()
-                    .map_err(|_| engine_error("invalid callback ID"))?,
-            ),
-            time,
-            position,
-        );
-        self.publish(transaction)
+        let callback = id
+            .parse()
+            .map_err(|_| engine_error("invalid callback ID"))?;
+        self.edit_scene(|scene| {
+            scene_execution::add_updater(
+                scene,
+                &target.handle,
+                HostCallbackId::new(callback),
+                time,
+                position,
+            )
+        })
     }
+
     #[pyo3(name = "removeUpdater")]
     fn remove_updater(&mut self, target: &MobjectHandle, id: &str, time: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.remove_updater(
-            target.handle.node_id(),
-            HostCallbackId::new(
-                id.parse()
-                    .map_err(|_| engine_error("invalid callback ID"))?,
-            ),
-            time,
-        );
-        self.publish(transaction)
+        let callback = id
+            .parse()
+            .map_err(|_| engine_error("invalid callback ID"))?;
+        self.edit_scene(|scene| {
+            scene_execution::remove_updater(
+                scene,
+                &target.handle,
+                HostCallbackId::new(callback),
+                time,
+            )
+        })
     }
+
     #[pyo3(name = "clearUpdaters")]
     fn clear_updaters(&mut self, target: &MobjectHandle, time: f64) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        let mut tx = SemanticMutationTransaction::new();
-        tx.clear_updaters(target.handle.node_id(), time);
-        self.publish(tx)
+        self.edit_scene(|scene| scene_execution::clear_updaters(scene, &target.handle, time))
     }
+
     #[pyo3(signature = (sample_hz, retain_history=false, prepare_shaders=true))]
     fn configure(
         &mut self,
@@ -3671,6 +5175,7 @@ impl Context {
         self.terminal = true;
         self.segment = None;
         self.pending_ack = None;
+        self.callback_membership = None;
         self.requested_sample = None;
         Ok(())
     }
@@ -3861,16 +5366,11 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<crate::mobject::LineEndpoints> {
-        self.require_active()?;
-        self.same_store(target)?;
-        if !self.bound_ids.contains(&target.handle.node_id()) {
-            return Err(engine_error("mobject is not bound to this canonical Scene"));
-        }
-        let value = if self.has_execution() {
-            self.with_live(|live| live.effective_line_endpoints(&target.handle))?
-        } else {
-            target.handle.manim_line_endpoints().map_err(engine_error)?
-        };
+        let value = self.observe_bound_mobject(
+            target,
+            Mobject::manim_line_endpoints,
+            Scene::effective_line_endpoints,
+        )?;
         Ok(crate::mobject::LineEndpoints { value })
     }
 
@@ -3879,45 +5379,50 @@ impl Context {
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<Option<crate::family::ColorObservation>> {
-        self.require_active()?;
-        self.same_store(target)?;
-        if !self.bound_ids.contains(&target.handle.node_id()) {
-            return Err(engine_error("mobject is not bound to this canonical Scene"));
-        }
-        let color = if self.has_execution() {
-            self.scene
-                .effective_fill_color(&target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
-        } else {
-            target.handle.fill_color().map_err(engine_error)?
-        };
-        Ok(color.map(Into::into))
+        self.observe_bound_mobject(target, Mobject::fill_color, Scene::effective_fill_color)
+            .map(|color| color.map(Into::into))
     }
     #[pyo3(name = "queryMobjectStrokeColor")]
     fn query_stroke_color(
         &mut self,
         target: &MobjectHandle,
     ) -> PyResult<Option<crate::family::ColorObservation>> {
-        self.require_active()?;
-        self.same_store(target)?;
-        if !self.bound_ids.contains(&target.handle.node_id()) {
-            return Err(engine_error("mobject is not bound to this canonical Scene"));
-        }
-        let color = if self.has_execution() {
-            self.scene
-                .effective_stroke_color(&target.handle)
-                .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, true)))?
-        } else {
-            target.handle.stroke_color().map_err(engine_error)?
-        };
-        Ok(color.map(Into::into))
+        self.observe_bound_mobject(target, Mobject::stroke_color, Scene::effective_stroke_color)
+            .map(|color| color.map(Into::into))
+    }
+    #[pyo3(name = "queryMobjectBackgroundStrokeColor")]
+    fn query_background_stroke_color(
+        &self,
+        target: &MobjectHandle,
+    ) -> PyResult<Option<crate::family::ColorObservation>> {
+        self.observe_bound_mobject(
+            target,
+            Mobject::background_stroke_color,
+            Scene::effective_background_stroke_color,
+        )
+        .map(|color| color.map(Into::into))
+    }
+    #[pyo3(name = "queryMobjectBackgroundStrokeWidth")]
+    fn query_background_stroke_width(&self, target: &MobjectHandle) -> PyResult<f64> {
+        self.observe_bound_mobject(
+            target,
+            Mobject::background_stroke_width,
+            Scene::effective_background_stroke_width,
+        )
+    }
+    #[pyo3(name = "queryMobjectBackgroundStrokeOpacity")]
+    fn query_background_stroke_opacity(&self, target: &MobjectHandle) -> PyResult<f64> {
+        self.observe_bound_mobject(
+            target,
+            Mobject::background_stroke_opacity,
+            Scene::effective_background_stroke_opacity,
+        )
     }
     #[pyo3(name = "queryMobjectFillOpacity")]
     fn query_fill_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
         if self.has_execution() {
-            self.with_live(|live| live.effective(&target.handle))
-                .map(|v| v.fill_opacity())
+            self.observe_effective(target).map(|v| v.fill_opacity())
         } else {
             target.handle.fill_opacity().map_err(engine_error)
         }
@@ -3926,8 +5431,7 @@ impl Context {
     fn query_stroke_opacity(&mut self, target: &MobjectHandle) -> PyResult<f64> {
         self.same_store(target)?;
         if self.has_execution() {
-            self.with_live(|live| live.effective(&target.handle))
-                .map(|v| v.stroke_opacity())
+            self.observe_effective(target).map(|v| v.stroke_opacity())
         } else {
             target.handle.stroke_opacity().map_err(engine_error)
         }
@@ -3944,7 +5448,7 @@ impl Context {
             target.handle.stroke_width().map_err(engine_error)
         }
     }
-    #[pyo3(name = "liveMoveToPoint")]
+    #[pyo3(name = "moveToPoint")]
     #[allow(clippy::too_many_arguments)]
     fn move_to_point(
         &mut self,
@@ -3960,13 +5464,46 @@ impl Context {
         self.place(|scene| {
             scene.move_to(
                 &target.handle,
-                noon::LiveLayoutTarget::Point(x, y),
+                noon::LayoutTarget::Point(x, y),
                 (ex, ey),
                 (mx, my),
             )
         })
     }
-    #[pyo3(name = "liveMoveToMobject")]
+    #[pyo3(name = "moveToLayout")]
+    fn move_to_layout(
+        &mut self,
+        source: &MobjectHandle,
+        target: &LayoutAnchor,
+        edge_x: f64,
+        edge_y: f64,
+        mask_x: f64,
+        mask_y: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.place(|scene| {
+            scene.move_to(
+                &source.handle,
+                noon::LayoutTarget::Anchor(&target.anchor),
+                (edge_x, edge_y),
+                (mask_x, mask_y),
+            )
+        })
+    }
+    #[pyo3(name = "alignMobjectOnFrame")]
+    fn align_mobject_on_frame(
+        &mut self,
+        source: &MobjectHandle,
+        direction_x: f64,
+        direction_y: f64,
+        buff: f64,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.place(|scene| {
+            scene.align_mobject_on_frame(&source.handle, (direction_x, direction_y), buff)
+        })
+    }
+    #[pyo3(name = "moveToMobject")]
     fn move_to_mobject(
         &mut self,
         target: &MobjectHandle,
@@ -3982,7 +5519,7 @@ impl Context {
         self.place(|scene| {
             scene.move_to(
                 &target.handle,
-                noon::LiveLayoutTarget::Mobject(&reference.handle),
+                noon::LayoutTarget::Mobject(&reference.handle),
                 (ex, ey),
                 (mx, my),
             )
@@ -3992,19 +5529,7 @@ impl Context {
         self.require_active()?;
         Ok(scene_execution::session(&self.scene).map(|s| s.runtime_identity().get()))
     }
-    #[pyo3(name = "liveSetStroke")]
-    fn set_stroke(
-        &mut self,
-        target: &MobjectHandle,
-        r: f64,
-        g: f64,
-        b: f64,
-        a: f64,
-    ) -> PyResult<()> {
-        self.available()?;
-        self.edit_live_appearance(|scene| scene.set_stroke(&target.handle, r, g, b, a))
-    }
-    #[pyo3(name = "liveSetStrokeColor")]
+    #[pyo3(name = "setStrokeColor")]
     fn set_stroke_color(
         &mut self,
         target: &MobjectHandle,
@@ -4014,12 +5539,12 @@ impl Context {
         a: f64,
     ) -> PyResult<()> {
         self.available()?;
-        self.edit_live_appearance(|scene| scene.set_stroke_color(&target.handle, r, g, b, a))
+        self.edit_scene(|scene| scene.set_stroke_color(&target.handle, r, g, b, a))
     }
-    #[pyo3(name = "liveSetStrokeOpacity")]
+    #[pyo3(name = "setStrokeOpacity")]
     fn set_stroke_opacity(&mut self, target: &MobjectHandle, a: f64) -> PyResult<()> {
         self.available()?;
-        self.edit_live_appearance(|scene| scene.set_stroke_opacity(&target.handle, a))
+        self.edit_scene(|scene| scene.set_stroke_opacity(&target.handle, a))
     }
     fn metrics(&self) -> (u64, u64, u64) {
         (self.frames, self.segments, self.callback_regions)
@@ -4045,6 +5570,50 @@ impl Context {
         request: &Bound<'_, PyAny>,
     ) -> PyResult<Py<pyo3::types::PyDict>> {
         self.read_callback_impl(py, token, request)
+    }
+    fn stage_callback_provisional_geometry(
+        &mut self,
+        py: Python<'_>,
+        token: &Bound<'_, PyAny>,
+        options: &GeometryOptions,
+    ) -> PyResult<crate::callback::ProvisionalMobject> {
+        self.stage_provisional_geometry(py, token, options.options.clone())
+    }
+    fn stage_callback_provisional_shift(
+        &mut self,
+        py: Python<'_>,
+        token: &Bound<'_, PyAny>,
+        object: &crate::callback::ProvisionalMobject,
+        x: f64,
+        y: f64,
+    ) -> PyResult<()> {
+        self.with_provisional(py, token, object, |collector, store, local| {
+            collector.stage_provisional_shift(store, local, x, y)
+        })
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn stage_callback_provisional_fill(
+        &mut self,
+        py: Python<'_>,
+        token: &Bound<'_, PyAny>,
+        object: &crate::callback::ProvisionalMobject,
+        rgba: [f64; 4],
+        opacity: Option<f64>,
+    ) -> PyResult<()> {
+        self.with_provisional(py, token, object, |collector, store, local| {
+            collector.stage_provisional_fill(store, local, rgba, opacity)
+        })
+    }
+    fn callback_provisional_center(
+        &mut self,
+        py: Python<'_>,
+        token: &Bound<'_, PyAny>,
+        object: &crate::callback::ProvisionalMobject,
+    ) -> PyResult<crate::callback::ProvisionalPoint> {
+        let (x, y) = self.with_provisional(py, token, object, |collector, store, local| {
+            collector.callback_provisional_center(store, local)
+        })?;
+        Ok(crate::callback::ProvisionalPoint { x, y })
     }
     fn fail_callback(
         &mut self,

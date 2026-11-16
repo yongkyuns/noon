@@ -36,38 +36,54 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     scene
         .add_many(&[(&family).into()])
         .map_err(|error| error.to_string())?;
-    let mut session = scene.execution_session().map_err(|e| e.to_string())?;
+    let mut session = scene.into_execution().map_err(|e| e.to_string())?;
     {
-        let mut live = scene.live(&mut session);
-        let wait = live.wait_segment(0.1).map_err(|e| e.to_string())?;
-        live.advance_segment_to(wait, wait.end_time())
+        let wait = session
+            .live()
+            .wait_segment(0.1)
             .map_err(|e| e.to_string())?;
-        live.complete_segment(wait).map_err(|e| e.to_string())?;
-        live.arrange_family_in_grid_with_options(
-            &family,
-            &FamilyGridOptions {
-                gap: (0.5, 0.25),
-                row_alignments: Some("ud".into()),
-                column_alignments: Some("lr".into()),
-                row_heights: Some(vec![Some(3.0), None]),
-                column_widths: Some(vec![None, Some(2.0)]),
-                flow: GridFlow::DownRight,
-                ..Default::default()
-            },
-        )
-        .map_err(|e| e.to_string())?;
-        let layout = live
+        session
+            .live()
+            .advance_segment_to(wait, wait.end_time())
+            .map_err(|e| e.to_string())?;
+        session
+            .live()
+            .complete_segment(wait)
+            .map_err(|e| e.to_string())?;
+        session
+            .scene_mut()
+            .arrange_family_in_grid_with_options(
+                &family,
+                &FamilyGridOptions {
+                    gap: (0.5, 0.25),
+                    row_alignments: Some("ud".into()),
+                    column_alignments: Some("lr".into()),
+                    row_heights: Some(vec![Some(3.0), None]),
+                    column_widths: Some(vec![None, Some(2.0)]),
+                    flow: GridFlow::DownRight,
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        let layout = session
+            .scene()
             .effective_family_layout(&family)
             .map_err(|e| e.to_string())?;
         assert_eq!(layout.center, (1.0, 0.0));
         assert_eq!(layout.width, 4.5);
         assert_eq!(layout.height, 4.25);
-        let wait = live.wait_segment(0.1).map_err(|e| e.to_string())?;
-        live.advance_segment_to(wait, wait.end_time())
+        let wait = session
+            .live()
+            .wait_segment(0.1)
             .map_err(|e| e.to_string())?;
-        live.complete_segment(wait).map_err(|e| e.to_string())?;
+        session
+            .live()
+            .advance_segment_to(wait, wait.end_time())
+            .map_err(|e| e.to_string())?;
+        session
+            .live()
+            .complete_segment(wait)
+            .map_err(|e| e.to_string())?;
     }
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(session)
 }

@@ -1,6 +1,5 @@
 //! Shared typed Rust/WASM qualification scene for immutable spatial meshes.
 
-use crate::ExecutionSession;
 use noon_core::{
     AnimationOptions, Color, CompositionTimeMap, MeshResource, RateFunction,
     SemanticAnimationCompositionKind, SemanticMutationTransaction, SemanticObjectRole,
@@ -93,19 +92,11 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     let animation_root = committed
         .resolve(animation_root)
         .expect("created composition");
-    let session = ExecutionSession::from_semantic_root_with_animation_root(
-        &store,
-        scene_root,
-        animation_root,
-    )
-    .map_err(|error| error.to_string())?;
-    crate::Scene::with_integration_root(
-        std::rc::Rc::new(std::cell::RefCell::new(store)),
-        scene_root,
-    )
-    .map_err(|error| error.to_string())?
-    .into_execution_with_session(session)
-    .map_err(|error| error.to_string())
+    let store = std::rc::Rc::new(std::cell::RefCell::new(store));
+    let animation = crate::DeclaredAnimation::new(std::rc::Rc::clone(&store), animation_root);
+    crate::integration::scene_execution::adopt_root(store, scene_root)
+        .map_err(|error| error.to_string())?
+        .into_execution_with_animation_root(&animation)
 }
 
 fn opaque(color: Color) -> SemanticStyle {

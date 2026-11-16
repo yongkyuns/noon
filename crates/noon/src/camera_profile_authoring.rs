@@ -1,10 +1,9 @@
 //! Shared native camera-profile authoring through semantic transactions and tracks.
 
 use noon_core::{
-    AnimationOptions, ManimCamera3DProfile, SemanticMutationImpact, SemanticMutationTransaction,
-    SemanticObjectRole, SemanticObjectState, SemanticProjection3D, StoredGeometry,
+    AnimationOptions, ManimCamera3DProfile, SemanticMutationTransaction, SemanticObjectRole,
+    SemanticObjectState, SemanticProjection3D, StoredGeometry,
 };
-use std::rc::Rc;
 
 use crate::{AuthoringError, DeclaredAnimation, Mobject, Scene};
 
@@ -30,22 +29,13 @@ impl Scene {
         profile
             .camera(near, far)
             .ok_or(AuthoringError::NonFiniteObjectState)?;
-        if !self
-            .integration_store()
-            .borrow()
-            .node(self.root())
-            .ok_or(AuthoringError::NonFiniteObjectState)?
-            .members()
-            .is_empty()
-        {
-            return Err(AuthoringError::CameraRequiresEmptyScene(self.root()));
-        }
+        self.require_camera_setup()?;
         let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
         state.set_role(SemanticObjectRole::Camera3D);
         state
             .set_camera_profile(profile, near, far)
             .map_err(|_| AuthoringError::NonFiniteObjectState)?;
-        self.create_spatial_role(state, true)
+        self.create_role_object(state, true)
     }
 
     /// Read camera profile from the current effective frame when running, otherwise authored state.
@@ -55,6 +45,7 @@ impl Scene {
     ) -> Result<(ManimCamera3DProfile, f64, f64), AuthoringError> {
         self.require_object(camera)?;
         if let Some(execution) = self.running_execution() {
+            execution.require_published_store(&self.integration_store().borrow())?;
             return execution
                 .effective_camera_profile(camera.node_id())
                 .ok_or(AuthoringError::NonFiniteObjectState);
@@ -107,47 +98,38 @@ impl Scene {
         self.set_camera_profile(camera, profile)
     }
 
-    /// Declare an ordinary camera-profile animation before lowering the scene.
+    /// Declare an ordinary camera-profile animation on this Scene.
     pub fn declare_camera_profile_move(
-        &self,
+        &mut self,
         camera: &Mobject,
         profile: ManimCamera3DProfile,
         options: AnimationOptions,
-    ) -> Result<DeclaredAnimation, String> {
-        self.require_object(camera)
-            .map_err(|error| error.to_string())?;
-        if self.running_execution().is_some() {
-            return Err(
-                "camera profile tracks require unstarted execution; use a live composition".into(),
-            );
-        }
-        let state = camera.state().map_err(|error| error.to_string())?;
+    ) -> Result<DeclaredAnimation, AuthoringError> {
+        self.require_object(camera)?;
+        let state = camera.state()?;
         let (near, far) = match state.camera_projection() {
             Some(SemanticProjection3D::Perspective { near, far, .. }) => (near, far),
-            _ => return Err("camera profile tracks require a perspective Camera3D".into()),
+            _ => {
+                return Err(AuthoringError::InvalidAnimationDeclaration(
+                    "camera profile tracks require a perspective Camera3D",
+                ))
+            }
         };
         if state.role() != SemanticObjectRole::Camera3D
             || state.camera_profile().is_none()
             || profile.camera(near, far).is_none()
         {
-            return Err("camera profile endpoint is invalid for this camera".into());
+            return Err(AuthoringError::InvalidAnimationDeclaration(
+                "camera profile endpoint is invalid for this camera",
+            ));
         }
-        let mut transaction = SemanticMutationTransaction::new();
-        let local = transaction.create_camera_profile_animation(camera.node_id(), profile, options);
-        let result = transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map_err(|error| error.to_string())?;
-        let node = result
-            .resolve(local)
-            .ok_or_else(|| "camera profile declaration was not resolved".to_owned())?;
-        debug_assert!(result
-            .impacts()
-            .iter()
-            .any(|impact| matches!(impact, SemanticMutationImpact::AnimationAdded { .. })));
-        Ok(DeclaredAnimation::new(
-            Rc::clone(self.integration_store()),
-            node,
-        ))
+        self.declare_animation(
+            noon_core::SemanticAnimationIntent::CameraProfileTo {
+                target: camera.node_id(),
+                profile,
+            },
+            options,
+        )
     }
 }
 
@@ -240,6 +222,40 @@ mod tests {
             store.semantic_animation_state(animation.node_id()).unwrap().intent(),
             SemanticAnimationIntent::CameraProfileTo { target, profile: actual }
                 if *target == camera.node_id() && *actual == endpoint
+        ));
+    }
+
+    #[test]
+    fn camera_profile_rejects_a_stale_running_publication() {
+        let mut scene = Scene::new();
+        let camera = scene.camera_3d_profile(profile(), 0.1, 100.0).unwrap();
+        let marker = scene.circle(0.5).unwrap();
+        scene.add(&marker).unwrap();
+        let execution = scene.into_execution().unwrap();
+
+        assert_eq!(
+            execution.scene().effective_camera_profile(&camera).unwrap(),
+            (profile(), 0.1, 100.0)
+        );
+        // A low-level authored edit makes this runtime's revision stale.
+        let mut external = SemanticMutationTransaction::new();
+        external.set_property(
+            marker.node_id(),
+            noon_core::SemanticObjectProperty::RotationZ,
+            0.5,
+        );
+        external
+            .apply(&mut execution.scene().integration_store().borrow_mut())
+            .unwrap();
+        let error = execution
+            .scene()
+            .effective_camera_profile(&camera)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            AuthoringError::ExecutionPublication(
+                crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+            )
         ));
     }
 

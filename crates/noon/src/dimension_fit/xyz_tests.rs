@@ -25,7 +25,7 @@ fn close(actual: f64, expected: f64, context: &str) {
 }
 
 #[test]
-fn fitting_xyz_matches_actual_ce_in_authored_owned_and_borrowed_execution() {
+fn fitting_xyz_matches_actual_ce_in_detached_cold_and_running_scenes() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../fixtures/manim-v0.21/fitting-xyz.json"
     ))
@@ -130,7 +130,7 @@ fn fitting_xyz_matches_actual_ce_in_authored_owned_and_borrowed_execution() {
                     .borrow()
                     .geometry_resources()
                     .len();
-                let mut borrowed = None;
+
                 let rejected = if mode == 0 {
                     let result = if matching {
                         anchor.match_dim_size_with_pivot(&peer_anchor, dimension, stretch, pivot)
@@ -153,16 +153,9 @@ fn fitting_xyz_matches_actual_ce_in_authored_owned_and_borrowed_execution() {
                     if mode == 1 {
                         let execution = scene.execution_session().unwrap();
                         scene.install_execution(execution);
-                    } else {
-                        borrowed = Some(scene.execution_session().unwrap());
                     }
-                    let mut live = if let Some(execution) = borrowed.as_mut() {
-                        scene.live(execution)
-                    } else {
-                        scene.owned_live()
-                    };
                     let result = if matching {
-                        live.match_dim_size_with_pivot(
+                        scene.match_dim_size_with_pivot(
                             &anchor,
                             &peer_anchor,
                             dimension,
@@ -170,7 +163,7 @@ fn fitting_xyz_matches_actual_ce_in_authored_owned_and_borrowed_execution() {
                             pivot,
                         )
                     } else {
-                        live.rescale_to_fit_with_pivot(&anchor, length, dimension, stretch, pivot)
+                        scene.rescale_to_fit_with_pivot(&anchor, length, dimension, stretch, pivot)
                     };
                     result.is_err()
                 };
@@ -186,7 +179,7 @@ fn fitting_xyz_matches_actual_ce_in_authored_owned_and_borrowed_execution() {
                     );
                     assert_eq!(scene.revision(), revision, "{context}");
                 }
-                let execution = borrowed.as_ref().or_else(|| scene.running_execution());
+                let execution = scene.running_execution();
                 for (index, leaf) in leaves.iter().enumerate() {
                     let query = if let Some(execution) = execution {
                         crate::path_queries::effective_path_query(
@@ -214,16 +207,7 @@ fn fitting_xyz_matches_actual_ce_in_authored_owned_and_borrowed_execution() {
                     .enumerate()
                 {
                     let dim = (dim as u32).try_into().unwrap();
-                    let actual = if let Some(execution) = borrowed.as_mut() {
-                        scene
-                            .live(execution)
-                            .dimension_length(&anchor, dim)
-                            .unwrap()
-                    } else if mode == 1 {
-                        scene.owned_live().dimension_length(&anchor, dim).unwrap()
-                    } else {
-                        anchor.dimension_length(dim).unwrap()
-                    };
+                    let actual = scene.layout_dimension_length(&anchor, dim).unwrap();
                     close(actual, expected.as_f64().unwrap(), &context);
                 }
                 assert_eq!(peer.state().unwrap(), peer_before, "{context}");

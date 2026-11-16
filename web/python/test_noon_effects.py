@@ -41,8 +41,7 @@ class EffectFacadeTests(unittest.TestCase):
         self.object = object.__new__(noon.Mobject)
         self.enter(patch.object(handles, "_handle_for", side_effect=lambda value: self.handle))
         self.enter(patch.object(handles, "_is_shared_family", return_value=False))
-        self.enter(patch.object(handles, "_live_mutation_context", side_effect=lambda value: self.context))
-        self.enter(patch.object(handles, "_live_constructor_context", return_value=None))
+        self.enter(patch.object(handles, "_path_authoring_context", side_effect=lambda value: self.context))
         token = updaters._ACTIVE_CANONICAL_CONTEXT.set(None)
         self.addCleanup(updaters._ACTIVE_CANONICAL_CONTEXT.reset, token)
 
@@ -75,6 +74,17 @@ class EffectFacadeTests(unittest.TestCase):
                 self.object.set_effect("material", parameters=parameters)
         self.assertEqual(self.request.free.call_count, 5)
         self.assertIs(copy.deepcopy(keys["scalar"]), keys["scalar"])
+
+    def test_setup_shader_attachment_uses_the_ordinary_scene_edit(self):
+        from _noon_shaders import ShaderEffect
+        definition = Mock()
+        shader = ShaderEffect._from_definition(definition)
+        self.context = Mock()
+        self.context.requiresLiveMutationRouting.return_value = False
+        self.assertIs(self.object.add_effect(shader, name="material"), self.object)
+        self.context.addEffect.assert_called_once_with(self.handle, definition, "material")
+        self.context.prepareEffectAddition.assert_not_called()
+        self.handle.addEffect.assert_not_called()
 
     def test_shader_float_queries_preserve_signed_zero_from_double_buffers(self):
         import array
@@ -336,17 +346,17 @@ class EffectFacadeTests(unittest.TestCase):
         self.assertIs(self.object.remove_glow(), self.object)
         self.handle.removeGlow.assert_called_once_with()
 
-    def test_live_calls_never_fall_through_to_raw_authored_mutation(self):
+    def test_scene_calls_keep_publication_errors(self):
         self.context = Mock()
         self.assertIs(self.object.set_glow(intensity=1.4), self.object)
-        self.context.liveSetGlow.assert_called_once_with(self.handle, self.request)
+        self.context.setGlow.assert_called_once_with(self.handle, self.request)
         self.handle.setGlow.assert_not_called()
-        self.context.liveSetEffect.side_effect = RuntimeError("transferred player")
+        self.context.setEffect.side_effect = RuntimeError("transferred player")
         with self.assertRaises(RuntimeError):
             self.object.set_effect("accent", intensity=0.6)
         self.handle.setEffect.assert_not_called()
         self.assertIs(self.object.remove_glow(), self.object)
-        self.context.liveRemoveGlow.assert_called_once_with(self.handle)
+        self.context.removeGlow.assert_called_once_with(self.handle)
         self.handle.removeGlow.assert_not_called()
 
     def test_scope_and_callback_rejection_do_not_walk_or_publish(self):
@@ -389,7 +399,7 @@ class EffectFacadeTests(unittest.TestCase):
         self.handle.removeEffectHandle.assert_called_once_with(bound._handle)
         self.handle.removeGlow.assert_called_once_with()
 
-    def test_live_family_calls_use_the_same_owner_and_never_raw_fallback(self):
+    def test_family_effect_calls_use_the_scene_owner(self):
         family = self.family()
         self.context = Mock()
         with patch.object(handles, "_is_shared_family", return_value=True):
@@ -401,27 +411,17 @@ class EffectFacadeTests(unittest.TestCase):
             family.remove_effect("soften")
             family.remove_effect(bound)
             family.remove_glow()
-            self.context.liveSetFamilyGlow.side_effect = RuntimeError("transferred player")
+            self.context.setFamilyGlow.side_effect = RuntimeError("transferred player")
             with self.assertRaisesRegex(RuntimeError, "transferred"):
                 family.set_glow(intensity=1)
-        self.context.liveAddFamilyEffect.assert_called_once()
-        self.context.liveSetFamilyEffect.assert_called_once_with(self.handle, "soften", self.request)
-        self.context.liveSetFamilyEffectHandle.assert_called_once_with(self.handle, bound._handle, self.request)
-        self.context.liveRemoveFamilyEffect.assert_called_once_with(self.handle, "soften")
-        self.context.liveRemoveFamilyEffectHandle.assert_called_once_with(self.handle, bound._handle)
-        self.context.liveRemoveFamilyGlow.assert_called_once_with(self.handle)
+        self.context.addFamilyEffect.assert_called_once()
+        self.context.setFamilyEffect.assert_called_once_with(self.handle, "soften", self.request)
+        self.context.setFamilyEffectHandle.assert_called_once_with(self.handle, bound._handle, self.request)
+        self.context.removeFamilyEffect.assert_called_once_with(self.handle, "soften")
+        self.context.removeFamilyEffectHandle.assert_called_once_with(self.handle, bound._handle)
+        self.context.removeFamilyGlow.assert_called_once_with(self.handle)
         self.handle.setGlow.assert_not_called()
         self.handle.setEffect.assert_not_called()
-
-    def test_detached_family_after_bootstrap_routes_via_current_constructor_owner(self):
-        family = self.family()
-        context = Mock()
-        with patch.object(handles, "_is_shared_family", return_value=True), patch.object(
-            handles, "_live_constructor_context", return_value=context
-        ):
-            family.set_glow(intensity=0.5)
-        context.liveSetFamilyGlow.assert_called_once_with(self.handle, self.request)
-        self.handle.setGlow.assert_not_called()
 
     def test_existing_animate_builder_composes_motion_and_effect_updates(self):
         # Only boundary routing is mocked. Do not simulate copy/interpolation in Python.

@@ -7,7 +7,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use noon::integration::{ExportFrameOptions, ExportStop, FrameRate};
-    use noon_export::output::{export_session_file, OutputOptions};
+    use noon_export::output::{export_scene_file, OutputOptions};
     use noon_export::CaptureOptions;
 
     let mut args = std::env::args_os().skip(1);
@@ -17,11 +17,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let (scene, animation) =
         noon::example_scenes::background_audio::scene().map_err(std::io::Error::other)?;
-    let mut session = scene
-        .execution_session_with_animation_root(&animation)
+    let mut execution = scene
+        .into_execution_with_animation_root(&animation)
         .map_err(std::io::Error::other)?;
-    let summary = export_session_file(
-        &mut session,
+    let summary = export_scene_file(
+        &mut execution,
         ExportFrameOptions {
             frame_rate: FrameRate::new(30, 1)?,
             start_frame: 0,

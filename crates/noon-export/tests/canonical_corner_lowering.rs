@@ -49,7 +49,7 @@ fn capture_reference_curves(corners: bool) -> Vec<u8> {
         }
         scene.add(&reference).unwrap();
     }
-    let mut session = scene.execution_session().unwrap();
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
     assert_eq!(session.frame().objects.len(), 2);
     let mut capture = SessionCapture::new(&session, CaptureOptions::new(960, 540)).unwrap();
     let frame = capture.capture(&mut session).unwrap();

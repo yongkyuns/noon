@@ -5,11 +5,10 @@
 
 mod raster_support;
 
+use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{NativeInputModifiers, NativePointerInputKind, NativePointerPosition};
-use noon::{
-    AnimationOptions, ExecutionSession, IndicateOptions, Mobject, PrefixPublisher, PrefixReader,
-    Scene,
-};
+use noon::{AnimationOptions, IndicateOptions, Mobject, PrefixPublisher, PrefixReader, Scene};
 use noon_core::{
     Color, NativePointerId, NativePointerInput, ObjectId, SemanticClickIndicate,
     SemanticMutationTransaction, Vec2,
@@ -40,7 +39,7 @@ fn recorded_scene(
             .on_click_indicate(&target, indication, animation)
             .unwrap();
     }
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene_execution::lower(&scene).unwrap();
     let object = source.execution_object_id(target.node_id()).unwrap();
     source
         .begin_replay_retention(ReplayLimits {
@@ -75,21 +74,11 @@ fn bind(
     target: &Mobject,
     binding: Option<SemanticClickIndicate>,
 ) {
-    if let Some(binding) = binding {
-        let (indication, animation) = options(binding);
-        scene
-            .live(source)
-            .on_click_indicate(target, indication, animation)
-            .unwrap();
-    } else {
-        // The facade has no clear convenience method. Use the public semantic
-        // transaction boundary, never mutate the store behind its live session.
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_click_indicate(target.node_id(), None);
-        source
-            .apply_semantic_transaction(&mut scene.integration_store().borrow_mut(), transaction)
-            .unwrap();
-    }
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_click_indicate(target.node_id(), binding);
+    source
+        .apply_semantic_transaction(&mut scene.integration_store().borrow_mut(), transaction)
+        .unwrap();
 }
 
 fn append_interval(
@@ -291,17 +280,22 @@ fn appended_binding_changes_preserve_active_effect_until_displayed_revision_chan
 
 #[test]
 fn detached_binding_update_is_admitted_only_on_reentry_and_old_history_outlives_deletion() {
-    let (scene, target, mut source, object, mut publisher, mut reader) = fixture(Some(A));
-    scene.live(&mut source).remove(&target).unwrap();
-    append_interval(&mut source, &mut publisher, &mut reader);
-    bind(&scene, &mut source, &target, Some(B));
+    let (scene, target, source, object, mut publisher, mut reader) = fixture(Some(A));
+    let mut source = scene_execution::consume_with_session(scene, source).unwrap();
+    source.scene_mut().remove(&target).unwrap();
+    append_interval(source.session_mut(), &mut publisher, &mut reader);
+    let (indication, animation) = options(B);
+    source
+        .scene_mut()
+        .on_click_indicate(&target, indication, animation)
+        .unwrap();
     assert_eq!(
-        append_interval(&mut source, &mut publisher, &mut reader).row_payloads,
+        append_interval(source.session_mut(), &mut publisher, &mut reader).row_payloads,
         0,
         "detached authoring does not create a displayed execution row"
     );
-    scene.live(&mut source).add(&target).unwrap();
-    let reentry = append_interval(&mut source, &mut publisher, &mut reader);
+    source.scene_mut().add(&target).unwrap();
+    let reentry = append_interval(source.session_mut(), &mut publisher, &mut reader);
     assert_eq!(
         reentry.new_object_slots, 0,
         "reentry preserves execution identity"
@@ -309,14 +303,11 @@ fn detached_binding_update_is_admitted_only_on_reentry_and_old_history_outlives_
 
     let mut deletion = SemanticMutationTransaction::new();
     deletion.remove_node(target.node_id());
-    source
-        .apply_semantic_transaction(&mut scene.integration_store().borrow_mut(), deletion)
-        .unwrap();
-    assert_eq!(source.execution_object_id(target.node_id()), None);
-    append_interval(&mut source, &mut publisher, &mut reader);
+    scene_execution::publish(source.scene_mut(), deletion).unwrap();
+    assert_eq!(source.session().execution_object_id(target.node_id()), None);
+    append_interval(source.session_mut(), &mut publisher, &mut reader);
     drop(target);
     drop(source);
-    drop(scene);
     drop(publisher);
 
     for (index, (time, binding)) in [
@@ -605,7 +596,7 @@ fn prepared_history_rejects_live_glow_pulse_without_borrowing_a_semantic_owner()
         .declare_glow_pulse(&target, 2.0, AnimationOptions::new().run_time(1.0))
         .unwrap();
     scene.on_click(&target, Some(&pulse)).unwrap();
-    let source = scene.execution_session().unwrap();
+    let source = scene_execution::lower(&scene).unwrap();
     assert!(
         source.has_native_pointer_subscribers(),
         "ordinary live GlowPulse stays interested in input"

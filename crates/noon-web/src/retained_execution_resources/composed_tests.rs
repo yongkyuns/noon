@@ -5,9 +5,11 @@ use crate::{
     RetainedFamilyExecutionDeltaEncoder, RetainedResourceRetirements,
     TransportComposedSourceHandle, TransportSlotId,
 };
+use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::{
     effects::{Blur, EffectUpdate, Pixels},
-    ExecutionSession, Mobject, MobjectFamily, Scene,
+    Mobject, MobjectFamily, Scene,
 };
 use noon_compile::CompiledComposedSourceErrorKind as Kind;
 use noon_core::{
@@ -201,7 +203,7 @@ impl Fixture {
             .add_many(&[(&outer).into(), (&outside).into()])
             .unwrap();
         let effect = inner.get_effect("inner").unwrap().node_id();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let inner_id = session.execution_object_id(inner.node_id()).unwrap();
         let outer_id = session.execution_object_id(outer.node_id()).unwrap();
         let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(73);
@@ -235,7 +237,13 @@ impl Fixture {
     fn parameter(&mut self) -> RetainedFamilyExecutionDeltaEnvelope {
         let mut tx = SemanticMutationTransaction::new();
         tx.update_effect(self.effect, EffectUpdate::default().radius(Pixels(4.0)));
-        self.scene.live(&mut self.session).apply(tx).unwrap();
+        scene_execution::publish_at_root(
+            self.scene.integration_store(),
+            self.scene.root(),
+            &mut self.session,
+            tx,
+        )
+        .unwrap();
         encode(&mut self.encoder, &mut self.session, false)
     }
     fn slot(&self, id: ObjectId) -> TransportSlotId {
@@ -281,7 +289,13 @@ fn nested_public_groups_cross_worker_codec_reuse_parameter_resources_and_retire_
     assert_coherent(&mut f.session, &f.mirror);
     let mut tx = SemanticMutationTransaction::new();
     tx.remove_member(f.scene.root(), f.outer.node_id());
-    f.scene.live(&mut f.session).apply(tx).unwrap();
+    scene_execution::publish_at_root(
+        f.scene.integration_store(),
+        f.scene.root(),
+        &mut f.session,
+        tx,
+    )
+    .unwrap();
     let detached = encode(&mut f.encoder, &mut f.session, false);
     assert_eq!(detached.resource_retirements.composed_sources.len(), 2);
     apply(&mut f.mirror, &detached).unwrap();
@@ -294,7 +308,13 @@ fn nested_public_groups_cross_worker_codec_reuse_parameter_resources_and_retire_
     assert_coherent(&mut f.session, &f.mirror);
     let mut tx = SemanticMutationTransaction::new();
     tx.add_member(f.scene.root(), f.outer.node_id());
-    f.scene.live(&mut f.session).apply(tx).unwrap();
+    scene_execution::publish_at_root(
+        f.scene.integration_store(),
+        f.scene.root(),
+        &mut f.session,
+        tx,
+    )
+    .unwrap();
     let readded = encode(&mut f.encoder, &mut f.session, false);
     assert_eq!(
         source_handle(&readded, f.inner_id).version,
@@ -548,13 +568,15 @@ fn membership_churn_retires_both_nested_plans_and_keeps_resource_closure_bounded
         ));
         tx.add_member(f.inner.node_id(), next);
         tx.remove_node(current);
-        current = f
-            .scene
-            .live(&mut f.session)
-            .apply(tx)
-            .unwrap()
-            .resolve(next)
-            .unwrap();
+        current = scene_execution::publish_at_root(
+            f.scene.integration_store(),
+            f.scene.root(),
+            &mut f.session,
+            tx,
+        )
+        .unwrap()
+        .resolve(next)
+        .unwrap();
         let delta = encode(&mut f.encoder, &mut f.session, false);
         assert_eq!(
             delta
@@ -577,7 +599,13 @@ fn membership_churn_retires_both_nested_plans_and_keeps_resource_closure_bounded
     }
     let mut tx = SemanticMutationTransaction::new();
     tx.remove_member(f.scene.root(), f.outer.node_id());
-    f.scene.live(&mut f.session).apply(tx).unwrap();
+    scene_execution::publish_at_root(
+        f.scene.integration_store(),
+        f.scene.root(),
+        &mut f.session,
+        tx,
+    )
+    .unwrap();
     let delta = encode(&mut f.encoder, &mut f.session, false);
     apply(&mut f.mirror, &delta).unwrap();
     assert_eq!(f.mirror.resources().composed_source_count(), 0);
@@ -682,7 +710,7 @@ fn dense_style_updates_preserve_new_and_changed_effect_definitions_as_full_rows(
 #[test]
 fn one_atomic_delta_resolves_pending_equal_interval_scopes_before_members_and_parent() {
     let scene = Scene::new();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(74);
     let mut mirror =
         InstalledRetainedExecutionMirror::from_bundle_bytes(&empty().encode_binary().unwrap())
@@ -704,7 +732,9 @@ fn one_atomic_delta_resolves_pending_equal_interval_scopes_before_members_and_pa
         .add_member(inner, b)
         .add_member(outer, inner)
         .add_member(scene.root(), outer);
-    let committed = scene.live(&mut session).apply(tx).unwrap();
+    let committed =
+        scene_execution::publish_at_root(scene.integration_store(), scene.root(), &mut session, tx)
+            .unwrap();
     let outer_id = session
         .execution_object_id(committed.resolve(outer).unwrap())
         .unwrap();
@@ -821,7 +851,10 @@ fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows(
         .unwrap();
     assert_eq!(query.objects, [earlier_id]);
     assert_eq!(query.stats.full_scan_fallbacks, 0);
-    session.live().shift(&earlier, 20.0, 0.0).unwrap();
+    session
+        .scene_mut()
+        .shift_3d(&earlier, noon::SemanticVec3::new(20.0, 0.0, 0.0))
+        .unwrap();
     let moved = encode(&mut encoder, session.session_mut(), false);
     let (_, changes) = apply(&mut mirror, &moved).unwrap();
     let stats = mirror.last_spatial_query_update_stats();
@@ -836,7 +869,10 @@ fn backdrop_spatial_queries_cross_the_worker_boundary_and_refit_only_dirty_rows(
         .is_empty());
     // A bad suffix must preserve the previously committed query, not just the
     // frame and protocol sequence. Retry the exact same sequence afterward.
-    session.live().shift(&earlier, -20.0, 0.0).unwrap();
+    session
+        .scene_mut()
+        .shift_3d(&earlier, noon::SemanticVec3::new(-20.0, 0.0, 0.0))
+        .unwrap();
     let good = encode(&mut encoder, session.session_mut(), false);
     let mut bad = good.clone();
     let mut suffix = added.retained.objects[0].clone();
@@ -899,14 +935,20 @@ fn backdrop_query_snapshot_uses_newly_committed_vector_geometry_resources() {
     scene
         .add_many(&[(&source).into(), (&panel).into()])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let source_id = session.execution_object_id(source.node_id()).unwrap();
-    let anchor = session.execution_object_id(panel.node_id()).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let source_id = session
+        .session()
+        .execution_object_id(source.node_id())
+        .unwrap();
+    let anchor = session
+        .session()
+        .execution_object_id(panel.node_id())
+        .unwrap();
     let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(124);
     let mut mirror =
         InstalledRetainedExecutionMirror::from_bundle_bytes(&empty().encode_binary().unwrap())
             .unwrap();
-    let mut snapshot = encode(&mut encoder, &mut session, true);
+    let mut snapshot = encode(&mut encoder, session.session_mut(), true);
     // The ordinary authoring path inlines this small path. Exercise the same
     // supported geometry as a versioned worker resource, which requires the
     // installed lookup rather than the inline-geometry shortcut.
@@ -958,9 +1000,12 @@ fn backdrop_query_snapshot_uses_newly_committed_vector_geometry_resources() {
         )
         .unwrap();
     assert_eq!(query.objects, [source_id]);
-    scene.live(&mut session).add(&second).unwrap();
-    let second_id = session.execution_object_id(second.node_id()).unwrap();
-    let mut next = encode(&mut encoder, &mut session, false);
+    session.scene_mut().add(&second).unwrap();
+    let second_id = session
+        .session()
+        .execution_object_id(second.node_id())
+        .unwrap();
+    let mut next = encode(&mut encoder, session.session_mut(), false);
     let mut second_geometries = noon_core::GeometryResourceArena::new();
     let second_handle = second_geometries.insert_path(second_path);
     assert_eq!(
@@ -1027,8 +1072,8 @@ fn backdrop_query_snapshot_uses_newly_committed_vector_geometry_resources() {
             .objects,
         [second_id]
     );
-    scene.live(&mut session).remove(&second).unwrap();
-    let mut removed = encode(&mut encoder, &mut session, false);
+    session.scene_mut().remove(&second).unwrap();
+    let mut removed = encode(&mut encoder, session.session_mut(), false);
     removed
         .resource_retirements
         .geometries

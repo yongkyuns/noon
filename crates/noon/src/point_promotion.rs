@@ -5,7 +5,7 @@ use crate::{
         prepare_semantic_copy_with_root_membership, CopyRootMembership, PendingSemanticCopy,
     },
     path_editing::{prepare_object_edit, PathEdit, PreparedPathEdits},
-    AuthoringError, CompositeEntryHandle, Mobject, MobjectTarget, SemanticCopy,
+    AuthoringError, CompositeEntryHandle, Mobject, MobjectTarget, Scene, SemanticCopy,
 };
 pub(crate) use alignment::alignment_side;
 pub use alignment::{PointAlignment, PointAlignmentSide};
@@ -116,6 +116,68 @@ impl MobjectTarget<'_> {
             |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
         )?;
         pending.resolve(&result, CompositeEntryHandle::from_node)
+    }
+}
+
+impl Scene {
+    /// Copy the root's own points into a child and clear them on the original.
+    /// Capture resident presentation and keep current children in the same publication.
+    pub fn promote_own_points(
+        &mut self,
+        source: MobjectTarget<'_>,
+        references: &[MobjectTarget<'_>],
+    ) -> Result<SemanticCopy<CompositeEntryHandle>, AuthoringError> {
+        let store = self.integration_store();
+        source.require_store(store)?;
+        self.require_effective_capture()?;
+        let Some(execution) = self.running_execution() else {
+            return source.promote_own_points_with_references(references);
+        };
+        let (prepared, pending) = prepare_point_promotion(
+            source,
+            references,
+            |object, graph_row| {
+                crate::effective_capture::capture_mobject_state_with_graph_dependency(
+                    store, execution, object, graph_row,
+                )
+            },
+            |store, source, style| {
+                crate::effective_capture::capture_family_style(store, execution, source, style)
+            },
+            |store, source, target, transaction| {
+                crate::effective_capture::stage_effect_copy(
+                    store,
+                    execution,
+                    source,
+                    target,
+                    transaction,
+                )
+            },
+        )?;
+        let result = self.publish_path_edits(prepared)?;
+        pending.resolve(&result, CompositeEntryHandle::from_node)
+    }
+
+    /// Align own-point presence by promoting the sole point-bearing operand.
+    pub fn align_own_points(
+        &mut self,
+        left: MobjectTarget<'_>,
+        right: MobjectTarget<'_>,
+        left_references: &[MobjectTarget<'_>],
+        right_references: &[MobjectTarget<'_>],
+    ) -> Result<Option<PointAlignment>, AuthoringError> {
+        self.require_effective_capture()?;
+        left.require_store(self.integration_store())?;
+        right.require_store(self.integration_store())?;
+        let Some(side) = alignment_side(self.own_point_count(left)?, self.own_point_count(right)?)
+        else {
+            return Ok(None);
+        };
+        let copied = match side {
+            PointAlignmentSide::Left => self.promote_own_points(left, left_references)?,
+            PointAlignmentSide::Right => self.promote_own_points(right, right_references)?,
+        };
+        Ok(Some(PointAlignment { side, copied }))
     }
 }
 
