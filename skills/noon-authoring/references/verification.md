@@ -1,5 +1,9 @@
 # Verification
 
+- [Live viewer feedback](#live-viewer-feedback)
+- [Captured frame feedback](#captured-frame-feedback)
+- [Repository validation](#repository-validation)
+
 Treat code execution, semantic correctness, rendered appearance, and mathematical
 correctness as separate checks. A scene can run successfully while displaying the
 wrong starting object, dropping a label, or using incorrect timing.
@@ -14,6 +18,90 @@ observed scene times when the available tooling exposes them. Null or unavailabl
 metadata is not a license to guess. Compare raster evidence only within the
 qualified backend and tolerance policy; do not require universal cross-GPU bit
 identity or widen thresholds to make a failing scene pass.
+
+## Live viewer feedback
+
+For someone already viewing a prepared scene in the playground, prefer **Comment**
+above the preview: it pauses and captures the displayed Run, then lets them click
+a point and type one comment. No separate static review folder is needed.
+The download contains the exact source snapshot and PNG; confirm that sharing
+that source is appropriate. The agent imports it with:
+
+```bash
+node tools/noon-mcp/bin/noon-feedback.mjs import-live \
+  --input viewer-feedback.json --output review
+```
+
+Use the same `check` and fresh candidate `compare` flow below. Do not replace
+its source with unsubmitted editor text, silently retarget its time, or treat
+pending feedback as an accepted correction. See [viewer feedback boundaries](../../../docs/live-viewer-feedback.md).
+Unsupported playback profiles or missing presentation receipts fail visibly;
+use qualified captured-frame review instead of inventing a frame observation.
+
+## Captured frame feedback
+
+For a human review, generate a local page from verified preview captures:
+
+```bash
+node tools/noon-mcp/bin/noon-feedback.mjs review \
+  --preview preview-output/manifest.json --source scene.py --output review-page
+```
+
+Open `review-page/index.html`. Select a captured frame, **click the relevant visual
+to drop a comment pin, and type your feedback**. The comment alone is enough;
+the suggested correction and preservation details are optional. You can also
+choose Draw region for an area rather than a point. Adjust the interval only if
+the problem spans more than the captured instant. Download the feedback note and
+keep it with the review folder. These
+are discrete stills, not playback. Finalize the note through the shared builder:
+
+```bash
+node tools/noon-mcp/bin/noon-feedback.mjs import \
+  --review review-page --note downloaded-note.json --output review
+```
+
+Import verifies the original source and complete selected frame identity before
+writing the ordinary pending feedback bundle. Do not manually change the note's
+frame identity or sample to make it fit a revised capture. Preserve the original
+review folder; use `check` and a fresh `compare` after the focused correction.
+
+Use `noon_annotate_frame` with the owned `session`, retained `artifactId`,
+`interval: {start,end}`, `observation`, `desiredChange`, optional `preserve`, and
+optional `point: {x,y}` or `region: {x,y,width,height}`. Coordinates are fractions of the
+captured image, from its top-left corner. The interval must contain the published
+capture time. Preserve the returned pending feedback record and PNG before the
+live artifact expires or the session closes. Do not fabricate provenance or
+substitute a screenshot from a different run.
+
+For persisted schema-2 preview captures, use the offline CLI from the checkout:
+
+```bash
+node tools/noon-mcp/bin/noon-feedback.mjs annotate \
+  --preview preview-output/manifest.json --sample 1 \
+  --source scene.py --input note.json --output review
+node tools/noon-mcp/bin/noon-feedback.mjs check \
+  --feedback review/feedback.json --source scene.py
+node tools/noon-mcp/bin/noon-feedback.mjs compare \
+  --feedback review/feedback.json --candidate revised-preview/manifest.json \
+  --sample 1 --source scene.py --output comparison
+```
+
+Put the same interval/region/observation/desiredChange/preserve fields in
+`note.json`; omit session and artifactId for the offline route. Indices start at
+zero. Each output directory must be new. `annotate` saves the original PNG and
+source with the record. `check` verifies that evidence and reports source changes
+as stale (exit 2); current source exits 0, invalid evidence exits 1. Run it before
+editing, and inspect the original source snapshot if the association is stale.
+
+After the focused correction, capture a fresh run before using `compare`. Choose
+the candidate frame explicitly, since narration or timing edits may move the
+relevant moment. The comparison retains separate before/after source/build/run/
+time identities and source snapshots. It remains pending review with an unverified
+interval association; it does not retarget the original region or resolve feedback.
+Inspect both frames and review actual playback when the comment concerns time or
+sound. Report remaining uncertainty, not an automatic success from rendering.
+
+## Repository validation
 
 For repository changes, the existing validation entrypoints are:
 

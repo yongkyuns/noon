@@ -16,10 +16,10 @@ function accepts(name, value) {
   return renderingToolContracts[name].inputSchema.safeParse(value).success;
 }
 
-test("rendering contract is versioned and names the planned runner operations", () => {
-  assert.equal(RENDERING_CONTRACT_VERSION, 1);
+test("rendering contract is versioned and names the preview and feedback operations", () => {
+  assert.equal(RENDERING_CONTRACT_VERSION, 2);
   assert.deepEqual(RENDERING_TOOL_NAMES, [
-    "noon_open_scene", "noon_sample_frames", "noon_inspect", "noon_close_scene",
+    "noon_open_scene", "noon_sample_frames", "noon_inspect", "noon_annotate_frame", "noon_close_scene",
   ]);
 });
 
@@ -78,4 +78,56 @@ test("inspect and close accept only the session capability", () => {
   assert.equal(renderingToolContracts.noon_close_scene.annotations.destructiveHint, true);
   assert.equal(renderingToolContracts.noon_close_scene.annotations.idempotentHint, false,
     "a closed handle becomes stale and must be rejected rather than silently reused");
+});
+
+test("frame feedback accepts bounded reviewer input but no caller-supplied provenance or status", () => {
+  const input = {
+    session,
+    artifactId: "artifact_0123456789abcdef",
+    interval: { start: 1, end: 2 },
+    observation: "The input arrows disappear when the sum reaches zero.",
+    desiredChange: "Keep both inputs visible and update only the sum.",
+  };
+  assert.equal(accepts("noon_annotate_frame", input), true);
+  assert.equal(accepts("noon_annotate_frame", {
+    ...input, point: { x: 0.25, y: 0.8 },
+  }), true);
+  assert.equal(accepts("noon_annotate_frame", {
+    ...input,
+    region: { x: 0.25, y: 0.1, width: 0.5, height: 0.8 },
+    preserve: "The two contributions still exist.",
+  }), true);
+  for (const extra of [
+    { session: "short" },
+    { artifactId: "short" },
+    { interval: { start: -1, end: 2 } },
+    { interval: { start: 2, end: 1 } },
+    { interval: { start: 0, end: Infinity } },
+    { interval: { start: 0, end: MAX_RENDER_TIME_SECONDS + 1 } },
+    { interval: { start: 1, end: 2, target: "sum" } },
+    { region: { x: 0, y: 0, width: 0, height: 1 } },
+    { region: { x: 0.75, y: 0, width: 0.5, height: 1 } },
+    { region: { x: 0, y: 0.5, width: 1, height: 0.75 } },
+    { point: { x: -0.01, y: 0.2 } },
+    { point: { x: 0.2, y: 1.01 } },
+    { point: { x: 0.2, y: 0.3, sourceRef: "forged" } },
+    { observation: " " },
+    { observation: "é".repeat(2001) },
+    { desiredChange: "x".repeat(4001) },
+    { preserve: "x".repeat(4001) },
+    { status: "resolved" },
+    { provenance: { sourceSha256: "f".repeat(64) } },
+    { sourceSha256: "f".repeat(64) },
+    { frame: { id: input.artifactId } },
+    { semanticNodeId: "new-object" },
+  ]) {
+    assert.equal(accepts("noon_annotate_frame", { ...input, ...extra }), false,
+      JSON.stringify(extra));
+  }
+  assert.deepEqual(renderingToolContracts.noon_annotate_frame.annotations, {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  });
 });

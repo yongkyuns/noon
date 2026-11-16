@@ -3,7 +3,7 @@ name: noon-authoring
 description: Author and review educational Noon animation scenes using capability-qualified ManimCE-style Python or the shared Rust API. Use when a user asks to create, explain, storyboard, repair, or verify a Noon animation, or when scene source imports noon. Not a generic ManimGL skill or a contract for modifying Noon internals.
 compatibility: Requires a trusted Noon repository checkout, Python 3.12+, and Node 22+ for local capability/MCP tooling. Native narration preparation requires the repository-pinned Rust toolchain. Isolated preview additionally requires Docker, a built current browser package, and the repository-pinned preview runtime; capability discovery alone does not render or install dependencies.
 metadata:
-  version: "0.5.0"
+  version: "0.8.0"
 ---
 
 # Noon authoring
@@ -63,8 +63,8 @@ about an installed binary, the current GPU, or a live session. See
    mathematical and animation semantics; never conceal an unsupported operation by
    replacing `MathTex` with `Text` or removing an updater. Associate feedback with
    the source revision, interval, and visible target; compare that interval after
-   the edit. Follow the [narration and revision guidance](references/education.md#narration-and-revision)
-   without claiming unimplemented audio or annotation APIs.
+   the edit. Use [captured frame feedback](references/verification.md#captured-frame-feedback)
+   and follow the [narration and revision guidance](references/education.md#narration-and-revision).
 
 For speech assets and shared cue/end waits, read
 [prepared narration](references/narration.md). Completed immutable scenes can use
@@ -125,6 +125,8 @@ environment, use these tools rather than inventing a second execution route:
 - `noon_sample_frames` — advances through nondecreasing times; at most 31 samples
   in one call, with the shared retained-frame budget enforced across calls.
 - `noon_inspect` — metadata-only inspection of the last coherent retained state.
+- `noon_annotate_frame` — attaches interval/region feedback to one retained PNG,
+  deriving source/build/run/time identity and leaving the correction pending review.
 - `noon_close_scene` — closes the owned session; the handle becomes stale.
 
 Session handles are transport-scoped capabilities. Treat stale/cross-scope errors,

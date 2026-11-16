@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Noon · Frame review</title>
+  <link rel="stylesheet" href="review.css">
+  <script src="review.js" defer></script>
+</head>
+<body>
+  <main class="review-shell">
+    <header class="page-header">
+      <div class="brand-line"><span class="brand">noon</span><span class="product-label">Frame review</span><span class="capture-badge">Captured stills</span></div>
+      <h1>Make the explanation clearer.</h1>
+      <p class="intro">Click the part that needs attention, then write what should change. Draw a region only when useful.</p>
+      <p class="source-line"><span class="source-label">Source</span><span id="source-name">Loading source…</span></p>
+    </header>
+
+    <div class="review-layout">
+      <section class="evidence-panel" aria-labelledby="capture-heading">
+        <div class="section-heading"><h2 id="capture-heading">Captured moment</h2><span id="frame-position" class="muted"></span></div>
+        <div id="frame-stage" class="frame-stage" tabindex="0" role="group" aria-label="Captured frame. Click to place a comment pin, or use Draw region." aria-describedby="region-help" aria-busy="true">
+          <img id="frame-image" alt="Selected captured animation frame" draggable="false">
+          <div id="region-overlay" class="region-overlay" hidden aria-hidden="true"></div>
+          <div id="comment-pin" class="comment-pin" hidden aria-hidden="true">1</div>
+        </div>
+        <div class="capture-caption"><strong id="capture-time">No frame selected</strong><span id="image-status" role="status" aria-live="polite">Loading captured image…</span></div>
+
+        <nav class="frame-nav" aria-label="Captured moments">
+          <div id="frame-list" class="frame-list"></div>
+        </nav>
+
+        <section class="region-panel" aria-labelledby="region-heading">
+          <div class="section-heading region-heading"><h2 id="region-heading">Point to the problem <span class="optional">Optional</span></h2><div class="region-actions"><button id="mark-region" class="button button-small" type="button" aria-pressed="false" disabled>Draw region</button><button id="clear-region" class="button button-quiet button-small" type="button" disabled>Clear mark</button></div></div>
+          <p id="region-help" class="field-help">Click the image to place a comment pin. For a larger area, choose Draw region and drag. Clicking another spot moves the pin.</p>
+          <label class="check-label"><input id="region-enabled" type="checkbox" disabled> Use a rectangular region instead of a pin</label>
+          <div id="region-grid" class="region-grid" hidden>
+            <label for="region-x">Left <span class="unit">%</span><input id="region-x" type="number" min="0" max="100" step="any" inputmode="decimal" value="0" disabled></label>
+            <label for="region-y">Top <span class="unit">%</span><input id="region-y" type="number" min="0" max="100" step="any" inputmode="decimal" value="0" disabled></label>
+            <label for="region-width">Width <span class="unit">%</span><input id="region-width" type="number" min="0" max="100" step="any" inputmode="decimal" value="100" disabled></label>
+            <label for="region-height">Height <span class="unit">%</span><input id="region-height" type="number" min="0" max="100" step="any" inputmode="decimal" value="100" disabled></label>
+          </div>
+          <p id="region-status" class="region-status" role="status" aria-live="polite">Click a point to attach a note there, or leave it unmarked to comment on the entire frame.</p>
+        </section>
+
+        <details class="evidence-details">
+          <summary>Capture details</summary>
+          <dl id="provenance" class="provenance"></dl>
+          <p class="field-help">These details keep your note attached to the original capture. They do not establish that a later correction is complete.</p>
+        </details>
+      </section>
+
+      <section class="note-panel" aria-labelledby="note-heading">
+        <div class="section-heading"><h2 id="note-heading">Your feedback</h2><span class="draft-badge">Draft note</span></div>
+        <form id="feedback-form" novalidate>
+          <fieldset class="interval-fieldset">
+            <legend>When does it happen?</legend>
+            <div class="interval-grid">
+              <label for="interval-start">Start <span class="unit">seconds</span><input id="interval-start" type="number" min="0" max="600" step="any" inputmode="decimal" required></label>
+              <label for="interval-end">End <span class="unit">seconds</span><input id="interval-end" type="number" min="0" max="600" step="any" inputmode="decimal" required></label>
+            </div>
+            <p class="field-help">Include the captured moment. Use the same start and end for a single instant.</p>
+          </fieldset>
+
+          <div class="field-block">
+            <label for="observation">Comment</label>
+            <p class="field-help" id="observation-help">Write what you noticed or want changed. Your pin identifies the part you mean.</p>
+            <textarea id="observation" rows="4" maxlength="4000" required aria-describedby="observation-help observation-count" placeholder="Keep this arrow visible while the sum changes…"></textarea>
+            <span id="observation-count" class="text-count">0 / 4,000 bytes</span>
+          </div>
+          <div class="field-block">
+            <label for="desired-change">Suggested correction <span class="optional">Optional</span></label>
+            <p class="field-help" id="desired-change-help">Leave blank for the agent to propose a focused correction.</p>
+            <textarea id="desired-change" rows="3" maxlength="4000" aria-describedby="desired-change-help desired-change-count" placeholder="Keep both contributions visible and change only the sum."></textarea>
+            <span id="desired-change-count" class="text-count">0 / 4,000 bytes</span>
+          </div>
+          <div class="field-block">
+            <label for="preserve">What should stay the same? <span class="optional">Optional</span></label>
+            <textarea id="preserve" rows="3" maxlength="4000" aria-describedby="preserve-count" placeholder="Keep the input magnitudes, labels, scale, and accepted narration."></textarea>
+            <span id="preserve-count" class="text-count">0 / 4,000 bytes</span>
+          </div>
+
+          <div class="download-panel">
+            <button id="download-note" class="button button-primary" type="submit" disabled>Download note <span aria-hidden="true">↓</span></button>
+            <p id="form-status" class="form-status" role="status" aria-live="polite">Write a comment to prepare your note.</p>
+            <p class="field-help">Give the downloaded note and this review folder to your agent. Review the revised capture before accepting a correction.</p>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <footer class="page-footer"><span>One clear change at a time.</span><span>Stills show composition. Review playback for pacing and sound.</span></footer>
+  </main>
+  <script id="noon-review-data" type="application/json">__NOON_REVIEW_DATA__</script>
+</body>
+</html>
