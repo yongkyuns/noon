@@ -1,0 +1,4 @@
+interface:
+  display_name: "Noon Retrospective"
+  short_description: "Turn observed workflow friction into focused fixes"
+  default_prompt: "Use $noon-retro to identify useful improvements from this Noon work session."

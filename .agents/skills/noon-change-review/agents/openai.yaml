@@ -1,0 +1,4 @@
+interface:
+  display_name: "Noon Change Review"
+  short_description: "Review Noon changes against scope and invariants"
+  default_prompt: "Use $noon-change-review to inspect this Noon change and its validation evidence."

@@ -267,3 +267,25 @@ Before declaring work complete:
 11. Update the owning GitHub issue/PR with what landed and what remains.
 
 When uncertain, choose the design that keeps one semantic authority, one lowering boundary, one runtime, one reusable renderer, platform hosts as lifecycle-only shells, and typed in-process Rust boundaries on both native and direct single-context Rust/WASM paths.
+
+## 16. Repository skills
+
+Use the matching repository skill for substantial work; load only the workflow
+needed for the task. These skills supplement this operating contract and the
+existing architecture documents.
+
+| Task | Skill |
+| --- | --- |
+| Reproduce a bug or performance regression | [noon-debug](.agents/skills/noon-debug/SKILL.md) |
+| Self-review a change against its requirements and repository rules | [noon-change-review](.agents/skills/noon-change-review/SKILL.md) |
+| Compare interfaces or record a consequential design decision | [noon-design](.agents/skills/noon-design/SKILL.md) |
+| Improve the development workflow after an observed problem | [noon-retro](.agents/skills/noon-retro/SKILL.md) |
+| Write documentation or improve the documentation website | [noon-documentation](.agents/skills/noon-documentation/SKILL.md) |
+
+Keep durable project facts in their existing source documents and link to them
+from skills. Choose routine implementation details within the authorized scope;
+ask when an unresolved requirement or consequential tradeoff needs the user's
+decision. See [skill attribution](.agents/skills/ATTRIBUTION.md) for upstream sources.
+
+Scene authoring continues to use the existing
+[noon-authoring skill](skills/noon-authoring/SKILL.md).

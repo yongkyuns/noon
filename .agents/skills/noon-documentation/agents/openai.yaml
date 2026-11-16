@@ -1,0 +1,4 @@
+interface:
+  display_name: "Noon Documentation"
+  short_description: "Write natural Noon docs and polish documentation UI"
+  default_prompt: "Use $noon-documentation to improve Noon documentation and its website, grounding examples in current source and verifying the reader experience."

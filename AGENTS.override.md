@@ -1,5 +1,8 @@
 # Noon agent override
 
+Also read [AGENTS.md](AGENTS.md) for the operating contract and repository skill
+routing. The review restrictions in this override remain in force.
+
 ## No automated Codex reviews
 
 Codex code review and Codex security review are disabled for this repository.
