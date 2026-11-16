@@ -6,6 +6,8 @@ import vm from "node:vm";
 const source = await readFile(new URL("../scripts/playground-product-e2e.mjs", import.meta.url), "utf8");
 
 assert.match(source, /const measurement = productMeasurement\(exampleId\);/);
+assert.match(source, /releasePreload = await holdPlaygroundPreload\(page\);[\s\S]*await page\.goto\(/);
+assert.match(source, /await browser\?\.close\(\);[\s\S]*releasePreload\?\.\(\);/);
 assert.doesNotMatch(source, /executionMetrics\(/);
 assert.match(source, /probe\.requestMetrics\(\)/);
 assert.match(source, /class ObservedWorker extends NativeWorker/);
