@@ -189,13 +189,16 @@ export async function captureAttemptedPage(page, { timeoutMs = 2000 } = {}) {
       const toggle = controls?.querySelector(".playback-toggle");
       const gallery = window.__noonExampleGallery;
       const phase = gallery?.runPhaseMetrics;
+      const patch = document.querySelector("#patch-status");
       return {
         url: location.href,
         performanceTimeOriginMs: globalThis.performance?.timeOrigin ?? null,
         visibilityState: document.visibilityState ?? null,
         documentHasFocus: document.hasFocus?.() ?? null,
-        runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
+        runGeneration: gallery?.generationDiagnostics?.runGeneration ?? null,
+        runInFlight: gallery?.runInFlight ?? null,
         runPhaseMetrics: phase && phase.runGeneration === gallery?.generationDiagnostics?.runGeneration ? {
+          exampleId: phase.exampleId,
           runGeneration: phase.runGeneration,
           runAcceptedAtMs: phase.runAcceptedAtMs,
           sourceRunStartedAtMs: phase.sourceRunStartedAtMs,
@@ -207,8 +210,10 @@ export async function captureAttemptedPage(page, { timeoutMs = 2000 } = {}) {
         } : null,
         runDisabled: document.querySelector("#replace-scene")?.disabled ?? null,
         selectedExampleId: document.querySelector(".example-card[aria-selected='true']")?.dataset.exampleId ?? null,
-        patchState: document.querySelector("#patch-status")?.dataset.state ?? null,
-        patchText: (document.querySelector("#patch-status")?.value ?? "").slice(0, 300),
+        patchState: patch?.dataset.state ?? null,
+        patchRunGeneration: patch?.dataset.runGeneration ?? null,
+        patchExampleId: patch?.dataset.exampleId ?? null,
+        patchText: (patch?.value ?? "").slice(0, 300),
         runtimeStartup: document.querySelector("#status")?.dataset.runtimeStartup ?? null,
         runtimeState: document.querySelector("#status")?.dataset.state ?? null,
         executionMode: document.querySelector("#status")?.dataset.executionMode ?? null,

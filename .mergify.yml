@@ -33,9 +33,10 @@ queue_rules:
       - check-success = @github-actions/Architecture constraints do not regress
       - check-success = @github-actions/Engine dependency direction stays one-way
       # Path-selected qualification is relevant only when it runs. Do not
-      # merge over its failure or while its GitHub Actions checks are pending.
+      # merge over its failure or while any check is pending (including
+      # conditionally selected GitHub Actions jobs).
       - "-check-failure *= @github-actions/**"
-      - "-check-pending *= @github-actions/**"
+      - "#check-pending = 0"
 
 pull_request_rules:
   - name: Queue explicitly opted-in master PRs
