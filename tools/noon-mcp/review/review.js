@@ -124,7 +124,7 @@
       counter.classList.toggle("over-limit", invalid);
       input.setAttribute("aria-invalid", String(invalid));
       if (!message && invalid) { message = "Shorten the highlighted text to 4,000 bytes and remove any NUL characters."; state = "error"; }
-      if (!message && required && input.value.trim() === "") message = "Describe the problem and the correction to prepare your note.";
+      if (!message && required && input.value.trim() === "") message = "Write a comment to prepare your note.";
     }
     downloadButton.disabled = Boolean(message) || Boolean(drag) || marking;
     if (!message && marking) message = "Finish or cancel drawing before downloading your note.";
