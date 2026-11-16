@@ -19,6 +19,7 @@ const server = await serveRepository(root, 0);
 const selection = JSON.parse(await readFile(path.join(root,'web/site/examples.json'),'utf8'));
 const report = [];
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+const frameCaptureTimeout = 10_000;
 const editSource = color => `from noon import *
 class EmbedEdit(Scene):
     def construct(self):
@@ -32,6 +33,13 @@ async function workersRetired(workers) {
   while (workers.size && Date.now()<until) await new Promise(resolve=>setTimeout(resolve,25));
   assert.equal(workers.size,0,'navigation must retire all observed embedded workers');
 }
+function centerRgb(png) {
+  const offset = (Math.floor(png.height / 2) * png.width + Math.floor(png.width / 2)) * 4;
+  return [...png.data.subarray(offset, offset + 3)];
+}
+function matchesColor(rgb, expected) {
+  return rgb.every((channel, index) => Math.abs(channel - expected[index]) <= 4);
+}
 function coloredPixels(bytes, minimumBuckets, expectedCenter) {
   const png = pngjs.PNG.sync.read(bytes), buckets = new Set();
   for (let i=0;i<png.data.length;i+=16) {
@@ -40,9 +48,8 @@ function coloredPixels(bytes, minimumBuckets, expectedCenter) {
   assert.ok(png.width>100 && png.height>60,'actual canvas dimensions');
   assert.ok(buckets.size>minimumBuckets,'canvas is not a flat placeholder');
   if (expectedCenter) {
-    const center = (Math.floor(png.height / 2) * png.width + Math.floor(png.width / 2)) * 4;
-    const rgb = [...png.data.subarray(center, center + 3)];
-    assert.ok(rgb.every((channel, index) => Math.abs(channel - expectedCenter[index]) <= 4),
+    const rgb = centerRgb(png);
+    assert.ok(matchesColor(rgb, expectedCenter),
       `edited square center is ${rgb.join(', ')}; expected ${expectedCenter.join(', ')}`);
   }
   return {width:png.width,height:png.height,colorBuckets:buckets.size};
@@ -127,10 +134,26 @@ async function sample(frame, prefix, time, expectedCenter = null) {
     const presentedTime = report?.metrics?.latestPresentationSample?.time;
     return Number.isFinite(presentedTime) && Math.abs(presentedTime - target) < 1e-7;
   }, target);
-  // Allow the iframe compositor to display the acknowledged canvas publication.
-  await frame.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  const bytes = await frame.locator('#scene').screenshot();
-  await writeFile(path.join(output,`${prefix}.png`),bytes);
+  // A renderer acknowledgment precedes compositor handoff. Check the displayed
+  // pixels for the edited frame and retain the last capture if it stays blank.
+  const screenshotPath = path.join(output,`${prefix}.png`);
+  const canvas = frame.locator('#scene');
+  const deadline = performance.now() + frameCaptureTimeout;
+  let bytes;
+  try {
+    if (expectedCenter === null) {
+      await frame.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      bytes = await canvas.screenshot();
+    } else {
+      do {
+        bytes = await canvas.screenshot({timeout:Math.max(1, deadline - performance.now())});
+        if (matchesColor(centerRgb(pngjs.PNG.sync.read(bytes)), expectedCenter)) break;
+        await frame.waitForTimeout(100);
+      } while (performance.now() < deadline);
+    }
+  } finally {
+    if (bytes) await writeFile(screenshotPath,bytes);
+  }
   const pixels = coloredPixels(bytes, expectedCenter ? 1 : 8, expectedCenter);
   return {target:time,time:await frame.locator('#metric-time').evaluate(element=>element.value),sha256:hash(bytes),...pixels};
 }
@@ -299,6 +322,11 @@ try {
           await frame.locator('.preview-pane').press('Home');
             await frame.waitForFunction(()=>parseFloat(document.querySelector('#metric-time').value)<1);
             await frame.getByRole('tab',{name:'Code',exact:true}).click();
+            assert.equal(await frame.locator('#scene').evaluate(canvas => {
+              const { x, y, width, height } = canvas.getBoundingClientRect();
+              return getComputedStyle(canvas).visibility === 'visible' &&
+                !!document.elementFromPoint(x + width / 2, y + height / 2)?.closest('.editor-pane');
+            }),true,'Code covers the canvas without hiding its rendered surface');
             await frame.getByRole('tab',{name:'View',exact:true}).click();
             assert.equal(await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration),initialGeneration,'flipping View/Code is not source execution');
             mark('hot-edit-input',id);
