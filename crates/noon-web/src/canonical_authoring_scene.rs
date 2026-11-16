@@ -12577,13 +12577,18 @@ mod tests {
             .unwrap();
         {
             let player = context.active_live_player().unwrap();
+            assert!(player
+                .scene()
+                .effective_content(&target)
+                .unwrap()
+                .text()
+                .is_some());
             let session = player.session_mut_for_test();
             assert_eq!(
                 session.execution_object_id(target.node_id()),
                 Some(execution_id)
             );
             assert_eq!(session.execution_slot_for_frame_index(0), Some(slot));
-            assert!(session.frame().objects[0].text().is_some());
         }
 
         let mut handed_off = context.take_execution_player(1.0, 29).unwrap();

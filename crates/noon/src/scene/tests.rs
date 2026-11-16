@@ -318,7 +318,7 @@ fn exact_transform_track_preserves_constant_endpoints_that_differ_from_base() {
 }
 
 #[test]
-fn effective_path_snapshots_require_the_scene_owned_publication() {
+fn effective_path_and_content_require_the_scene_owned_publication() {
     let mut scene = Scene::new();
     let mut line = scene.line((1.0, 2.0), (4.0, 6.0)).unwrap();
     scene.add(&line).unwrap();
@@ -326,6 +326,7 @@ fn effective_path_snapshots_require_the_scene_owned_publication() {
     for result in [
         scene.effective_path_query(&line).map(|_| ()),
         scene.effective_all_points((&line).into()).map(|_| ()),
+        scene.effective_content(&line).map(|_| ()),
     ] {
         assert!(matches!(
             result,
@@ -340,6 +341,7 @@ fn effective_path_snapshots_require_the_scene_owned_publication() {
     let query = scene.effective_path_query(&line).unwrap();
     assert_eq!(query.start().unwrap(), (1.0, 2.0));
     assert_eq!(query.end().unwrap(), (4.0, 6.0));
+    assert!(scene.effective_content(&line).unwrap().geometry().is_some());
     assert_eq!(
         scene.effective_all_points((&line).into()).unwrap(),
         query.points().unwrap()
@@ -351,6 +353,7 @@ fn effective_path_snapshots_require_the_scene_owned_publication() {
     for result in [
         scene.effective_path_query(&foreign).map(|_| ()),
         scene.effective_all_points((&foreign).into()).map(|_| ()),
+        scene.effective_content(&foreign).map(|_| ()),
     ] {
         assert!(matches!(result, Err(crate::AuthoringError::ForeignStore)));
     }
@@ -358,6 +361,7 @@ fn effective_path_snapshots_require_the_scene_owned_publication() {
     for result in [
         scene.effective_path_query(&line).map(|_| ()),
         scene.effective_all_points((&line).into()).map(|_| ()),
+        scene.effective_content(&line).map(|_| ()),
     ] {
         assert!(matches!(
             result,
