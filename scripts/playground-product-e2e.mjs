@@ -11,6 +11,7 @@ import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRe
   freshProductRunSettled } from "./playground-product-fps.mjs";
 import { packageSizes } from "../.github/ci/wasm-build.mjs";
 import { captureAttemptedPage } from "./playground-browser-failure-evidence.mjs";
+import { holdPlaygroundPreload } from "./playground-browser-support.mjs";
 import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
@@ -141,9 +142,7 @@ async function waitForServer() {
 }
 
 async function waitForApplied(page, previousGeneration) {
-  // A new explicit Run can race the previous run's still-applied patch DOM.
-  // Wait for the exact new generation's terminal patch, not a stale one;
-  // retain the original 30s deadline and genuine source-completion gates.
+  // Require the explicit Run's receipt even if the previous patch still says applied.
   await page.waitForFunction(freshProductRunSettled, { previousGeneration, allowLegacyBaseline },
     { timeout: 30_000 });
   const state = await page.evaluate(() => ({
@@ -204,6 +203,7 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
     const previousGeneration = await page.evaluate(
       () => window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? 0,
     );
+    evidence.previousGeneration = previousGeneration;
     await page.locator("#replace-scene").click();
     // Run may replace its canvas during startup; the preview frame is stable.
     await page.locator(".canvas-frame").scrollIntoViewIfNeeded();
@@ -238,8 +238,7 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
         !events.some(event => event.stage === "profile-change") && dispositionReady;
     }, { exampleId, expectedProfile: completionExpectation.attachedProfile,
       expectedDisposition: completionExpectation.disposition, durationSeconds: measurement.sourceEndSeconds,
-      allowLegacyBaseline },
-    { timeout: 30_000 });
+      allowLegacyBaseline }, { timeout: 30_000 });
     const lifecycle = await page.evaluate(() => {
       const gallery = window.__noonExampleGallery;
       return { runInFlight: gallery.runInFlight, run: gallery.runPhaseMetrics,
@@ -405,6 +404,7 @@ async function synchronizeFinalFrame(page, seconds) {
 
 let browser = null;
 let page = null;
+let releasePreload = null;
 const pageErrors = [];
 const consoleErrors = [];
 try {
@@ -427,6 +427,8 @@ try {
     deviceScaleFactor: 1,
   });
   page = await context.newPage();
+  // Every measured pass starts through Run, including the first cold pass.
+  releasePreload = await holdPlaygroundPreload(page);
   await page.addInitScript(profileStages => {
     const NativeWorker = window.Worker;
     // The product client rejects this ID before issuing it (counter exhausted).
@@ -512,12 +514,16 @@ try {
   const shellReadyMs = performance.now() - navigationStarted;
   const shell = await page.evaluate(() => ({
     selected: window.__noonExampleGallery?.selectedExampleId ?? null,
+    runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
+    runAccepted: window.__noonExampleGallery?.runPhaseMetrics != null ||
+      window.__noonExampleGallery?.runInFlight === true,
     runtimeStartup: document.querySelector("#status")?.dataset.runtimeStartup ?? null,
     executionMode: document.querySelector("#status")?.dataset.executionMode ?? null,
     controls: document.querySelector(".playback-controls") !== null,
     statusText: document.querySelector("#status-text")?.textContent ?? "",
   }));
   assert.equal(shell.selected, exampleId, "product E2E loaded the wrong example");
+  assert.equal(shell.runAccepted, false, "product shell accepted a Run before the explicit cold pass");
   assert.equal(shell.executionMode, null, "page shell entered an execution mode before Run");
   assert.equal(shell.controls, false, "page shell allocated playback controls before Run");
 
@@ -693,7 +699,10 @@ try {
   }, null, 2)}\n`, "utf8");
   throw error;
 } finally {
-  await browser?.close();
-  server.kill("SIGTERM");
-  await serverClosed;
+  try { await browser?.close(); }
+  finally {
+    releasePreload?.();
+    server.kill("SIGTERM");
+    await serverClosed;
+  }
 }
