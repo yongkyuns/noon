@@ -11,6 +11,7 @@ import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRe
   freshProductRunSettled } from "./playground-product-fps.mjs";
 import { packageSizes } from "../.github/ci/wasm-build.mjs";
 import { captureAttemptedPage } from "./playground-browser-failure-evidence.mjs";
+import { waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
@@ -29,7 +30,7 @@ assert.ok(["baseline", "candidate"].includes(label), "product measurement role m
 const allowLegacyBaseline = label === "baseline";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
 const measurement = productMeasurement(exampleId);
-const readinessWait = { polling: 100, timeout: 30_000 };
+const readinessWait = { interval: 100, timeout: 30_000 };
 const profileExpectation = SHOWCASE_PROFILE_EXPECTATIONS.find(entry => entry.id === exampleId);
 const completionExpectation = { attachedProfile: profileExpectation?.attachedProfile ?? "incremental",
   disposition: profileExpectation?.disposition ?? "looped" };
@@ -142,8 +143,8 @@ async function waitForServer() {
 }
 
 async function waitForApplied(page, previousGeneration) {
-  // The source worker can settle the current Run independently of page animation frames.
-  await page.waitForFunction(freshProductRunSettled, { previousGeneration, allowLegacyBaseline }, readinessWait);
+  await waitForBrowserObservation(page, freshProductRunSettled,
+    { previousGeneration, allowLegacyBaseline }, readinessWait);
   const state = await page.evaluate(() => ({
     patchState: document.querySelector("#patch-status")?.dataset.state ?? null,
     patchText:
@@ -202,6 +203,7 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
     const previousGeneration = await page.evaluate(
       () => window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? 0,
     );
+    evidence.previousGeneration = previousGeneration;
     await page.locator("#replace-scene").click();
     // Run may replace its canvas during startup; the preview frame is stable.
     await page.locator(".canvas-frame").scrollIntoViewIfNeeded();
@@ -210,7 +212,7 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
     // completion signal. Wait for the same run's source cleanup and final
     // profile disposition, including one actual loop before accepting a
     // replayable pass.
-    await page.waitForFunction(({ exampleId, expectedProfile, expectedDisposition, durationSeconds,
+    await waitForBrowserObservation(page, ({ exampleId, expectedProfile, expectedDisposition, durationSeconds,
       allowLegacyBaseline }) => {
       const gallery = window.__noonExampleGallery;
       const run = gallery?.runPhaseMetrics;

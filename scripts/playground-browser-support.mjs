@@ -43,13 +43,28 @@ export function playgroundLaunchOptions(browserName) {
   return { headless: true };
 }
 
-// Playwright's waitForFunction tests a returned Promise for truthiness before
-// resolving it. Async worker observations need polling of the resolved value.
-export async function waitForBrowserObservation(page, predicate, argument, { timeout = 90_000 } = {}) {
-  const deadline = Date.now() + timeout;
-  while (!await page.evaluate(predicate, argument)) {
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for browser observation");
-    await page.waitForTimeout(25);
+// Poll from the test process. Each evaluation observes the current page and
+// awaits any worker reply without relying on a browser-side polling callback.
+export async function waitForBrowserObservation(page, predicate, argument,
+  { timeout = 90_000, interval = 25 } = {}) {
+  const deadline = performance.now() + timeout;
+  const timeoutError = new Error("Timed out waiting for browser observation");
+  let stopped = false;
+  let timer;
+  const observe = async () => {
+    while (!stopped) {
+      if (await page.evaluate(predicate, argument)) return;
+      if (performance.now() >= deadline) throw timeoutError;
+      if (!stopped) await page.waitForTimeout(interval);
+    }
+  };
+  try {
+    await Promise.race([observe(), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(timeoutError), timeout);
+    })]);
+  } finally {
+    stopped = true;
+    clearTimeout(timer);
   }
 }
 
