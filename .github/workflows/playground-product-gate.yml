@@ -33,6 +33,7 @@ on:
       - "scripts/manim-tutorial-smoke.mjs"
       - "scripts/playground-layout-smoke.mjs"
       - "scripts/playground-browser-support.mjs"
+      - "scripts/playground-browser-failure-evidence.mjs"
       - "scripts/playground-product-e2e.mjs"
       - "scripts/playground-product-fps.mjs"
       - "scripts/playground-product-fps.test.mjs"
