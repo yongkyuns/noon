@@ -1,5 +1,8 @@
 # Verification
 
+- [Captured frame feedback](#captured-frame-feedback)
+- [Repository validation](#repository-validation)
+
 Treat code execution, semantic correctness, rendered appearance, and mathematical
 correctness as separate checks. A scene can run successfully while displaying the
 wrong starting object, dropping a label, or using incorrect timing.
@@ -16,6 +19,28 @@ qualified backend and tolerance policy; do not require universal cross-GPU bit
 identity or widen thresholds to make a failing scene pass.
 
 ## Captured frame feedback
+
+For a human review, generate a local page from verified preview captures:
+
+```bash
+node tools/noon-mcp/bin/noon-feedback.mjs review \
+  --preview preview-output/manifest.json --source scene.py --output review-page
+```
+
+Open `review-page/index.html`. Select a captured frame, mark a region by dragging
+or entering coordinates, set the interval, and describe the correction and what
+must remain. Download the feedback note and keep it with the review folder. These
+are discrete stills, not playback. Finalize the note through the shared builder:
+
+```bash
+node tools/noon-mcp/bin/noon-feedback.mjs import \
+  --review review-page --note downloaded-note.json --output review
+```
+
+Import verifies the original source and complete selected frame identity before
+writing the ordinary pending feedback bundle. Do not manually change the note's
+frame identity or sample to make it fit a revised capture. Preserve the original
+review folder; use `check` and a fresh `compare` after the focused correction.
 
 Use `noon_annotate_frame` with the owned `session`, retained `artifactId`,
 `interval: {start,end}`, `observation`, `desiredChange`, optional `preserve`, and

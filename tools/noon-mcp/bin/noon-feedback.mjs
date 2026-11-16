@@ -2,11 +2,17 @@
 import { runFeedbackCli } from "../src/feedback-cli.mjs";
 
 const USAGE = `Usage:
+  noon-feedback review --preview <manifest.json> --source <scene.py> --output <new-review-dir>
+  noon-feedback import --review <review-dir> --note <downloaded-note.json> --output <new-feedback-dir>
   noon-feedback annotate --preview <manifest.json> [--sample <index>] --source <scene.py> --input <note.json> --output <new-dir>
   noon-feedback check --feedback <feedback.json> --source <scene.py>
   noon-feedback compare --feedback <feedback.json> --candidate <manifest.json> [--sample <index>] --source <revised.py> --output <new-dir>
 
 Use captured schema-2 noon-preview output. No renderer, provider, or credentials are needed.
+Review writes a portable page: open index.html, select a captured moment, mark a
+region, and download a feedback note. Import validates that note against the
+preserved source and complete frame identity before creating a feedback bundle.
+The page displays captured stills; it does not play or seek an animation.
 Sample indices start at zero. Note JSON contains interval {start,end}, observation,
 desiredChange, optional preserve, and optional normalized region {x,y,width,height}
 with a top-left origin. The interval must contain the published capture time.

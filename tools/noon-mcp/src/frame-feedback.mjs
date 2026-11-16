@@ -74,10 +74,10 @@ function verifyImage(frame, png) {
   }
 }
 
-function capturedFrame(retained) {
+export function readCapturedFrame(retained) {
   const { retentionMs: _retentionMs, ...frame } = descriptorSchema.parse(retained?.descriptor);
   verifyImage(frame, retained?.png);
-  return frame;
+  return freeze(frame);
 }
 
 export function buildFrameFeedback(retained, input) {
@@ -85,7 +85,7 @@ export function buildFrameFeedback(retained, input) {
   return freeze(feedbackRecordSchema.parse({
     kind: "noon-frame-feedback", schemaVersion: 1, status: "pending_review",
     feedback: { ...note, region: note.region ?? null, preserve: note.preserve ?? null },
-    frame: capturedFrame(retained),
+    frame: readCapturedFrame(retained),
   }));
 }
 
@@ -107,7 +107,7 @@ export function checkFeedbackSource(record, currentSourceSha256) {
 
 export function buildFeedbackComparison(record, candidate, currentSourceSha256) {
   const before = feedbackRecordSchema.parse(record);
-  const after = capturedFrame(candidate);
+  const after = readCapturedFrame(candidate);
   const association = checkFeedbackSource(before, currentSourceSha256);
   if (after.provenance.sourceSha256 !== association.currentSourceSha256) {
     throw new Error("candidate frame does not match the supplied current source");

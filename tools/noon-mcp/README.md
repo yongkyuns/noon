@@ -156,6 +156,49 @@ through the shared session/runner cleanup path.
 
 ## Frame feedback and revision
 
+### Review captured frames in a browser
+
+Generate a review folder from a completed preview and the matching source. Run
+this from `tools/noon-mcp`:
+
+```bash
+node bin/noon-feedback.mjs review \
+  --preview /absolute/path/to/preview-output/manifest.json \
+  --source /absolute/path/to/scene.py \
+  --output /absolute/path/to/review-page
+```
+
+Open `review-page/index.html` directly in a browser. Choose a captured moment,
+mark a region by dragging or entering its coordinates, set the affected interval,
+and describe the problem, correction, and what must stay the same. Download the
+feedback note when ready. The page works locally without a server, network,
+renderer, or provider. It shows the discrete frames that were captured; it does
+not provide playback between them.
+
+The download is bound to the complete selected frame identity. Turn it into the
+same verified feedback bundle used by the CLI and MCP workflow:
+
+```bash
+node bin/noon-feedback.mjs import \
+  --review /absolute/path/to/review-page \
+  --note /absolute/path/to/downloaded-note.json \
+  --output /absolute/path/to/review
+```
+
+Import checks the preserved source, image bytes, and original source/build/run/
+time identity before calling the shared feedback builder. A note for another
+frame or edited capture fails. Keep the downloaded note with its review folder
+when handing it to an agent. Generated folders contain the source snapshot and
+remain local unless you choose to share them.
+
+Generation validates every frame before creating the output directory, with at
+most 32 frames, 8 MiB per PNG, and 64 MiB of captured PNGs in total. Existing
+directories are never reused. Reviewer input remains a draft until import, and
+the resulting feedback remains pending review. Use the existing `check` and
+`compare` commands below after making a focused source change.
+
+### Annotate through MCP or the command line
+
 Use feedback to describe an explanatory problem, the correction, and the meaning
 that must survive the edit. The rectangle uses normalized image coordinates with
 a top-left origin. Its positive width/height must stay inside the image. The
@@ -220,9 +263,10 @@ No comment is silently reattached to the same timestamp in a changed lesson.
 Inspect the candidate and review playback for timing or speech issues: a still
 comparison and a successful render cannot establish that an explanation is fixed.
 
-This is a portable agent/CLI feedback workflow. A pointer-driven annotation UI,
-semantic target reconciliation, cue realignment, and reviewer resolution controls
-remain separate work in [#2581](https://github.com/yongkyuns/noon/issues/2581).
+This is a portable captured-frame feedback workflow. Integrating pause-and-capture
+with the live playback viewer, semantic target reconciliation, cue realignment,
+and reviewer resolution controls remain separate work in
+[#2581](https://github.com/yongkyuns/noon/issues/2581).
 
 ## Evaluation
 

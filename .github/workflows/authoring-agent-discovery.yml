@@ -11,6 +11,9 @@ on:
       - "crates/noon/src/narration/**"
       - "scripts/agent-preview-artifacts.mjs"
       - "scripts/agent-preview-sessions.mjs"
+      - "scripts/ci-install-playwright-browser.sh"
+      - "scripts/ci-install-reference-deps.sh"
+      - "scripts/ci_reference_apt_sources.py"
       - "scripts/noon-capabilities.py"
       - "scripts/manim-api-coverage.py"
       - "compat/manim-v0.21.0.json"
@@ -38,6 +41,9 @@ on:
       - "crates/noon/src/narration/**"
       - "scripts/agent-preview-artifacts.mjs"
       - "scripts/agent-preview-sessions.mjs"
+      - "scripts/ci-install-playwright-browser.sh"
+      - "scripts/ci-install-reference-deps.sh"
+      - "scripts/ci_reference_apt_sources.py"
       - "scripts/noon-capabilities.py"
       - "scripts/manim-api-coverage.py"
       - "compat/manim-v0.21.0.json"
@@ -135,6 +141,41 @@ jobs:
           name: noon-agent-distribution
           path: ${{ runner.temp }}/noon-agent-distribution.json
           if-no-files-found: error
+          retention-days: 3
+
+  feedback-review:
+    name: Captured frame review interface
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/noon-mcp/package-lock.json
+      - name: Install exact locked tooling dependencies
+        working-directory: tools/noon-mcp
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install pinned interface test tools without lifecycle hooks
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund playwright@1.62.1 pngjs@7.0.0
+      - name: Install Chromium with the bounded repository helper
+        run: bash scripts/ci-install-playwright-browser.sh chromium
+      - name: Verify offline review interaction and canonical feedback import
+        env:
+          NOON_FEEDBACK_REVIEW_ARTIFACTS: ${{ runner.temp }}/noon-feedback-review
+        run: |
+          set -o pipefail
+          timeout --signal=TERM 180s node tools/noon-mcp/test/feedback-review-browser.mjs | tee "$RUNNER_TEMP/noon-feedback-review.log"
+      - name: Retain review screenshots and interaction evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: noon-feedback-review
+          path: |
+            ${{ runner.temp }}/noon-feedback-review/
+            ${{ runner.temp }}/noon-feedback-review.log
+          if-no-files-found: warn
           retention-days: 3
 
   preview-isolation:

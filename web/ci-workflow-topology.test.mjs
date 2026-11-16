@@ -290,12 +290,28 @@ test("agent discovery selects narration and checkout package inputs on PRs and m
       "crates/noon/src/narration/preparation/native/provider.rs",
       "crates/noon/src/narration/future/nested/input.rs",
       "web/ci-workflow-topology.test.mjs",
+      "scripts/ci-install-playwright-browser.sh", "scripts/ci-install-reference-deps.sh",
+      "scripts/ci_reference_apt_sources.py",
     ]) assert.equal(selects(changed), true, `${event} skips package input ${changed}`);
     for (const changed of [
       "Cargo.lock.bak", "crates/noon/src/lib.rs", "crates/noon/src/narration-other/input.rs",
       "scripts/unrelated.mjs", "scripts/agent-preview-artifacts.mjs.bak", "README.md",
     ]) assert.equal(selects(changed), false, `${event} unnecessarily selects ${changed}`);
   }
+});
+
+test("captured frame review has a browser proof independent of engine builds", async () => {
+  const workflow = await readFile(new URL("authoring-agent-discovery.yml", workflowDir), "utf8");
+  const job = workflow.split("\n  feedback-review:\n")[1]?.split(/^  [a-z][a-z-]*:/m)[0];
+  assert.ok(job, "captured frame review must retain its independent browser job");
+  assert.doesNotMatch(job, /^    (?:needs|if|continue-on-error):/m);
+  assert.doesNotMatch(job, /dev-wasm-build|build-web-demo|docker|cargo/);
+  assert.match(job, /playwright@1\.62\.1 pngjs@7\.0\.0/);
+  assert.match(job, /bash scripts\/ci-install-playwright-browser\.sh chromium/);
+  assert.match(job, /timeout --signal=TERM 180s node tools\/noon-mcp\/test\/feedback-review-browser\.mjs/);
+  assert.match(job, /set -o pipefail/);
+  assert.match(job, /if: always\(\)\n        uses: actions\/upload-artifact@/);
+  assert.match(job, /\$\{\{ runner\.temp \}\}\/noon-feedback-review\//);
 });
 
 

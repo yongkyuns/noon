@@ -47,7 +47,7 @@ test("distribution manifest pins package, skill, capability and runner identitie
   assert.equal(first.environment.trustedCheckoutRequired, true);
 
   assert.equal(first.skill.name, "noon-authoring");
-  assert.equal(first.skill.version, "0.6.0");
+  assert.equal(first.skill.version, "0.7.0");
   assertSha(first.skill.sha256, "skill");
   for (const reference of ["education.md", "teaching-patterns.md", "examples.md"]) {
     const name = `skills/noon-authoring/references/${reference}`;
@@ -74,6 +74,11 @@ test("distribution manifest pins package, skill, capability and runner identitie
     "tools/noon-mcp/src/distribution-manifest.mjs",
     "tools/noon-mcp/bin/noon-feedback.mjs",
     "tools/noon-mcp/src/feedback-cli.mjs",
+    "tools/noon-mcp/src/feedback-files.mjs",
+    "tools/noon-mcp/src/feedback-review.mjs",
+    "tools/noon-mcp/review/review.html",
+    "tools/noon-mcp/review/review.css",
+    "tools/noon-mcp/review/review.js",
     "tools/noon-mcp/src/frame-feedback.mjs",
     "tools/noon-mcp/src/server.mjs",
     "scripts/agent-preview-sessions.mjs",

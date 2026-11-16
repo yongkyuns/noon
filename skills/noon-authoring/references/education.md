@@ -95,7 +95,9 @@ pronunciation, voice, or delivery changes, replace the affected audio and review
 alignment, captions, and dependent later timing. Keep unrelated passages reusable.
 
 Use `noon_annotate_frame` for a retained preview artifact, or the offline
-`noon-feedback` CLI for an existing preview manifest. State the observed problem,
+`noon-feedback` CLI for an existing preview manifest. For a human reviewer, generate
+a `noon-feedback review` page, collect the downloaded note, and finalize it with
+`noon-feedback import`. State the observed problem,
 desired correction, and meaning/state to preserve; select an interval containing
 the published capture time and, when useful, a normalized image region. The tool
 retains the actual source/build/run/time/image evidence instead of asking you to
@@ -107,7 +109,7 @@ silently reusing a timestamp or rectangle. Rehearse the affected interval throug
 a fresh bounded run, select the candidate capture, and retain the before/after
 comparison. Keep feedback pending until reviewed. Stills cannot prove pacing,
 speech correspondence, or learner understanding. This workflow does not imply a
-persistent annotation UI, arbitrary live rollback, or cross-edit object reconciliation.
+live pause-and-capture integration, arbitrary live rollback, or cross-edit object reconciliation.
 
 ## Worked example: One Extra Column
 
