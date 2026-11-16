@@ -1611,6 +1611,29 @@ class Scene:
         from _noon_audio import on_click_playback
         return on_click_playback(self, target, action)
 
+    def narrate(self, narration: object) -> Any:
+        """Place prepared speech at the current cursor before execution.
+
+        The complete immutable browser Scene profile uses one shared Rust
+        clip and clock. Import and native CPython support are separate profiles.
+        """
+        from _noon_audio import narrate
+        return narrate(self, narration)
+
+    def wait_for_narration(self, narration: object) -> Scene:
+        """Declare the remaining wait to this narration's end before execution.
+
+        Rust validates the placement and uses the current authored cursor.
+        A reached target adds no wait and does not rewind or stretch motion.
+        """
+        from _noon_audio import wait_for_narration
+        return wait_for_narration(self, narration)
+
+    def wait_for_narration_cue(self, narration: object, name: str) -> Scene:
+        """Declare the remaining wait to a manual cue's start before execution."""
+        from _noon_audio import wait_for_narration_cue
+        return wait_for_narration_cue(self, narration, name)
+
     @property
     def time(self) -> float:
         return _scene_operations()._canonical_scene_time(self)
@@ -1775,6 +1798,8 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 _PUBLIC_EXPORTS = {
     "AudioSource": "_noon_audio",
     "AudioClip": "_noon_audio",
+    "PreparedNarration": "_noon_audio",
+    "NarrationHandle": "_noon_audio",
     "PlaybackControl": "_noon_audio",
     "typing": "_manim_typing",
     "get_unit_normal": "_manim_user_vector_bases",

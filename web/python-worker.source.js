@@ -1,6 +1,7 @@
 import initNoonWeb, {
   WasmAuthoringStore,
   WasmAudioSource,
+  WasmPreparedNarration,
   WasmAudioClipOptions,
   WasmAuthoringFamilyHandle,
   WasmEffectDefinition,
@@ -353,6 +354,7 @@ async function initializePyodide() {
   self.noonCreateAuthoringArrowHandle = (options) =>
     authoringStore.createManimArrow(options);
   self.noonAudioSource = WasmAudioSource;
+  self.noonPreparedNarration = WasmPreparedNarration;
   self.noonAudioClipOptions = (...args) => new WasmAudioClipOptions(...args);
   self.noonCreateAuthoringSvgHandle = (source, shouldCenter, height, width) =>
     authoringStore.createSvgFromString(source, shouldCenter, height, width);

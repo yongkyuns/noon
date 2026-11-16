@@ -243,6 +243,7 @@ mod live_session;
 mod matrix_authoring;
 #[cfg(feature = "latex")]
 mod matrix_display;
+pub mod narration;
 mod native_signal_authoring;
 #[cfg(feature = "latex")]
 mod numeric_authoring;
@@ -382,6 +383,7 @@ pub use matrix_display::{
     DEFAULT_MATRIX_BRACKET_H_BUFF, DEFAULT_MATRIX_BRACKET_V_BUFF, DEFAULT_MATRIX_H_BUFF,
     DEFAULT_MATRIX_V_BUFF,
 };
+pub use narration::{NarrationCue, NarrationError, NarrationTranscriptStatus, PreparedNarration};
 pub use native_signal_authoring::{NativeBoolSignal, NativeVectorSignal};
 pub use noon_core::SemanticNumberLineScale;
 #[cfg(feature = "latex")]
@@ -421,6 +423,7 @@ pub use noon_core::{HatchPaint, HatchPaintError, HatchPaintOptions};
 pub use noon_core::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintError, ImageUvTransform};
 pub use noon_core::{NoisePaint, NoisePaintError};
 pub use noon_core::{PlaybackControl, PointArrayShape, PointArrayShapeError, RasterImageSampling};
+pub use scene::NarrationHandle;
 pub use scene_script::{
     BlockingScene, SceneScript, ScriptBoundary, ScriptError, ScriptScene, UpdaterFrame,
     UpdaterRegistration, UpdaterTarget,
@@ -553,6 +556,9 @@ pub mod prelude {
     #[cfg(feature = "image-decode")]
     pub use crate::{ImageDecodeError, ImageDecodeLimits};
     pub use crate::{ImageMobjectOptions, RasterImageSampling, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
+    pub use crate::{
+        NarrationCue, NarrationError, NarrationHandle, NarrationTranscriptStatus, PreparedNarration,
+    };
 }
 
 pub use family_gradient::color_gradient;

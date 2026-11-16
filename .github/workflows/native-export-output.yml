@@ -9,6 +9,7 @@ on:
       - 'scripts/ci_reference_apt_sources.py'
       - 'scripts/test_ci_install_reference_deps.py'
       - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'crates/noon-export/**'
       - 'crates/noon/**'
@@ -25,6 +26,7 @@ on:
       - 'scripts/ci_reference_apt_sources.py'
       - 'scripts/test_ci_install_reference_deps.py'
       - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'crates/noon-export/**'
       - 'crates/noon/**'
@@ -104,6 +106,10 @@ jobs:
           mkdir -p output-proof/source
           cp -r crates/noon-export output-proof/source/
           cp scripts/verify-native-export.py output-proof/source/
+          cp -r crates/noon/src/narration output-proof/source/narration
+          cp crates/noon/src/narration.rs crates/noon/src/bin/prepare_narration.rs output-proof/source/
+          cp crates/noon/Cargo.toml output-proof/source/noon-Cargo.toml
+          cp Cargo.lock output-proof/source/
           cargo fmt --all
           git diff --binary > output-proof/rustfmt.patch
       - name: Retain evidence, including failures

@@ -1,9 +1,9 @@
 ---
 name: noon-authoring
 description: Author and review educational Noon animation scenes using capability-qualified ManimCE-style Python or the shared Rust API. Use when a user asks to create, explain, storyboard, repair, or verify a Noon animation, or when scene source imports noon. Not a generic ManimGL skill or a contract for modifying Noon internals.
-compatibility: Requires a trusted Noon repository checkout, Python 3.12+, and Node 22+ for local capability/MCP tooling. Isolated preview additionally requires Docker, a built current browser package, and the repository-pinned preview runtime; capability discovery alone does not render or install dependencies.
+compatibility: Requires a trusted Noon repository checkout, Python 3.12+, and Node 22+ for local capability/MCP tooling. Native narration preparation requires the repository-pinned Rust toolchain. Isolated preview additionally requires Docker, a built current browser package, and the repository-pinned preview runtime; capability discovery alone does not render or install dependencies.
 metadata:
-  version: "0.3.0"
+  version: "0.5.0"
 ---
 
 # Noon authoring
@@ -66,9 +66,10 @@ about an installed binary, the current GPU, or a live session. See
    the edit. Follow the [narration and revision guidance](references/education.md#narration-and-revision)
    without claiming unimplemented audio or annotation APIs.
 
-For speech assets, read [narration preparation](references/narration.md). Preparing
-and caching a recording does not establish its admission into an ordinary scene,
-audio preview, or export; verify the selected route separately.
+For speech assets and shared cue/end waits, read
+[prepared narration](references/narration.md). Completed immutable scenes can use
+the shared Rust narration API; ordinary source continuations and native Python
+retain their separate admission limits. Verify the selected preview/export route.
 
 ## Qualified local preview route
 

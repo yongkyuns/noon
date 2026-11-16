@@ -18,8 +18,8 @@ Its direct Rust counterpart is
 The Rust function returns an ordinary `Scene` for `Scene::execution_session`
 and native MP4 export. Native window audio output has not yet been qualified.
 
-Python uses an explicit finite `result = Scene()`. This complete scene is declared
-before playback. Normal `Scene.construct`, `Scene.play`, and `Scene.wait` retain
+Python's `completed_scene()` returns an explicit finite `Scene` as `result`.
+This complete scene is declared before playback. Normal `Scene.construct`, `Scene.play`, and `Scene.wait` retain
 their source continuation behavior.
 
 ```python
@@ -44,6 +44,53 @@ result.audio(
 advances the Rust authoring cursor. `next_section` records a boundary at that
 cursor. `bind_position` keeps the relationship in Rust; no Python callback runs
 on animation frames.
+
+## Prepared narration variant
+
+Pass three accepted `PreparedNarration` values to `completed_scene(narrations)`
+to explain the same illustration with speech. The direct Rust counterpart is
+`background_music_lesson::scene_with_narration(&passages)`. Each passage needs a
+manual cue named `move`; the three passages correspond to positive input,
+negative input, and zero.
+
+The scene places a full recording at its current cursor, waits for the cue,
+moves both points for two seconds, and waits only for the recording's remainder.
+A 0.75-second inspection gap separates passages. The narration variant hides
+the numerical answer footers and asks the viewer to predict the output before
+the points move. The default 30-second music lesson keeps its existing source
+behavior and soundtrack.
+
+The [narration guide](../../../skills/noon-authoring/references/narration.md)
+covers shared Rust WAV preparation, typed construction, cache reuse, and host
+restrictions. Python's `PreparedNarration.from_wav` forwards to the same Rust
+decoder; native applications can use `NarrationPreparer` and pass its typed
+result directly into the scene. An optional technical speech fixture is
+reproducible with:
+
+```bash
+python3 crates/noon-export/examples/narration/prepare.py output/narration-lesson
+```
+
+The script requires FFmpeg with Flite `slt` and the repository-pinned Rust
+toolchain, uses a new destination directory, invokes the Rust preparation CLI,
+and reports three manifests. This Flite voice was rejected for lesson narration;
+the helper is retained for timing/export reproduction. Supply the manifest paths
+to the existing native exporter:
+
+```bash
+cargo run --locked --release -p noon-export --features narration-import \
+  --example render_audio_video -- lesson.mp4 --narration \
+  POSITIVE_MANIFEST NEGATIVE_MANIFEST ZERO_MANIFEST
+```
+
+Replace the placeholders with the paths reported by preparation. Speech is
+generated offline; exact concatenated phrase boundaries supply manual cues and
+a two-second prediction silence before the negative answer. This is a pipeline
+example, not an automatic alignment or voice-quality claim. The exporter uses
+its existing 0.75-second frozen final-hold option; that hold adds no speech.
+Other recordings or prepared provider output can use the same three-passage
+contract. Complete immutable scenes are the supported profile for this variant;
+ordinary continuations and native Python narration remain separate work.
 
 ## Finite clip options
 

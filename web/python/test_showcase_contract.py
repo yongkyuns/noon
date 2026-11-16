@@ -95,14 +95,35 @@ class ShowcaseSourceContract(unittest.TestCase):
                    and any(isinstance(target, ast.Name) and target.id == "result" for target in node.targets)]
         self.assertEqual(len(results), 1)
         self.assertIsInstance(results[0].value, ast.Call)
-        self.assertEqual(results[0].value.func.id, "Scene")
-        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+        self.assertEqual(results[0].value.func.id, "completed_scene")
+        self.assertEqual(results[0].value.args, [])
+        self.assertEqual(results[0].value.keywords, [])
+        builders = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "completed_scene"]
+        self.assertEqual(len(builders), 1)
+        builder = builders[0]
+        scenes = [node for node in builder.body if isinstance(node, ast.Assign)
+                  and any(isinstance(target, ast.Name) and target.id == "result" for target in node.targets)]
+        self.assertEqual(len(scenes), 1)
+        self.assertEqual(ast.unparse(scenes[0].value), "Scene()")
+        self.assertIsInstance(builder.body[-1], ast.Return)
+        self.assertEqual(ast.unparse(builder.body[-1].value), "result")
+        calls = [node for node in ast.walk(builder) if isinstance(node, ast.Call)
                  and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
                  and node.func.value.id == "result"]
         named = lambda name: [call for call in calls if call.func.attr == name]
         self.assertFalse(any(named(name) for name in ("play", "wait", "add_updater", "on_click")))
         self.assertEqual(len(named("bind_position")), 2)
         self.assertEqual(len(named("value_tracker")), 1)
+        # Preserve all existing default-gallery assertions inside the explicit
+        # no-narration branch; optional recordings do not redefine that fixture.
+        defaults = [node for node in builder.body if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == "narrations is None"]
+        self.assertEqual(len(defaults), 1)
+        default_tree = ast.Module(body=defaults[0].body, type_ignores=[])
+        calls = [node for node in ast.walk(default_tree) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+                 and node.func.value.id == "result"]
         self.assertEqual([ast.literal_eval(call.args[0]) for call in named("next_section")],
                          ["Double a positive input", "Keep the sign", "Return to zero"])
         declarations = named("declare_value")

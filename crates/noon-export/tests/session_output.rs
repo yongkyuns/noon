@@ -749,6 +749,246 @@ fn finite_movies_keep_audio_phase_gaps_crop_holds_and_exact_presentation_endpoin
     }
 }
 
+#[cfg(feature = "narration-native")]
+#[test]
+#[ignore = "requires software Vulkan, FFmpeg and ffprobe; verifies typed Rust preparation through export"]
+fn prepared_narration_survives_visual_revision_crop_and_silent_final_hold() {
+    use noon::narration::preparation::native::NarrationPreparer;
+    use noon::narration::preparation::PreparationOptions;
+    use noon::NarrationCue;
+
+    let directory = TestDirectory::new("prepared-narration", true);
+    // A complete WAV fixture enters the same shared Rust preparation used by
+    // authoring. No Python process or serialized scene/media roundtrip sits
+    // between preparation, Scene admission, execution and MP4 export. The tone
+    // is a timing oracle, not a generated-voice quality test.
+    let frames = 12_000_u32;
+    let rate = 24_000_u32;
+    let mut wav = Vec::with_capacity(44 + frames as usize * 2);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + frames * 2).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&rate.to_le_bytes());
+    wav.extend_from_slice(&(rate * 2).to_le_bytes());
+    wav.extend_from_slice(&2_u16.to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(frames * 2).to_le_bytes());
+    for frame in 0..frames {
+        let time = f64::from(frame) / f64::from(rate);
+        let envelope = (time / 0.01).min((0.5 - time) / 0.01).min(1.0);
+        let sample =
+            (32767.0 * 0.25 * envelope * (std::f64::consts::TAU * 500.0 * time).sin()) as i16;
+        wav.extend_from_slice(&sample.to_le_bytes());
+    }
+    let preparer = NarrationPreparer::new(directory.path.join("cache"));
+    let prepare = |caption: &str| {
+        preparer
+            .prepare_wav(
+                &wav,
+                "Timing fixture; no speech transcript is verified.",
+                PreparationOptions {
+                    caption_text: Some(caption.to_owned()),
+                    cues: vec![NarrationCue::manual("move", 0.1, 0.2).unwrap()],
+                },
+            )
+            .unwrap()
+    };
+    let prepared = prepare("Double the input");
+    let revised = prepare("2x");
+    assert_ne!(prepared.manifest_path, revised.manifest_path);
+    assert!(prepared.manifest_path.is_file());
+    assert!(revised.manifest_path.is_file());
+    let narration = prepared.narration;
+    let revised_caption = revised.narration;
+    assert_eq!(narration.duration_seconds(), 0.5);
+    assert_eq!(narration.audio_id(), revised_caption.audio_id());
+    assert_eq!(
+        narration.audio().samples(),
+        revised_caption.audio().samples()
+    );
+    assert_ne!(narration.caption_text(), revised_caption.caption_text());
+    let source_pointer = narration.audio().samples().as_ptr();
+
+    let make_session = |red: f64| {
+        let mut scene = Scene::new();
+        let mut marker = scene.square(0.8).unwrap();
+        marker.set_fill(red, 0.4, 1.0 - red, 1.0).unwrap();
+        marker.set_stroke_width(0.0).unwrap();
+        scene.add(&marker).unwrap();
+        let tracker = scene.value_tracker(-2.0).unwrap();
+        let position = scene
+            .position_from_tracker(
+                &tracker,
+                SemanticVec3::new(1.0, 0.0, 0.0),
+                SemanticVec3::new(0.0, 0.0, 0.0),
+            )
+            .unwrap();
+        scene.bind_position(&marker, &position).unwrap();
+        scene.wait(0.125).unwrap();
+        let speech = scene.narrate(&narration).unwrap();
+        scene.wait_for_narration_cue(&speech, "move").unwrap();
+        assert!((scene.time() - 0.225).abs() < 1e-12);
+        scene
+            .play_value(&tracker, 2.0)
+            .rate_func(RateFunction::Linear)
+            .run_time(0.25)
+            .unwrap();
+        scene.wait_for_narration(&speech).unwrap();
+        assert!((scene.time() - 0.625).abs() < 1e-12);
+        assert_eq!(narration.audio().samples().as_ptr(), source_pointer);
+        scene.execution_session().unwrap()
+    };
+
+    let mut full_audio = None;
+    let mut full_pixels = None;
+    for (name, start_frame, red) in [
+        ("full", 0, 0.8),
+        ("visual-revision", 0, 0.2),
+        ("crop", 5, 0.8),
+    ] {
+        let path = directory.path.join(format!("{name}.mp4"));
+        let mut session = make_session(red);
+        assert!((session.finite_timeline_end_time().unwrap() - 0.625).abs() < 1e-12);
+        let summary = export_session_file(
+            &mut session,
+            ExportFrameOptions {
+                start_frame,
+                final_hold_seconds: 0.2,
+                ..frame_options()
+            },
+            capture_options(),
+            OutputOptions::mp4(&path),
+        )
+        .unwrap();
+        let frames = if start_frame == 0 { 25 } else { 20 };
+        assert_eq!(summary.capture.sampling.frames, frames);
+        let crop_start = start_frame as f64 * 1001.0 / 30_000.0;
+        let duration = frames as f64 * 1001.0 / 30_000.0;
+        verify_movie_timing(&path, frames, duration, true);
+
+        let decoded = command_output(
+            Command::new("ffmpeg")
+                .args(["-v", "error", "-nostdin", "-i"])
+                .arg(&path)
+                .args([
+                    "-map",
+                    "0:a:0",
+                    "-c:a",
+                    "pcm_f32le",
+                    "-f",
+                    "f32le",
+                    "pipe:1",
+                ]),
+        );
+        let pcm: Vec<f32> = decoded
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| f32::from_le_bytes(*v))
+            .collect();
+        let count = (duration * 48_000.0).floor() as usize;
+        assert!(pcm.len() >= count * 2);
+        for channel in 0..2 {
+            let (
+                mut error,
+                mut actual_power,
+                mut expected_power,
+                mut cross,
+                mut silence,
+                mut silent_count,
+            ) = (0.0, 0.0, 0.0, 0.0, 0.0, 0);
+            for frame in 0..count {
+                let relative = crop_start + frame as f64 / 48_000.0 - 0.125;
+                let expected = if (0.0..0.5).contains(&relative) {
+                    0.25 * (relative / 0.01).min((0.5 - relative) / 0.01).min(1.0)
+                        * (std::f64::consts::TAU * 500.0 * relative).sin()
+                } else {
+                    0.0
+                };
+                let actual = f64::from(pcm[frame * 2 + channel]);
+                assert!(actual.is_finite());
+                error += (actual - expected).powi(2);
+                expected_power += expected * expected;
+                actual_power += actual * actual;
+                cross += actual * expected;
+                if !(-0.025..=0.525).contains(&relative) {
+                    silence += actual * actual;
+                    silent_count += 1;
+                }
+            }
+            assert!(
+                (error / count as f64).sqrt() < 0.015,
+                "{name}: audio placement/phase"
+            );
+            assert!(
+                cross / (actual_power * expected_power).sqrt() > 0.98,
+                "{name}: decoded phase correlation"
+            );
+            assert!(silent_count > 1000);
+            assert!(
+                (silence / silent_count as f64).sqrt() < 0.008,
+                "{name}: final hold must be silent"
+            );
+        }
+        let pixels = command_output(
+            Command::new("ffmpeg")
+                .args(["-v", "error", "-nostdin", "-i"])
+                .arg(&path)
+                .args([
+                    "-map",
+                    "0:v:0",
+                    "-vf",
+                    "scale=in_range=limited:out_range=full:in_color_matrix=bt709,format=rgba",
+                    "-fps_mode",
+                    "passthrough",
+                    "-f",
+                    "rawvideo",
+                    "pipe:1",
+                ]),
+        );
+        assert_eq!(pixels.len(), frames as usize * FRAME_BYTES);
+        for (index, rgba) in pixels.as_chunks::<FRAME_BYTES>().0.iter().enumerate() {
+            let time = crop_start + index as f64 * 1001.0 / 30_000.0;
+            let x = -2.0 + 4.0 * ((time - 0.225) / 0.25).clamp(0.0, 1.0);
+            let expected = f64::from(WIDTH) / 2.0
+                + x * f64::from(HEIGHT) / f64::from(noon_core::DEFAULT_FRAME_HEIGHT);
+            let (mut weight, mut position) = (0.0, 0.0);
+            for (pixel, value) in rgba.as_chunks::<4>().0.iter().enumerate() {
+                let brightness = value[..3].iter().map(|v| u32::from(*v)).sum::<u32>();
+                if brightness > 36 {
+                    weight += f64::from(brightness);
+                    position += f64::from(brightness) * ((pixel % WIDTH as usize) as f64 + 0.5);
+                }
+            }
+            assert!(weight > 0.0);
+            assert!(
+                (position / weight - expected).abs() < 1.1,
+                "{name}: picture at {time}"
+            );
+        }
+        if name == "full" {
+            full_audio = Some(decoded);
+            full_pixels = Some(pixels);
+        } else if name == "visual-revision" {
+            assert_eq!(
+                full_audio.as_ref().unwrap(),
+                &decoded,
+                "visual-only revision must preserve decoded audio"
+            );
+            assert_ne!(
+                full_pixels.as_ref().unwrap(),
+                &pixels,
+                "the visual revision must actually change the picture"
+            );
+        }
+        eprintln!("{name}: {}", path.display());
+    }
+}
+
 #[test]
 #[ignore = "requires software Vulkan, FFmpeg and ffprobe"]
 fn video_only_sessions_and_explicit_visual_png_output_keep_their_profiles() {

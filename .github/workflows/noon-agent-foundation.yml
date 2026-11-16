@@ -7,8 +7,14 @@ on:
       - "scripts/noon-capabilities.py"
       - "scripts/test_noon_capabilities.py"
       - "scripts/check-noon-agent-skill.py"
-      - "scripts/prepare_narration.py"
-      - "scripts/test_prepare_narration.py"
+      - "crates/noon/src/narration*"
+      - "crates/noon/src/narration/**"
+      - "crates/noon/src/bin/prepare_narration.rs"
+      - "crates/noon/tests/narration*"
+      - "crates/noon/Cargo.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "scripts/manim-api-coverage.py"
       - "scripts/agent-preview-artifacts*.mjs"
       - "scripts/agent-preview-capture*.mjs"
@@ -23,8 +29,14 @@ on:
       - "scripts/noon-capabilities.py"
       - "scripts/test_noon_capabilities.py"
       - "scripts/check-noon-agent-skill.py"
-      - "scripts/prepare_narration.py"
-      - "scripts/test_prepare_narration.py"
+      - "crates/noon/src/narration*"
+      - "crates/noon/src/narration/**"
+      - "crates/noon/src/bin/prepare_narration.rs"
+      - "crates/noon/tests/narration*"
+      - "crates/noon/Cargo.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "scripts/manim-api-coverage.py"
       - "scripts/agent-preview-artifacts*.mjs"
       - "scripts/agent-preview-capture*.mjs"
@@ -52,8 +64,6 @@ jobs:
           python-version: "3.12"
       - name: Test offline discovery and negative cases
         run: python -B -m unittest discover -s scripts -p test_noon_capabilities.py -v
-      - name: Test narration preparation and cache invalidation without network
-        run: python -B -m unittest discover -s scripts -p test_prepare_narration.py -v
       - name: Validate actual checkout inventory without Manim
         run: python -S -B scripts/noon-capabilities.py > "$RUNNER_TEMP/noon-agent-capabilities.json"
       - name: Validate skill and current example references
@@ -65,6 +75,28 @@ jobs:
           path: ${{ runner.temp }}/noon-agent-capabilities.json
           if-no-files-found: error
           retention-days: 3
+  narration:
+    name: Shared Rust narration preparation and cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v7
+      - name: Pin the repository toolchain
+        run: rustup install
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-narration-cargo-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-narration-cargo-
+      - name: Test decoding, cache invalidation, provider failures and CLI without paid calls
+        run: cargo test --locked -p noon --no-default-features --features narration-native --lib --test narration_preparation_cli --bin prepare_narration narration
   artifacts:
     name: Frame artifact ownership
     runs-on: ubuntu-latest

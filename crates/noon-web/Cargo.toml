@@ -29,7 +29,7 @@ renderer = [
 
 [dependencies]
 ciborium = "0.2"
-noon = { version = "0.1.0", path = "../noon", features = ["diagnostics", "latex"] }
+noon = { version = "0.1.0", path = "../noon", features = ["diagnostics", "latex", "narration-preparation"] }
 noon-compile = { version = "0.1.0", path = "../noon-compile" }
 noon-core = { version = "0.1.0", path = "../noon-core" }
 noon-geometry = { version = "0.1.0", path = "../noon-geometry" }

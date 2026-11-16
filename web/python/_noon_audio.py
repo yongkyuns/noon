@@ -138,6 +138,177 @@ class AudioClip:
         return self
 
 
+class PreparedNarration:
+    """Verified immutable narration prepared before scene authoring.
+
+    Shared Rust prepares WAV bytes or validates a persisted manifest and PCM,
+    including identity, duration, and manual cues. This proxy performs no file access, decoding,
+    speech generation, alignment, or timing calculations. The first language
+    profile is a complete immutable browser Scene; native CPython admission is
+    not provided by this wrapper.
+    """
+    __slots__ = ("_handle",)
+
+    def __init__(self):
+        raise TypeError("use PreparedNarration.from_wav() or PreparedNarration.from_prepared()")
+
+    @classmethod
+    def from_wav(cls, wav, spoken_text, *, caption_text=None, cues=()):
+        """Prepare complete PCM16 WAV bytes through shared Rust before playback.
+
+        cues contains (name, start_seconds, end_seconds) manual intervals.
+        Rust measures duration and validates all media and cue semantics; a
+        supplied transcript is not automatically verified against the recording.
+        """
+        if not isinstance(spoken_text, str):
+            raise TypeError("spoken_text must be a string")
+        if caption_text is not None and not isinstance(caption_text, str):
+            raise TypeError("caption_text must be a string or None")
+        view = memoryview(wav)
+        if not view.c_contiguous or view.itemsize != 1:
+            raise TypeError("wav must be a contiguous byte buffer")
+        names, starts, ends = [], array("d"), array("d")
+        for name, start, end in cues:
+            if not isinstance(name, str):
+                raise TypeError("cue name must be a string")
+            names.append(name)
+            starts.append(_number(start, "cue start"))
+            ends.append(_number(end, "cue end"))
+        from _noon_host import array_value, byte_buffer
+        try:
+            from _noon_host import noonPreparedNarration
+        except ImportError as error:
+            raise NotImplementedError("prepared narration is not available in this host") from error
+        narration = object.__new__(cls)
+        narration._handle = engine_call(
+            noonPreparedNarration.fromWav, byte_buffer(view.cast("B")), spoken_text,
+            caption_text, array_value(names), array_value(starts), array_value(ends),
+            operation="PreparedNarration.from_wav",
+        )
+        return narration
+
+    @classmethod
+    def from_prepared(cls, manifest, pcm):
+        """Import manifest text and its complete f32le PCM byte payload once."""
+        if not isinstance(manifest, str):
+            raise TypeError("manifest must be JSON text")
+        view = memoryview(pcm)
+        if not view.c_contiguous or view.itemsize != 1:
+            raise TypeError("pcm must be a contiguous byte buffer")
+        from _noon_host import byte_buffer
+        try:
+            from _noon_host import noonPreparedNarration
+        except ImportError as error:
+            raise NotImplementedError("prepared narration is not available in this host") from error
+        narration = object.__new__(cls)
+        narration._handle = engine_call(
+            noonPreparedNarration.fromPrepared, manifest, byte_buffer(view.cast("B")),
+            operation="PreparedNarration.from_prepared",
+        )
+        return narration
+
+    @property
+    def duration(self):
+        return float(self._handle.durationSeconds)
+
+    @property
+    def spoken_text(self):
+        return str(self._handle.spokenText)
+
+    @property
+    def caption_text(self):
+        return str(self._handle.captionText)
+
+    @property
+    def transcript_status(self):
+        return str(self._handle.transcriptStatus)
+
+    def cue_start(self, name):
+        """Return a manual cue's source-relative start, as validated by Rust."""
+        if not isinstance(name, str):
+            raise TypeError("cue name must be a string")
+        return float(engine_call(self._handle.cueStart, name, operation="PreparedNarration.cue_start"))
+
+    def cue_end(self, name):
+        """Return a manual cue's source-relative end; this is not alignment."""
+        if not isinstance(name, str):
+            raise TypeError("cue name must be a string")
+        return float(engine_call(self._handle.cueEnd, name, operation="PreparedNarration.cue_end"))
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+
+class NarrationHandle:
+    """Opaque Rust placement receipt for one admitted full narration clip.
+
+    Timing getters describe its recorded placement. Scene wait operations check
+    that the receipt still belongs to this Scene and its clip remains valid.
+    """
+    __slots__ = ("_handle",)
+
+    def __init__(self):
+        raise TypeError("obtain a NarrationHandle from Scene.narrate()")
+
+    @classmethod
+    def _from_handle(cls, handle):
+        narration = object.__new__(cls)
+        narration._handle = handle
+        return narration
+
+    @property
+    def start_time(self):
+        return float(self._handle.startTime)
+
+    @property
+    def end_time(self):
+        return float(self._handle.endTime)
+
+    @property
+    def duration(self):
+        return float(self._handle.durationSeconds)
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+
+def narrate(scene, narration):
+    if not isinstance(narration, PreparedNarration):
+        raise TypeError("Scene.narrate requires PreparedNarration")
+    from _manim_scene import _context
+    return NarrationHandle._from_handle(engine_call(
+        _context(scene).narrate, narration._handle, operation="Scene.narrate",
+    ))
+
+
+def wait_for_narration(scene, narration):
+    if not isinstance(narration, NarrationHandle):
+        raise TypeError("Scene.wait_for_narration requires NarrationHandle")
+    from _manim_scene import _context
+    engine_call(_context(scene).waitForNarration, narration._handle,
+                operation="Scene.wait_for_narration")
+    return scene
+
+
+def wait_for_narration_cue(scene, narration, name):
+    if not isinstance(narration, NarrationHandle):
+        raise TypeError("Scene.wait_for_narration_cue requires NarrationHandle")
+    if not isinstance(name, str):
+        raise TypeError("cue name must be a string")
+    from _manim_scene import _context
+    engine_call(_context(scene).waitForNarrationCue, narration._handle, name,
+                operation="Scene.wait_for_narration_cue")
+    return scene
+
+
 class PlaybackControl(Enum):
     """Viewer requests emitted by the ordinary Rust click/input publication."""
     TOGGLE_PLAYBACK = "toggle_playback"
