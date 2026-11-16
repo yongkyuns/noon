@@ -145,42 +145,9 @@ class ManimArrowAnimateTargetTests(unittest.TestCase):
                 def scale(self, factor, scale_tips):
                     self.calls.append(("scale", float(factor), bool(scale_tips)))
 
-            class OpaqueFieldHandle(OpaqueArrowHandle):
-                def __init__(self, family, vector_families):
-                    self._family = family
-                    self._vector_families = vector_families
-                    self.rebind_calls = []
-                    self.scale_calls = []
-
-                def family(self): return self._family
-
                 def rebind(self, copied, index=None):
-                    self.rebind_calls.append(index)
-                    if index is None:
-                        return ReboundField(copied.familyFor(self._family))
-                    return ReboundArrow(
-                        self,
-                        copied.familyFor(self._vector_families[index]),
-                        start=(2.0, 0.0),
-                        end=(4.0, 0.0),
-                    )
-
-                def scale(self, factor, scale_tips):
-                    self.scale_calls.append(("scale", float(factor), bool(scale_tips)))
-
-            class ReboundField(OpaqueArrowHandle):
-                def __init__(self, family):
-                    self._family = family
-                    self.scale_calls = []
-
-                def family(self): return self._family
-                def vectorStartX(self, index): assert index == 0; return 2.0
-                def vectorStartY(self, index): assert index == 0; return 0.0
-                def vectorEndX(self, index): assert index == 0; return 4.0
-                def vectorEndY(self, index): assert index == 0; return 0.0
-                def vectorLength(self, index): assert index == 0; return 2.0
-                def scale(self, factor, scale_tips):
-                    self.scale_calls.append(("scale", float(factor), bool(scale_tips)))
+                    assert index is None
+                    return ReboundArrow(self, copied.familyFor(self._family), self._start, self._end)
 
             class Options:
                 def setBuff(self, value): pass
@@ -267,36 +234,29 @@ class ManimArrowAnimateTargetTests(unittest.TestCase):
             }
             field = object.__new__(_manim_compat.Group)
             field._semantic_family_handle = Family((field_vector._semantic_family_handle,))
-            field_handle = OpaqueFieldHandle(
-                field._semantic_family_handle, [field_vector._semantic_family_handle],
+            vector_handle = ReboundArrow(
+                None, field_vector._semantic_family_handle,
+                start=(2.0, 0.0), end=(4.0, 0.0),
             )
-            field._semantic_arrow_handle = field_handle
-            field_vector._semantic_arrow_handle = field_handle
-            field_vector._semantic_arrow_index = 0
+            field_vector._semantic_arrow_handle = vector_handle
             field._semantic_member_wrappers = {
                 _manim_semantic_handles._family_wrapper_key(field_vector): field_vector,
             }
             field_target = field.animate.target
             field_target_vector = field_target.submobjects[0]
-            assert field_handle.rebind_calls == [None, 0]
-            assert field_target._semantic_arrow_handle is not field._semantic_arrow_handle
-            assert field_target._semantic_arrow_handle.family() is field_target._semantic_family_handle
-            assert field_target_vector._semantic_arrow_handle is not field_target._semantic_arrow_handle
-            assert not hasattr(field_target_vector, "_semantic_arrow_index")
+            assert field_target_vector._semantic_arrow_handle is not vector_handle
             assert tuple(field_target_vector.get_start()) == (2.0, 0.0)
             assert field_target_vector.get_length() == 2.0
             assert field_target_vector.scale(0.5, scale_tips=True) is field_target_vector
             assert field_target_vector._semantic_arrow_handle.calls == [("scale", 0.5, True)]
-            assert field_handle.scale_calls == []
+            assert vector_handle.calls == []
 
             selected_target = field_vector.animate.target
-            assert field_handle.rebind_calls == [None, 0, 0]
-            assert not hasattr(selected_target, "_semantic_arrow_index")
             assert tuple(selected_target.get_start()) == (2.0, 0.0)
             assert selected_target.get_length() == 2.0
             assert selected_target.scale(0.5, scale_tips=True) is selected_target
             assert selected_target._semantic_arrow_handle.calls == [("scale", 0.5, True)]
-            assert field_handle.scale_calls == []
+            assert vector_handle.calls == []
             """
         )
         completed = subprocess.run(

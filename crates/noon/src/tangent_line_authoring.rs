@@ -1,12 +1,12 @@
 //! Shared Manim-compatible TangentLine construction from retained path queries.
 //!
 //! Tangent sampling is a semantic authoring operation: the source path is observed
-//! once in authored world space, two nearby path proportions are sampled, and the
+//! once in scene space, two nearby path proportions are sampled, and the
 //! resulting direction is normalized to the requested line length. The result is an
 //! ordinary analytic Line candidate; no source dependency, renderer primitive, or
 //! frontend-owned geometry is retained after construction.
 
-use crate::{AuthoringError, ManimGeometryOptions, Mobject};
+use crate::{AuthoringError, ManimGeometryOptions, Mobject, PathQuery, Scene};
 
 impl Mobject {
     /// Prepare an inert analytic Line matching ManimCE v0.21 `TangentLine`.
@@ -23,32 +23,60 @@ impl Mobject {
         length: f64,
         d_alpha: f64,
     ) -> Result<ManimGeometryOptions, AuthoringError> {
-        let query = self.path_query()?;
-        let a1 = (alpha - d_alpha).clamp(0.0, 1.0);
-        let a2 = (alpha + d_alpha).clamp(0.0, 1.0);
-        let first = query.point_from_proportion(a1)?;
-        let second = query.point_from_proportion(a2)?;
-
-        let dx = second.0 - first.0;
-        let dy = second.1 - first.1;
-        let sample_length = dx.hypot(dy);
-        if !sample_length.is_finite() || sample_length == 0.0 {
-            return Err(AuthoringError::NonPositiveNumber {
-                name: "TangentLine sampled chord length".to_owned(),
-                value: sample_length,
-            });
-        }
-
-        let midpoint = ((first.0 + second.0) * 0.5, (first.1 + second.1) * 0.5);
-        let half = length * 0.5;
-        let unit = (dx / sample_length, dy / sample_length);
-        ManimGeometryOptions::line(
-            midpoint.0 - unit.0 * half,
-            midpoint.1 - unit.1 * half,
-            midpoint.0 + unit.0 * half,
-            midpoint.1 + unit.1 * half,
-        )
+        tangent_options(self.path_query()?, alpha, length, d_alpha)
     }
+}
+
+impl Scene {
+    /// Prepare an analytic tangent from the current authored or published path.
+    pub fn tangent_line_options(
+        &self,
+        source: &Mobject,
+        alpha: f64,
+        length: f64,
+        d_alpha: f64,
+    ) -> Result<ManimGeometryOptions, AuthoringError> {
+        self.require_object(source)?;
+        self.require_effective_capture()?;
+        let query = crate::path_queries::captured_path_query(
+            self.integration_store(),
+            self.running_execution(),
+            source,
+        )?;
+        tangent_options(query, alpha, length, d_alpha)
+    }
+}
+
+fn tangent_options(
+    query: PathQuery,
+    alpha: f64,
+    length: f64,
+    d_alpha: f64,
+) -> Result<ManimGeometryOptions, AuthoringError> {
+    let a1 = (alpha - d_alpha).clamp(0.0, 1.0);
+    let a2 = (alpha + d_alpha).clamp(0.0, 1.0);
+    let first = query.point_from_proportion(a1)?;
+    let second = query.point_from_proportion(a2)?;
+
+    let dx = second.0 - first.0;
+    let dy = second.1 - first.1;
+    let sample_length = dx.hypot(dy);
+    if !sample_length.is_finite() || sample_length == 0.0 {
+        return Err(AuthoringError::NonPositiveNumber {
+            name: "TangentLine sampled chord length".to_owned(),
+            value: sample_length,
+        });
+    }
+
+    let midpoint = ((first.0 + second.0) * 0.5, (first.1 + second.1) * 0.5);
+    let half = length * 0.5;
+    let unit = (dx / sample_length, dy / sample_length);
+    ManimGeometryOptions::line(
+        midpoint.0 - unit.0 * half,
+        midpoint.1 - unit.1 * half,
+        midpoint.0 + unit.0 * half,
+        midpoint.1 + unit.1 * half,
+    )
 }
 
 #[cfg(test)]

@@ -40,7 +40,8 @@ pub(crate) fn axes_area(
 /// values cannot replace the Rust-owned partition or trigger a second snapshot.
 /// This is disposable authoring data, not a scene cache or a runtime subscription.
 pub struct RiemannRectanglePlan {
-    store: Rc<RefCell<SemanticStore>>,
+    source: Mobject,
+    scene: Option<SemanticNodeId>,
     frame: AxesFrame,
     partition: noon_geometry::PlotSamplingPlan,
     graph_path: PathQuery,
@@ -51,9 +52,7 @@ pub struct RiemannRectanglePlan {
 }
 
 impl RiemannRectanglePlan {
-    /// Integration entry point. The caller must capture all operands from the
-    /// same authored state or effective publication, without interleaved callbacks.
-    pub fn from_snapshot(
+    pub(super) fn from_snapshot(
         frame: AxesFrame,
         graph: &Mobject,
         graph_path: &PathQuery,
@@ -94,7 +93,8 @@ impl RiemannRectanglePlan {
         }
         let colors = crate::color_gradient(&options.colors, partition.parameters().len() - 1)?;
         let plan = Self {
-            store: Rc::clone(graph.integration_store()),
+            source: graph.clone(),
+            scene: None,
             frame,
             partition,
             graph_path: graph_path.clone(),
@@ -214,29 +214,37 @@ impl RiemannRectanglePlan {
         Ok(paths)
     }
 
-    /// Cold authoring publication into the originating store. Live integrations
-    /// use `paths()` with their existing Scene/LiveSession family transaction.
+    pub(super) fn for_scene(mut self, root: SemanticNodeId) -> Self {
+        self.scene = Some(root);
+        self
+    }
+
+    pub(super) fn require_scene(&self, scene: &Scene) -> Result<(), CoordinateAuthoringError> {
+        crate::MobjectTarget::from(&self.source).require_store(scene.integration_store())?;
+        if self.scene != Some(scene.root()) {
+            return Err(CoordinateAuthoringError::InvalidOptions(
+                "Riemann plan belongs to a different authoring owner",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Publish a detached authoring plan into its originating store.
     pub fn publish(
         &self,
         top_values: Option<&[f64]>,
         baseline_values: Option<&[f64]>,
     ) -> Result<MobjectFamily, CoordinateAuthoringError> {
+        if self.scene.is_some() {
+            return Err(CoordinateAuthoringError::InvalidOptions(
+                "Scene Riemann plans require publication through their owning Scene",
+            ));
+        }
         publish_path_family(
-            Rc::clone(&self.store),
+            Rc::clone(self.source.integration_store()),
             self.paths(top_values, baseline_values)?,
         )
     }
-}
-
-pub(crate) fn prepare_riemann_paths(
-    frame: AxesFrame,
-    graph: &Mobject,
-    graph_path: &PathQuery,
-    bounded: Option<(&Mobject, &PathQuery)>,
-    options: RiemannRectangleOptions,
-) -> Result<Vec<(noon_core::VectorPath, SemanticStyle)>, CoordinateAuthoringError> {
-    RiemannRectanglePlan::from_snapshot(frame, graph, graph_path, bounded, options)?
-        .paths(None, None)
 }
 
 /// Reuse the existing bounded NumPy-compatible plot sample planner. Its extra
@@ -250,7 +258,7 @@ fn riemann_partition_plan(
     options.plan()
 }
 
-pub(crate) fn publish_path_family(
+fn publish_path_family(
     store: Rc<RefCell<SemanticStore>>,
     paths: Vec<(noon_core::VectorPath, SemanticStyle)>,
 ) -> Result<MobjectFamily, CoordinateAuthoringError> {

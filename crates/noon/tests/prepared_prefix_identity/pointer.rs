@@ -405,37 +405,40 @@ fn prefix_pointer_selection_does_not_revive_after_observed_detach_and_reentry() 
     let mut shape = scene.circle(0.65).unwrap();
     shape.set_fill(0.1, 0.3, 0.9, 1.0).unwrap();
     scene.add(&shape).unwrap();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = scene.into_execution().unwrap();
     source
+        .session_mut()
         .begin_replay_retention(ReplayLimits {
             revisions: 64,
             payloads: 256,
         })
         .unwrap();
-    let first = source.wait_segment(1.0).unwrap();
-    source.advance_to(1.0).unwrap();
-    let (mut publisher, mut reader) = source.create_prepared_prefix(first).unwrap();
+    let first = source.live().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(1.0).unwrap();
+    let (mut publisher, mut reader) = source.session().create_prepared_prefix(first).unwrap();
     reader.seek(0.5).unwrap();
     configure(&mut reader, true);
     assert_eq!(
         click(&mut reader, 0).selection_click().unwrap().target(),
         Some(shape.node_id())
     );
-    scene.live(&mut source).remove(&shape).unwrap();
-    let second = source.wait_segment(1.0).unwrap();
-    source.advance_to(2.0).unwrap();
+    source.scene_mut().remove(&shape).unwrap();
+    let second = source.live().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(2.0).unwrap();
     append(
         &mut reader,
         source
+            .session()
             .publish_prepared_prefix(second, &mut publisher)
             .unwrap(),
     );
-    scene.live(&mut source).add(&shape).unwrap();
-    let third = source.wait_segment(1.0).unwrap();
-    source.advance_to(3.0).unwrap();
+    source.scene_mut().add(&shape).unwrap();
+    let third = source.live().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(3.0).unwrap();
     append(
         &mut reader,
         source
+            .session()
             .publish_prepared_prefix(third, &mut publisher)
             .unwrap(),
     );

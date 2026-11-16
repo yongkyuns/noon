@@ -88,11 +88,9 @@ pub fn filled_path_transform() -> Result<crate::SceneExecution, String> {
         .path(star(1.7, 0.7, 0.0), style(Some(PURPLE), WHITE, 0.08))
         .map_err(|error| error.to_string())?;
     scene.add(&shape).map_err(|error| error.to_string())?;
-    let mut session = scene
-        .execution_session()
-        .map_err(|error| error.to_string())?;
-    scene
-        .live(&mut session)
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
         .declare_and_activate_composition(
             &AnimationCompositionRequest::TransformTo(TransformToRequest::point_correspondence(
                 &shape,
@@ -102,9 +100,7 @@ pub fn filled_path_transform() -> Result<crate::SceneExecution, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 /// One retained path concurrently follows point correspondence and Create reveal.
@@ -210,11 +206,9 @@ pub fn create_shapes() -> Result<crate::SceneExecution, String> {
     let wave = scene
         .path(wave, style(None, PINK, 0.05))
         .map_err(|error| error.to_string())?;
-    let mut session = scene
-        .execution_session()
-        .map_err(|error| error.to_string())?;
-    scene
-        .live(&mut session)
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
         .declare_and_activate_create_parallel(
             &[
                 (&circle, options()),
@@ -225,9 +219,7 @@ pub fn create_shapes() -> Result<crate::SceneExecution, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 /// Mixed Text and analytic Circle family Create used by renderer qualifications.
@@ -245,11 +237,9 @@ pub fn mixed_family_reveal() -> Result<crate::SceneExecution, String> {
     let family = scene
         .family(&[(&text).into(), (&circle).into()])
         .map_err(|error| error.to_string())?;
-    let mut session = scene
-        .execution_session()
-        .map_err(|error| error.to_string())?;
-    scene
-        .live(&mut session)
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
         .declare_and_activate_family_reveal(
             &family,
             false,
@@ -260,9 +250,7 @@ pub fn mixed_family_reveal() -> Result<crate::SceneExecution, String> {
                 .rate_func(RateFunction::Linear),
         )
         .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 /// A bounded, repeated path-morph workload. Python uses 96 objects in the shared
@@ -321,11 +309,9 @@ pub fn morph_stress(count: usize) -> Result<crate::SceneExecution, String> {
         scene.add(&shape).map_err(|error| error.to_string())?;
         pairs.push((shape, target));
     }
-    let mut session = scene
-        .execution_session()
-        .map_err(|error| error.to_string())?;
-    scene
-        .live(&mut session)
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
         .declare_and_activate_composition(
             &AnimationCompositionRequest::Composition {
                 kind: crate::SemanticAnimationCompositionKind::Parallel,
@@ -346,9 +332,7 @@ pub fn morph_stress(count: usize) -> Result<crate::SceneExecution, String> {
             AnimationOptions::new(),
         )
         .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 //! Shared nested-family arrangement before and after a logical wait boundary.
 use crate::{
-    Color, FamilyArrangeOptions, LayoutAnchor, LiveLayoutTarget, LiveProgram, ManimNextToArgs,
+    Color, FamilyArrangeOptions, LayoutAnchor, LayoutTarget, LiveProgram, ManimNextToArgs,
     MobjectTarget, Scene, SceneScript, ScriptError, Vec2,
 };
 
@@ -45,14 +45,14 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
         assert!(layout.center.0.abs() < 1e-5);
         scene.move_family_to(
             &nested,
-            LiveLayoutTarget::Point(0.0, 0.0),
+            LayoutTarget::Point(0.0, 0.0),
             (0.0, 0.0),
             (1.0, 0.0),
         )?;
         let source = LayoutAnchor::from(&nested);
         scene.next_layout_to_aligned(
             &source,
-            LiveLayoutTarget::Point(0.0, 0.0),
+            LayoutTarget::Point(0.0, 0.0),
             &source.clone().member(-1),
             ManimNextToArgs {
                 direction: (0.0, 2.0),
@@ -61,11 +61,11 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
                 mask: (0.0, 1.0),
             },
         )?;
-        scene.align_family_to(&nested, LiveLayoutTarget::Mobject(&first), (0.0, 1.0))?;
+        scene.align_family_to(&nested, LayoutTarget::Mobject(&first), (0.0, 1.0))?;
         let first_anchor = LayoutAnchor::from(&first);
         scene.next_layout_to_aligned(
             &first_anchor,
-            LiveLayoutTarget::Mobject(&second),
+            LayoutTarget::Mobject(&second),
             &first_anchor,
             ManimNextToArgs {
                 direction: (-1.0, 0.0),

@@ -1,10 +1,14 @@
+use noon::integration::scene_execution;
 use noon::{Scene, SceneMembershipRequest};
 use noon_core::{
     ObjectId, SemanticMutationTransaction, SemanticSpatialCompositionDomain, SemanticTransform,
     SemanticTransform2_5D, SemanticVec3,
 };
 
-fn row_index(execution: &noon::ExecutionSession, object: ObjectId) -> usize {
+fn row_index(
+    execution: &noon::integration::scene_execution::ExecutionSession,
+    object: ObjectId,
+) -> usize {
     execution
         .frame()
         .objects
@@ -13,7 +17,10 @@ fn row_index(execution: &noon::ExecutionSession, object: ObjectId) -> usize {
         .unwrap()
 }
 
-fn anchor_center(execution: &noon::ExecutionSession, object: ObjectId) -> SemanticVec3 {
+fn anchor_center(
+    execution: &noon::integration::scene_execution::ExecutionSession,
+    object: ObjectId,
+) -> SemanticVec3 {
     execution.frame().objects[row_index(execution, object)]
         .spatial
         .as_deref()
@@ -31,7 +38,7 @@ fn removing_anchor_family_publishes_cleared_spatial_state_to_running_runtime() {
     scene
         .edit_membership(SceneMembershipRequest::Add(&[(&family).into()]))
         .unwrap();
-    let mut execution = scene.execution_session().unwrap();
+    let mut execution = scene_execution::lower(&scene).unwrap();
     let store_rc = scene.integration_store();
 
     let mut anchor = SemanticMutationTransaction::new();
@@ -101,7 +108,7 @@ fn nested_anchor_membership_recomputes_only_its_shared_center() {
         ]))
         .unwrap();
     let extra = scene.square(2.0).unwrap();
-    let mut execution = scene.execution_session().unwrap();
+    let mut execution = scene_execution::lower(&scene).unwrap();
     let store_rc = scene.integration_store();
 
     let mut declare = SemanticMutationTransaction::new();

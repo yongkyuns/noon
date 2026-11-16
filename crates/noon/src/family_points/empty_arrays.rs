@@ -31,38 +31,6 @@ impl crate::MobjectTarget<'_> {
     }
 }
 
-fn publish_empty_family_point_array(
-    store: &Rc<std::cell::RefCell<SemanticStore>>,
-    root: noon_core::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    family: &MobjectFamily,
-    shape: &PointArrayShape,
-) -> Result<(), AuthoringError> {
-    crate::MobjectTarget::from(family).require_store(store)?;
-    let path = VectorPath::from_empty_point_array(shape.clone())?;
-    if let Some(object) = family.own_object()? {
-        return crate::path_editing::publish_running_object_edit(
-            store,
-            root,
-            execution,
-            &object,
-            crate::path_editing::PathEdit::EmptyPointArray(shape),
-        );
-    }
-    crate::path_editing::require_running_path_resource_admission(store, root, execution)?;
-    publish_initial_family_path(
-        &mut store.borrow_mut(),
-        family.node_id(),
-        path,
-        |store, transaction| {
-            execution
-                .apply_semantic_transaction_at_root(store, root, transaction)
-                .map(|_| ())
-                .map_err(AuthoringError::from)
-        },
-    )
-}
-
 impl crate::Scene {
     pub fn set_empty_point_array(
         &mut self,
@@ -70,22 +38,50 @@ impl crate::Scene {
         shape: PointArrayShape,
     ) -> Result<(), AuthoringError> {
         target.require_store(self.integration_store())?;
-        if self.running_execution().is_none() {
-            return target.set_empty_point_array(shape);
-        }
-        self.with_running_execution(|store, root, execution| match target {
-            crate::MobjectTarget::Object(object) => {
-                crate::path_editing::publish_running_object_edit(
-                    store,
-                    root,
-                    execution,
-                    object,
-                    crate::path_editing::PathEdit::EmptyPointArray(&shape),
-                )
-            }
+        let edit = crate::path_editing::PathEdit::EmptyPointArray(&shape);
+        match target {
+            crate::MobjectTarget::Object(object) => self.edit_object_path(object, edit),
             crate::MobjectTarget::Family(family) => {
-                publish_empty_family_point_array(store, root, execution, family, &shape)
+                let path = VectorPath::from_empty_point_array(shape.clone())?;
+                if let Some(object) = family.own_object()? {
+                    return self.edit_object_path(&object, edit);
+                }
+                self.require_resource_admission()?;
+                self.set_initial_family_path(family, path)
             }
-        })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scene_preserves_the_shape_of_new_and_existing_empty_family_paths() {
+        let mut scene = crate::Scene::new();
+        let family = scene.family(&[]).unwrap();
+        let target = crate::MobjectTarget::from(&family);
+        let initial = PointArrayShape::new(vec![0, 2]).unwrap();
+        scene
+            .set_empty_point_array(target, initial.clone())
+            .unwrap();
+        assert_eq!(target.point_array().unwrap().shape(), &initial);
+
+        let mut running = scene.into_execution().unwrap();
+        let shape = PointArrayShape::new(vec![0, 2, 3]).unwrap();
+        running
+            .scene_mut()
+            .set_empty_point_array(target, shape.clone())
+            .unwrap();
+        assert_eq!(target.point_array().unwrap().shape(), &shape);
+        let revision = running.scene().revision();
+        let invalid = PointArrayShape::xyz(1).unwrap();
+        assert!(running
+            .scene_mut()
+            .set_empty_point_array(target, invalid)
+            .is_err());
+        assert_eq!(running.scene().revision(), revision);
+        assert_eq!(target.point_array().unwrap().shape(), &shape);
     }
 }

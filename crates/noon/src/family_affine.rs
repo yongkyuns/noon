@@ -417,6 +417,22 @@ impl LayoutAnchor {
         operation: FamilyAffine,
         table_layout_scope: Option<SemanticNodeId>,
     ) -> Result<(), AuthoringError> {
+        let prepared = self.prepare_affine(operation, table_layout_scope)?;
+        prepared.publish(
+            &mut self.integration_store().borrow_mut(),
+            |store, transaction| {
+                transaction
+                    .apply(store)
+                    .map(|_| ())
+                    .map_err(AuthoringError::from)
+            },
+        )
+    }
+    pub(crate) fn prepare_affine(
+        &self,
+        operation: FamilyAffine,
+        table_layout_scope: Option<SemanticNodeId>,
+    ) -> Result<crate::path_editing::PreparedPathEdits, AuthoringError> {
         let (leaves, bounds) = if operation.needs_xy_bounds() {
             let layout = self.layout()?;
             (layout.leaves().to_vec(), layout.boundary_bounds())
@@ -427,20 +443,11 @@ impl LayoutAnchor {
                 None,
             )
         };
-        let prepared = operation.prepare_for_scope(
+        operation.prepare_for_scope(
             &self.integration_store().borrow(),
             &leaves,
             bounds,
             table_layout_scope,
-        )?;
-        prepared.publish(
-            &mut self.integration_store().borrow_mut(),
-            |store, transaction| {
-                transaction
-                    .apply(store)
-                    .map(|_| ())
-                    .map_err(AuthoringError::from)
-            },
         )
     }
 }

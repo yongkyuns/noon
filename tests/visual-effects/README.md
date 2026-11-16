@@ -239,7 +239,7 @@ these correctness checks do not establish physical-device frame pacing.
 
 `NoisePaint(low, high, seed=0, frequency=(8, 8), phase=(0, 0))` supplies a smooth
 two-color local field through ordinary `set_fill` and `.animate.set_fill`.
-Rust uses checked `NoisePaint::new` and `Mobject`/`LiveSession::set_fill_noise`.
+Rust uses checked `NoisePaint::new` and `Scene::set_fill_noise`.
 Complete paired scripts are `noon::example_scenes::noise_paint` and
 `web/python/examples/noise_paint.py`, with the native `noise_paint` example and
 direct Rust/WASM host. They animate frequency, phase, transparent colors and
@@ -313,7 +313,7 @@ class UncertaintyRegion(Scene):
 The default background is transparent. Defaults are `spacing=0.25`,
 `width=0.04`, `angle=pi/4`, `phase=(0,0)`, and `cross=False`. Rust uses
 `HatchPaint::new(foreground, background, HatchPaintOptions { ... })`, followed by
-`Mobject::set_fill_hatch` or `LiveSession::set_fill_hatch`. The full paired
+`Scene::set_fill_hatch`. The full paired
 playback scripts are `noon::example_scenes::hatch_paint` and
 `web/python/examples/hatch_paint.py`; the native executable is `hatch_paint`.
 
@@ -374,8 +374,8 @@ frame pacing.
 
 `RadialGradient(stops, center=(0.5, 0.5), radii=(0.5, 0.5))` uses the same
 ordinary `set_fill`, `.animate.set_fill` and independent opacity grammar as linear
-paint. Rust uses `RadialGradient::new` and `set_fill_radial_gradient` on `Mobject`
-or `LiveSession`. Complete paired scripts are
+paint. Rust uses `RadialGradient::new` and `Scene::set_fill_radial_gradient`.
+Complete paired scripts are
 `noon::example_scenes::radial_gradient` and
 `web/python/examples/radial_gradient.py`; native `radial_gradient` and the direct
 Rust/WASM host run that same Rust program. The scripts animate an elliptical
@@ -510,8 +510,7 @@ transparent color, and double-applied opacity. The existing `test_reference.py`
 entrypoint includes these tests. These component tests do not establish geometry
 rasterization, GPU pixels, temporal behavior, cross-host parity or performance.
 
-The next authoring slice exposes `Mobject::set_fill_gradient` and
-`LiveSession::set_fill_gradient` with an immutable checked `LinearGradient`.
+Rust uses `Scene::set_fill_gradient` with an immutable checked `LinearGradient`.
 Python uses the ordinary `obj.set_fill(LinearGradient(stops, start=..., end=...))`
 and `obj.animate.set_fill(...)` operations. Omitted opacity preserves its multiplier.
 The paired executable examples are `noon::example_scenes::linear_gradient`,
@@ -633,7 +632,7 @@ fn authored_contract() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     assert_eq!(movement.options()?.run_time, Some(1.5));
     assert_ne!(dot.get_effect("glow")?.node_id(), target.get_effect("glow")?.node_id());
-    assert!(scene.execution_session().is_err()); // explicitly unavailable before M1
+    assert!(scene.into_execution().is_err()); // explicitly unavailable before M1
     Ok(())
 }
 ```
@@ -742,8 +741,7 @@ kind of animated scene object or introduce `play_effect`, `GlowTo` or `AnimateGl
 
 This supersedes the earlier handle-returning `add_effect`, `obj.effect(...)`, and
 handle-centric `.animate.set(...)` examples. Python setters return their receiver.
-Rust follows existing checked Scene/LiveSession and target-editor conventions;
-copying Python's fluent syntax is not a reason to bypass live publication.
+Rust uses the Scene's checked authoring and target-editor methods.
 Python imports use **`from noon import Glow, GlowPulse, Pixels`**, alongside
 ordinary animation names. The current frontend is the module `noon.py`, not a
 `noon` package; do not require a new package hierarchy or inject a synthetic
@@ -1346,7 +1344,7 @@ protocol 27; direct native and Rust/WASM execution remain typed in process.
 The nested native raster corpus checks partial masks, empty/full endpoints,
 reverse progress, cleanup, ordinary named-filter witnesses and clean reuse
 against scalar noise and full two-dimensional convolution references. The normal
-Rust Scene/LiveSession capture regression separately checks leaf and family
+Rust Scene capture regression separately checks leaf and family
 Dissolve under an ancestor silhouette, including exact empty output and rewind.
 These native checks do not establish browser or physical-device pacing support.
 
@@ -1959,7 +1957,7 @@ budget rejection. A later neutral unsupported operator must reject before an
 ordered prefix allocates or changes its coherent output.
 
 `hdr_captures::authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions`
-runs the ordinary Rust Scene/LiveSession -> source visibility -> retained capture
+runs ordinary Rust Scene authoring through source visibility and retained capture
 -> one/two ordered Blur passes -> painter placement -> real Bloom/SDR route.
 Its 36 authored phases cover geometry groups and geometry/image groups, overlapping
 alpha, a nonblack clear, radius/opacity/child edits, zero radius/opacity, unrelated

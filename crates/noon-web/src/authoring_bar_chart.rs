@@ -111,41 +111,41 @@ impl WasmAuthoringStore {
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
-    #[wasm_bindgen(js_name = liveCreateBarChart)]
-    pub fn live_create_bar_chart(
+    #[wasm_bindgen(js_name = createBarChart)]
+    pub fn create_bar_chart(
         &mut self,
         options: WasmBarChartOptions,
     ) -> Result<WasmBarChartHandle, JsValue> {
         self.inner
-            .live_create_bar_chart(&options.options)
+            .create_bar_chart(&options.options)
             .map(|chart| WasmBarChartHandle { chart })
             .map_err(crate::authoring_error::js_error)
     }
 
-    #[wasm_bindgen(js_name = liveChangeBarValues)]
-    pub fn live_change_bar_values(
+    #[wasm_bindgen(js_name = changeBarValues)]
+    pub fn change_bar_values(
         &mut self,
         chart: &mut WasmBarChartHandle,
         values: &[f64],
         update_colors: bool,
     ) -> Result<(), JsValue> {
         self.inner
-            .live_change_bar_values(&mut chart.chart, values, update_colors)
+            .change_bar_values(&mut chart.chart, values, update_colors)
             .map_err(crate::authoring_error::js_error)
     }
 }
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
-    #[wasm_bindgen(js_name = liveCreateLabeledBarChart)]
-    pub fn live_create_labeled_bar_chart(
+    #[wasm_bindgen(js_name = createLabeledBarChart)]
+    pub fn create_labeled_bar_chart(
         &mut self,
         options: WasmBarChartOptions,
         labels: crate::WasmNumberLabelOptions,
         compiler: &mut crate::WasmLatexCompiler,
     ) -> Result<WasmBarChartHandle, JsValue> {
         self.inner
-            .live_create_labeled_bar_chart(&options.options, &labels.options, compiler)
+            .create_labeled_bar_chart(&options.options, &labels.options, compiler)
             .map(|chart| WasmBarChartHandle { chart })
             .map_err(crate::authoring_error::js_error)
     }
@@ -278,8 +278,8 @@ impl WasmBarChartHandle {
 
 #[wasm_bindgen]
 impl CanonicalAuthoringSceneContext {
-    #[wasm_bindgen(js_name = liveBarLabelFamily)]
-    pub fn live_bar_label_family(
+    #[wasm_bindgen(js_name = barLabelFamily)]
+    pub fn bar_label_family(
         &mut self,
         chart: &WasmBarChartHandle,
         font_size: f64,
@@ -289,7 +289,7 @@ impl CanonicalAuthoringSceneContext {
         compiler: &mut crate::WasmLatexCompiler,
     ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
         self.inner
-            .live_bar_labels(
+            .bar_labels(
                 &chart.chart,
                 compiler,
                 &label_options(font_size, buff, math, rgba)?,

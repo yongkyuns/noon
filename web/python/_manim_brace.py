@@ -136,7 +136,7 @@ class Brace(_compat.VMobject):
             fill_opacity=fill_value,
             background_stroke_width=background_stroke_width,
         )
-        context = _shared._live_constructor_context("Brace", allow_unstarted=True)
+        context = _shared._path_authoring_context(mobject)
         if context is None:
             candidate = engine_call(
                 target.beginBrace, direction_value.x, direction_value.y,
@@ -144,7 +144,7 @@ class Brace(_compat.VMobject):
             )
         else:
             candidate = engine_call(
-                context.liveBraceGeometryOptions, _shared._layout_anchor(mobject),
+                context.braceGeometryOptions, _shared._layout_anchor(mobject),
                 direction_value.x, direction_value.y, buff_value, sharpness_value,
                 operation="Brace",
             )
@@ -294,7 +294,7 @@ class BraceLabel(_compat.VGroup):
         self._brace_sharpness = _shared._ir._finite_number("sharpness", brace_options.pop("sharpness", 2.0))
         if brace_options:
             raise NotImplementedError("unsupported BraceLabel brace_config option(s): " + ", ".join(sorted(brace_options)))
-        context = _shared._live_constructor_context("BraceLabel", allow_unstarted=True)
+        context = _shared._path_authoring_context(obj)
         if context is None:
             raise RuntimeError("BraceLabel requires a canonical Scene authoring context")
         target = _shared._layout_anchor(obj)
@@ -305,7 +305,7 @@ class BraceLabel(_compat.VGroup):
         if label_anchor is None:
             raise TypeError("BraceLabel label requires a shared Mobject or family")
         self._brace_label_handle = engine_call(
-            context.liveCreateBraceLabel, target, label_anchor,
+            context.createBraceLabel, target, label_anchor,
             self.brace_direction.x, self.brace_direction.y,
             self._brace_buff, self._brace_sharpness, _base.DEFAULT_MOBJECT_TO_MOBJECT_BUFFER,
             operation="BraceLabel.create",
@@ -357,7 +357,7 @@ class BraceLabel(_compat.VGroup):
         target = _shared._layout_anchor(obj)
         if target is None:
             raise TypeError("BraceLabel target requires a shared Mobject or family")
-        engine_call(self._canonical_live_target_context.liveShiftBraceLabel,
+        engine_call(self._canonical_live_target_context.shiftBraceLabel,
                     self._brace_label_handle, target, operation="BraceLabel.shift_brace")
         self._install_members(self.label)
         return self
@@ -367,7 +367,7 @@ class BraceLabel(_compat.VGroup):
         anchor = _shared._layout_anchor(label)
         if anchor is None:
             raise TypeError("label_constructor must return a shared Mobject or family")
-        engine_call(self._canonical_live_target_context.liveReplaceBraceLabel,
+        engine_call(self._canonical_live_target_context.replaceBraceLabel,
                     self._brace_label_handle, anchor, operation="BraceLabel.change_label")
         self._install_members(label)
         return self
@@ -382,7 +382,7 @@ class BraceLabel(_compat.VGroup):
         anchor = _shared._layout_anchor(label)
         if anchor is None:
             raise TypeError("label_constructor must return a shared Mobject or family")
-        engine_call(self._canonical_live_target_context.liveChangeBraceLabel,
+        engine_call(self._canonical_live_target_context.changeBraceLabel,
                     self._brace_label_handle, target, anchor,
                     operation="BraceLabel.change_brace_label")
         self._install_members(label)

@@ -16,15 +16,15 @@ impl LiveContinuation for UncreateOptions {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let (target, options) = match self.stage {
             0 => {
-                live.add_many(&[
-                    MobjectTarget::Object(&self.first),
-                    MobjectTarget::Object(&self.kept),
-                    MobjectTarget::Object(&self.forward),
-                ])
-                .map_err(|error| error.to_string())?;
+                scene
+                    .add_many(&[
+                        MobjectTarget::Object(&self.first),
+                        MobjectTarget::Object(&self.kept),
+                        MobjectTarget::Object(&self.forward),
+                    ])
+                    .map_err(|error| error.to_string())?;
                 (
                     &self.first,
                     AnimationOptions::new()
@@ -33,8 +33,8 @@ impl LiveContinuation for UncreateOptions {
                 )
             }
             1 => {
-                if live
-                    .contains(&self.first)
+                if scene
+                    .contains_direct(&self.first)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("default Uncreate did not remove its target".into());
@@ -45,8 +45,8 @@ impl LiveContinuation for UncreateOptions {
                 )
             }
             2 => {
-                if !live
-                    .contains(&self.kept)
+                if !scene
+                    .contains_direct(&self.kept)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("Uncreate with remover=false removed its target".into());
@@ -59,8 +59,8 @@ impl LiveContinuation for UncreateOptions {
                 )
             }
             3 => {
-                if live
-                    .contains(&self.forward)
+                if scene
+                    .contains_direct(&self.forward)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("forward Uncreate did not remove its target".into());
@@ -71,7 +71,7 @@ impl LiveContinuation for UncreateOptions {
             _ => return Err("Uncreate continuation resumed after completion".into()),
         };
         let segment = if self.stage == 0 {
-            live.declare_and_activate_composition(
+            scene.live().declare_and_activate_composition(
                 &AnimationCompositionRequest::Composition {
                     kind: SemanticAnimationCompositionKind::Parallel,
                     children: vec![AnimationCompositionRequest::Uncreate { target, options }],
@@ -80,7 +80,7 @@ impl LiveContinuation for UncreateOptions {
                 AnimationOptions::new(),
             )
         } else {
-            live.declare_and_activate_uncreate(target, options)
+            scene.live().declare_and_activate_uncreate(target, options)
         }
         .map_err(|error| error.to_string())?;
         self.stage += 1;

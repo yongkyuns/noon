@@ -1,5 +1,4 @@
-/* Theme the shell only, never the authored scene. Hidden panels retain geometry,
-   editor state and runtime ownership; a View/Code switch is not source execution. */
+/* Code covers the preview without hiding its worker-owned canvas from painting. */
 :root{--embed-paper:#f5f3ed;--embed-ink:#20262b;--embed-muted:#566068;--embed-line:#cdd2d1;--embed-panel:#eaece8;--embed-accent:#a83f27;color-scheme:light}
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){--embed-paper:#111821;--embed-ink:#edf0f2;--embed-muted:#b4bec5;--embed-line:#394750;--embed-panel:#19232e;--embed-accent:#f0a088;color-scheme:dark}}
 :root[data-theme=dark]{--embed-paper:#111821;--embed-ink:#edf0f2;--embed-muted:#b4bec5;--embed-line:#394750;--embed-panel:#19232e;--embed-accent:#f0a088;color-scheme:dark}
@@ -11,9 +10,10 @@ html[data-noon-embed] .topbar,html[data-noon-embed] .example-gallery,html[data-n
 html[data-noon-embed] .pane-toolbar,html[data-noon-embed] .preview-head,html[data-noon-embed] .playback-slot,
 html[data-noon-embed] .playback-controls,html[data-noon-embed] .metrics,html[data-noon-embed] .python-editor-tools{display:none!important}
 html[data-noon-embed] .preview-pane,html[data-noon-embed] .editor-pane{position:absolute;inset:0;width:100%;height:100%;min-height:0;border:0;background:var(--embed-paper);overflow:hidden}
-html[data-noon-embed] .editor-pane{display:flex;padding-top:3.25rem;visibility:hidden;pointer-events:none}
+html[data-noon-embed] .preview-pane{z-index:0}
+html[data-noon-embed] .editor-pane{z-index:1;display:flex;padding-top:3.25rem;visibility:hidden;pointer-events:none}
 html[data-noon-embed][data-embed-view=code] .editor-pane{visibility:visible;pointer-events:auto}
-html[data-noon-embed][data-embed-view=code] .preview-pane{visibility:hidden;pointer-events:none}
+html[data-noon-embed][data-embed-view=code] .preview-pane{pointer-events:none}
 html[data-noon-embed] .canvas-wrap{height:100%;min-height:0;padding:0}
 html[data-noon-embed] .canvas-frame{width:100%;height:100%;max-width:none;max-height:none;border:0;border-radius:0;box-shadow:none}
 html[data-noon-embed] .canvas-frame::before{display:none}

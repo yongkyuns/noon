@@ -1,4 +1,5 @@
-use noon::{ExecutionSegment, ExecutionSession};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::ExecutionSegment;
 use noon_runtime::{RuntimeWakeState, TimelineWakeState};
 
 /// Browser primitive requested by the target-neutral execution-session wake state.

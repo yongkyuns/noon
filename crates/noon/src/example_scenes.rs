@@ -151,42 +151,43 @@ impl LiveContinuation for OrdinaryDifferentRotations {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, String> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
                 let options = AnimationOptions::new()
                     .run_time(2.0)
                     .rate_func(RateFunction::Smooth);
-                live.declare_and_activate_animation_composition(
-                    SemanticAnimationCompositionKind::Parallel,
-                    &[
-                        AnimationCompositionRequest::TransformTo(
-                            TransformToRequest::point_correspondence(
-                                &self.left,
-                                &self.left_target,
-                                options,
+                scene
+                    .live()
+                    .declare_and_activate_animation_composition(
+                        SemanticAnimationCompositionKind::Parallel,
+                        &[
+                            AnimationCompositionRequest::TransformTo(
+                                TransformToRequest::point_correspondence(
+                                    &self.left,
+                                    &self.left_target,
+                                    options,
+                                ),
                             ),
-                        ),
-                        AnimationCompositionRequest::Rotate {
-                            target: &self.right,
-                            angle: std::f64::consts::PI,
-                            options,
-                        },
-                    ],
-                    AnimationOptions::new().rate_func(RateFunction::Linear),
-                    AnimationOptions::new()
-                        .run_time(2.0)
-                        .rate_func(RateFunction::Linear),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                            AnimationCompositionRequest::Rotate {
+                                target: &self.right,
+                                angle: std::f64::consts::PI,
+                                options,
+                            },
+                        ],
+                        AnimationOptions::new().rate_func(RateFunction::Linear),
+                        AnimationOptions::new()
+                            .run_time(2.0)
+                            .rate_func(RateFunction::Linear),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
-                let left = live
+                let left = scene
                     .effective(&self.left)
                     .map_err(|error| error.to_string())?;
-                let right = live
+                let right = scene
                     .effective(&self.right)
                     .map_err(|error| error.to_string())?;
                 if (left.transform.rotation - std::f32::consts::PI).abs() > 1.0e-5
@@ -195,7 +196,9 @@ impl LiveContinuation for OrdinaryDifferentRotations {
                     return Err("DifferentRotations did not publish both endpoints".into());
                 }
                 self.stage = 2;
-                live.wait_segment(1.0)
+                scene
+                    .live()
+                    .wait_segment(1.0)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
@@ -350,12 +353,9 @@ pub fn live_affine_callbacks(
         callbacks.add_updater(&mut store, drift.node_id(), ACCUMULATE_DT, 0.0, None)?;
     }
 
-    let mut session = scene.execution_session()?;
-    {
-        let mut live = scene.live(&mut session);
-        live.play_animation(&animation)?;
-    }
-    Ok((scene.into_execution_with_session(session)?, callbacks))
+    let mut execution = scene.into_execution()?;
+    execution.live().play_animation(&animation)?;
+    Ok((execution, callbacks))
 }
 
 /// Build the paired callback paint example over the canonical effective-style batch.
@@ -440,9 +440,9 @@ pub fn live_callback_paint(
         )?;
     }
 
-    let mut session = scene.execution_session()?;
-    scene.live(&mut session).play_animation(&animation)?;
-    Ok((scene.into_execution_with_session(session)?, callbacks))
+    let mut execution = scene.into_execution()?;
+    execution.live().play_animation(&animation)?;
+    Ok((execution, callbacks))
 }
 
 /// Build the paired Line callback example used by renderer-observation proofs.
@@ -616,64 +616,70 @@ pub fn live_affine_completion() -> Result<crate::SceneExecution, Box<dyn Error>>
     )?;
     let mut second_target = circle.target_editor()?;
     second_target.set_translation(5.0, -2.0)?;
-    let second = scene.declare_transform_to(
-        &circle,
-        &second_target,
-        AnimationOptions::new()
-            .run_time(2.0)
-            .rate_func(RateFunction::Linear),
-    )?;
-
-    let mut session = scene.execution_session()?;
+    let mut session = scene.into_execution()?;
     {
-        let mut live = scene.live(&mut session);
-        let first_segment = live.play_animation(&first)?;
-        live.advance_segment_to(first_segment, first_segment.end_time())?;
-        assert!(!live.segment_state(first_segment).is_complete());
-        live.complete_segment(first_segment)?;
-        assert!(live.segment_state(first_segment).is_complete());
+        let first_segment = session.live().play_animation(&first)?;
+        session
+            .live()
+            .advance_segment_to(first_segment, first_segment.end_time())?;
+        assert!(!session.live().segment_state(first_segment).is_complete());
+        session.live().complete_segment(first_segment)?;
+        assert!(session.live().segment_state(first_segment).is_complete());
         assert_eq!(
-            live.effective(&circle)?.transform.translation,
+            session.scene().effective(&circle)?.transform.translation,
             Vec2::new(2.0, -2.0)
         );
-        let first_authored = live.authored(&circle)?.transform.translation;
+        let first_authored = session.scene().authored(&circle)?.transform.translation;
         assert_eq!((first_authored.x, first_authored.y), (2.0, -2.0));
 
-        live.set_translation(&circle, 3.0, -2.0)?;
+        session.scene_mut().set_translation(&circle, 3.0, -2.0)?;
         assert_eq!(
-            live.effective(&circle)?.transform.translation,
+            session.scene().effective(&circle)?.transform.translation,
             Vec2::new(3.0, -2.0)
         );
 
-        let next_frame = live.wait_segment(0.25)?;
-        live.advance_segment_to(next_frame, next_frame.end_time())?;
-        live.complete_segment(next_frame)?;
+        let next_frame = session.live().wait_segment(0.25)?;
+        session
+            .live()
+            .advance_segment_to(next_frame, next_frame.end_time())?;
+        session.live().complete_segment(next_frame)?;
         assert_eq!(
-            live.effective(&circle)?.transform.translation,
+            session.scene().effective(&circle)?.transform.translation,
             Vec2::new(3.0, -2.0),
             "released timeline state must not overwrite the later authored setter",
         );
-        let edited_authored = live.authored(&circle)?.transform.translation;
+        let edited_authored = session.scene().authored(&circle)?.transform.translation;
         assert_eq!((edited_authored.x, edited_authored.y), (3.0, -2.0));
 
-        let second_segment = live.play_animation(&second)?;
-        live.advance_segment_to(second_segment, second_segment.start_time() + 1.0)?;
+        let second = session.scene_mut().declare_transform_to(
+            &circle,
+            &second_target,
+            AnimationOptions::new()
+                .run_time(2.0)
+                .rate_func(RateFunction::Linear),
+        )?;
+        let second_segment = session.live().play_animation(&second)?;
+        session
+            .live()
+            .advance_segment_to(second_segment, second_segment.start_time() + 1.0)?;
         assert_eq!(
-            live.effective(&circle)?.transform.translation,
+            session.scene().effective(&circle)?.transform.translation,
             Vec2::new(4.0, -2.0),
             "the second declaration must capture the current effective source",
         );
-        live.advance_segment_to(second_segment, second_segment.end_time())?;
-        live.complete_segment(second_segment)?;
-        assert!(live.segment_state(second_segment).is_complete());
+        session
+            .live()
+            .advance_segment_to(second_segment, second_segment.end_time())?;
+        session.live().complete_segment(second_segment)?;
+        assert!(session.live().segment_state(second_segment).is_complete());
         assert_eq!(
-            live.effective(&circle)?.transform.translation,
+            session.scene().effective(&circle)?.transform.translation,
             Vec2::new(5.0, -2.0)
         );
-        let final_authored = live.authored(&circle)?.transform.translation;
+        let final_authored = session.scene().authored(&circle)?.transform.translation;
         assert_eq!((final_authored.x, final_authored.y), (5.0, -2.0));
     }
-    Ok(scene.into_execution_with_session(session)?)
+    Ok(session)
 }
 
 /// Execute the paired ordinary affine-play example on one live runtime.
@@ -706,7 +712,7 @@ pub fn ordinary_affine_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         session.live().advance_segment_to(first, first.end_time())?;
         session.live().complete_segment(first)?;
         assert_eq!(
-            session.live().effective_layout(&circle)?.center,
+            session.scene().effective_layout(&circle)?.center,
             (2.0, -1.0)
         );
     }
@@ -718,12 +724,14 @@ pub fn ordinary_affine_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         session.live().advance_segment_to(wait, wait.end_time())?;
         session.live().complete_segment(wait)?;
         assert_eq!(
-            session.live().effective_layout(&circle)?.center,
+            session.scene().effective_layout(&circle)?.center,
             (2.0, -1.0)
         );
-        session.live().shift(&circle, 1.0, 0.0)?;
+        session
+            .scene_mut()
+            .shift_3d(&circle, crate::SemanticVec3::new(1.0, 0.0, 0.0))?;
         assert_eq!(
-            session.live().effective_layout(&circle)?.center,
+            session.scene().effective_layout(&circle)?.center,
             (3.0, -1.0)
         );
     }
@@ -731,7 +739,9 @@ pub fn ordinary_affine_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
 
     {
         let second_target = session.scene_mut().target_editor(&circle)?;
-        session.live().set_translation(&second_target, 5.0, -1.0)?;
+        session
+            .scene_mut()
+            .set_translation(&second_target, 5.0, -1.0)?;
         let second = session.live().declare_and_activate_transform_to(
             &circle,
             &second_target,
@@ -743,10 +753,10 @@ pub fn ordinary_affine_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
             .advance_segment_to(second, second.end_time())?;
         session.live().complete_segment(second)?;
         assert_eq!(
-            session.live().effective_layout(&circle)?.center,
+            session.scene().effective_layout(&circle)?.center,
             (5.0, -1.0)
         );
-        let authored = session.live().authored(&circle)?.transform.translation;
+        let authored = session.scene().authored(&circle)?.transform.translation;
         assert_eq!((authored.x, authored.y), (5.0, -1.0));
     }
     assert_eq!(session.session().frame().time, 4.0);
@@ -802,14 +812,12 @@ impl LiveContinuation for OrdinaryAffineContinuation {
                 // This resumes after the wait's no-op endpoint. It proves that
                 // authored edits and late targets keep using the one live session.
                 scene
-                    .live()
-                    .shift(&self.circle, 1.0, 0.0)
+                    .shift_3d(&self.circle, crate::SemanticVec3::new(1.0, 0.0, 0.0))
                     .map_err(|error| error.to_string())?;
                 let late_target = scene
                     .target_editor(&self.circle)
                     .map_err(|error| error.to_string())?;
                 scene
-                    .live()
                     .set_translation(&late_target, 5.0, -1.0)
                     .map_err(|error| error.to_string())?;
                 self.stage = 3;
@@ -899,8 +907,7 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
                     .geometry(circle_options)
                     .map_err(|error| error.to_string())?;
                 if scene
-                    .live()
-                    .contains(&circle)
+                    .contains_direct(&circle)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("new live Circle must be detached before admission".into());
@@ -928,8 +935,7 @@ impl LiveContinuation for OrdinaryLivePrimitiveConstructionContinuation {
                     .geometry(square_options)
                     .map_err(|error| error.to_string())?;
                 if scene
-                    .live()
-                    .contains(&square)
+                    .contains_direct(&square)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("new live Square must be detached before admission".into());
@@ -973,41 +979,48 @@ impl LiveContinuation for OrdinaryValueTrackerContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.associate_value_tracker(&self.tracker)
+                scene
+                    .associate_value_tracker(&self.tracker)
                     .map_err(|error| error.to_string())?;
-                live.declare_and_activate_value_tracker(
-                    &self.tracker,
-                    2.0,
-                    2.0,
-                    RateFunction::Linear,
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_value_tracker(
+                        &self.tracker,
+                        2.0,
+                        2.0,
+                        RateFunction::Linear,
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
                 // Completion releases the first track. This setter is one
                 // authored hold at t=2, not a host-side scalar cache.
-                live.set_value(&self.tracker, 3.0)
+                scene
+                    .set_value(&self.tracker, 3.0)
                     .map_err(|error| error.to_string())?;
                 self.stage = 2;
-                live.wait_segment(1.0)
+                scene
+                    .live()
+                    .wait_segment(1.0)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             2 => {
                 self.stage = 3;
-                live.declare_and_activate_value_tracker(
-                    &self.tracker,
-                    5.0,
-                    1.0,
-                    RateFunction::Linear,
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_value_tracker(
+                        &self.tracker,
+                        5.0,
+                        1.0,
+                        RateFunction::Linear,
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             3 => {
                 self.stage = 4;
@@ -1341,7 +1354,6 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     0.5
                 );
                 let layout = scene
-                    .live()
                     .effective_family_layout(&self.family)
                     .map_err(|error| error.to_string())?;
                 assert!((layout.center.0 - 2.0).abs() < 1e-6);
@@ -1362,10 +1374,9 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     mask: (1.0, 1.0),
                 };
                 scene
-                    .live()
                     .next_layout_to_aligned(
                         &source,
-                        crate::LiveLayoutTarget::Mobject(&self.circle),
+                        crate::LayoutTarget::Mobject(&self.circle),
                         &source,
                         args,
                     )
@@ -1378,19 +1389,18 @@ impl LiveContinuation for OrdinaryCallbackContinuation {
                     .map_err(|error| error.to_string())?;
                 let source = crate::LayoutAnchor::from(&self.circle);
                 let error = scene
-                    .live()
                     .next_layout_to_aligned(
                         &source,
-                        crate::LiveLayoutTarget::Mobject(&probe),
+                        crate::LayoutTarget::Mobject(&probe),
                         &source,
                         args,
                     )
                     .unwrap_err();
                 assert!(matches!(
                     error,
-                    crate::LiveSessionError::Authoring(crate::AuthoringError::Unsupported(
+                    crate::AuthoringError::Unsupported(
                         crate::UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
-                    ))
+                    )
                 ));
                 assert_eq!(
                     scene
@@ -1471,30 +1481,36 @@ impl LiveContinuation for OrdinaryCallbackSparseReadsContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             1 => {
                 self.stage = 2;
-                live.declare_and_activate_value_tracker(
-                    &self.tracker,
-                    2.0,
-                    1.0,
-                    RateFunction::Linear,
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_value_tracker(
+                        &self.tracker,
+                        2.0,
+                        1.0,
+                        RateFunction::Linear,
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             2 => {
-                live.set_value(&self.tracker, 3.0)
+                scene
+                    .set_value(&self.tracker, 3.0)
                     .map_err(|error| error.to_string())?;
                 self.stage = 3;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
@@ -1675,32 +1691,33 @@ impl LiveContinuation for OrdinaryFadeContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let linear = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
         match self.stage {
             0 => {
-                if live
-                    .contains(&self.circle)
+                if scene
+                    .contains_direct(&self.circle)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("FadeIn example target must begin detached".into());
                 }
                 self.stage = 1;
-                live.declare_and_activate_fade(&self.circle, SemanticFadeDirection::In, linear)
+                scene
+                    .live()
+                    .declare_and_activate_fade(&self.circle, SemanticFadeDirection::In, linear)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             1 => {
-                let effective = live
+                let effective = scene
                     .effective(&self.circle)
                     .map_err(|error| error.to_string())?;
-                let authored = live
+                let authored = scene
                     .authored(&self.circle)
                     .map_err(|error| error.to_string())?;
-                if !live
-                    .contains(&self.circle)
+                if !scene
+                    .contains_direct(&self.circle)
                     .map_err(|error| error.to_string())?
                     || effective.appearance != 1.0
                     || authored.style != self.authored_style
@@ -1708,41 +1725,45 @@ impl LiveContinuation for OrdinaryFadeContinuation {
                     return Err("FadeIn did not publish its exact shared endpoint".into());
                 }
                 self.stage = 2;
-                live.declare_and_activate_fade(&self.circle, SemanticFadeDirection::Out, linear)
+                scene
+                    .live()
+                    .declare_and_activate_fade(&self.circle, SemanticFadeDirection::Out, linear)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             2 => {
-                if live
-                    .contains(&self.circle)
+                if scene
+                    .contains_direct(&self.circle)
                     .map_err(|error| error.to_string())?
-                    || live.effective(&self.circle).is_ok()
+                    || scene.effective(&self.circle).is_ok()
                     || self.circle.node_id() != self.semantic_id
                 {
                     return Err("FadeOut did not detach the original semantic handle".into());
                 }
                 self.stage = 3;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             3 => {
-                if live
-                    .contains(&self.circle)
+                if scene
+                    .contains_direct(&self.circle)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("fade target re-entered before the detached wait completed".into());
                 }
-                live.add(&self.circle).map_err(|error| error.to_string())?;
-                let effective = live
+                scene.add(&self.circle).map_err(|error| error.to_string())?;
+                let effective = scene
                     .effective(&self.circle)
                     .map_err(|error| error.to_string())?;
-                let authored = live
+                let authored = scene
                     .authored(&self.circle)
                     .map_err(|error| error.to_string())?;
                 if self.circle.node_id() != self.semantic_id
-                    || !live
-                        .contains(&self.circle)
+                    || !scene
+                        .contains_direct(&self.circle)
                         .map_err(|error| error.to_string())?
                     || effective.appearance != 1.0
                     || authored.style != self.authored_style
@@ -1750,16 +1771,18 @@ impl LiveContinuation for OrdinaryFadeContinuation {
                     return Err("ordinary re-add did not preserve fade identity and style".into());
                 }
                 self.stage = 4;
-                live.wait_segment(0.0)
+                scene
+                    .live()
+                    .wait_segment(0.0)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             4 => {
                 if self.circle.node_id() != self.semantic_id
-                    || !live
-                        .contains(&self.circle)
+                    || !scene
+                        .contains_direct(&self.circle)
                         .map_err(|error| error.to_string())?
-                    || live
+                    || scene
                         .authored(&self.circle)
                         .map_err(|error| error.to_string())?
                         .style
@@ -1813,32 +1836,33 @@ impl LiveContinuation for OrdinaryCreateContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
-                if live
-                    .contains(&self.circle)
+                if scene
+                    .contains_direct(&self.circle)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("Create example target must begin detached".into());
                 }
                 self.stage = 1;
-                live.declare_and_activate_create(
-                    &self.circle,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Smooth),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_create(
+                        &self.circle,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Smooth),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
-                let authored = live
+                let authored = scene
                     .authored(&self.circle)
                     .map_err(|error| error.to_string())?;
                 if self.circle.node_id() != self.semantic_id
-                    || !live
-                        .contains(&self.circle)
+                    || !scene
+                        .contains_direct(&self.circle)
                         .map_err(|error| error.to_string())?
                     || authored.style != self.authored_style
                 {
@@ -1890,33 +1914,34 @@ impl LiveContinuation for OrdinaryAffineLifecycleContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, String> {
-        let live = &mut scene.live();
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Smooth);
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.declare_and_activate_affine_lifecycle(
-                    &self.square,
-                    AffineLifecycleDirection::IntroduceFrom,
-                    AffineLifecycleEndpoint::Point {
-                        x: 0.0,
-                        y: 0.0,
-                        rotation_offset: -std::f64::consts::PI / 2.0,
-                        point_color: Some(Color::RED),
-                    },
-                    options,
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_affine_lifecycle(
+                        &self.square,
+                        AffineLifecycleDirection::IntroduceFrom,
+                        AffineLifecycleEndpoint::Point {
+                            x: 0.0,
+                            y: 0.0,
+                            rotation_offset: -std::f64::consts::PI / 2.0,
+                            point_color: Some(Color::RED),
+                        },
+                        options,
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
                 if self.square.node_id() != self.semantic_id
-                    || !live
-                        .contains(&self.square)
+                    || !scene
+                        .contains_direct(&self.square)
                         .map_err(|error| error.to_string())?
-                    || live
+                    || scene
                         .authored(&self.square)
                         .map_err(|error| error.to_string())?
                         .style
@@ -1925,18 +1950,20 @@ impl LiveContinuation for OrdinaryAffineLifecycleContinuation {
                     return Err("affine introduction changed authored identity or style".into());
                 }
                 self.stage = 2;
-                live.declare_and_activate_affine_lifecycle(
-                    &self.square,
-                    AffineLifecycleDirection::RemoveTo,
-                    AffineLifecycleEndpoint::EffectiveCenter,
-                    options,
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_affine_lifecycle(
+                        &self.square,
+                        AffineLifecycleDirection::RemoveTo,
+                        AffineLifecycleEndpoint::EffectiveCenter,
+                        options,
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             2 => {
-                if live
-                    .contains(&self.square)
+                if scene
+                    .contains_direct(&self.square)
                     .map_err(|error| error.to_string())?
                     || self.square.node_id() != self.semantic_id
                 {
@@ -1989,29 +2016,30 @@ impl LiveContinuation for OrdinaryUncreateContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
-                if live
-                    .contains(&self.square)
+                if scene
+                    .contains_direct(&self.square)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("Uncreate example target must begin detached".into());
                 }
                 self.stage = 1;
-                live.declare_and_activate_uncreate(
-                    &self.square,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Smooth),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_uncreate(
+                        &self.square,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Smooth),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
                 if self.square.node_id() != self.semantic_id
-                    || live
-                        .contains(&self.square)
+                    || scene
+                        .contains_direct(&self.square)
                         .map_err(|error| error.to_string())?
                 {
                     return Err("Uncreate did not remove its exact shared target".into());
@@ -2060,14 +2088,13 @@ impl LiveContinuation for OrdinarySquareAndCircleCreateContinuation {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
-                if live
-                    .contains(&self.circle)
+                if scene
+                    .contains_direct(&self.circle)
                     .map_err(|error| error.to_string())?
-                    || live
-                        .contains(&self.square)
+                    || scene
+                        .contains_direct(&self.square)
                         .map_err(|error| error.to_string())?
                 {
                     return Err("parallel Create targets must begin detached".into());
@@ -2076,29 +2103,31 @@ impl LiveContinuation for OrdinarySquareAndCircleCreateContinuation {
                 let child_options = AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Smooth);
-                live.declare_and_activate_create_parallel(
-                    &[(&self.circle, child_options), (&self.square, child_options)],
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Linear),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_create_parallel(
+                        &[(&self.circle, child_options), (&self.square, child_options)],
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
-                let circle = live
+                let circle = scene
                     .authored(&self.circle)
                     .map_err(|error| error.to_string())?;
-                let square = live
+                let square = scene
                     .authored(&self.square)
                     .map_err(|error| error.to_string())?;
                 if self.circle.node_id() != self.circle_semantic_id
                     || self.square.node_id() != self.square_semantic_id
-                    || !live
-                        .contains(&self.circle)
+                    || !scene
+                        .contains_direct(&self.circle)
                         .map_err(|error| error.to_string())?
-                    || !live
-                        .contains(&self.square)
+                    || !scene
+                        .contains_direct(&self.square)
                         .map_err(|error| error.to_string())?
                     || circle.style != self.circle_style
                     || square.style != self.square_style
@@ -2160,40 +2189,43 @@ impl LiveContinuation for OrdinaryCreateThenContentMorph {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.declare_and_activate_create(
-                    &self.square,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Smooth),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_create(
+                        &self.square,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Smooth),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
                 self.stage = 2;
-                live.declare_and_activate_transform_to(
-                    &self.square,
-                    &self.circle_target,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Smooth),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(
+                        &self.square,
+                        &self.circle_target,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Smooth),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             2 => {
-                let authored = live
+                let authored = scene
                     .authored(&self.square)
                     .map_err(|error| error.to_string())?;
                 if !matches!(
                     authored.content.geometry(),
                     Some(StoredGeometry::Circle { .. })
                 ) || authored.style
-                    != live
+                    != scene
                         .authored(&self.circle_target)
                         .map_err(|error| error.to_string())?
                         .style
@@ -2201,19 +2233,21 @@ impl LiveContinuation for OrdinaryCreateThenContentMorph {
                     return Err("content morph did not publish its exact target endpoint".into());
                 }
                 self.stage = 3;
-                live.declare_and_activate_fade(
-                    &self.square,
-                    SemanticFadeDirection::Out,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Smooth),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_fade(
+                        &self.square,
+                        SemanticFadeDirection::Out,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Smooth),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             3 => {
-                if live
-                    .contains(&self.square)
+                if scene
+                    .contains_direct(&self.square)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("SquareToCircle FadeOut did not detach its source".into());
@@ -2264,31 +2298,35 @@ impl LiveContinuation for OrdinaryMovingCameraCenter {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<crate::ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.wait_segment(0.3)
+                scene
+                    .live()
+                    .wait_segment(0.3)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             1 => {
-                live.add(&self.square).map_err(|error| error.to_string())?;
-                live.add(&self.triangle)
+                scene.add(&self.square).map_err(|error| error.to_string())?;
+                scene
+                    .add(&self.triangle)
                     .map_err(|error| error.to_string())?;
                 self.stage = 2;
-                live.declare_and_activate_transform_to(
-                    &self.frame,
-                    &self.left_target,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Smooth),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(
+                        &self.frame,
+                        &self.left_target,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Smooth),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             2 => {
-                if live
+                if scene
                     .effective(&self.frame)
                     .map_err(|error| error.to_string())?
                     .transform
@@ -2298,24 +2336,28 @@ impl LiveContinuation for OrdinaryMovingCameraCenter {
                     return Err("first camera move did not publish its exact endpoint".into());
                 }
                 self.stage = 3;
-                live.wait_segment(0.3)
+                scene
+                    .live()
+                    .wait_segment(0.3)
                     .map(crate::ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             3 => {
                 self.stage = 4;
-                live.declare_and_activate_transform_to(
-                    &self.frame,
-                    &self.right_target,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Smooth),
-                )
-                .map(crate::ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(
+                        &self.frame,
+                        &self.right_target,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Smooth),
+                    )
+                    .map(crate::ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             4 => {
-                if live
+                if scene
                     .effective(&self.frame)
                     .map_err(|error| error.to_string())?
                     .transform
@@ -2447,14 +2489,20 @@ pub fn ordinary_composition_play() -> Result<crate::SceneExecution, Box<dyn Erro
         )?;
         assert_eq!((segment.start_time(), segment.end_time()), (0.0, 2.0));
         session.live().advance_segment_to(segment, 1.0)?;
-        assert_eq!(session.live().effective_layout(&left)?.center, (-2.0, 0.5));
-        assert_eq!(session.live().effective_layout(&right)?.center, (2.0, -0.5));
+        assert_eq!(session.scene().effective_layout(&left)?.center, (-2.0, 0.5));
+        assert_eq!(
+            session.scene().effective_layout(&right)?.center,
+            (2.0, -0.5)
+        );
         session
             .live()
             .advance_segment_to(segment, segment.end_time())?;
         session.live().complete_segment(segment)?;
-        assert_eq!(session.live().effective_layout(&left)?.center, (-2.0, 1.0));
-        assert_eq!(session.live().effective_layout(&right)?.center, (2.0, -1.0));
+        assert_eq!(session.scene().effective_layout(&left)?.center, (-2.0, 1.0));
+        assert_eq!(
+            session.scene().effective_layout(&right)?.center,
+            (2.0, -1.0)
+        );
 
         let left_fill = session.scene_mut().target_editor(&left)?;
         session
@@ -2479,18 +2527,18 @@ pub fn ordinary_composition_play() -> Result<crate::SceneExecution, Box<dyn Erro
         assert_eq!((segment.start_time(), segment.end_time()), (2.0, 4.0));
         session.live().advance_segment_to(segment, 3.0)?;
         assert_eq!(
-            session.live().effective(&left)?.style.fill,
+            session.scene().effective(&left)?.style.fill,
             Some(Color::rgb(1.0, 0.0, 0.0))
         );
         assert_eq!(
-            session.live().effective(&right)?.style.fill,
+            session.scene().effective(&right)?.style.fill,
             Some(Color::rgb(1.0, 1.0, 1.0))
         );
         session
             .live()
             .advance_segment_to(segment, segment.end_time())?;
         assert_eq!(
-            session.live().effective(&right)?.style.fill,
+            session.scene().effective(&right)?.style.fill,
             Some(Color::rgb(0.0, 0.0, 1.0))
         );
         session.live().complete_segment(segment)?;
@@ -2500,7 +2548,7 @@ pub fn ordinary_composition_play() -> Result<crate::SceneExecution, Box<dyn Erro
             .scene_mut()
             .set_fill_rgb(&left, 0.0, 1.0, 0.0, 1.0)?;
         assert_eq!(
-            session.live().effective(&left)?.style.fill,
+            session.scene().effective(&left)?.style.fill,
             Some(Color::rgb(0.0, 1.0, 0.0))
         );
     }
@@ -2527,7 +2575,7 @@ pub fn ordinary_style_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
             .scene_mut()
             .set_fill_rgb(&target, 1.0, 0.0, 0.0, 0.4)?;
         session.scene_mut().set_object_opacity(&target, 0.5)?;
-        let target_style = session.live().authored(&target)?.style;
+        let target_style = session.scene().authored(&target)?.style;
 
         let segment = session.live().declare_and_activate_transform_to(
             &circle,
@@ -2537,7 +2585,7 @@ pub fn ordinary_style_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
                 .rate_func(RateFunction::Linear),
         )?;
         session.live().advance_segment_to(segment, 1.0)?;
-        let midpoint = session.live().effective(&circle)?.style;
+        let midpoint = session.scene().effective(&circle)?.style;
         let midpoint_fill = midpoint.fill.expect("the style play retains its fill");
         assert!((midpoint_fill.red - 0.5).abs() < 1e-6);
         assert!((midpoint_fill.green - 0.2).abs() < 1e-6);
@@ -2548,24 +2596,24 @@ pub fn ordinary_style_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         session
             .live()
             .advance_segment_to(segment, segment.end_time())?;
-        let endpoint = session.live().effective(&circle)?.style;
+        let endpoint = session.scene().effective(&circle)?.style;
         assert_eq!(endpoint.fill, Some(Color::rgba(1.0, 0.0, 0.0, 0.4)));
         assert!((endpoint.opacity - 0.5).abs() < 1e-6);
         session.live().complete_segment(segment)?;
-        assert_eq!(session.live().authored(&circle)?.style, target_style);
+        assert_eq!(session.scene().authored(&circle)?.style, target_style);
 
         session
             .scene_mut()
             .set_fill_rgb(&circle, 0.0, 1.0, 0.0, 1.0)?;
         session.scene_mut().set_object_opacity(&circle, 1.0)?;
-        let final_style = session.live().authored(&circle)?.style;
+        let final_style = session.scene().authored(&circle)?.style;
         assert_eq!(
             final_style.fill,
             Some(SemanticPaint::Solid(Color::rgb(0.0, 1.0, 0.0)))
         );
         assert_eq!(final_style.fill_opacity, 1.0);
         assert_eq!(final_style.object_opacity, 1.0);
-        let effective = session.live().effective(&circle)?.style;
+        let effective = session.scene().effective(&circle)?.style;
         assert_eq!(effective.fill, Some(Color::rgb(0.0, 1.0, 0.0)));
         assert_eq!(effective.opacity, 1.0);
     }
@@ -2590,17 +2638,17 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         session
             .scene_mut()
             .set_fill_rgb(&circle, 0.0, 0.0, 1.0, 0.75)?;
-        let fill_only = session.live().effective(&circle)?.style;
+        let fill_only = session.scene().effective(&circle)?.style;
         assert_eq!(fill_only.fill, Some(Color::rgba(0.0, 0.0, 1.0, 0.75)));
         assert_eq!(fill_only.stroke, Some(Color::rgb(1.0, 1.0, 1.0)));
         session
             .scene_mut()
             .set_stroke(&circle, 1.0, 1.0, 1.0, 0.4)?;
-        let stroke_only = session.live().effective(&circle)?.style;
+        let stroke_only = session.scene().effective(&circle)?.style;
         assert_eq!(stroke_only.fill, fill_only.fill);
         assert_eq!(stroke_only.stroke, Some(Color::rgba(1.0, 1.0, 1.0, 0.4)));
         session.scene_mut().set_opacity(&circle, 0.2)?;
-        let paint_opacity = session.live().effective(&circle)?.style;
+        let paint_opacity = session.scene().effective(&circle)?.style;
         assert_eq!(paint_opacity.fill, Some(Color::rgba(0.0, 0.0, 1.0, 0.2)));
         assert_eq!(paint_opacity.stroke, Some(Color::rgba(1.0, 1.0, 1.0, 0.2)));
         assert_eq!(paint_opacity.opacity, 1.0);
@@ -2622,7 +2670,7 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         session
             .live()
             .advance_segment_to(independent, independent.end_time())?;
-        let independent_endpoint = session.live().effective(&circle)?.style;
+        let independent_endpoint = session.scene().effective(&circle)?.style;
         assert_eq!(
             independent_endpoint.fill,
             Some(Color::rgba(1.0, 0.25, 0.75, 0.8))
@@ -2633,7 +2681,7 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         );
         assert_eq!(independent_endpoint.opacity, 1.0);
         session.live().complete_segment(independent)?;
-        let independent_authored = session.live().authored(&circle)?.style;
+        let independent_authored = session.scene().authored(&circle)?.style;
         assert_eq!(
             independent_authored.fill,
             Some(SemanticPaint::Solid(Color::rgb(1.0, 0.25, 0.75)))
@@ -2666,7 +2714,7 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
                 .rate_func(RateFunction::Linear),
         )?;
         session.live().advance_segment_to(segment, 1.4)?;
-        let midpoint = session.live().effective(&circle)?.style;
+        let midpoint = session.scene().effective(&circle)?.style;
         assert_eq!(midpoint.fill, Some(Color::rgba(0.5, 0.0, 0.5, 0.75)));
         assert_eq!(midpoint.stroke, Some(Color::rgba(1.0, 0.5, 0.5, 0.75)));
         assert_eq!(midpoint.opacity, 1.0);
@@ -2674,7 +2722,7 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         session
             .live()
             .advance_segment_to(segment, segment.end_time())?;
-        let endpoint = session.live().effective(&circle)?.style;
+        let endpoint = session.scene().effective(&circle)?.style;
         assert_eq!(endpoint.fill, Some(Color::rgba(1.0, 0.0, 0.0, 0.5)));
         assert_eq!(endpoint.stroke, Some(Color::rgba(1.0, 0.0, 0.0, 0.5)));
         assert_eq!(endpoint.opacity, 1.0);
@@ -2684,7 +2732,7 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
             .scene_mut()
             .set_color_rgba(&circle, 1.0, 1.0, 0.0, 1.0)?;
         session.scene_mut().set_opacity(&circle, 1.0)?;
-        let final_style = session.live().authored(&circle)?.style;
+        let final_style = session.scene().authored(&circle)?.style;
         assert_eq!(
             final_style.fill,
             Some(SemanticPaint::Solid(Color::rgb(1.0, 1.0, 0.0)))
@@ -2696,7 +2744,7 @@ pub fn ordinary_paint_play() -> Result<crate::SceneExecution, Box<dyn Error>> {
         assert_eq!(final_style.fill_opacity, 1.0);
         assert_eq!(final_style.stroke_opacity, 1.0);
         assert_eq!(final_style.object_opacity, 1.0);
-        let effective = session.live().effective(&circle)?.style;
+        let effective = session.scene().effective(&circle)?.style;
         assert_eq!(effective.fill, Some(Color::rgb(1.0, 1.0, 0.0)));
         assert_eq!(effective.stroke, Some(Color::rgb(1.0, 1.0, 0.0)));
         assert_eq!(effective.opacity, 1.0);

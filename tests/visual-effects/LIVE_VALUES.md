@@ -66,7 +66,7 @@ boundary: removal during animation, new-generation attachment, stale rejection,
 atomic failure, coalescing, staged and moved tracks, bounded 4,097-row locality,
 and repeated forward/rewind restoration. These are **not** public Rust/Python
 Scene, browser-pixel or physical-GPU results. The prepared semantic bridge below
-supplies this structural operation to ordinary public Scene/LiveSession calls.
+supplies this structural operation to ordinary Scene calls.
 
 
 ## Prepared semantic attachment publication
@@ -101,13 +101,13 @@ retired drivers. These are boundary tests, not an alternative product session.
 
 ## Public Scene playback and finite admission
 
-Initial Scene lowering and ordinary LiveSession publication now admit one glow on
+Initial Scene lowering and ordinary Scene publication admit one glow on
 an eligible filled, unstroked analytic circle or rectangle. Unsupported reachable
 profiles/stacks reject through the same compiler validation; unsupported detached
 targets remain inert until enrollment. Removing blanket store-wide gates does not
 weaken the source-profile validator or the existing pending-segment/callback barrier.
 
-`LiveSession::target_editor` stages both the object and an independent attachment
+`Scene::target_editor` stages both the object and an independent attachment
 in the same semantic transaction, with allocator-resolved target identity. It
 captures a resident source's effective glow by exact generation rather than losing
 appearance or copying an obsolete authored base. A detached source copies its

@@ -579,7 +579,7 @@ test("ThreeDAxes direct and worker fixtures enroll source, timing, and Rust coor
   assert.match(workerSource, /z_axis_config=\{"color": BLUE\}/);
   assert.match(referenceSource, /axes\.get_axis_labels\(/);
   assert.match(workerSource, /axes\.get_axis_labels\(/);
-  assert.match(nativeSource, /create_axis_label_targets/);
+  assert.match(nativeSource, /\bscene\s*\.\s*three_d_axis_labels\(/);
   for (const source of [nativeSource, referenceSource, workerSource]) {
     assert.match(source, /tick_size.*0\.15|tick_size: Some\(0\.15\)/);
     assert.match(source, /RED/);

@@ -2,15 +2,41 @@
 //! Only Rust selects occurrences, evaluates frames, validates writes and commits.
 use crate::{context::Context, engine_error};
 use noon::integration::{
-    CallbackAdvance, CallbackPhaseOverlay, CallbackPhaseToken, CallbackReadRequest,
-    CallbackReadValue, CallbackRegionAdvance, EffectiveObjectProperties, EffectivePropertyBatch,
-    EffectiveSemanticPropertyWrite, RequiredCallbackInvocation,
+    callback_line_path, callback_provisional_key, commit_callback_path,
+    commit_inline_callback_content, resolve_callback_provisional, scene_execution,
+    AuthoringFailure, CallbackAdvance, CallbackMembershipCollector, CallbackPhaseOverlay,
+    CallbackPhaseToken, CallbackReadRequest, CallbackReadValue, CallbackRegionAdvance,
+    CallbackVisualContent, EffectiveObjectProperties, EffectivePropertyBatch,
+    EffectiveSemanticPropertyWrite, RequiredCallbackInvocation, SemanticStore,
 };
-use noon::{Color, SemanticNodeId, Style, Transform2D, Vec2};
+use noon::{Color, ManimGeometryOptions, SemanticNodeId, Style, Transform2D, Vec2};
+use noon_core::{GeometryRef, SemanticLocalNodeToken};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyList},
 };
+
+#[pyclass(frozen, skip_from_py_object, module = "_noon_native")]
+pub(crate) struct ProvisionalMobject {
+    token: CallbackPhaseToken,
+    local: SemanticLocalNodeToken,
+}
+
+#[pymethods]
+impl ProvisionalMobject {
+    #[getter(localKey)]
+    fn local_key(&self) -> String {
+        callback_provisional_key(self.local)
+    }
+}
+
+#[pyclass(frozen, skip_from_py_object, module = "_noon_native")]
+pub(crate) struct ProvisionalPoint {
+    #[pyo3(get)]
+    pub x: f64,
+    #[pyo3(get)]
+    pub y: f64,
+}
 
 fn node<'py>(py: Python<'py>, id: SemanticNodeId) -> PyResult<Bound<'py, PyDict>> {
     let result = PyDict::new(py);
@@ -206,6 +232,62 @@ fn event<'py>(
 }
 
 impl Context {
+    fn require_provisional_token(
+        &self,
+        py: Python<'_>,
+        token: &Bound<'_, PyAny>,
+    ) -> PyResult<CallbackPhaseToken> {
+        self.require_active()?;
+        let expected = scene_execution::session(&self.scene)
+            .and_then(|session| session.pending_callback_token())
+            .ok_or_else(|| engine_error("no pending callback"))?;
+        require_token(py, token, expected)?;
+        Ok(expected)
+    }
+
+    pub(crate) fn stage_provisional_geometry(
+        &mut self,
+        py: Python<'_>,
+        token: &Bound<'_, PyAny>,
+        options: ManimGeometryOptions,
+    ) -> PyResult<ProvisionalMobject> {
+        let token = self.require_provisional_token(py, token)?;
+        let collector = self
+            .callback_membership
+            .get_or_insert_with(|| CallbackMembershipCollector::new(token));
+        let local = collector
+            .stage_provisional_geometry(&mut self.scene.integration_store().borrow_mut(), options)
+            .map_err(engine_error)?;
+        Ok(ProvisionalMobject { token, local })
+    }
+
+    pub(crate) fn with_provisional<T>(
+        &mut self,
+        py: Python<'_>,
+        token: &Bound<'_, PyAny>,
+        object: &ProvisionalMobject,
+        apply: impl FnOnce(
+            &mut CallbackMembershipCollector,
+            &mut SemanticStore,
+            SemanticLocalNodeToken,
+        ) -> Result<T, AuthoringFailure>,
+    ) -> PyResult<T> {
+        let token = self.require_provisional_token(py, token)?;
+        let collector = self
+            .callback_membership
+            .as_mut()
+            .filter(|collector| collector.token == token && object.token == token)
+            .ok_or_else(|| {
+                engine_error("callback provisional geometry token is unknown or stale")
+            })?;
+        apply(
+            collector,
+            &mut self.scene.integration_store().borrow_mut(),
+            object.local,
+        )
+        .map_err(engine_error)
+    }
+
     /// Advance the compiled Rust runtime until Python is genuinely required.
     /// Sampling is an explicit renderer-free host policy, not a Python timeline.
     pub(crate) fn drive_impl(&mut self, py: Python<'_>) -> PyResult<Py<PyDict>> {
@@ -288,7 +370,7 @@ impl Context {
         value: &Bound<'_, PyDict>,
     ) -> PyResult<Py<PyDict>> {
         self.require_active()?;
-        let (_, _, session) = noon::integration::scene_execution::parts_mut(&mut self.scene)
+        let (store, _, session) = scene_execution::parts_mut(&mut self.scene)
             .ok_or_else(|| engine_error("no execution"))?;
         let expected = session
             .pending_callback_token()
@@ -301,13 +383,6 @@ impl Context {
                 .ok_or_else(|| engine_error("missing batch token"))?,
             expected,
         )?;
-        if value.contains("content")? {
-            return Err(engine_error(noon::integration::AuthoringFailure::new(
-                "unsupported_operation",
-                "python.callback_content",
-                "native callback content replacement is outside the qualified profile",
-            )));
-        }
         let region: u32 = value
             .get_item("region")?
             .ok_or_else(|| engine_error("missing callback region"))?
@@ -361,6 +436,85 @@ impl Context {
             };
             writes.push(write);
         }
+        let mut replacements = Vec::new();
+        let mut retained_path = None;
+        if let Some(content) = value.get_item("content")? {
+            session
+                .require_terminal_callback_content_region(expected, region)
+                .map_err(engine_error)?;
+            let rows = if content.is_instance_of::<PyDict>() {
+                vec![content]
+            } else {
+                content.try_iter()?.collect::<PyResult<Vec<_>>>()?
+            };
+            let multiple_targets = rows.len() > 1;
+            for row in rows {
+                let row = row.cast::<PyDict>()?;
+                let provisional = row.get_item("provisional")?;
+                let geometry = row.get_item("geometry")?;
+                let path = row.get_item("path")?;
+                let variant_count = usize::from(provisional.is_some())
+                    + usize::from(geometry.is_some())
+                    + usize::from(path.is_some());
+                if variant_count != 1 || row.contains("text_source")? {
+                    return Err(engine_error(AuthoringFailure::new(
+                        "unsupported_operation",
+                        "python.callback_content",
+                        "native callback content requires exactly one geometry, path, or provisional",
+                    )));
+                }
+                let target = read_node(
+                    &row.get_item("object")?
+                        .ok_or_else(|| engine_error("missing callback content target"))?,
+                )?;
+                let content = if let Some(key) = provisional {
+                    let collector = self
+                        .callback_membership
+                        .as_mut()
+                        .filter(|collector| collector.token == expected)
+                        .ok_or_else(|| {
+                            engine_error("callback visual producer has no provisional declaration")
+                        })?;
+                    resolve_callback_provisional(
+                        collector,
+                        &mut store.borrow_mut(),
+                        target,
+                        key.extract::<&str>()?,
+                        &mut writes,
+                    )
+                    .map_err(engine_error)?
+                } else if let Some(geometry) = geometry {
+                    if geometry.get_item("kind")?.extract::<&str>()? != "circle" {
+                        return Err(engine_error(
+                            "callback inline geometry currently requires a circle",
+                        ));
+                    }
+                    CallbackVisualContent::Geometry(GeometryRef::circle(
+                        geometry.get_item("radius")?.extract()?,
+                    ))
+                } else {
+                    let path = path.expect("one content variant was checked");
+                    CallbackVisualContent::Path(
+                        callback_line_path(
+                            path.get_item("points")?.extract()?,
+                            path.get_item("closed")?.extract()?,
+                        )
+                        .map_err(engine_error)?,
+                    )
+                };
+                match content {
+                    CallbackVisualContent::Geometry(geometry) => {
+                        replacements.push((target, geometry))
+                    }
+                    CallbackVisualContent::Path(_) if multiple_targets => {
+                        return Err(engine_error(
+                            "multi-target callback content currently requires inline geometry",
+                        ))
+                    }
+                    CallbackVisualContent::Path(path) => retained_path = Some((target, path)),
+                }
+            }
+        }
         let batch = EffectivePropertyBatch::new(expected, writes).with_region(region);
         match session
             .submit_required_callback_region(batch)
@@ -374,9 +528,24 @@ impl Context {
                 event(py, "callback", Some(phase(py, overlay, invocations)?))
             }
             CallbackRegionAdvance::Complete(batch) => {
-                session
-                    .commit_required_callback_phase(batch)
+                if let Some((target, path)) = retained_path {
+                    commit_callback_path(
+                        session,
+                        &mut self.callback_geometry_sources,
+                        batch,
+                        target,
+                        path,
+                    )
                     .map_err(engine_error)?;
+                } else if replacements.is_empty() {
+                    session
+                        .commit_required_callback_phase(batch)
+                        .map_err(engine_error)?;
+                } else {
+                    commit_inline_callback_content(session, batch, replacements)
+                        .map_err(engine_error)?;
+                }
+                self.callback_membership = None;
                 self.pending_ack = Some(expected);
                 let phase = PyDict::new(py);
                 phase.set_item("token", token_dict(py, expected)?)?;
@@ -450,6 +619,7 @@ impl Context {
         session
             .fail_required_callback_phase(expected)
             .map_err(engine_error)?;
+        self.callback_membership = None;
         Err(engine_error(noon::integration::AuthoringFailure::new(
             "callback_failure",
             "python.callback_failed",

@@ -8,32 +8,22 @@ from _typed_geometry_test_support import identity_only_wrapper
 
 
 class FamilyMembershipOrderTests(unittest.TestCase):
-    def test_empty_family_keeps_its_registered_live_mutation_owner(self):
+    def test_empty_family_keeps_its_registered_scene_owner_in_setup_and_playback(self):
         group = identity_only_wrapper(compat.VGroup)
         group._semantic_family_handle = SimpleNamespace(memberKeys=Mock(return_value=[]))
         group._semantic_member_wrappers = {}
-        context = SimpleNamespace(
-            liveExecutionOwnership=Mock(),
-            requiresLiveMutationRouting=Mock(return_value=True),
-        )
+        context = SimpleNamespace()
         group._canonical_live_target_context = context
-        with patch.object(handles, "_live_constructor_context", side_effect=AssertionError("unexpected fallback")):
-            for ownership in ["active", "returned", "transferred"]:
-                with self.subTest(ownership=ownership):
-                    context.liveExecutionOwnership.return_value = ownership
-                    self.assertIs(handles._group_target_context(group), context)
-        context.liveExecutionOwnership.assert_not_called()
+        with patch.object(handles, "_path_authoring_context", side_effect=AssertionError("unexpected fallback")):
+            self.assertIs(handles._group_target_context(group), context)
 
-    def test_empty_family_without_a_started_runtime_uses_constructor_route(self):
+    def test_standalone_family_uses_constructor_route(self):
         group = identity_only_wrapper(compat.VGroup)
         group._semantic_family_handle = SimpleNamespace(memberKeys=Mock(return_value=[]))
         group._semantic_member_wrappers = {}
-        context = SimpleNamespace(requiresLiveMutationRouting=Mock(return_value=False))
-        group._canonical_live_target_context = context
-        with patch.object(handles, "_live_constructor_context", return_value=None) as constructor:
+        with patch.object(handles, "_path_authoring_context", return_value=None) as constructor:
             self.assertIsNone(handles._group_target_context(group))
-        context.requiresLiveMutationRouting.assert_called_once_with()
-        constructor.assert_called_once_with()
+        constructor.assert_called_once_with(group)
 
     def test_mutations_update_identity_references_without_querying_sibling_order(self):
         a = identity_only_wrapper(compat.Mobject)
@@ -46,7 +36,7 @@ class FamilyMembershipOrderTests(unittest.TestCase):
         group._semantic_family_handle = bridge
         group._semantic_member_wrappers = {'1:0': a, '2:0': b}
         with patch.object(handles, '_family_membership_batch', return_value=object()), \
-             patch.object(handles, '_live_constructor_context', return_value=None):
+             patch.object(handles, '_path_authoring_context', return_value=None):
             self.assertIs(group.add(a), group)
             bridge.memberKeys.assert_not_called()
             self.assertEqual(len(group), 2)
@@ -70,9 +60,9 @@ class FamilyMembershipOrderTests(unittest.TestCase):
         group = identity_only_wrapper(compat.VGroup)
         group._semantic_family_handle = bridge
         group._semantic_member_wrappers = {}
-        context = SimpleNamespace(liveEditFamilyMembership=Mock(return_value=[True]))
+        context = SimpleNamespace(editFamilyMembership=Mock(return_value=[True]))
         with patch.object(handles, '_family_membership_batch', return_value='batch'), \
-             patch.object(handles, '_live_constructor_context', return_value=context):
+             patch.object(handles, '_path_authoring_context', return_value=context):
             group.add(a)
-        context.liveEditFamilyMembership.assert_called_once_with(bridge, 'batch')
+        context.editFamilyMembership.assert_called_once_with(bridge, 'batch')
         self.assertIs(group[0], a)

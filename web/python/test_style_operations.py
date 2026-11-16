@@ -268,7 +268,7 @@ class StyleOperationsTests(unittest.TestCase):
         self.assertIs(obj.set_stroke(background=True), obj)
         self.assertIs(obj.set_background_stroke(), obj)
         sheen_target = SimpleNamespace(setSheenDirection=Mock())
-        with patch.object(handles, "_style_target", return_value=(sheen_target, None, "")):
+        with patch.object(handles, "_paint_authoring_target", return_value=(sheen_target, None, "")):
             self.assertIs(obj.set_sheen(0.0, compat._base.UL), obj)
             self.assertIs(obj.set_sheen_direction(compat._base.UL), obj)
         self.assertEqual(sheen_target.setSheenDirection.call_count, 2)
@@ -424,14 +424,15 @@ class StyleOperationsTests(unittest.TestCase):
             vector.update_rgbas_array("fill_rgbas", "#FF0000")
         del vector.sheen_factor
 
-    def test_sheen_direction_mutators_use_shared_rust_detached_and_live_routes(self):
+    def test_sheen_direction_mutators_use_standalone_and_scene_routes(self):
         obj = identity_only_wrapper(compat.VMobject)
         detached = SimpleNamespace(
             setSheenDirection=Mock(),
             rotateSheenDirection=Mock(),
             sheenDirection=Mock(return_value=[0.25, -0.5]),
         )
-        with patch.object(handles, "_style_target", return_value=(detached, None, "")):
+        with patch.object(handles, "_paint_authoring_target", return_value=(detached, None, "")), \
+             patch.object(handles, "_handle_for", return_value=detached):
             self.assertIs(obj.set_sheen_direction([0, 1]), obj)
             detached.setSheenDirection.assert_called_once_with(0.0, 1.0, 0.0, 2, True)
             self.assertIs(obj.set_sheen_direction((1, 2, 3), family=False), obj)
@@ -448,41 +449,42 @@ class StyleOperationsTests(unittest.TestCase):
             rotateSheenDirection=Mock(),
             ownSheenDirection=Mock(return_value=[1.0, 0.0, 0.0]),
         )
-        with patch.object(handles, "_style_target", return_value=(family, None, "Family")):
+        group._semantic_family_handle = family
+        with patch.object(handles, "_paint_authoring_target", return_value=(family, None, "Family")):
             self.assertIs(group.set_sheen(0.0, compat._base.DOWN, family=False), group)
             family.setSheenDirection.assert_called_once_with(0.0, -1.0, 0.0, 3, False)
             self.assertIs(group.rotate_sheen_direction(1.0, axis=(0, 1), family=True), group)
             family.rotateSheenDirection.assert_called_once_with(1.0, 0.0, 1.0, 0.0, True)
             self.assertEqual(list(group.get_sheen_direction()), [1.0, 0.0, 0.0])
 
-        live = SimpleNamespace(liveSetMobjectSheenDirection=Mock(),
-                               liveRotateMobjectSheenDirection=Mock())
-        with patch.object(handles, "_style_target", return_value=(detached, live, "")):
+        live = SimpleNamespace(setMobjectSheenDirection=Mock(),
+                               rotateMobjectSheenDirection=Mock())
+        with patch.object(handles, "_paint_authoring_target", return_value=(detached, live, "")):
             self.assertIs(obj.set_sheen_direction(compat._base.RIGHT), obj)
             self.assertIs(obj.rotate_sheen_direction(0.25), obj)
-        live.liveSetMobjectSheenDirection.assert_called_once_with(
+        live.setMobjectSheenDirection.assert_called_once_with(
             detached, 1.0, 0.0, 0.0, 3, True
         )
-        live.liveRotateMobjectSheenDirection.assert_called_once_with(
+        live.rotateMobjectSheenDirection.assert_called_once_with(
             detached, 0.25, 0.0, 0.0, 1.0, True
         )
 
-        family_live = SimpleNamespace(liveSetFamilySheenDirection=Mock(),
-                                      liveRotateFamilySheenDirection=Mock())
-        with patch.object(handles, "_style_target", return_value=(family, family_live, "Family")):
+        family_live = SimpleNamespace(setFamilySheenDirection=Mock(),
+                                      rotateFamilySheenDirection=Mock())
+        with patch.object(handles, "_paint_authoring_target", return_value=(family, family_live, "Family")):
             self.assertIs(group.set_sheen_direction(compat._base.UP, family=False), group)
             self.assertIs(group.rotate_sheen_direction(-0.5, family=False), group)
-        family_live.liveSetFamilySheenDirection.assert_called_once_with(
+        family_live.setFamilySheenDirection.assert_called_once_with(
             family, 0.0, 1.0, 0.0, 3, False
         )
-        family_live.liveRotateFamilySheenDirection.assert_called_once_with(
+        family_live.rotateFamilySheenDirection.assert_called_once_with(
             family, -0.5, 0.0, 0.0, 1.0, False
         )
 
     def test_sheen_direction_staged_writes_and_invalid_values_do_not_dispatch(self):
         obj = identity_only_wrapper(compat.VMobject)
         target = SimpleNamespace(setSheenDirection=Mock(), rotateSheenDirection=Mock())
-        with patch.object(handles, "_style_target", return_value=(target, None, "")):
+        with patch.object(handles, "_paint_authoring_target", return_value=(target, None, "")):
             with self.assertRaises(ValueError):
                 obj.set_sheen_direction((float("nan"), 0.0, 0.0))
             with self.assertRaises(ValueError):
@@ -536,7 +538,9 @@ class StyleOperationsTests(unittest.TestCase):
 
         obj = identity_only_wrapper(compat.VMobject)
         detached = SimpleNamespace(setStrokeCap=Mock(), strokeCap="square")
-        with patch.object(handles, "_style_target", return_value=(detached, None, "")):
+        obj._semantic_handle = detached
+        obj._semantic_handle_fresh = True
+        with patch.object(handles, "_paint_authoring_target", return_value=(detached, None, "")):
             self.assertIs(obj.set_cap_style(cap.SQUARE), obj)
             self.assertIs(obj.cap_style, cap.SQUARE)
             obj.cap_style = cap.ROUND
@@ -546,29 +550,35 @@ class StyleOperationsTests(unittest.TestCase):
         )
 
         live_context = SimpleNamespace(
-            liveSetStrokeCap=Mock(), queryMobjectStrokeCap=Mock(return_value="butt")
+            setStrokeCap=Mock(), queryMobjectStrokeCap=Mock(return_value="butt")
         )
-        with patch.object(handles, "_style_target", return_value=(detached, live_context, "")):
+        obj._canonical_live_target_context = live_context
+        self.assertIs(obj.cap_style, cap.SQUARE)
+        live_context.queryMobjectStrokeCap.assert_not_called()
+        obj._scene = SimpleNamespace(_canonical_authoring_context=live_context)
+        obj._object = object()
+        with patch.object(handles, "_paint_authoring_target", return_value=(detached, live_context, "")):
             self.assertIs(obj.set_cap_style(cap.BUTT), obj)
             self.assertIs(obj.cap_style, cap.BUTT)
-        live_context.liveSetStrokeCap.assert_called_once_with(detached, "butt")
+        live_context.setStrokeCap.assert_called_once_with(detached, "butt")
         live_context.queryMobjectStrokeCap.assert_called_once_with(detached)
 
         family = identity_only_wrapper(compat.VGroup)
         family_handle = SimpleNamespace(
             setStrokeCap=Mock(), ownStrokeCap=Mock(return_value="butt")
         )
-        with patch.object(handles, "_style_target", return_value=(family_handle, None, "Family")):
+        family._semantic_family_handle = family_handle
+        with patch.object(handles, "_paint_authoring_target", return_value=(family_handle, None, "Family")):
             self.assertIs(family.set_cap_style(cap.BUTT), family)
             self.assertIs(family.cap_style, cap.BUTT)
         family_handle.setStrokeCap.assert_called_once_with("butt")
 
-        family_context = SimpleNamespace(liveSetFamilyOwnStrokeCap=Mock())
+        family_context = SimpleNamespace(setFamilyOwnStrokeCap=Mock())
         with patch.object(
-            handles, "_style_target", return_value=(family_handle, family_context, "Family")
+            handles, "_paint_authoring_target", return_value=(family_handle, family_context, "Family")
         ):
             self.assertIs(family.set_cap_style(cap.ROUND), family)
-        family_context.liveSetFamilyOwnStrokeCap.assert_called_once_with(family_handle, "round")
+        family_context.setFamilyOwnStrokeCap.assert_called_once_with(family_handle, "round")
 
     def test_none_background_image_helpers_restore_white_through_shared_color(self):
         obj = identity_only_wrapper(compat.VMobject)
@@ -610,7 +620,7 @@ class StyleOperationsTests(unittest.TestCase):
             with self.subTest(operation=operation), self.assertRaises(NotImplementedError):
                 operation()
         bridge = SimpleNamespace(setStyle=Mock())
-        with patch.object(handles, "_style_target", return_value=(bridge, None, "")):
+        with patch.object(handles, "_paint_authoring_target", return_value=(bridge, None, "")):
             self.assertIs(
                 obj.set_stroke(color=compat._base.RED, width=2, background=True), obj
             )
@@ -651,7 +661,7 @@ class StyleOperationsTests(unittest.TestCase):
     def test_combined_style_is_one_typed_request_and_validates_before_dispatch(self):
         obj = identity_only_wrapper(compat.Circle)
         bridge = SimpleNamespace(setStyle=Mock())
-        with patch.object(handles, '_style_target', return_value=(bridge, None, '')):
+        with patch.object(handles, '_paint_authoring_target', return_value=(bridge, None, '')):
             self.assertIs(obj.set_style(fill_color='#FF0000', fill_opacity=0.4,
                                         stroke_color='#0000FF', stroke_width=6), obj)
             bridge.setStyle.assert_called_once_with(True, 1, 0, 0, 1, 0.4,
@@ -686,11 +696,11 @@ class StyleOperationsTests(unittest.TestCase):
         source._semantic_family_handle = object()
         target._semantic_family_handle = object()
         source_handle, target_handle = object(), object()
-        context = SimpleNamespace(liveMatchFamilyStyle=Mock())
-        with patch.object(handles, '_style_target', side_effect=[
+        context = SimpleNamespace(matchFamilyStyle=Mock())
+        with patch.object(handles, '_paint_authoring_target', side_effect=[
                 (source_handle, context, 'Family'), (target_handle, context, 'Family')]):
             self.assertIs(source.match_style(target), source)
-        context.liveMatchFamilyStyle.assert_called_once_with(source_handle, target_handle)
+        context.matchFamilyStyle.assert_called_once_with(source_handle, target_handle)
         style = {
             "fill_color": compat._base.GREEN,
             "fill_opacity": 0.3,
@@ -713,10 +723,10 @@ class StyleOperationsTests(unittest.TestCase):
         bridge, context = Mock(), Mock()
         for live in [None, context]:
             with patch.object(handles, '_handle_for', return_value=bridge), \
-                 patch.object(handles, '_live_mutation_context', return_value=live):
+                 patch.object(handles, '_path_authoring_context', return_value=live):
                 self.assertIs(handles._set_fill(obj), obj)
                 self.assertIs(handles._set_stroke(obj), obj)
         bridge.disableFill.assert_not_called()
         bridge.disableStroke.assert_not_called()
-        context.liveDisableFill.assert_not_called()
-        context.liveDisableStroke.assert_not_called()
+        context.disableFill.assert_not_called()
+        context.disableStroke.assert_not_called()

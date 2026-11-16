@@ -343,7 +343,6 @@ class VMobject(Mobject):
         return edit_points(
             self,
             "addCubicBezierCurve",
-            "liveAddCubicBezierCurve",
             (anchor1, handle1, handle2, anchor2),
         )
 
@@ -477,7 +476,7 @@ class VMobject(Mobject):
 
     def reverse_direction(self):
         from _manim_path_editing import edit_points
-        return edit_points(self, "reverseDirection", "liveReverseDirection", ())
+        return edit_points(self, "reverseDirection", ())
 
     def align_points(self, vmobject):
         from _manim_path_editing import align_points
@@ -541,7 +540,7 @@ class VMobject(Mobject):
             from _manim_semantic_handles import _get_background_stroke_width
             return _get_background_stroke_width(self)
         from _manim_semantic_handles import _get_stroke_width
-        return _get_stroke_width(self, background)
+        return _get_stroke_width(self)
 
     def get_sheen_factor(self):
         return 0.0
@@ -1350,12 +1349,6 @@ class VGroup(VMobject):
     def get_fill_opacity(self):
         from _manim_semantic_handles import _get_fill_opacity
         return _get_fill_opacity(self)
-
-    def get_stroke_opacity(self, background=False):
-        if background:
-            return float(self.get_stroke_opacities(background=True)[0])
-        from _manim_semantic_handles import _get_stroke_opacity
-        return _get_stroke_opacity(self)
 
     def set_fill(
         self,

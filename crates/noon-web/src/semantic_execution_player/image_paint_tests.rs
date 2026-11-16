@@ -125,9 +125,7 @@ fn worker_bitmap_and_fill_share_pixels_and_retire_only_after_both_roots_leave() 
     assert!(mirror.apply_family(premature).is_err());
     assert_eq!(mirror.frame().unwrap(), &before);
 
-    player
-        .with_live_session(|live| live.remove(&bitmap))
-        .unwrap();
+    player.scene_mut().remove(&bitmap).unwrap();
     let delta = player.delta(false).unwrap().unwrap();
     assert!(delta.resource_retirements.images.is_empty());
     mirror.apply_family(delta).unwrap();

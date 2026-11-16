@@ -589,16 +589,59 @@ fn overlapping_source_scale_supersedes_click_effect_while_unrelated_track_contin
 }
 
 #[test]
+fn click_indicate_survives_retained_viewer_handoff() {
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.9).unwrap();
+    circle.set_fill(0.0, 0.0, 1.0, 0.78).unwrap();
+    scene.add(&circle).unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    execution
+        .session_mut()
+        .begin_replay_retention(Default::default())
+        .unwrap();
+    let mut live = execution.live();
+    let wait = live.wait_segment(0.125).unwrap();
+    live.advance_segment_to(wait, wait.end_time()).unwrap();
+    live.complete_segment(wait).unwrap();
+    execution
+        .scene_mut()
+        .on_click_indicate(&circle, IndicateOptions::default(), AnimationOptions::new())
+        .unwrap();
+    execution.session_mut().seal_replay_for_viewer().unwrap();
+    execution.seek(0.0).unwrap();
+    execution.seek(wait.end_time()).unwrap();
+    execution
+        .session_mut()
+        .configure_native_pointer_input(POINTER, 1)
+        .unwrap();
+    let store = std::rc::Rc::clone(execution.scene().integration_store());
+    let mut store = store.borrow_mut();
+    let revision = store.scene_revision();
+    let session = execution.session_mut();
+    click(&mut store, session, 1, 0.0);
+    assert!(session.interactions_active());
+    session.advance_interactions(&mut store, 0.0).unwrap();
+    session.advance_interactions(&mut store, 1.1).unwrap();
+    assert!(!session.interactions_active());
+    assert_eq!(session.frame().time, wait.end_time());
+    assert_eq!(store.scene_revision(), revision);
+}
+
+#[test]
 fn completed_create_and_wait_allow_click_with_nonreplayable_drag_policy() {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.9).unwrap();
     circle.set_fill(0.0, 0.0, 1.0, 0.78).unwrap();
     let mut rectangle = scene.rectangle(2.2, 1.6).unwrap();
     rectangle.set_translation(4.0, 0.0).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    session.begin_replay_retention(Default::default()).unwrap();
+    let session = scene.execution_session().unwrap();
+    scene.install_execution(session);
+    scene
+        .owned_execution_mut()
+        .begin_replay_retention(Default::default())
+        .unwrap();
     let segment = scene
-        .live(&mut session)
+        .owned_live()
         .declare_and_activate_create_parallel(
             &[
                 (&circle, AnimationOptions::new()),
@@ -607,15 +650,18 @@ fn completed_create_and_wait_allow_click_with_nonreplayable_drag_policy() {
             AnimationOptions::new().run_time(1.4),
         )
         .unwrap();
-    session
+    scene
+        .owned_execution_mut()
         .advance_segment_to(segment, segment.end_time())
         .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    let wait = scene.live(&mut session).wait_segment(0.5).unwrap();
-    session.advance_segment_to(wait, wait.end_time()).unwrap();
-    scene.live(&mut session).complete_segment(wait).unwrap();
+    scene.owned_live().complete_segment(segment).unwrap();
+    let wait = scene.owned_live().wait_segment(0.5).unwrap();
     scene
-        .live(&mut session)
+        .owned_execution_mut()
+        .advance_segment_to(wait, wait.end_time())
+        .unwrap();
+    scene.owned_live().complete_segment(wait).unwrap();
+    scene
         .on_click_indicate(
             &circle,
             IndicateOptions::default(),
@@ -623,19 +669,18 @@ fn completed_create_and_wait_allow_click_with_nonreplayable_drag_policy() {
         )
         .unwrap();
     scene
-        .live(&mut session)
+        .owned_live()
         .set_translation_drag_targets([&rectangle])
         .unwrap();
-    assert!(session.seal_replay().is_err());
-    session.configure_native_pointer_input(POINTER, 1).unwrap();
-    click(
-        &mut scene.integration_store().borrow_mut(),
-        &mut session,
-        1,
-        0.0,
-    );
+    assert!(scene.owned_execution_mut().seal_replay().is_err());
+    scene
+        .owned_execution_mut()
+        .configure_native_pointer_input(POINTER, 1)
+        .unwrap();
+    let store = std::rc::Rc::clone(scene.integration_store());
+    click(&mut store.borrow_mut(), scene.owned_execution_mut(), 1, 0.0);
     assert!(
-        session.interactions_active(),
+        scene.owned_execution().interactions_active(),
         "first-pass completed Create must not suppress native click"
     );
 }

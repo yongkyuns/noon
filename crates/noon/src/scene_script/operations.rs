@@ -2,7 +2,8 @@
 
 use std::{cell::RefCell, rc::Weak};
 
-use noon_core::{HostCallbackId, SemanticMutationTransaction};
+use crate::integration::scene_execution;
+use noon_core::HostCallbackId;
 
 use super::{ScriptBoundary, ScriptBridge, ScriptError, ScriptScene};
 use crate::{
@@ -235,9 +236,9 @@ impl ScriptScene {
                 };
                 callback(&mut UpdaterTarget { context }, frame)
             })?;
-            let mut transaction = SemanticMutationTransaction::new();
-            transaction.add_updater(target.node_id(), id, authoring_time(scene), None);
-            if let Err(error) = scene.apply_semantic_transaction(transaction) {
+            if let Err(error) =
+                scene_execution::add_updater(scene, target, id, authoring_time(scene), None)
+            {
                 callbacks.discard_script_callback(id);
                 return Err(error.into());
             }
@@ -259,13 +260,12 @@ impl ScriptScene {
         }
         self.with_scene(|scene| {
             scene.require_object(&registration.target)?;
-            let mut transaction = SemanticMutationTransaction::new();
-            transaction.remove_updater(
-                registration.target.node_id(),
+            scene_execution::remove_updater(
+                scene,
+                &registration.target,
                 registration.callback,
                 authoring_time(scene),
-            );
-            scene.apply_semantic_transaction(transaction)?;
+            )?;
             Ok(())
         })
     }

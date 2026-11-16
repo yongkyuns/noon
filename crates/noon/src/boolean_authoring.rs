@@ -23,29 +23,25 @@ fn boolean_options(
 }
 
 impl Scene {
-    /// Snapshot boolean operands from one coherent execution publication.
+    /// Snapshot boolean operands for an ordinary geometry constructor.
     ///
-    /// Reachable operands use effective affine transforms, and detached operands
-    /// use authored transforms. This requires execution and allocates no scene
-    /// identity or resource. The options carry geometry and ordinary result paint.
-    pub fn effective_boolean_geometry_options(
+    /// Reachable operands use the current effective publication during playback.
+    /// Fresh detached operands and setup use authored transforms.
+    pub fn boolean_geometry_options(
         &self,
         operation: BooleanOperation,
         operands: &[Mobject],
     ) -> Result<ManimGeometryOptions, AuthoringError> {
-        let execution = self.running_execution().ok_or(AuthoringError::Unsupported(
-            UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        self.require_effective_capture()?;
         let store = self.integration_store();
         let store_ref = store.borrow();
-        execution.require_published_store(&store_ref)?;
         boolean_options(&store_ref, operation, operands, |object| {
-            if !Rc::ptr_eq(store, object.integration_store()) {
-                return Err(AuthoringError::ForeignStore);
-            }
-            object.validate()?;
+            self.require_object(object)?;
             let mut state = object.state()?;
-            if execution.semantic_object_is_reachable(object.node_id()) {
+            if let Some(execution) = self
+                .running_execution()
+                .filter(|execution| execution.semantic_object_is_reachable(object.node_id()))
+            {
                 let observed = execution.effective_semantic_object(&store_ref, object.node_id())?;
                 if !observed.authored_content_layout_applicable() {
                     return Err(AuthoringError::Unsupported(
@@ -73,7 +69,7 @@ impl ManimGeometryOptions {
     /// No semantic identity or resource is allocated until these options are
     /// consumed by `Scene::geometry`. Result paint uses ordinary VMobject defaults;
     /// operand paint, membership, identity and content are unchanged.
-    /// For current runtime geometry use `Scene::effective_boolean_geometry_options`.
+    /// For current runtime geometry use `Scene::boolean_geometry_options`.
     pub fn boolean_geometry(
         operation: BooleanOperation,
         operands: &[Mobject],
@@ -100,33 +96,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scene_effective_boolean_requires_running_and_preserves_store_validation() {
+    fn scene_boolean_uses_authored_setup_and_preserves_store_validation() {
         let mut scene = Scene::new();
         let a = scene.square(2.0).unwrap();
         let b = scene.square(2.0).unwrap();
         scene.add(&a).unwrap();
         scene.add(&b).unwrap();
 
-        assert!(matches!(
-            scene.effective_boolean_geometry_options(
-                BooleanOperation::Union,
-                &[a.clone(), b.clone()],
-            ),
-            Err(AuthoringError::Unsupported(
-                UnsupportedAuthoringOperation::EffectiveStateUnavailable
-            ))
-        ));
+        assert!(scene
+            .boolean_geometry_options(BooleanOperation::Union, &[a.clone(), b.clone()])
+            .is_ok());
 
         let execution = scene.execution_session().unwrap();
         scene.install_execution(execution);
         assert!(scene
-            .effective_boolean_geometry_options(BooleanOperation::Union, &[a.clone(), b])
+            .boolean_geometry_options(BooleanOperation::Union, &[a.clone(), b])
             .is_ok());
 
         let mut foreign_scene = Scene::new();
         let foreign = foreign_scene.square(1.0).unwrap();
         assert!(matches!(
-            scene.effective_boolean_geometry_options(BooleanOperation::Union, &[a, foreign]),
+            scene.boolean_geometry_options(BooleanOperation::Union, &[a, foreign]),
             Err(AuthoringError::ForeignStore)
         ));
     }

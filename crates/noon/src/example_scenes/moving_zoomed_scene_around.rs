@@ -7,8 +7,8 @@
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
     FadeEndpoint, FadeTranslation, ImageMobjectOptions, LayoutAnchor, LayoutDimension,
-    LiveContinuation, LiveLayoutTarget, LiveProgram, ManimGeometryOptions, ManimNextToArgs,
-    Mobject, RateFunction, RustHostCallbackTable, Scene, SemanticAnimationCompositionKind as Kind,
+    LayoutTarget, LiveContinuation, LiveProgram, ManimGeometryOptions, ManimNextToArgs, Mobject,
+    RateFunction, RustHostCallbackTable, Scene, SemanticAnimationCompositionKind as Kind,
     SemanticFadeDirection, SemanticVec3, Text, TransformToRequest, ZoomedSceneOptions, ZoomedView,
 };
 use noon_core::HostCallbackId;
@@ -81,14 +81,10 @@ impl LiveContinuation for MovingZoomedSceneAround {
                 // frame, then runs Restore back to that saved state. Capture
                 // from the exact effective publication before stretching.
                 if self.stage == 1 {
-                    scene
-                        .live()
-                        .activate_zooming(&self.zoomed_view)
-                        .map_err(message)?;
+                    scene.activate_zooming(&self.zoomed_view).map_err(message)?;
                 }
                 let saved_display = scene.target_editor(&self.display).map_err(message)?;
                 scene
-                    .live()
                     .replace_layout(
                         &LayoutAnchor::from(&self.display),
                         &LayoutAnchor::from(&self.frame),
@@ -129,10 +125,9 @@ impl LiveContinuation for MovingZoomedSceneAround {
             2 => {
                 let caption_anchor = LayoutAnchor::from(&self.zoomed_camera_text);
                 scene
-                    .live()
                     .next_layout_to_aligned(
                         &caption_anchor,
-                        LiveLayoutTarget::Mobject(&self.display),
+                        LayoutTarget::Mobject(&self.display),
                         &caption_anchor,
                         ManimNextToArgs {
                             direction: (0.0, -1.0),
@@ -160,12 +155,10 @@ impl LiveContinuation for MovingZoomedSceneAround {
             3 => {
                 let frame_target = scene.target_editor(&self.frame).map_err(message)?;
                 scene
-                    .live()
                     .manim_scale(&frame_target, 0.5, 1.5)
                     .map_err(message)?;
                 let display_target = scene.target_editor(&self.display).map_err(message)?;
                 scene
-                    .live()
                     .manim_scale(&display_target, 0.5, 1.5)
                     .map_err(message)?;
                 let options = smooth(STEP_DURATION);
@@ -215,10 +208,7 @@ impl LiveContinuation for MovingZoomedSceneAround {
             }
             5 => {
                 let target = scene.target_editor(&self.display).map_err(message)?;
-                scene
-                    .live()
-                    .manim_scale(&target, 2.0, 2.0)
-                    .map_err(message)?;
+                scene.manim_scale(&target, 2.0, 2.0).map_err(message)?;
                 self.stage = 6;
                 scene
                     .live()
@@ -232,7 +222,9 @@ impl LiveContinuation for MovingZoomedSceneAround {
             }
             7 => {
                 let target = scene.target_editor(&self.frame).map_err(message)?;
-                scene.live().shift(&target, 0.0, -2.5).map_err(message)?;
+                scene
+                    .shift_3d(&target, crate::SemanticVec3::new(0.0, -2.5, 0.0))
+                    .map_err(message)?;
                 self.stage = 8;
                 scene
                     .live()

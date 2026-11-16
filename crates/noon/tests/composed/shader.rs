@@ -5,6 +5,7 @@ use noon::effects::{
     ShaderCoordinates, ShaderDependencies, ShaderEffect, ShaderParameterDefinition,
     ShaderParameterType, ShaderProfile, ShaderSchema, ShaderUnit, ShaderValue, WgslEffectProgram,
 };
+use noon::integration::scene_execution;
 
 const SOURCE: &str = "
 fn shade(input: NoonShaderInput, p: NoonShaderParameters) -> vec4<f32> {
@@ -225,10 +226,9 @@ fn shader_scene_animation_pose_camera_resolution_and_replay_match_independent_fi
                     let (scene, objects, animation) = fixture(Some(&program), angle, scale);
                     let (plain, _, plain_animation) = fixture(None, angle, scale);
                     let mut session = scene.into_execution().unwrap();
-                    let mut baseline = plain.execution_session().unwrap();
+                    let mut baseline = scene_execution::lower(&plain).unwrap();
                     let segment = session.live().play_animation(&animation).unwrap();
-                    plain
-                        .live(&mut baseline)
+                    scene_execution::borrow_uninstalled(&plain, &mut baseline)
                         .play_animation(&plain_animation)
                         .unwrap();
                     let mut surface =
@@ -368,31 +368,49 @@ fn offscreen_shader_residency_and_rejected_source_keep_the_published_scene() {
         .add_effect(&object, ShaderEffect::new(program.clone()), "material")
         .unwrap();
     scene.add(&object).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let mut surface = Surface::new(&device, &queue);
-    let hidden = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+    let hidden = surface.render_on(
+        &device,
+        &queue,
+        session.session_mut(),
+        wgpu::Color::TRANSPARENT,
+    );
     assert!(hidden.iter().all(|&v| v == 0));
     assert_eq!(surface.program_stats.pipeline_compiles, 1);
-    scene.live(&mut session).shift(&object, -20.0, 0.0).unwrap();
-    let valid = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
+    session
+        .scene_mut()
+        .shift_3d(&object, noon::SemanticVec3::new(-20.0, 0.0, 0.0))
+        .unwrap();
+    let valid = surface.render_on(
+        &device,
+        &queue,
+        session.session_mut(),
+        wgpu::Color::TRANSPARENT,
+    );
     assert_eq!(surface.program_stats.pipeline_compiles, 0);
     assert!(valid.iter().any(|&v| v > 0));
-    let before = session.publication_context();
-    let changes = session.resource_publication().changes().clone();
+    let before = session.session().publication_context();
+    let changes = session.session().resource_publication().changes().clone();
     assert!(WgslEffectProgram::prepare(
         program.schema().clone(),
         format!("{SOURCE}\nfn fs_sample() {{}}")
     )
     .is_err());
-    assert_eq!(session.publication_context(), before);
-    assert_eq!(session.resource_publication().changes(), &changes);
+    assert_eq!(session.session().publication_context(), before);
+    assert_eq!(session.session().resource_publication().changes(), &changes);
     assert_eq!(
         readback(&device, &queue, &surface.target),
         valid,
         "failed preparation must keep the actual last image"
     );
     assert_eq!(
-        surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT),
+        surface.render_on(
+            &device,
+            &queue,
+            session.session_mut(),
+            wgpu::Color::TRANSPARENT
+        ),
         valid
     );
 }
@@ -425,10 +443,14 @@ fn shader_time_wait_pixels_and_seek_use_authored_time_without_source_recapture()
     };
     let scene = make(true);
     let plain = make(false);
-    let mut session = scene.execution_session().unwrap();
-    let mut baseline = plain.execution_session().unwrap();
-    let wait = scene.live(&mut session).wait_segment(2.0).unwrap();
-    let plain_wait = plain.live(&mut baseline).wait_segment(2.0).unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
+    let mut baseline = scene_execution::lower(&plain).unwrap();
+    let wait = scene_execution::borrow_uninstalled(&scene, &mut session)
+        .wait_segment(2.0)
+        .unwrap();
+    let plain_wait = scene_execution::borrow_uninstalled(&plain, &mut baseline)
+        .wait_segment(2.0)
+        .unwrap();
     assert_eq!(
         session.segment_state(wait).timeline(),
         noon_runtime::TimelineWakeState::Continuous
@@ -439,12 +461,10 @@ fn shader_time_wait_pixels_and_seek_use_authored_time_without_source_recapture()
     let mut overall_maximum = 0;
     for (step, time) in [0.0, 0.25, 0.75, 1.5, 0.75, 1.5].into_iter().enumerate() {
         if step < 4 {
-            scene
-                .live(&mut session)
+            scene_execution::borrow_uninstalled(&scene, &mut session)
                 .advance_segment_to(wait, time)
                 .unwrap();
-            plain
-                .live(&mut baseline)
+            scene_execution::borrow_uninstalled(&plain, &mut baseline)
                 .advance_segment_to(plain_wait, time)
                 .unwrap();
         } else {
@@ -738,8 +758,8 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
     assert_eq!(session.session().publication_context(), context);
     assert_eq!(readback(&device, &queue, &surface.target), input);
     session.live().publish_staged_effects(pending).unwrap();
-    assert!(!session.live().contains(&object).unwrap());
-    assert!(session.live().contains(&incoming).unwrap());
+    assert!(!session.scene_mut().contains_direct(&object).unwrap());
+    assert!(session.scene_mut().contains_direct(&incoming).unwrap());
     let actual = surface.render_on(
         &device,
         &queue,

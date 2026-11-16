@@ -2,6 +2,7 @@
 //! silhouette glow added later is the visible wrong-order witness.
 use super::*;
 use noon::effects::{Glow, NoiseDissolve};
+use noon::integration::scene_execution;
 use noon_core::SemanticMutationTransaction;
 
 #[test]
@@ -38,7 +39,7 @@ fn dissolve_lifecycle_reuses_warmed_resources_and_restores_exact_source_pixels()
             .as_ref()
             .map_or(source.node_id(), |family| family.node_id());
         scene.add_many(&[target]).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let mut surface = Surface::new(&device, &queue);
         let original = surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
         assert!(original.iter().any(|value| *value > 128));
@@ -56,8 +57,7 @@ fn dissolve_lifecycle_reuses_warmed_resources_and_restores_exact_source_pixels()
                         .rate_func(RateFunction::Linear)
                         .remover(false),
                 };
-                let segment = scene
-                    .live(&mut session)
+                let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
                     .declare_and_activate_composition(&request, AnimationOptions::new())
                     .unwrap();
                 for alpha in [0.5, 1.0] {
@@ -97,7 +97,9 @@ fn dissolve_lifecycle_reuses_warmed_resources_and_restores_exact_source_pixels()
                         0
                     );
                 }
-                scene.live(&mut session).complete_segment(segment).unwrap();
+                scene_execution::borrow_uninstalled(&scene, &mut session)
+                    .complete_segment(segment)
+                    .unwrap();
                 let pixels =
                     surface.render_on(&device, &queue, &mut session, wgpu::Color::TRANSPARENT);
                 images += 1;
@@ -178,7 +180,7 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
                 &mut tx,
             )
             .unwrap();
-        session.live().apply(tx).unwrap();
+        scene_execution::publish(session.scene_mut(), tx).unwrap();
         let visibility = session
             .scene()
             .integration_store()
@@ -221,7 +223,7 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
                         &mut tx,
                     )
                     .unwrap();
-                session.live().apply(tx).unwrap();
+                scene_execution::publish(session.scene_mut(), tx).unwrap();
                 let pixels = surface.render_on(
                     &device,
                     &queue,
@@ -286,7 +288,7 @@ fn visibility_masks_remain_final_after_authored_glow_and_reuse_warmed_captures()
         }
         let mut tx = SemanticMutationTransaction::new();
         tx.remove_node(visibility);
-        session.live().apply(tx).unwrap();
+        scene_execution::publish(session.scene_mut(), tx).unwrap();
         assert_eq!(
             surface.render_on(
                 &device,

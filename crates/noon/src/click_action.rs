@@ -9,7 +9,7 @@ use noon_core::{
     SemanticStoreError,
 };
 
-use crate::{AuthoringError, DeclaredAnimation, LiveSession, LiveSessionError, Mobject, Scene};
+use crate::{AuthoringError, DeclaredAnimation, Mobject, Scene};
 
 fn glow_pulse_declaration(
     intensity: f64,
@@ -127,44 +127,6 @@ impl Scene {
             Some(SemanticClickAction::GlowPulse(binding)),
         );
         self.apply_semantic_transaction(transaction).map(|_| ())
-    }
-}
-
-impl LiveSession<'_> {
-    /// Replace or clear one object-owned action through live semantic publication.
-    pub fn on_click(
-        &mut self,
-        target: &Mobject,
-        animation: Option<&DeclaredAnimation>,
-    ) -> Result<(), LiveSessionError> {
-        self.require_mobject(target)?;
-        let binding = animation
-            .map(|animation| {
-                declared_click_action(self.integration_store(), target.node_id(), animation)
-            })
-            .transpose()?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_click_action(target.node_id(), binding);
-        self.apply(transaction)?;
-        Ok(())
-    }
-
-    /// Publish a click pulse without allocating an attachment or replay track.
-    pub fn on_click_glow_pulse(
-        &mut self,
-        target: &Mobject,
-        intensity: f64,
-        options: AnimationOptions,
-    ) -> Result<(), LiveSessionError> {
-        self.require_mobject(target)?;
-        let binding = glow_pulse_declaration(intensity, options)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_click_action(
-            target.node_id(),
-            Some(SemanticClickAction::GlowPulse(binding)),
-        );
-        self.apply(transaction)?;
-        Ok(())
     }
 }
 

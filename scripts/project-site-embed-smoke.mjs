@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, firefox, webkit } from 'playwright';
 import pngjs from 'pngjs';
 import { serveRepository } from './browser-test-server.mjs';
-import { playgroundLaunchOptions } from './playground-browser-support.mjs';
+import { playgroundLaunchOptions, waitForBrowserObservation } from './playground-browser-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { captureStalledRenderStacks } from './noon-site-worker-stack.mjs';
 import { observeUnpromptedPlayback, observedUnpromptedProgress } from './project-site-autoplay-observer.mjs';
@@ -19,6 +19,7 @@ const server = await serveRepository(root, 0);
 const selection = JSON.parse(await readFile(path.join(root,'web/site/examples.json'),'utf8'));
 const report = [];
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+const frameCaptureTimeout = 10_000;
 const editSource = color => `from noon import *
 class EmbedEdit(Scene):
     def construct(self):
@@ -32,13 +33,25 @@ async function workersRetired(workers) {
   while (workers.size && Date.now()<until) await new Promise(resolve=>setTimeout(resolve,25));
   assert.equal(workers.size,0,'navigation must retire all observed embedded workers');
 }
-function coloredPixels(bytes, minimumBuckets = 8) {
+function centerRgb(png) {
+  const offset = (Math.floor(png.height / 2) * png.width + Math.floor(png.width / 2)) * 4;
+  return [...png.data.subarray(offset, offset + 3)];
+}
+function matchesColor(rgb, expected) {
+  return rgb.every((channel, index) => Math.abs(channel - expected[index]) <= 4);
+}
+function coloredPixels(bytes, minimumBuckets, expectedCenter) {
   const png = pngjs.PNG.sync.read(bytes), buckets = new Set();
   for (let i=0;i<png.data.length;i+=16) {
     const [r,g,b] = png.data.subarray(i,i+3); buckets.add(`${r>>4},${g>>4},${b>>4}`);
   }
   assert.ok(png.width>100 && png.height>60,'actual canvas dimensions');
   assert.ok(buckets.size>minimumBuckets,'canvas is not a flat placeholder');
+  if (expectedCenter) {
+    const rgb = centerRgb(png);
+    assert.ok(matchesColor(rgb, expectedCenter),
+      `edited square center is ${rgb.join(', ')}; expected ${expectedCenter.join(', ')}`);
+  }
   return {width:png.width,height:png.height,colorBuckets:buckets.size};
 }
 async function ready(frame, afterGeneration = 0) {
@@ -96,21 +109,62 @@ async function captureFrameState(frame) {
     return {url:frame.url(),captureError:String(error)};
   } finally { clearTimeout(timer); }
 }
-async function sample(frame, prefix, time, minimumBuckets = 8) {
-  // The regular playback controls remain the authority even though the embed
-  // hides their toolbar. Use the same input events, not an alternative renderer.
-  if (await frame.locator('#status').getAttribute('data-playback-playing')==='true') {
-    await frame.locator('.playback-toggle').evaluate(button=>button.click());
-  }
-  await frame.waitForFunction(()=>document.querySelector('#status').dataset.playbackPlaying==='false');
-  await frame.locator('.playback-scrubber').evaluate((element,time)=>{
-    element.value=String(time);element.dispatchEvent(new Event('input',{bubbles:true}));
+async function pause(frame) {
+  await frame.locator('.playback-controls').evaluate(controls => {
+    if (controls.dataset.playing === 'true') controls.querySelector('.playback-toggle').click();
+  });
+  await waitForBrowserObservation(frame, () => {
+    const controls = document.querySelector('.playback-controls');
+    return controls.dataset.playing === 'false' && controls.dataset.busy === 'false';
+  });
+}
+async function sample(frame, prefix, time, expectedCenter = null) {
+  // Use the regular playback controller for the frame being captured.
+  await pause(frame);
+  const target = await frame.locator('.playback-scrubber').evaluate((element,time)=>{
+    element.value=String(time);
+    const target = Number(element.value);
+    element.dispatchEvent(new Event('input',{bubbles:true}));
     element.dispatchEvent(new Event('change',{bubbles:true}));
+    return target;
   },time);
-  await frame.waitForFunction(time=>Math.abs(parseFloat(document.querySelector('#metric-time').value)-time)<.2,time);
-  const bytes = await frame.locator('#scene').screenshot();
-  const pixels = coloredPixels(bytes,minimumBuckets);
-  await writeFile(path.join(output,`${prefix}.png`),bytes);
+  // The scrubber displays its requested time before the renderer draws it.
+  await waitForBrowserObservation(frame, async target => {
+    const controls = document.querySelector('.playback-controls');
+    if (controls.dataset.playing !== 'false' || controls.dataset.busy !== 'false') return false;
+    const report = await window.__noonExampleGallery.executionMetrics();
+    const presentedTime = report?.metrics?.latestPresentationSample?.time;
+    return Number.isFinite(presentedTime) && Math.abs(presentedTime - target) < 1e-7;
+  }, target);
+  // A renderer acknowledgment precedes compositor handoff. Check the displayed
+  // pixels for the edited frame and retain the last capture if it stays blank.
+  const screenshotPath = path.join(output,`${prefix}.png`);
+  const canvas = frame.locator('#scene');
+  const deadline = performance.now() + frameCaptureTimeout;
+  let bytes;
+  try {
+    if (expectedCenter === null) {
+      await frame.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      bytes = await canvas.screenshot();
+    } else {
+      // Firefox can stall an element screenshot while waiting for layout stability
+      // in a nested iframe. Capture the same visible region from the outer page.
+      const page = frame.page();
+      const remaining = () => Math.max(1, deadline - performance.now());
+      await canvas.evaluate(element => element.scrollIntoView({block:'center',behavior:'instant'}),
+        undefined, {timeout:remaining()});
+      do {
+        const clip = await canvas.boundingBox({timeout:remaining()});
+        assert.ok(clip, 'edited canvas has a visible capture region');
+        bytes = await page.screenshot({clip,timeout:remaining()});
+        if (matchesColor(centerRgb(pngjs.PNG.sync.read(bytes)), expectedCenter)) break;
+        await frame.waitForTimeout(100);
+      } while (performance.now() < deadline);
+    }
+  } finally {
+    if (bytes) await writeFile(screenshotPath,bytes);
+  }
+  const pixels = coloredPixels(bytes, expectedCenter ? 1 : 8, expectedCenter);
   return {target:time,time:await frame.locator('#metric-time').evaluate(element=>element.value),sha256:hash(bytes),...pixels};
 }
 async function edit(frame, page, source) {
@@ -230,10 +284,7 @@ try {
           await Promise.all(frames.map(({frame})=>ready(frame)));
           assert.ok(workers.size>=selection.length,'all live contexts created runtime workers');
           assert.equal(await page.locator('video, .demo-poster, [data-demo-open]').count(),0);
-          for (const [index,{id,element,frame}] of frames.entries()) {
-            await page.setViewportSize({width:index%2 ? 390 : 1280,height:1000});
-            const prefix = `${name}-${surface}-${id}`;
-            mark('authored-frames',id);
+          const playback = await Promise.all(frames.map(async ({frame}) => {
             const initialGeneration = await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration);
             assert.equal(initialGeneration,1,'exactly one canonical automatic initial Run');
             // A frame may have played thousands of real frames while Firefox
@@ -255,6 +306,17 @@ try {
               frames: Number(document.querySelector('#status').dataset.presentedFrames),
               time: Number.parseFloat(document.querySelector('#metric-time').value),
             }));
+            return {initialGeneration,autoplayBefore,autoplayAfter};
+          }));
+          // After proving concurrent autoplay, pause the other embeds while
+          // each scene is checked for canvas pixels and editor behavior.
+          mark('pause-after-autoplay');
+          await Promise.all(frames.map(({frame})=>pause(frame)));
+          for (const [index,{id,element,frame}] of frames.entries()) {
+            await page.setViewportSize({width:index%2 ? 390 : 1280,height:1000});
+            const prefix = `${name}-${surface}-${id}`;
+            mark('authored-frames',id);
+            const {initialGeneration,autoplayBefore,autoplayAfter}=playback[index];
             assert.equal(await frame.locator('#auto-run').isChecked(),true);
             assert.equal(await frame.locator('button:visible').count(),2,'no playback/editor toolbar in View');
             const duration = await frame.locator('.playback-scrubber').evaluate(element=>Number(element.max));
@@ -278,6 +340,11 @@ try {
           await frame.locator('.preview-pane').press('Home');
             await frame.waitForFunction(()=>parseFloat(document.querySelector('#metric-time').value)<1);
             await frame.getByRole('tab',{name:'Code',exact:true}).click();
+            assert.equal(await frame.locator('#scene').evaluate(canvas => {
+              const { x, y, width, height } = canvas.getBoundingClientRect();
+              return getComputedStyle(canvas).visibility === 'visible' &&
+                !!document.elementFromPoint(x + width / 2, y + height / 2)?.closest('.editor-pane');
+            }),true,'Code covers the canvas without hiding its rendered surface');
             await frame.getByRole('tab',{name:'View',exact:true}).click();
             assert.equal(await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration),initialGeneration,'flipping View/Code is not source execution');
             mark('hot-edit-input',id);
@@ -286,7 +353,7 @@ try {
             await ready(frame,initialGeneration);
             const editedGeneration=await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration);
             await frame.getByRole('tab',{name:'View',exact:true}).click();
-            const edited=await sample(frame,`${prefix}-hot-edit`,1,1);
+            const edited=await sample(frame,`${prefix}-hot-edit`,1,[88,196,221]);
             assert.ok(samples.every(item=>item.sha256!==edited.sha256),'editing changed actual canvas output');
             let recovery=null;
             if (index===0) {
@@ -300,7 +367,7 @@ try {
               mark('recovery-ready',id);
               await ready(frame,failedGeneration);
               await frame.getByRole('tab',{name:'View',exact:true}).click();
-              recovery=await sample(frame,`${prefix}-recovered`,1,1);
+              recovery=await sample(frame,`${prefix}-recovered`,1,[209,71,189]);
               assert.notEqual(recovery.sha256,edited.sha256,'fixed code replaces blue pixels with pink pixels');
             }
             assert.equal(await element.evaluate(node=>node.isConnected),true,'hot reload keeps the same iframe/editor');

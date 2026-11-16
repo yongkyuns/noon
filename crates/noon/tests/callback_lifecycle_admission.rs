@@ -1,6 +1,7 @@
 //! Acceptance tests for lifecycle animations beside an unrelated host updater.
 //! These exercise the shared execution path used by Python, without a browser.
 
+use noon::integration::scene_execution;
 use std::{cell::RefCell, rc::Rc};
 
 use noon::integration::HostCallbackId;
@@ -111,9 +112,9 @@ fn qualify_unrelated_callback(lifecycle: Lifecycle) {
         }
         let times = Rc::new(RefCell::new(Vec::new()));
         let mut callbacks = install_motion(&mut scene, &moving, &times);
-        let mut execution = scene.execution_session().unwrap();
-        let identity = execution.runtime_identity();
-        callbacks.advance_to(&mut execution, 0.0).unwrap();
+        let mut execution = scene.into_execution().unwrap();
+        let identity = execution.session().runtime_identity();
+        callbacks.advance_to(execution.session_mut(), 0.0).unwrap();
         assert_eq!(*times.borrow(), [0.0]);
 
         let leaf = lifecycle.request(&target);
@@ -127,10 +128,9 @@ fn qualify_unrelated_callback(lifecycle: Lifecycle) {
             leaf
         };
         let result = if matches!(route, ActivationRoute::Direct) {
-            let mut live = scene.live(&mut execution);
             match lifecycle {
-                Lifecycle::FadeIn | Lifecycle::FadeOut => live
-                    .declare_and_activate_fade_with_endpoint(
+                Lifecycle::FadeIn | Lifecycle::FadeOut => {
+                    execution.live().declare_and_activate_fade_with_endpoint(
                         &target,
                         if lifecycle.removes() {
                             SemanticFadeDirection::Out
@@ -139,33 +139,40 @@ fn qualify_unrelated_callback(lifecycle: Lifecycle) {
                         },
                         FadeEndpoint::default(),
                         options(),
-                    ),
-                Lifecycle::Create => live.declare_and_activate_create(&target, options()),
-                Lifecycle::Uncreate => live.declare_and_activate_uncreate(&target, options()),
+                    )
+                }
+                Lifecycle::Create => execution
+                    .live()
+                    .declare_and_activate_create(&target, options()),
+                Lifecycle::Uncreate => execution
+                    .live()
+                    .declare_and_activate_uncreate(&target, options()),
             }
         } else {
-            scene
-                .live(&mut execution)
+            execution
+                .live()
                 .declare_and_activate_composition(&request, AnimationOptions::new())
         };
         let segment = result.unwrap_or_else(|error| {
             panic!("{lifecycle:?}, route={route:?}: unrelated updater blocked admission: {error}")
         });
-        assert!(scene.live(&mut execution).contains(&target).unwrap());
+        assert!(execution.scene_mut().contains_direct(&target).unwrap());
         for time in [0.25, 0.5, 1.0] {
             callbacks
-                .advance_segment_to(&mut execution, segment, time)
+                .advance_segment_to(execution.session_mut(), segment, time)
                 .unwrap();
-            let moving_state = scene.live(&mut execution).effective(&moving).unwrap();
+            let moving_state = execution.scene().effective(&moving).unwrap();
             assert_eq!(moving_state.transform.translation.x, time as f32);
-            assert_eq!(execution.frame().time, time);
-            assert_eq!(execution.runtime_identity(), identity);
-            assert_eq!(execution.frame().objects.len(), 2);
+            assert_eq!(execution.session().frame().time, time);
+            assert_eq!(execution.session().runtime_identity(), identity);
+            assert_eq!(execution.session().frame().objects.len(), 2);
             // The fixture deliberately binds the updater first and the lifecycle
             // target second. Read the renderer's actual appearance/reveal value.
             let progress = match lifecycle {
-                Lifecycle::FadeIn | Lifecycle::FadeOut => execution.frame().objects[1].appearance,
-                Lifecycle::Create | Lifecycle::Uncreate => execution.frame().reveal(1),
+                Lifecycle::FadeIn | Lifecycle::FadeOut => {
+                    execution.session().frame().objects[1].appearance
+                }
+                Lifecycle::Create | Lifecycle::Uncreate => execution.session().frame().reveal(1),
             };
             let expected = if lifecycle.removes() {
                 1.0 - time
@@ -174,24 +181,21 @@ fn qualify_unrelated_callback(lifecycle: Lifecycle) {
             };
             assert!((progress - expected as f32).abs() < 1.0e-6);
         }
-        scene
-            .live(&mut execution)
-            .complete_segment(segment)
-            .unwrap();
+        execution.live().complete_segment(segment).unwrap();
         assert_eq!(
-            scene.live(&mut execution).contains(&target).unwrap(),
+            execution.scene_mut().contains_direct(&target).unwrap(),
             !lifecycle.removes()
         );
-        assert!(scene.live(&mut execution).contains(&moving).unwrap());
+        assert!(execution.scene_mut().contains_direct(&moving).unwrap());
 
-        let hold = scene.live(&mut execution).wait_segment(0.5).unwrap();
+        let hold = execution.live().wait_segment(0.5).unwrap();
         callbacks
-            .advance_segment_to(&mut execution, hold, 1.5)
+            .advance_segment_to(execution.session_mut(), hold, 1.5)
             .unwrap();
-        scene.live(&mut execution).complete_segment(hold).unwrap();
+        execution.live().complete_segment(hold).unwrap();
         assert_eq!(
-            scene
-                .live(&mut execution)
+            execution
+                .scene()
                 .effective(&moving)
                 .unwrap()
                 .transform
@@ -200,7 +204,7 @@ fn qualify_unrelated_callback(lifecycle: Lifecycle) {
             1.5
         );
         assert_eq!(times.borrow().last().copied(), Some(1.5));
-        assert_eq!(execution.runtime_identity(), identity);
+        assert_eq!(execution.session().runtime_identity(), identity);
     }
 }
 
@@ -232,20 +236,20 @@ fn removed_callback_history_does_not_block_a_later_fade() {
     scene.add(&moving).unwrap();
     let times = Rc::new(RefCell::new(Vec::new()));
     let mut callbacks = install_motion(&mut scene, &moving, &times);
-    let mut execution = scene.execution_session().unwrap();
-    let first = scene.live(&mut execution).wait_segment(1.0).unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let first = execution.live().wait_segment(1.0).unwrap();
     callbacks
-        .advance_segment_to(&mut execution, first, 1.0)
+        .advance_segment_to(execution.session_mut(), first, 1.0)
         .unwrap();
-    scene.live(&mut execution).complete_segment(first).unwrap();
+    execution.live().complete_segment(first).unwrap();
 
     let mut removal = SemanticMutationTransaction::new();
     removal.remove_updater(moving.node_id(), MOVE, 1.0);
-    scene.live(&mut execution).apply(removal).unwrap();
+    scene_execution::publish(execution.scene_mut(), removal).unwrap();
     let call_count = times.borrow().len();
-    let frozen = scene.live(&mut execution).effective(&moving).unwrap();
-    let segment = scene
-        .live(&mut execution)
+    let frozen = execution.scene().effective(&moving).unwrap();
+    let segment = execution
+        .live()
         .declare_and_activate_composition(
             &Lifecycle::FadeIn.request(&target),
             AnimationOptions::new(),
@@ -253,23 +257,16 @@ fn removed_callback_history_does_not_block_a_later_fade() {
         .expect("completed callback history must not forbid unrelated lifecycle admission");
     for time in [1.5, 2.0] {
         callbacks
-            .advance_segment_to(&mut execution, segment, time)
+            .advance_segment_to(execution.session_mut(), segment, time)
             .unwrap();
         assert_eq!(times.borrow().len(), call_count);
         assert_eq!(
-            scene
-                .live(&mut execution)
-                .effective(&moving)
-                .unwrap()
-                .transform,
+            execution.scene().effective(&moving).unwrap().transform,
             frozen.transform
         );
     }
-    scene
-        .live(&mut execution)
-        .complete_segment(segment)
-        .unwrap();
-    assert!(scene.live(&mut execution).contains(&target).unwrap());
+    execution.live().complete_segment(segment).unwrap();
+    assert!(execution.scene_mut().contains_direct(&target).unwrap());
 }
 
 #[test]
@@ -281,11 +278,11 @@ fn rejected_composition_preserves_membership_and_callback_execution() {
     scene.add(&moving).unwrap();
     let times = Rc::new(RefCell::new(Vec::new()));
     let mut callbacks = install_motion(&mut scene, &moving, &times);
-    let mut execution = scene.execution_session().unwrap();
-    callbacks.advance_to(&mut execution, 0.0).unwrap();
-    let before = execution.publication_context();
+    let mut execution = scene.into_execution().unwrap();
+    callbacks.advance_to(execution.session_mut(), 0.0).unwrap();
+    let before = execution.session().publication_context();
     let before_calls = times.borrow().clone();
-    let before_objects = execution.frame().objects.clone();
+    let before_objects = execution.session().frame().objects.clone();
     let request = Request::Composition {
         kind: Kind::Parallel,
         children: vec![
@@ -294,26 +291,26 @@ fn rejected_composition_preserves_membership_and_callback_execution() {
         ],
         options: options(),
     };
-    assert!(scene
-        .live(&mut execution)
+    assert!(execution
+        .live()
         .declare_and_activate_composition(&request, AnimationOptions::new())
         .is_err());
-    assert_eq!(execution.publication_context(), before);
-    assert_eq!(scene.revision(), before.scene_revision());
-    assert_eq!(execution.frame().objects, before_objects);
+    assert_eq!(execution.session().publication_context(), before);
+    assert_eq!(execution.scene().revision(), before.scene_revision());
+    assert_eq!(execution.session().frame().objects, before_objects);
     assert_eq!(*times.borrow(), before_calls);
-    assert!(!scene.live(&mut execution).contains(&target).unwrap());
+    assert!(!execution.scene_mut().contains_direct(&target).unwrap());
 
     // A rejected request must not consume or corrupt the next callback phase.
-    let hold = scene.live(&mut execution).wait_segment(0.5).unwrap();
+    let hold = execution.live().wait_segment(0.5).unwrap();
     callbacks
-        .advance_segment_to(&mut execution, hold, 0.5)
+        .advance_segment_to(execution.session_mut(), hold, 0.5)
         .unwrap();
-    scene.live(&mut execution).complete_segment(hold).unwrap();
+    execution.live().complete_segment(hold).unwrap();
     assert_eq!(times.borrow().last().copied(), Some(0.5));
     assert_eq!(
-        scene
-            .live(&mut execution)
+        execution
+            .scene()
             .effective(&moving)
             .unwrap()
             .transform
@@ -341,22 +338,22 @@ fn own_current_or_future_updater_is_rejected_before_any_admission() {
             tx.add_updater(target.node_id(), MOVE, active_from, None);
             tx.apply(&mut scene.integration_store().borrow_mut())
                 .unwrap();
-            let mut execution = scene.execution_session().unwrap();
-            let before = execution.publication_context();
-            let objects = execution.frame().objects.clone();
-            let error = scene
-                .live(&mut execution)
+            let mut execution = scene.into_execution().unwrap();
+            let before = execution.session().publication_context();
+            let objects = execution.session().frame().objects.clone();
+            let error = execution
+                .live()
                 .declare_and_activate_composition(
                     &lifecycle.request(&target),
                     AnimationOptions::new(),
                 )
                 .unwrap_err();
             assert!(error.to_string().contains("host updaters"), "{error}");
-            assert_eq!(execution.publication_context(), before);
-            assert_eq!(scene.revision(), before.scene_revision());
-            assert_eq!(execution.frame().objects, objects);
+            assert_eq!(execution.session().publication_context(), before);
+            assert_eq!(execution.scene().revision(), before.scene_revision());
+            assert_eq!(execution.session().frame().objects, objects);
             assert_eq!(
-                scene.live(&mut execution).contains(&target).unwrap(),
+                execution.scene_mut().contains_direct(&target).unwrap(),
                 lifecycle.removes()
             );
         }
@@ -378,11 +375,10 @@ fn family_fade_coexists_with_an_unrelated_updater() {
         }
         let times = Rc::new(RefCell::new(Vec::new()));
         let mut callbacks = install_motion(&mut scene, &moving, &times);
-        let mut execution = scene.execution_session().unwrap();
+        let mut execution = scene_execution::lower(&scene).unwrap();
         callbacks.advance_to(&mut execution, 0.0).unwrap();
         let identity = execution.runtime_identity();
-        let segment = scene
-            .live(&mut execution)
+        let segment = scene_execution::borrow_uninstalled(&scene, &mut execution)
             .declare_and_activate_composition(
                 &Request::FamilyFade {
                     target: &family,
@@ -402,8 +398,7 @@ fn family_fade_coexists_with_an_unrelated_updater() {
         callbacks
             .advance_segment_to(&mut execution, segment, 1.0)
             .unwrap();
-        scene
-            .live(&mut execution)
+        scene_execution::borrow_uninstalled(&scene, &mut execution)
             .complete_segment(segment)
             .unwrap();
         assert_eq!(
@@ -414,11 +409,15 @@ fn family_fade_coexists_with_an_unrelated_updater() {
             execution.frame().is_present(2),
             direction == SemanticFadeDirection::In
         );
-        let hold = scene.live(&mut execution).wait_segment(0.5).unwrap();
+        let hold = scene_execution::borrow_uninstalled(&scene, &mut execution)
+            .wait_segment(0.5)
+            .unwrap();
         callbacks
             .advance_segment_to(&mut execution, hold, 1.5)
             .unwrap();
-        scene.live(&mut execution).complete_segment(hold).unwrap();
+        scene_execution::borrow_uninstalled(&scene, &mut execution)
+            .complete_segment(hold)
+            .unwrap();
         assert_eq!(execution.frame().objects[0].transform.translation.x, 1.5);
         assert_eq!(execution.runtime_identity(), identity);
     }
@@ -436,10 +435,9 @@ fn family_or_descendant_updaters_are_rejected_without_partial_admission() {
         tx.add_updater(target, MOVE, 0.5, None);
         tx.apply(&mut scene.integration_store().borrow_mut())
             .unwrap();
-        let mut execution = scene.execution_session().unwrap();
+        let mut execution = scene_execution::lower(&scene).unwrap();
         let before = execution.publication_context();
-        let error = scene
-            .live(&mut execution)
+        let error = scene_execution::borrow_uninstalled(&scene, &mut execution)
             .declare_and_activate_composition(
                 &Request::FamilyFade {
                     target: &family,
@@ -464,18 +462,22 @@ fn pending_callback_excludes_lifecycle_admission_and_can_still_commit() {
     scene.add(&moving).unwrap();
     let times = Rc::new(RefCell::new(Vec::new()));
     let mut callbacks = install_motion(&mut scene, &moving, &times);
-    let mut execution = scene.execution_session().unwrap();
-    let overlay = match execution.advance_to_callback_barrier(0.0).unwrap() {
+    let mut execution = scene.into_execution().unwrap();
+    let overlay = match execution
+        .session_mut()
+        .advance_to_callback_barrier(0.0)
+        .unwrap()
+    {
         noon::integration::CallbackAdvance::HostRequired { overlay, .. } => overlay,
         noon::integration::CallbackAdvance::Ready(_) => {
             panic!("expected an unpublished callback phase")
         }
     };
-    let token = execution.pending_callback_token();
-    let before = execution.publication_context();
-    let frame = execution.frame().clone();
-    let error = scene
-        .live(&mut execution)
+    let token = execution.session().pending_callback_token();
+    let before = execution.session().publication_context();
+    let frame = execution.session().frame().clone();
+    let error = execution
+        .live()
         .declare_and_activate_composition(
             &Lifecycle::FadeIn.request(&target),
             AnimationOptions::new(),
@@ -487,30 +489,34 @@ fn pending_callback_excludes_lifecycle_admission_and_can_still_commit() {
             noon::ExecutionSessionAnimationError::RequiredCallbackPending
         )
     ));
-    assert_eq!(execution.pending_callback_token(), token);
-    assert_eq!(execution.publication_context(), before);
-    assert_eq!(scene.revision(), before.scene_revision());
-    assert_eq!(execution.frame(), &frame);
-    assert!(!scene.live(&mut execution).contains(&target).unwrap());
+    assert_eq!(execution.session().pending_callback_token(), token);
+    assert_eq!(execution.session().publication_context(), before);
+    assert_eq!(execution.scene().revision(), before.scene_revision());
+    assert_eq!(execution.session().frame(), &frame);
+    assert!(!execution.scene_mut().contains_direct(&target).unwrap());
     execution
+        .session_mut()
         .commit_required_callback_phase(overlay.finish())
         .unwrap();
-    let segment = scene
-        .live(&mut execution)
+    let segment = execution
+        .live()
         .declare_and_activate_composition(
             &Lifecycle::FadeIn.request(&target),
             AnimationOptions::new(),
         )
         .unwrap();
     callbacks
-        .advance_segment_to(&mut execution, segment, 1.0)
+        .advance_segment_to(execution.session_mut(), segment, 1.0)
         .unwrap();
-    scene
-        .live(&mut execution)
-        .complete_segment(segment)
-        .unwrap();
-    assert_eq!(execution.frame().objects[0].transform.translation.x, 1.0);
-    assert!(scene.live(&mut execution).contains(&target).unwrap());
+    execution.live().complete_segment(segment).unwrap();
+    assert_eq!(
+        execution.session().frame().objects[0]
+            .transform
+            .translation
+            .x,
+        1.0
+    );
+    assert!(execution.scene_mut().contains_direct(&target).unwrap());
 }
 
 #[test]
@@ -523,12 +529,12 @@ fn later_same_store_failure_rolls_back_staged_admission_and_allows_retry() {
     scene.add(&attached).unwrap();
     let times = Rc::new(RefCell::new(Vec::new()));
     let mut callbacks = install_motion(&mut scene, &moving, &times);
-    let mut execution = scene.execution_session().unwrap();
-    callbacks.advance_to(&mut execution, 0.0).unwrap();
-    let before = execution.publication_context();
-    let frame = execution.frame().clone();
+    let mut execution = scene.into_execution().unwrap();
+    callbacks.advance_to(execution.session_mut(), 0.0).unwrap();
+    let before = execution.session().publication_context();
+    let frame = execution.session().frame().clone();
     let calls = times.borrow().clone();
-    let nodes = scene.integration_store().borrow().len();
+    let nodes = execution.scene().integration_store().borrow().len();
     let request = Request::Composition {
         kind: Kind::Parallel,
         children: vec![
@@ -537,33 +543,30 @@ fn later_same_store_failure_rolls_back_staged_admission_and_allows_retry() {
         ],
         options: options(),
     };
-    let error = scene
-        .live(&mut execution)
+    let error = execution
+        .live()
         .declare_and_activate_composition(&request, AnimationOptions::new())
         .unwrap_err();
     assert!(error.to_string().contains("detached"), "{error}");
-    assert_eq!(execution.publication_context(), before);
-    assert_eq!(scene.revision(), before.scene_revision());
-    assert_eq!(scene.integration_store().borrow().len(), nodes);
-    assert_eq!(execution.frame(), &frame);
+    assert_eq!(execution.session().publication_context(), before);
+    assert_eq!(execution.scene().revision(), before.scene_revision());
+    assert_eq!(execution.scene().integration_store().borrow().len(), nodes);
+    assert_eq!(execution.session().frame(), &frame);
     assert_eq!(*times.borrow(), calls);
-    assert!(!scene.live(&mut execution).contains(&target).unwrap());
-    let segment = scene
-        .live(&mut execution)
+    assert!(!execution.scene_mut().contains_direct(&target).unwrap());
+    let segment = execution
+        .live()
         .declare_and_activate_composition(
             &Lifecycle::FadeIn.request(&target),
             AnimationOptions::new(),
         )
         .unwrap();
     callbacks
-        .advance_segment_to(&mut execution, segment, 1.0)
+        .advance_segment_to(execution.session_mut(), segment, 1.0)
         .unwrap();
-    scene
-        .live(&mut execution)
-        .complete_segment(segment)
-        .unwrap();
-    assert!(scene.live(&mut execution).contains(&target).unwrap());
-    assert!(scene.live(&mut execution).contains(&attached).unwrap());
+    execution.live().complete_segment(segment).unwrap();
+    assert!(execution.scene_mut().contains_direct(&target).unwrap());
+    assert!(execution.scene_mut().contains_direct(&attached).unwrap());
     assert_eq!(times.borrow().last().copied(), Some(1.0));
 }
 
@@ -588,11 +591,10 @@ fn unrelated_future_activation_is_not_skipped_by_lifecycle_progression() {
             None,
         )
         .unwrap();
-    let mut execution = scene.execution_session().unwrap();
+    let mut execution = scene_execution::lower(&scene).unwrap();
     callbacks.advance_to(&mut execution, 0.0).unwrap();
     assert!(times.borrow().is_empty());
-    let segment = scene
-        .live(&mut execution)
+    let segment = scene_execution::borrow_uninstalled(&scene, &mut execution)
         .declare_and_activate_composition(
             &Lifecycle::FadeIn.request(&target),
             AnimationOptions::new(),
@@ -604,8 +606,7 @@ fn unrelated_future_activation_is_not_skipped_by_lifecycle_progression() {
     assert_eq!(*times.borrow(), [0.5, 1.0]);
     assert_eq!(execution.frame().objects[0].transform.translation.x, 1.0);
     assert_eq!(execution.frame().objects[1].appearance, 1.0);
-    scene
-        .live(&mut execution)
+    scene_execution::borrow_uninstalled(&scene, &mut execution)
         .complete_segment(segment)
         .unwrap();
 }
@@ -617,23 +618,19 @@ fn a_target_with_completed_updater_history_can_fade_out_without_restarting_it() 
     scene.add(&target).unwrap();
     let times = Rc::new(RefCell::new(Vec::new()));
     let mut callbacks = install_motion(&mut scene, &target, &times);
-    let mut execution = scene.execution_session().unwrap();
-    let wait = scene.live(&mut execution).wait_segment(1.0).unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let wait = execution.live().wait_segment(1.0).unwrap();
     callbacks
-        .advance_segment_to(&mut execution, wait, 1.0)
+        .advance_segment_to(execution.session_mut(), wait, 1.0)
         .unwrap();
-    scene.live(&mut execution).complete_segment(wait).unwrap();
+    execution.live().complete_segment(wait).unwrap();
     let mut tx = SemanticMutationTransaction::new();
     tx.remove_updater(target.node_id(), MOVE, 1.0);
-    scene.live(&mut execution).apply(tx).unwrap();
+    scene_execution::publish(execution.scene_mut(), tx).unwrap();
     let calls = times.borrow().clone();
-    let frozen = scene
-        .live(&mut execution)
-        .effective(&target)
-        .unwrap()
-        .transform;
-    let segment = scene
-        .live(&mut execution)
+    let frozen = execution.scene().effective(&target).unwrap().transform;
+    let segment = execution
+        .live()
         .declare_and_activate_composition(
             &Lifecycle::FadeOut.request(&target),
             AnimationOptions::new(),
@@ -641,15 +638,12 @@ fn a_target_with_completed_updater_history_can_fade_out_without_restarting_it() 
         .unwrap();
     for time in [1.5, 2.0] {
         callbacks
-            .advance_segment_to(&mut execution, segment, time)
+            .advance_segment_to(execution.session_mut(), segment, time)
             .unwrap();
         assert_eq!(*times.borrow(), calls);
-        assert_eq!(execution.frame().objects[0].transform, frozen);
+        assert_eq!(execution.session().frame().objects[0].transform, frozen);
     }
-    scene
-        .live(&mut execution)
-        .complete_segment(segment)
-        .unwrap();
-    assert!(!scene.live(&mut execution).contains(&target).unwrap());
+    execution.live().complete_segment(segment).unwrap();
+    assert!(!execution.scene_mut().contains_direct(&target).unwrap());
     assert_eq!(*times.borrow(), calls);
 }

@@ -1,4 +1,5 @@
 use super::*;
+use noon::integration::scene_execution;
 use noon_core::{AnimationOptions, RateFunction};
 
 #[test]
@@ -6,7 +7,7 @@ fn observed_source_pause_preserves_elapsed_wait_and_intent_across_segments() {
     let mut scene = noon::Scene::new();
     let object = scene.circle(0.4).unwrap();
     scene.add(&object).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),
@@ -86,7 +87,7 @@ fn late_first_sample_of_a_new_finite_play_is_evaluated_before_endpoint() {
     first_target.set_translation(1.0, 0.0).unwrap();
     let mut second_target = object.target_editor().unwrap();
     second_target.set_translation(2.0, 0.0).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = SemanticExecutionPlayer::from_live_session(
         session,
         std::rc::Rc::clone(scene.integration_store()),

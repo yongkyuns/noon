@@ -136,7 +136,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
              patch.object(native, "_mesh_family_options", object()), \
              patch.object(native, "_bulk", side_effect=lambda values: tuple(values)), \
              patch.object(native, "_create_mesh_family", return_value=family), \
-             patch.object(spatial, "_live_constructor_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             surface = spatial.Surface(callback, u_range=(-2, 2), v_range=(0, 1),
                                       resolution=(1, 1), shade_in_3d=False,
                                       point_lit=True)
@@ -175,7 +175,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
              patch.object(native, "_mesh_family_options", object()), \
              patch.object(native, "_bulk", side_effect=lambda values: tuple(values)), \
              patch.object(native, "_create_mesh_family") as detached_create, \
-             patch.object(spatial, "_live_constructor_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             with self.assertRaises(ValueError) as raised:
                 spatial.Surface(lambda u, v: (u, v, 0), resolution=(1, 1),
                                 shade_in_3d=False, checkerboard_colors=False)
@@ -207,7 +207,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
              patch.object(native, "_mesh_family_options", object()), \
              patch.object(native, "_bulk", side_effect=lambda values: tuple(values)), \
              patch.object(native, "_create_mesh_family") as detached_create, \
-             patch.object(spatial, "_live_constructor_context", return_value=context):
+             patch.object(spatial, "_path_authoring_context", return_value=context):
             with self.assertRaises(NoonOwnershipError) as raised:
                 spatial.Surface(lambda u, v: (u, v, 0), resolution=(1, 1),
                                 shade_in_3d=False, checkerboard_colors=False)
@@ -268,7 +268,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             _canonical_authoring_context=context,
         )
         with patch.object(native, "_bulk", side_effect=lambda values: tuple(values)), \
-             patch.object(semantic, "_live_constructor_context", return_value=None):
+             patch.object(semantic, "_path_authoring_context", return_value=None):
             surface.shift((1, 2, 3))
             surface.rotate(0.5, axis=(0, 0, 1), about_point=(1, 2, 3))
             surface.scale(2, about_point=(1, 2, 3))
@@ -281,9 +281,9 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             handle, 0.0, 0.0, 1.0, 0.5, (1.0, 2.0, 3.0),
         )
         context.scaleFamilyWorld.assert_called_once_with(handle, 2.0, (1.0, 2.0, 3.0))
-        context.liveSetFamilyStyle.assert_called_once()
-        context.liveSetFamilyColor.assert_called_once()
-        context.liveSetFamilyOpacity.assert_called_once()
+        context.setFamilyStyle.assert_called_once()
+        context.setFamilyColor.assert_called_once()
+        context.setFamilyOpacity.assert_called_once()
         context.setSurfaceCheckerboard.assert_called_once_with(
             handle,
             (noon.RED.red, noon.RED.green, noon.RED.blue, noon.RED.alpha),
@@ -301,11 +301,10 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
             with self.subTest(property=name), self.assertRaises(AttributeError):
                 getattr(surface, name)
 
-    def test_surface_checkerboard_uses_canonical_owner_when_live(self):
+    def test_surface_checkerboard_uses_canonical_owner_during_setup(self):
         import _noon_spatial as native
         context = Mock()
-        context.liveExecutionOwnership.return_value = "active"
-        context.requiresLiveMutationRouting.return_value = True
+        context.requiresLiveMutationRouting.return_value = False
         handle = _family_handle()
         surface = _family_surface(handle)
         surface.submobjects[0]._scene = SimpleNamespace(
@@ -316,6 +315,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         context.setSurfaceCheckerboard.assert_called_once()
         self.assertIs(context.setSurfaceCheckerboard.call_args.args[0], handle)
         handle.setFillByCheckerboard.assert_not_called()
+        context.requiresLiveMutationRouting.assert_not_called()
 
     def test_explicit_unshaded_tipless_surface_keeps_the_single_mesh_path(self):
         callback = lambda u, v: (u, v, 0)
@@ -347,8 +347,8 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         surface._scene = SimpleNamespace(_canonical_authoring_context=context)
         surface._object = SimpleNamespace(id=42)
         surface.set_style(fill_color=noon.RED)
-        context.liveSetStyle.assert_called_once()
-        context.liveSetFamilyStyle.assert_not_called()
+        context.setStyle.assert_called_once()
+        context.setFamilyStyle.assert_not_called()
 
         mesh_handle.width.return_value = 2.5
         mesh_handle.height.return_value = 1.25
@@ -385,9 +385,9 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         surface.set_color(noon.BLUE)
         surface.set_opacity(0.4)
         surface.match_style(target)
-        context.liveSetColor.assert_called_once()
-        context.liveSetObjectOpacity.assert_called_once_with(mesh_handle, 0.4)
-        context.liveMatchStyle.assert_called_once_with(mesh_handle, target_handle)
+        context.setColor.assert_called_once()
+        context.setObjectOpacity.assert_called_once_with(mesh_handle, 0.4)
+        context.matchStyle.assert_called_once_with(mesh_handle, target_handle)
 
         with patch("_manim_geometry._mobject_get_color", return_value=noon.BLUE) as get_color:
             self.assertIs(surface.get_color(), noon.BLUE)
@@ -515,7 +515,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
              patch.object(native, "_mesh_family_options", object()), \
              patch.object(native, "_bulk", side_effect=lambda values: tuple(values)), \
              patch.object(native, "_create_mesh_family", return_value=family), \
-             patch.object(spatial, "_live_constructor_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             surface = spatial.Surface(callback, resolution=(1, 1), shade_in_3d=True)
 
         self.assertEqual(len(sampled), 16)
@@ -550,7 +550,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
              patch.object(native, "_bulk", side_effect=tuple), \
              patch.object(native, "_create_mesh_family",
                           side_effect=lambda value: events.append("publish") or family), \
-             patch.object(spatial, "_live_constructor_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             spatial.Surface(
                 lambda u, v: (u, v, 0), resolution=(1, 1),
                 _axial_pose=((0, 0, 1), 0),
@@ -606,7 +606,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
              patch.object(native, "_mesh_family_options", object()), \
              patch.object(native, "_bulk", side_effect=tuple), \
              patch.object(native, "_create_mesh_family", side_effect=publish) as create_family, \
-             patch.object(spatial, "_live_constructor_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             cone = spatial.Cone(
                 base_radius=base_radius, height=height, direction=(-1, 2, -3),
             )
@@ -682,7 +682,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
                      patch.object(native, "_mesh_family_options", object()), \
                      patch.object(native, "_bulk", side_effect=tuple), \
                      patch.object(native, "_create_mesh_family", side_effect=publish), \
-                     patch.object(spatial, "_live_constructor_context", return_value=None), \
+                     patch.object(spatial, "_path_authoring_context", return_value=None), \
                      patch.object(Mesh3D, "parametric") as parametric:
                     cone = spatial.Cone(
                         base_radius=3, height=4, direction=direction,
@@ -735,7 +735,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
              patch.object(native, "_mesh_family_options", object()), \
              patch.object(native, "_bulk", side_effect=lambda values: tuple(values)), \
              patch.object(native, "_create_mesh_family") as detached_create, \
-             patch.object(spatial, "_live_constructor_context", return_value=context):
+             patch.object(spatial, "_path_authoring_context", return_value=context):
             sphere = spatial.Sphere()
             torus = spatial.Torus()
 
@@ -875,7 +875,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         translucent_red = noon.Color(0.8, 0.1, 0.2, 0.5)
         with patch.object(native, "_prism_face_family_options", return_value=candidate) as faces, \
              patch.object(native, "_create_mesh_family", return_value=family) as admit, \
-             patch.object(spatial, "_live_constructor_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             cube = spatial.Cube()
             prism = spatial.Prism(dimensions=(3, 2, 1), fill_opacity=0.4,
                                   fill_color=translucent_red, shade_in_3d=False)
@@ -916,7 +916,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         candidate.setFill.side_effect = failure
         with patch.object(native, "_prism_face_family_options", return_value=candidate), \
              patch.object(native, "_create_mesh_family") as detached_create, \
-             patch.object(spatial, "_live_constructor_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             with self.assertRaises(ValueError) as raised:
                 spatial.Cube()
 
@@ -935,7 +935,7 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         candidate = Mock()
         with patch.object(native, "_prism_face_family_options", return_value=candidate), \
              patch.object(native, "_create_mesh_family", side_effect=typed) as detached_create, \
-             patch.object(spatial, "_live_constructor_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             with self.assertRaises(NoonOwnershipError) as raised:
                 spatial.Cube()
 

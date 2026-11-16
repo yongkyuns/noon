@@ -173,13 +173,13 @@ fn public_composed_group_pixels_cover_live_attachment_membership_and_retirement(
                 .unwrap(),
             8 => {
                 session
-                    .live()
+                    .scene_mut()
                     .add_family_members(&inner, &[(&added).into()])
                     .unwrap();
             }
             9 => {
                 session
-                    .live()
+                    .scene_mut()
                     .remove_family_members(&inner, &[(&images[0]).into()])
                     .unwrap();
             }
@@ -190,7 +190,7 @@ fn public_composed_group_pixels_cover_live_attachment_membership_and_retirement(
                 } else {
                     tx.add_member(root, outer.node_id());
                 }
-                session.live().apply(tx).unwrap();
+                noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
             }
             _ => {}
         }

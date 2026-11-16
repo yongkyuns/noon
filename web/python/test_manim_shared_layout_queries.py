@@ -55,7 +55,7 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
         query = Mock(return_value=(7., -3., 2.375))
         anchor = SimpleNamespace(contentCriticalPoint3D=query, free=Mock())
         with patch.object(shared, "_layout_anchor", return_value=anchor), \
-             patch.object(shared, "_live_mutation_context", return_value=None):
+             patch.object(shared, "_path_authoring_context", return_value=None):
             self.assert_point_result(value.get_center(), [7., -3., 2.375])
             self.assert_point_result(value.get_left(), [7., -3., 2.375])
             self.assert_point_result(value.get_right(), [7., -3., 2.375])
@@ -81,25 +81,24 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
         anchor.contentCriticalPoint3D.assert_not_called()
         anchor.free.assert_called_once_with()
 
-    def test_bound_content_before_first_play_queries_authored_anchor_in_owning_scene(self):
-        anchor = SimpleNamespace(contentCriticalPoint3D=Mock(return_value=(1.25, -4.5, 2.375)),
+    def test_bound_content_before_first_play_queries_owning_scene(self):
+        anchor = SimpleNamespace(contentCriticalPoint3D=Mock(side_effect=AssertionError("direct query")),
                                  free=Mock())
         value = self.wrapper(SimpleNamespace(requiresContentBoundary=Mock(return_value=True),
                                              layoutAnchor=Mock(return_value=anchor)))
         context = SimpleNamespace(requiresLiveMutationRouting=Mock(return_value=False),
                                   queryMobjectRequiresContentBoundary=Mock(return_value=True),
-                                  queryLayoutContentCriticalPoint3D=Mock(
-                                      side_effect=AssertionError("begin live execution before querying")))
+                                  queryLayoutContentCriticalPoint3D=Mock(return_value=(1.25, -4.5, 2.375)))
         foreign_context = SimpleNamespace(requiresLiveMutationRouting=Mock(
             side_effect=AssertionError("use owning scene, not old constructor context")))
         value._canonical_live_target_context = foreign_context
         value._scene = SimpleNamespace(_canonical_authoring_context=context)
         value._object = object()
         self.assert_point_result(value.get_center(), [1.25, -4.5, 2.375])
-        context.requiresLiveMutationRouting.assert_called_once_with()
-        context.queryLayoutContentCriticalPoint3D.assert_not_called()
+        context.requiresLiveMutationRouting.assert_not_called()
+        context.queryLayoutContentCriticalPoint3D.assert_called_once_with(anchor, 0., 0., 0.)
         foreign_context.requiresLiveMutationRouting.assert_not_called()
-        anchor.contentCriticalPoint3D.assert_called_once_with(0., 0., 0.)
+        anchor.contentCriticalPoint3D.assert_not_called()
         anchor.free.assert_called_once_with()
 
     def test_content_query_failure_frees_anchor_and_does_not_read_planar_bounds(self):
@@ -119,7 +118,7 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
         create = Mock(side_effect=AssertionError("anchor leaked before routing guard"))
         value._semantic_family_handle = SimpleNamespace(requiresContentBoundary=Mock(return_value=True),
                                                         layoutAnchor=create)
-        with patch.object(shared, "_group_live_layout_context", side_effect=NotImplementedError("active callback phase")):
+        with patch.object(shared, "_group_layout_context", side_effect=NotImplementedError("active callback phase")):
             with self.assertRaisesRegex(NotImplementedError, "active callback phase"):
                 shared._content_critical_point_3d(value, noon.RIGHT)
         create.assert_not_called()
@@ -187,7 +186,7 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
         value._semantic_family_handle = handle
         context = SimpleNamespace(queryFamilyRequiresContentBoundary=Mock(return_value=True),
                                   queryLayoutContentCriticalPoint3D=Mock(return_value=(7., -3., -1.1875)))
-        with patch.object(shared, "_group_live_layout_context", return_value=context), \
+        with patch.object(shared, "_group_layout_context", return_value=context), \
              patch.object(shared, "_group_layout_observation", side_effect=AssertionError("planar query")), \
              patch.object(_manim_compat, "_leaf_mobjects", side_effect=AssertionError("wrapper traversal")):
             self.assertEqual(list(shared._get_center(value)), [7., -3., -1.1875])
@@ -234,29 +233,32 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
         point_read = Mock(side_effect=AssertionError("staged query read point membership"))
         value._semantic_family_handle = SimpleNamespace(requiresContentBoundary=point_read, familyKeys=point_read)
         with patch.object(_manim_updaters, "canonical_callback_phase_active", return_value=True), patch.object(
-            shared, "_group_live_layout_context",
+            shared, "_group_layout_context",
             side_effect=NotImplementedError("family layout query during active callback phase"),
         ):
             with self.assertRaisesRegex(NotImplementedError, "active callback phase"):
                 value.get_center()
         point_read.assert_not_called()
 
-    def test_content_depth_queries_forward_to_authored_and_live_rust_layout(self):
+    def test_content_depth_queries_use_scene_when_owned_and_handle_when_standalone(self):
         from _typed_geometry_test_support import identity_only_wrapper
         from _manim_typst import Text
         value = identity_only_wrapper(Text)
         anchor = SimpleNamespace(contentCriticalPoint3D=Mock(return_value=(7., -3., 1.125)), free=Mock())
-        context = SimpleNamespace(queryLayoutContentCriticalPoint3D=Mock(return_value=(7., -3., -2.5)))
+        context = SimpleNamespace(
+            queryLayoutContentCriticalPoint3D=Mock(return_value=(7., -3., -2.5)),
+            requiresLiveMutationRouting=Mock(return_value=False),
+        )
         with patch.object(shared, "_layout_anchor", return_value=anchor), patch.object(
-            shared, "_live_mutation_context", return_value=None
+            shared, "_path_authoring_context", return_value=None
         ):
             self.assertEqual(list(value.get_zenith()), [7., -3., 1.125])
         anchor.contentCriticalPoint3D.assert_called_once_with(0., 0., 1.)
-        with patch.object(shared, "_layout_anchor", return_value=anchor), patch.object(
-            shared, "_live_mutation_context", return_value=context
-        ):
+        value._canonical_live_target_context = context
+        with patch.object(shared, "_layout_anchor", return_value=anchor):
             self.assertEqual(list(value.get_nadir()), [7., -3., -2.5])
         context.queryLayoutContentCriticalPoint3D.assert_called_once_with(anchor, 0., 0., -1.)
+        context.requiresLiveMutationRouting.assert_not_called()
         self.assertEqual(anchor.free.call_count, 2)
 
     def wrapper(self, handle):
@@ -342,16 +344,17 @@ class ManimSharedLayoutQueryTests(unittest.TestCase):
     def test_family_dimensions_use_the_shared_dimension_only_query(self):
         value = object.__new__(_manim_compat.VGroup)
         value._semantic_family_handle = object()
-        anchor = SimpleNamespace(dimensionLength=Mock(side_effect=lambda dim: (3.0, 7.0)[dim]))
+        anchor = SimpleNamespace(dimensionLength=Mock(side_effect=lambda dim: (3.0, 7.0)[dim]), free=Mock())
         context = SimpleNamespace(queryLayoutDimensionLength=Mock(side_effect=lambda handle, dim: (6.0, 14.0)[dim]))
         with patch.object(shared, "_layout_anchor", return_value=anchor), patch.object(
-            shared, "_group_live_layout_context", return_value=None
+            shared, "_group_layout_context", return_value=None
         ), patch.object(shared, "_group_layout_observation", side_effect=ValueError("unpaired anchors")):
             self.assertEqual((shared._width(value), shared._height(value)), (3.0, 7.0))
         with patch.object(shared, "_layout_anchor", return_value=anchor), patch.object(
-            shared, "_group_live_layout_context", return_value=context
+            shared, "_group_layout_context", return_value=context
         ):
             self.assertEqual((shared._width(value), shared._height(value)), (6.0, 14.0))
+        self.assertEqual(anchor.free.call_count, 4)
 
     def test_missing_shared_layout_never_falls_back_to_snapshot_math(self):
         for handle in (None, SimpleNamespace(snapshotJson=lambda: self.fail("raw fallback"))):

@@ -237,7 +237,7 @@ fn replacement_preserves_the_private_visibility_role_beside_a_named_mask() {
     assert!(restored[1].name.is_visibility());
     assert_ne!(restored[1].attachment, old);
     scene.add(&source).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = noon::integration::scene_execution::lower(&scene).unwrap();
     let owner = session.execution_object_id(source.node_id()).unwrap();
     let row = session
         .frame()

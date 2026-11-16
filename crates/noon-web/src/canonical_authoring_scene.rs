@@ -6,6 +6,8 @@ mod effects;
 mod prepared;
 mod zoomed_view;
 use crate::authoring_error::AuthoringFailure;
+#[cfg(any(target_arch = "wasm32", test))]
+use noon::integration::scene_execution;
 #[cfg(target_arch = "wasm32")]
 mod brace;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -42,10 +44,11 @@ mod wait_bootstrap_tests;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon::integration::CallbackPhaseToken;
 use noon_core::ObjectId;
+#[cfg(target_arch = "wasm32")]
+use noon_core::SemanticVec3;
 #[cfg(any(target_arch = "wasm32", test))]
 use noon_core::{
-    HostCallbackId, SemanticFadeDirection, SemanticMutationTransaction,
-    SemanticSceneMembershipRequest, SemanticStore, SemanticVec3,
+    HostCallbackId, SemanticFadeDirection, SemanticSceneMembershipRequest, SemanticStore,
 };
 
 #[derive(Clone)]
@@ -248,20 +251,6 @@ impl SceneMembershipBatch {
                 OwnedSceneMembershipMember::CallbackProvisional { .. }
             )
         })
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    pub(crate) fn callback_provisionals(&self) -> Option<Vec<noon_core::SemanticLocalNodeToken>> {
-        let locals = self
-            .members
-            .iter()
-            .filter_map(|member| match member {
-                OwnedSceneMembershipMember::CallbackProvisional { local, .. } => Some(*local),
-                OwnedSceneMembershipMember::Mobject { .. }
-                | OwnedSceneMembershipMember::Family(_) => None,
-            })
-            .collect::<Vec<_>>();
-        (!locals.is_empty()).then_some(locals)
     }
 
     /// Validate one ordered callback-local Scene.add batch. Existing typed
@@ -645,7 +634,7 @@ impl CanonicalAuthoringScene {
         if self.bindings.contains_key(&id) {
             return Err(format!("canonical object {} is already bound", id.get()).into());
         }
-        let frame = self.scene.camera_frame().map_err(AuthoringFailure::from)?;
+        let frame = self.local_authoring_scene()?.camera_frame()?;
         let node = frame.node_id();
         debug_assert!(!self.identities.contains_key(&node));
         self.bindings.insert(id, node);
@@ -663,10 +652,9 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "semantic scene root is no longer live".into())
     }
 
-    pub fn lower_execution(&self) -> Result<noon::ExecutionSession, String> {
-        self.scene
-            .execution_session()
-            .map_err(|error| error.to_string())
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn lower_execution(&self) -> Result<scene_execution::ExecutionSession, String> {
+        scene_execution::lower(&self.scene).map_err(|error| error.to_string())
     }
 
     /// Author one host-owned callable occurrence into this scene's semantic store.
@@ -683,9 +671,14 @@ impl CanonicalAuthoringScene {
         position: Option<usize>,
     ) -> Result<(), String> {
         self.require_updater_target(handle)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(handle.node_id(), callback, active_from, position);
-        self.publish_updater_edit(transaction)
+        scene_execution::add_updater(
+            self.updater_scene()?,
+            handle,
+            callback,
+            active_from,
+            position,
+        )
+        .map_err(|error| error.to_string())
     }
 
     /// Close the first open occurrence for this host callback at an exclusive
@@ -698,36 +691,31 @@ impl CanonicalAuthoringScene {
         inactive_from: f64,
     ) -> Result<(), String> {
         self.require_updater_target(handle)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.remove_updater(handle.node_id(), callback, inactive_from);
-        self.publish_updater_edit(transaction)
+        scene_execution::remove_updater(self.updater_scene()?, handle, callback, inactive_from)
+            .map_err(|error| error.to_string())
     }
 
     /// Close every open callback occurrence on this target at an exclusive
-    /// authored time through the owning live session when execution has begun.
+    /// authored time through the owning Scene.
     #[cfg(any(target_arch = "wasm32", test))]
     fn clear_updaters(&mut self, handle: &noon::Mobject, inactive_from: f64) -> Result<(), String> {
         self.require_updater_target(handle)?;
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.clear_updaters(handle.node_id(), inactive_from);
-        self.publish_updater_edit(transaction)
+        scene_execution::clear_updaters(self.updater_scene()?, handle, inactive_from)
+            .map_err(|error| error.to_string())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn publish_updater_edit(
-        &mut self,
-        transaction: SemanticMutationTransaction,
-    ) -> Result<(), String> {
+    fn updater_scene(&mut self) -> Result<&mut noon::Scene, String> {
         if self.player_ownership.is_transferred() {
             return Err("return the active execution player before editing updaters".into());
         }
         if let Some(player) = self.player_ownership.local_mut() {
-            return player.live_edit_updaters(transaction);
+            player
+                .require_completed_live_segment()
+                .map_err(|error| error.to_string())?;
+            return Ok(player.scene_mut());
         }
-        transaction
-            .apply(&mut self.scene.integration_store().borrow_mut())
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        Ok(&mut self.scene)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -773,7 +761,7 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn build_live_player_with_session(
         &self,
-        session: noon::ExecutionSession,
+        session: scene_execution::ExecutionSession,
         duration: f64,
         transport_session: u32,
     ) -> Result<crate::SemanticExecutionPlayer, String> {
@@ -838,10 +826,20 @@ impl CanonicalAuthoringScene {
         self.player_ownership.prepare_for_run(authored)
     }
 
+    /// Select the Scene that can supply current observations without changing
+    /// the retained player's ownership or replacing a stale returned runtime.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn returned_player_is_stale(&self) -> bool {
-        self.player_ownership
-            .returned_is_stale(self.scene.integration_store().borrow().scene_revision())
+    fn effective_observation_scene(&self) -> Result<Option<&noon::Scene>, AuthoringFailure> {
+        match &self.player_ownership {
+            PlayerOwnership::Unstarted => Ok(None),
+            PlayerOwnership::Active(player) => Ok(Some(player.scene())),
+            PlayerOwnership::Returned(player) => {
+                Ok((player.scene_revision() == self.scene.revision()).then(|| player.scene()))
+            }
+            PlayerOwnership::Transferred(_) => {
+                Err("live execution session is running in the semantic engine".into())
+            }
+        }
     }
 
     /// Begin an explicit authoring-run publication boundary.
@@ -880,6 +878,42 @@ impl CanonicalAuthoringScene {
             .ok_or_else(|| "begin live execution before reading or mutating it".into())
     }
 
+    pub(crate) fn local_authoring_scene(&mut self) -> Result<&mut noon::Scene, AuthoringFailure> {
+        #[cfg(any(target_arch = "wasm32", test))]
+        if !self.player_ownership.is_unstarted() {
+            return Ok(self.active_live_player()?.scene_mut());
+        }
+        Ok(&mut self.scene)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn place<T>(
+        &mut self,
+        operation: impl FnOnce(&mut noon::Scene) -> Result<T, noon::AuthoringError>,
+    ) -> Result<(), AuthoringFailure> {
+        let running = !self.player_ownership.is_unstarted();
+        operation(self.local_authoring_scene()?)
+            .map(|_| ())
+            .map_err(|error| {
+                if running {
+                    running_placement_error(error)
+                } else {
+                    error.into()
+                }
+            })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn edit_scene<T>(
+        &mut self,
+        edit: impl FnOnce(&mut noon::Scene) -> Result<T, noon::AuthoringError>,
+    ) -> Result<(), AuthoringFailure> {
+        let running = !self.player_ownership.is_unstarted();
+        edit(self.local_authoring_scene()?)
+            .map(|_| ())
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
+    }
+
     /// Ordinary continuation declarations reuse an existing local lease as-is.
     /// Only the first declaration bootstraps a player; an explicit new run uses
     /// `live_player`/`prepare_execution_run` and owns any recovery transition.
@@ -913,17 +947,12 @@ impl CanonicalAuthoringScene {
     /// Detached handles are queried directly by their language wrapper.
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_observation<T, E: Into<AuthoringFailure>>(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
         authored: impl FnOnce(&noon::Mobject) -> Result<T, E>,
-        effective: impl FnOnce(
-            &mut crate::SemanticExecutionPlayer,
-            &noon::Mobject,
-        ) -> Result<T, AuthoringFailure>,
+        effective: impl FnOnce(&noon::Scene, &noon::Mobject) -> Result<T, AuthoringFailure>,
     ) -> Result<T, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
+        let scene = self.effective_observation_scene()?;
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
             return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
                 .with_message("mobject belongs to another authoring store"));
@@ -932,21 +961,21 @@ impl CanonicalAuthoringScene {
         if !self.identities.contains_key(&handle.node_id()) {
             return Err("mobject is not bound to this canonical Scene".into());
         }
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local_mut() {
-                return effective(player, handle);
-            }
+        if let Some(scene) = scene {
+            return effective(scene, handle);
         }
         authored(handle).map_err(Into::into)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_layout(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
     ) -> Result<(f64, f64, f64, f64), AuthoringFailure> {
-        self.mobject_observation(handle, authored_mobject_layout, |player, handle| {
-            let observed = player.live_effective_layout(handle)?;
+        self.mobject_observation(handle, authored_mobject_layout, |scene, handle| {
+            let observed = scene
+                .effective_layout(handle)
+                .map_err(running_scene_error)?;
             Ok((
                 observed.center.0,
                 observed.center.1,
@@ -958,124 +987,145 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_dimension(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
         dimension: noon::LayoutDimension,
     ) -> Result<f64, AuthoringFailure> {
         self.mobject_observation(
             handle,
             |handle| noon::LayoutAnchor::from(handle).dimension_length(dimension),
-            |player, handle| {
-                player.live_layout_dimension_length(&noon::LayoutAnchor::from(handle), dimension)
+            |scene, handle| {
+                layout_dimension_length(scene, &noon::LayoutAnchor::from(handle), dimension, true)
             },
         )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_point_count(&mut self, handle: &noon::Mobject) -> Result<usize, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            noon::Mobject::get_num_points,
-            crate::SemanticExecutionPlayer::effective_point_count,
+    fn mobject_point_count(&self, handle: &noon::Mobject) -> Result<usize, AuthoringFailure> {
+        self.mobject_observation(handle, noon::Mobject::get_num_points, |scene, handle| {
+            scene.own_point_count(handle.into()).map_err(Into::into)
+        })
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_point_count(&self, family: &noon::MobjectFamily) -> Result<usize, AuthoringFailure> {
+        self.family_observation(
+            family,
+            |target| target.get_num_points(),
+            |scene, target| scene.own_point_count(target).map_err(Into::into),
         )
     }
 
     /// Observe one family's own root through the current execution owner.
     #[cfg(any(target_arch = "wasm32", test))]
     fn family_own_path_query(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
     ) -> Result<noon::PathQuery, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), family.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        family.validate().map_err(AuthoringFailure::from)?;
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local_mut() {
-                return player.effective_family_own_path_query(family);
-            }
-        }
-        family.own_path_query().map_err(AuthoringFailure::from)
+        self.family_observation(
+            family,
+            |_| family.own_path_query(),
+            |scene, _| {
+                scene
+                    .effective_family_own_path_query(family)
+                    .map_err(Into::into)
+            },
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_path_query(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
     ) -> Result<noon::PathQuery, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::path_query, |player, handle| {
-            player.effective_path_query(handle)
+        self.mobject_observation(handle, noon::Mobject::path_query, |scene, handle| {
+            scene.effective_path_query(handle).map_err(Into::into)
         })
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_all_points(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
     ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).all_points(),
-            |player, handle| player.live_effective_all_points(noon::MobjectTarget::from(handle)),
+            |scene, handle| {
+                scene
+                    .effective_all_points(handle.into())
+                    .map_err(Into::into)
+            },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_requires_content_boundary(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
     ) -> Result<bool, AuthoringFailure> {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).requires_content_boundary(),
-            |player, handle| player.live_requires_content_boundary(handle.into()),
+            |scene, handle| {
+                scene
+                    .effective_requires_content_boundary(handle.into())
+                    .map_err(|error| AuthoringFailure::from(noon::LiveSessionError::from(error)))
+            },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_all_points_3d(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
     ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).all_points_3d(),
-            |player, handle| player.live_effective_all_points_3d(noon::MobjectTarget::from(handle)),
+            |scene, handle| {
+                scene
+                    .effective_all_points_3d(handle.into())
+                    .map_err(Into::into)
+            },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_point_array(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
     ) -> Result<noon::PointArrayObservation, AuthoringFailure> {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).point_array(),
-            |player, handle| player.live_point_array(noon::MobjectTarget::from(handle)),
+            |scene, handle| {
+                scene
+                    .effective_point_array(handle.into())
+                    .map_err(running_placement_error)
+            },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_point_reduction_tree(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
     ) -> Result<noon::PointReductionTree, AuthoringFailure> {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).point_reduction_tree(),
-            |player, handle| {
-                player.live_effective_point_reduction_tree(noon::MobjectTarget::from(handle))
+            |scene, handle| {
+                scene
+                    .effective_point_reduction_tree(handle.into())
+                    .map_err(Into::into)
             },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_critical_point_3d(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
         direction: noon_core::SemanticVec3,
         vector_boundary: bool,
@@ -1090,43 +1140,49 @@ impl CanonicalAuthoringScene {
                     target.critical_point_3d(direction)
                 }
             },
-            |player, handle| {
-                player.live_effective_critical_point_3d(handle.into(), direction, vector_boundary)
+            |scene, handle| {
+                scene
+                    .effective_critical_point_3d(handle.into(), direction, vector_boundary)
+                    .map_err(Into::into)
             },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_path_boundary_points_3d(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
     ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).path_boundary_points_3d(),
-            |player, handle| {
-                player.live_effective_path_boundary_points_3d(noon::MobjectTarget::from(handle))
+            |scene, handle| {
+                scene
+                    .effective_path_boundary_points_3d(handle.into())
+                    .map_err(Into::into)
             },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_path_boundary_points(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
     ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).path_boundary_points(),
-            |player, handle| {
-                player.live_effective_path_boundary_points(noon::MobjectTarget::from(handle))
+            |scene, handle| {
+                scene
+                    .effective_path_boundary_points(handle.into())
+                    .map_err(Into::into)
             },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_extremum_along_dim(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
         dim: usize,
         key: f64,
@@ -1134,19 +1190,17 @@ impl CanonicalAuthoringScene {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).extremum_along_dim(dim, key),
-            |player, handle| {
-                player.live_effective_extremum_along_dim(
-                    noon::MobjectTarget::from(handle),
-                    dim,
-                    key,
-                )
+            |scene, handle| {
+                scene
+                    .effective_extremum_along_dim(handle.into(), dim, key)
+                    .map_err(Into::into)
             },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_path_boundary_extremum_along_dim(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
         dim: usize,
         key: f64,
@@ -1154,48 +1208,50 @@ impl CanonicalAuthoringScene {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).path_boundary_extremum_along_dim(dim, key),
-            |player, handle| {
-                player.live_effective_path_boundary_extremum_along_dim(
-                    noon::MobjectTarget::from(handle),
-                    dim,
-                    key,
-                )
+            |scene, handle| {
+                scene
+                    .effective_path_boundary_extremum_along_dim(handle.into(), dim, key)
+                    .map_err(Into::into)
             },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_length_over_dim(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
         dim: usize,
     ) -> Result<f64, AuthoringFailure> {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).length_over_dim(dim),
-            |player, handle| {
-                player.live_effective_length_over_dim(noon::MobjectTarget::from(handle), dim)
+            |scene, handle| {
+                scene
+                    .effective_length_over_dim(handle.into(), dim)
+                    .map_err(Into::into)
             },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_center_of_mass(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
     ) -> Result<(f64, f64), AuthoringFailure> {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).center_of_mass(),
-            |player, handle| {
-                player.live_effective_center_of_mass(noon::MobjectTarget::from(handle))
+            |scene, handle| {
+                scene
+                    .effective_center_of_mass(handle.into())
+                    .map_err(Into::into)
             },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_boundary_point(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
         direction_x: f64,
         direction_y: f64,
@@ -1203,19 +1259,17 @@ impl CanonicalAuthoringScene {
         self.mobject_observation(
             handle,
             |handle| noon::MobjectTarget::from(handle).boundary_point(direction_x, direction_y),
-            |player, handle| {
-                player.live_effective_boundary_point(
-                    noon::MobjectTarget::from(handle),
-                    direction_x,
-                    direction_y,
-                )
+            |scene, handle| {
+                scene
+                    .effective_boundary_point(handle.into(), direction_x, direction_y)
+                    .map_err(Into::into)
             },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_path_boundary_point(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
         direction_x: f64,
         direction_y: f64,
@@ -1225,104 +1279,107 @@ impl CanonicalAuthoringScene {
             |handle| {
                 noon::MobjectTarget::from(handle).path_boundary_point(direction_x, direction_y)
             },
-            |player, handle| {
-                player.live_effective_path_boundary_point(
-                    noon::MobjectTarget::from(handle),
-                    direction_x,
-                    direction_y,
-                )
+            |scene, handle| {
+                scene
+                    .effective_path_boundary_point(handle.into(), direction_x, direction_y)
+                    .map_err(Into::into)
             },
         )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn family_all_points(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
     ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
         self.family_observation(
             family,
             |target| target.all_points(),
-            |player, target| player.live_effective_all_points(target),
+            |scene, target| scene.effective_all_points(target).map_err(Into::into),
         )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn family_all_points_3d(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
     ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
         self.family_observation(
             family,
             |target| target.all_points_3d(),
-            crate::SemanticExecutionPlayer::live_effective_all_points_3d,
+            |scene, target| scene.effective_all_points_3d(target).map_err(Into::into),
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn family_point_array(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
     ) -> Result<noon::PointArrayObservation, AuthoringFailure> {
         self.family_observation(
             family,
             |target| target.point_array(),
-            crate::SemanticExecutionPlayer::live_point_array,
+            |scene, target| {
+                scene
+                    .effective_point_array(target)
+                    .map_err(running_placement_error)
+            },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn family_requires_content_boundary(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
     ) -> Result<bool, AuthoringFailure> {
         self.family_observation(
             family,
             |target| target.requires_content_boundary(),
-            crate::SemanticExecutionPlayer::live_requires_content_boundary,
+            |scene, target| {
+                scene
+                    .effective_requires_content_boundary(target)
+                    .map_err(|error| AuthoringFailure::from(noon::LiveSessionError::from(error)))
+            },
         )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn family_observation<T>(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
         authored: impl FnOnce(noon::MobjectTarget<'_>) -> Result<T, noon::AuthoringError>,
-        effective: impl FnOnce(
-            &mut crate::SemanticExecutionPlayer,
-            noon::MobjectTarget<'_>,
-        ) -> Result<T, AuthoringFailure>,
+        effective: impl FnOnce(&noon::Scene, noon::MobjectTarget<'_>) -> Result<T, AuthoringFailure>,
     ) -> Result<T, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
+        let scene = self.effective_observation_scene()?;
         let target = noon::MobjectTarget::from(family);
         target
             .require_store(self.scene.integration_store())
             .map_err(AuthoringFailure::from)?;
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local_mut() {
-                return effective(player, target);
-            }
+        if let Some(scene) = scene {
+            return effective(scene, target);
         }
         authored(target).map_err(AuthoringFailure::from)
     }
 
     #[cfg(target_arch = "wasm32")]
     fn family_point_reduction_tree(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
     ) -> Result<noon::PointReductionTree, AuthoringFailure> {
         self.family_observation(
             family,
             |target| target.point_reduction_tree(),
-            crate::SemanticExecutionPlayer::live_effective_point_reduction_tree,
+            |scene, target| {
+                scene
+                    .effective_point_reduction_tree(target)
+                    .map_err(Into::into)
+            },
         )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn family_critical_point_3d(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
         direction: noon_core::SemanticVec3,
         vector_boundary: bool,
@@ -1336,39 +1393,49 @@ impl CanonicalAuthoringScene {
                     target.critical_point_3d(direction)
                 }
             },
-            |player, target| {
-                player.live_effective_critical_point_3d(target, direction, vector_boundary)
+            |scene, target| {
+                scene
+                    .effective_critical_point_3d(target, direction, vector_boundary)
+                    .map_err(Into::into)
             },
         )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn family_vector_boundary_points_3d(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
     ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
         self.family_observation(
             family,
             |target| target.vector_boundary_points_3d(),
-            crate::SemanticExecutionPlayer::live_effective_vector_boundary_points_3d,
+            |scene, target| {
+                scene
+                    .effective_vector_boundary_points_3d(target)
+                    .map_err(Into::into)
+            },
         )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn family_vector_boundary_points(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
     ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
         self.family_observation(
             family,
             |target| target.vector_boundary_points(),
-            crate::SemanticExecutionPlayer::live_effective_vector_boundary_points,
+            |scene, target| {
+                scene
+                    .effective_vector_boundary_points(target)
+                    .map_err(Into::into)
+            },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn family_merged_points(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
     ) -> Result<Vec<f64>, AuthoringFailure> {
         self.family_point_reduction_tree(family).map(|tree| {
@@ -1381,7 +1448,7 @@ impl CanonicalAuthoringScene {
 
     #[cfg(target_arch = "wasm32")]
     fn family_extremum_along_dim(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
         dim: usize,
         key: f64,
@@ -1389,38 +1456,46 @@ impl CanonicalAuthoringScene {
         self.family_observation(
             family,
             |target| target.extremum_along_dim(dim, key),
-            |player, target| player.live_effective_extremum_along_dim(target, dim, key),
+            |scene, target| {
+                scene
+                    .effective_extremum_along_dim(target, dim, key)
+                    .map_err(Into::into)
+            },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn family_length_over_dim(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
         dim: usize,
     ) -> Result<f64, AuthoringFailure> {
         self.family_observation(
             family,
             |target| target.length_over_dim(dim),
-            |player, target| player.live_effective_length_over_dim(target, dim),
+            |scene, target| {
+                scene
+                    .effective_length_over_dim(target, dim)
+                    .map_err(Into::into)
+            },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn family_center_of_mass(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
     ) -> Result<(f64, f64), AuthoringFailure> {
         self.family_observation(
             family,
             |target| target.center_of_mass(),
-            |player, target| player.live_effective_center_of_mass(target),
+            |scene, target| scene.effective_center_of_mass(target).map_err(Into::into),
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn family_boundary_point(
-        &mut self,
+        &self,
         family: &noon::MobjectFamily,
         direction_x: f64,
         direction_y: f64,
@@ -1428,193 +1503,164 @@ impl CanonicalAuthoringScene {
         self.family_observation(
             family,
             |target| target.boundary_point(direction_x, direction_y),
-            |player, target| player.live_effective_boundary_point(target, direction_x, direction_y),
+            |scene, target| {
+                scene
+                    .effective_boundary_point(target, direction_x, direction_y)
+                    .map_err(Into::into)
+            },
         )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_line_endpoints(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
     ) -> Result<noon::ManimLineEndpoints, AuthoringFailure> {
         self.mobject_observation(
             handle,
             noon::Mobject::manim_line_endpoints,
-            crate::SemanticExecutionPlayer::live_effective_line_endpoints,
+            |scene, handle| {
+                scene
+                    .effective_line_endpoints(handle)
+                    .map_err(running_scene_error)
+            },
         )
     }
 
     #[cfg(target_arch = "wasm32")]
     fn mobject_fill_color(
-        &mut self,
+        &self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.mobject_observation(
-            target,
-            noon::Mobject::fill_color,
-            crate::SemanticExecutionPlayer::live_effective_fill_color,
-        )
+        self.mobject_observation(target, noon::Mobject::fill_color, |scene, target| {
+            scene
+                .effective_fill_color(target)
+                .map_err(running_scene_error)
+        })
     }
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_stroke_color(
-        &mut self,
+        &self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.mobject_observation(
-            target,
-            noon::Mobject::stroke_color,
-            crate::SemanticExecutionPlayer::live_effective_stroke_color,
-        )
+        self.mobject_observation(target, noon::Mobject::stroke_color, |scene, target| {
+            scene
+                .effective_stroke_color(target)
+                .map_err(running_scene_error)
+        })
     }
     #[cfg(target_arch = "wasm32")]
-    fn mobject_stroke_width(&mut self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(
-            target,
-            noon::Mobject::stroke_width,
-            crate::SemanticExecutionPlayer::live_effective_stroke_width,
-        )
+    fn mobject_stroke_width(&self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(target, noon::Mobject::stroke_width, |scene, target| {
+            scene
+                .effective_stroke_width(target)
+                .map_err(running_scene_error)
+        })
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_background_stroke_color(
-        &mut self,
+        &self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
         self.mobject_observation(
             target,
             noon::Mobject::background_stroke_color,
-            crate::SemanticExecutionPlayer::live_effective_background_stroke_color,
+            |scene, target| {
+                scene
+                    .effective_background_stroke_color(target)
+                    .map_err(running_scene_error)
+            },
         )
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_background_stroke_width(
-        &mut self,
+        &self,
         target: &noon::Mobject,
     ) -> Result<f64, AuthoringFailure> {
         self.mobject_observation(
             target,
             noon::Mobject::background_stroke_width,
-            crate::SemanticExecutionPlayer::live_effective_background_stroke_width,
+            |scene, target| {
+                scene
+                    .effective_background_stroke_width(target)
+                    .map_err(running_scene_error)
+            },
         )
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_background_stroke_opacity(
-        &mut self,
+        &self,
         handle: &noon::Mobject,
     ) -> Result<f64, AuthoringFailure> {
         self.mobject_observation(
             handle,
             noon::Mobject::background_stroke_opacity,
-            |player, handle| {
-                handle
-                    .background_stroke_opacity()
-                    .map_err(AuthoringFailure::from)?;
-                player.live_effective_background_stroke_opacity(handle)
+            |scene, handle| {
+                scene
+                    .effective_background_stroke_opacity(handle)
+                    .map_err(running_scene_error)
             },
         )
     }
     #[cfg(target_arch = "wasm32")]
     fn mobject_stroke_cap(
-        &mut self,
+        &self,
         target: &noon::Mobject,
     ) -> Result<noon_core::StrokeCap, AuthoringFailure> {
-        self.mobject_observation(
-            target,
-            noon::Mobject::stroke_cap,
-            crate::SemanticExecutionPlayer::live_effective_stroke_cap,
-        )
+        self.mobject_observation(target, noon::Mobject::stroke_cap, |scene, target| {
+            scene
+                .effective_stroke_cap(target)
+                .map_err(running_scene_error)
+        })
     }
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_color(
-        &mut self,
-        handle: &noon::Mobject,
-    ) -> Result<noon_core::Color, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            noon::Mobject::manim_color,
-            crate::SemanticExecutionPlayer::live_effective_manim_color,
-        )
+    fn mobject_color(&self, handle: &noon::Mobject) -> Result<noon_core::Color, AuthoringFailure> {
+        self.mobject_observation(handle, noon::Mobject::manim_color, |scene, target| {
+            scene
+                .effective_manim_color(target)
+                .map_err(running_scene_error)
+        })
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_fill_opacity(&mut self, handle: &noon::Mobject) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::fill_opacity, |player, handle| {
+    fn mobject_fill_opacity(&self, handle: &noon::Mobject) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(handle, noon::Mobject::fill_opacity, |scene, handle| {
             // Reject resource paints before reading their lowered scalar projection.
             handle.fill_opacity().map_err(AuthoringFailure::from)?;
-            Ok(player.live_effective(handle)?.fill_opacity())
+            Ok(scene
+                .effective(handle)
+                .map_err(running_scene_error)?
+                .fill_opacity())
         })
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_stroke_opacity(&mut self, handle: &noon::Mobject) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::stroke_opacity, |player, handle| {
+    fn mobject_stroke_opacity(&self, handle: &noon::Mobject) -> Result<f64, AuthoringFailure> {
+        self.mobject_observation(handle, noon::Mobject::stroke_opacity, |scene, handle| {
             // Reject resource paints before reading their lowered scalar projection.
             handle.stroke_opacity().map_err(AuthoringFailure::from)?;
-            Ok(player.live_effective(handle)?.stroke_opacity())
+            Ok(scene
+                .effective(handle)
+                .map_err(running_scene_error)?
+                .stroke_opacity())
         })
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn begin_boolean_geometry(
-        &mut self,
-        operation: noon::BooleanOperation,
-        operands: &[noon::Mobject],
-    ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        for object in operands {
-            if !std::rc::Rc::ptr_eq(self.scene.integration_store(), object.integration_store()) {
-                return Err(noon::AuthoringError::ForeignStore.into());
-            }
-            object.validate().map_err(AuthoringFailure::from)?;
-        }
-        if !self.returned_player_is_stale() {
-            if let Some(player) = self.player_ownership.local_mut() {
-                return player.live_boolean_geometry_options(operation, operands);
-            }
-        }
-        noon::ManimGeometryOptions::boolean_geometry(operation, operands).map_err(Into::into)
-    }
-
-    /// Inert bounds-dependent construction observes this runtime for bound targets,
-    /// while fresh detached targets retain their shared authored layout.
     #[cfg(any(target_arch = "wasm32", test))]
     fn begin_underline(
         &mut self,
         handle: &noon::Mobject,
         buff: f64,
     ) -> Result<noon::ManimGeometryOptions, AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
-            return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
-                .with_message("mobject belongs to another authoring store"));
-        }
-        handle.validate().map_err(AuthoringFailure::from)?;
-        let mut bounds = handle
-            .layout_bounds()
-            .map_err(AuthoringFailure::from)?
-            .ok_or("Underline target has no layout bounds")?;
-        if self.identities.contains_key(&handle.node_id()) {
-            let (x, y, width, height) = self.mobject_layout(handle)?;
-            bounds = noon_core::Bounds2D64 {
-                min_x: x - width * 0.5,
-                max_x: x + width * 0.5,
-                min_y: y - height * 0.5,
-                max_y: y + height * 0.5,
-            };
-        }
-        noon::ManimGeometryOptions::underline(bounds, buff).map_err(AuthoringFailure::from)
+        self.local_authoring_scene()?
+            .underline_options(handle, buff)
+            .map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn require_pre_execution_signal_authoring(&self) -> Result<(), String> {
+    fn require_authored_cursor(&self) -> Result<(), String> {
         if !self.player_ownership.is_unstarted() {
-            return Err(
-                "signal declarations and bindings must be authored before canonical execution begins"
-                    .into(),
-            );
+            return Err("authored cursor operations require a Scene before execution".into());
         }
         Ok(())
     }
@@ -1626,16 +1672,10 @@ impl CanonicalAuthoringScene {
         indication: noon::IndicateOptions,
         options: noon_core::AnimationOptions,
     ) -> Result<(), AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        match self.player_ownership.local_mut() {
-            Some(player) => player.live_bind_click_indicate(target, indication, options),
-            None => self
-                .scene
-                .on_click_indicate(target, indication, options)
-                .map_err(AuthoringFailure::from),
-        }
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
+            .on_click_indicate(target, indication, options)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1645,30 +1685,18 @@ impl CanonicalAuthoringScene {
         intensity: f64,
         options: noon_core::AnimationOptions,
     ) -> Result<(), AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        match self.player_ownership.local_mut() {
-            Some(player) => player.live_bind_click_glow_pulse(target, intensity, options),
-            None => self
-                .scene
-                .on_click_glow_pulse(target, intensity, options)
-                .map_err(AuthoringFailure::from),
-        }
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
+            .on_click_glow_pulse(target, intensity, options)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn clear_click_action(&mut self, target: &noon::Mobject) -> Result<(), AuthoringFailure> {
-        if self.player_ownership.is_transferred() {
-            return Err("live execution session is running in the semantic engine".into());
-        }
-        match self.player_ownership.local_mut() {
-            Some(player) => player.live_clear_click_action(target),
-            None => self
-                .scene
-                .on_click(target, None)
-                .map_err(AuthoringFailure::from),
-        }
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
+            .on_click(target, None)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     /// Create one scalar signal in this context's shared semantic store.
@@ -1681,7 +1709,13 @@ impl CanonicalAuthoringScene {
             return Err("live execution session is running in the semantic engine".into());
         }
         match self.player_ownership.local_mut() {
-            Some(player) => player.live_value_tracker(initial),
+            Some(player) => {
+                player.require_completed_live_segment()?;
+                player
+                    .scene_mut()
+                    .value_tracker(initial)
+                    .map_err(Into::into)
+            }
             None => self
                 .scene
                 .value_tracker(initial)
@@ -1699,7 +1733,13 @@ impl CanonicalAuthoringScene {
             return Err("live execution session is running in the semantic engine".into());
         }
         match self.player_ownership.local_mut() {
-            Some(player) => player.live_associate_value_tracker(tracker),
+            Some(player) => {
+                player.require_completed_live_segment()?;
+                player
+                    .scene_mut()
+                    .associate_value_tracker(tracker)
+                    .map_err(Into::into)
+            }
             None => self
                 .scene
                 .associate_value_tracker(tracker)
@@ -1708,156 +1748,15 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn pointer_position_signal(&self) -> Result<noon::NativeVectorSignal, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .pointer_position_signal()
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn viewport_size_signal(&self) -> Result<noon::NativeVectorSignal, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .viewport_size_signal()
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn wheel_delta_signal(&self) -> Result<noon::NativeVectorSignal, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .wheel_delta_signal()
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn key_state_signal(
-        &self,
-        code: String,
-        initial: bool,
-    ) -> Result<noon::NativeBoolSignal, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .key_state_signal(code, initial)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn control_signal(
-        &self,
-        name: String,
-        initial: f64,
-    ) -> Result<noon::ValueTracker, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .control_signal(name, initial)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn pointer_down_events(&self, button: u8) -> Result<noon::ValueTracker, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .pointer_down_events(button)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn wheel_events(&self) -> Result<noon::ValueTracker, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene.wheel_events().map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn control_commit_events(&self, name: String) -> Result<noon::ValueTracker, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .control_commit_events(name)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn bind_native_translation(
-        &self,
-        object: &noon::Mobject,
-        signal: &noon::NativeVectorSignal,
-    ) -> Result<(), AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .bind_native_translation(object, signal)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn bind_rotation(
-        &self,
-        object: &noon::Mobject,
-        signal: &noon::ValueTracker,
-    ) -> Result<(), AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .bind_rotation(object, signal)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn bind_opacity(
-        &self,
-        object: &noon::Mobject,
-        signal: &noon::ValueTracker,
-    ) -> Result<(), AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .bind_opacity(object, signal)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn bind_presence(
-        &self,
-        object: &noon::Mobject,
-        signal: &noon::NativeBoolSignal,
-    ) -> Result<(), AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .bind_presence(object, signal)
-            .map_err(AuthoringFailure::from)
-    }
-
-    /// Build only the common `offset + tracker * direction` semantic expression.
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn tracker_position(
-        &self,
-        tracker: &noon::ValueTracker,
-        direction: SemanticVec3,
-        offset: SemanticVec3,
-    ) -> Result<noon::TrackerPosition, AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .position_from_tracker(tracker, direction, offset)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn bind_tracker_position(
-        &self,
-        object: &noon::Mobject,
-        position: &noon::TrackerPosition,
-    ) -> Result<(), AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
-        self.scene
-            .bind_position(object, position)
-            .map_err(AuthoringFailure::from)
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn tracker_value(&mut self, tracker: &noon::ValueTracker) -> Result<f64, AuthoringFailure> {
+    fn tracker_value(&self, tracker: &noon::ValueTracker) -> Result<f64, AuthoringFailure> {
         if self.player_ownership.is_transferred() {
             return Err("semantic execution session is running in the semantic engine".into());
         }
-        match self.player_ownership.local_mut() {
-            Some(player) => player.live_effective_signal(tracker),
+        match self.player_ownership.local() {
+            Some(player) => player
+                .scene()
+                .value_tracker_value(tracker)
+                .map_err(running_scene_error),
             None => self
                 .scene
                 .value_tracker_value(tracker)
@@ -1875,7 +1774,15 @@ impl CanonicalAuthoringScene {
             return Err("semantic execution session is running in the semantic engine".into());
         }
         match self.player_ownership.local_mut() {
-            Some(player) => player.live_set_signal(tracker, value),
+            Some(player) => {
+                if !value.is_finite() {
+                    return Err("ValueTracker value must be finite".into());
+                }
+                player
+                    .scene_mut()
+                    .set_value(tracker, value)
+                    .map_err(running_scene_error)
+            }
             None => self
                 .scene
                 .set_value(tracker, value)
@@ -1936,7 +1843,7 @@ impl CanonicalAuthoringScene {
     /// Advance the shared Rust authoring cursor without declaring legacy timing.
     #[cfg(any(target_arch = "wasm32", test))]
     fn authored_wait(&mut self, duration: f64) -> Result<f64, String> {
-        self.require_pre_execution_signal_authoring()?;
+        self.require_authored_cursor()?;
         self.scene.wait(duration)?;
         Ok(self.scene.time())
     }
@@ -1951,7 +1858,7 @@ impl CanonicalAuthoringScene {
         run_time: f64,
         rate_function: noon_core::RateFunction,
     ) -> Result<(), AuthoringFailure> {
-        self.require_pre_execution_signal_authoring()?;
+        self.require_authored_cursor()?;
         self.scene
             .play_value(tracker, target)
             .rate_func(rate_function)
@@ -2020,34 +1927,29 @@ impl CanonicalAuthoringScene {
             .and_then(crate::SemanticExecutionPlayer::live_handoff_duration)
     }
 
-    /// Add replayable animation meaning before a live session is created.
+    /// Publish replayable animation meaning on the current Scene.
     #[cfg(any(target_arch = "wasm32", test))]
     fn declare_live_transform_to(
-        &self,
+        &mut self,
         source: &noon::Mobject,
         target: &noon::Mobject,
         options: noon_core::AnimationOptions,
-    ) -> Result<noon::DeclaredAnimation, String> {
-        if !self.player_ownership.is_unstarted() {
-            return Err("declare live animations before beginning execution".into());
-        }
-        self.scene.declare_transform_to(source, target, options)
+    ) -> Result<noon::DeclaredAnimation, AuthoringFailure> {
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .declare_transform_to(source, target, options)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
-    /// Read the shared session's direct-root membership for one retained wrapper.
-    ///
-    /// This lets Python update only its derived wrapper attachment after a completed
-    /// FadeOut without storing lifecycle state or adding metadata to the player receipt.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_contains_mobject(&mut self, target: &noon::Mobject) -> Result<bool, AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        target.validate().map_err(AuthoringFailure::from)?;
-        if !self.identities.contains_key(&target.node_id()) {
-            return Err("live Mobject is not bound to this canonical Scene".into());
-        }
-        self.active_live_player()?.live_contains(target)
+    fn contains_direct_mobject(
+        &mut self,
+        target: &noon::Mobject,
+    ) -> Result<bool, AuthoringFailure> {
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
+            .contains_direct(target)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -2733,7 +2635,7 @@ impl CanonicalAuthoringScene {
         children: &[OrdinaryCompositionChild],
         composition_options: noon_core::AnimationOptions,
         play_options: noon_core::AnimationOptions,
-    ) -> Result<(), String> {
+    ) -> Result<(), AuthoringFailure> {
         // A continuation cannot restart a pre-authored Rust timeline at zero.
         // This is the common admission guard for every request shape.
         if self.player_ownership.is_unstarted() && self.scene.time() != 0.0 {
@@ -2788,10 +2690,10 @@ impl CanonicalAuthoringScene {
                     options,
                 } => {
                     if !tracker.is_in_store(self.scene.integration_store()) {
-                        return Err(
-                            "ordinary composition ValueTracker belongs to another authoring store"
-                                .into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                            "ordinary composition ValueTracker belongs to another authoring store",
+                        ));
                     }
                     self.scene
                         .integration_store()
@@ -2823,13 +2725,13 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         path.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary MoveAlongPath objects belong to another authoring store"
-                                .into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary MoveAlongPath objects belong to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
-                    path.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
+                    path.validate()?;
                     if !self.identities.contains_key(&target.node_id())
                         || !self.identities.contains_key(&path.node_id())
                     {
@@ -2856,11 +2758,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "callback interval target belongs to another authoring store".into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "callback interval target belongs to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     if !self.identities.contains_key(&target.node_id()) {
                         return Err("callback interval target must belong to this Scene".into());
                     }
@@ -2882,12 +2785,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary subset-display family belongs to another authoring store"
-                                .into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary subset-display family belongs to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     let direct_members = self
                         .scene
                         .integration_store()
@@ -2918,12 +2821,9 @@ impl CanonicalAuthoringScene {
                             self.scene.integration_store(),
                             member.integration_store(),
                         ) {
-                            return Err(
-                                "ordinary subset-display member belongs to another authoring store"
-                                    .into(),
-                            );
+                            return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore).with_message("ordinary subset-display member belongs to another authoring store"));
                         }
-                        member.validate().map_err(|error| error.to_string())?;
+                        member.validate()?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
                             || !register_entering(*id, member.node_id())
@@ -2969,11 +2869,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary family animation belongs to another authoring store".into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary family animation belongs to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     let family_leaves = self
                         .scene
                         .integration_store()
@@ -3032,11 +2933,12 @@ impl CanonicalAuthoringScene {
                             self.scene.integration_store(),
                             member.integration_store(),
                         ) {
-                            return Err(
-                                "ordinary family member belongs to another authoring store".into(),
-                            );
+                            return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                                .with_message(
+                                    "ordinary family member belongs to another authoring store",
+                                ));
                         }
-                        member.validate().map_err(|error| error.to_string())?;
+                        member.validate()?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
                             || !register_entering(*id, member.node_id())
@@ -3056,12 +2958,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary family DrawBorderThenFill belongs to another authoring store"
-                                .into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                            "ordinary family DrawBorderThenFill belongs to another authoring store",
+                        ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     let family_leaves = self
                         .scene
                         .integration_store()
@@ -3091,9 +2993,9 @@ impl CanonicalAuthoringScene {
                             self.scene.integration_store(),
                             member.integration_store(),
                         ) {
-                            return Err("ordinary family DrawBorderThenFill member belongs to another authoring store".into());
+                            return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore).with_message("ordinary family DrawBorderThenFill member belongs to another authoring store"));
                         }
-                        member.validate().map_err(|error| error.to_string())?;
+                        member.validate()?;
                         if self.bindings.contains_key(id)
                             || self.identities.contains_key(&member.node_id())
                             || !register_entering(*id, member.node_id())
@@ -3126,16 +3028,18 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target_state.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary family Transform belongs to another authoring store".into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary family Transform belongs to another authoring store",
+                            ));
                     }
-                    source.validate().map_err(|error| error.to_string())?;
-                    target_state.validate().map_err(|error| error.to_string())?;
+                    source.validate()?;
+                    target_state.validate()?;
                     if options.reverse_rate_function == Some(true) {
                         return Err(
                             noon_core::AnimationOptionsError::UnsupportedReverseRateFunction
-                                .to_string(),
+                                .to_string()
+                                .into(),
                         );
                     }
                     noon_core::resolve_transform_animation_options(
@@ -3153,11 +3057,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary family Indicate belongs to another authoring store".into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary family Indicate belongs to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     noon_core::resolve_animation_options(
                         noon_core::AnimationDefaults::MANIM,
                         *options,
@@ -3190,12 +3095,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary camera profile target belongs to another authoring store"
-                                .into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary camera profile target belongs to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     let state = target.state().map_err(|error| error.to_string())?;
                     let clips = match state.camera_projection() {
                         Some(noon_core::SemanticProjection3D::Perspective {
@@ -3224,11 +3129,12 @@ impl CanonicalAuthoringScene {
                         self.scene.integration_store(),
                         target.integration_store(),
                     ) {
-                        return Err(
-                            "ordinary composition target belongs to another authoring store".into(),
-                        );
+                        return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                            .with_message(
+                                "ordinary composition target belongs to another authoring store",
+                            ));
                     }
-                    target.validate().map_err(|error| error.to_string())?;
+                    target.validate()?;
                     if self.identities.contains_key(&target.node_id()) {
                         return Err(
                             "ordinary composition TransformTo target state must be detached".into(),
@@ -3321,11 +3227,12 @@ impl CanonicalAuthoringScene {
                 } => (*entering_id, target, *options),
             };
             if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-                return Err(
-                    "ordinary composition target belongs to another authoring store".into(),
-                );
+                return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
+                    .with_message(
+                        "ordinary composition target belongs to another authoring store",
+                    ));
             }
-            target.validate().map_err(|error| error.to_string())?;
+            target.validate()?;
             let resolved = if matches!(
                 child,
                 OrdinaryCompositionChild::TransformTo { .. }
@@ -3406,108 +3313,65 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_target_editor(
-        &mut self,
-        source: &noon::Mobject,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
+    fn target_editor(&mut self, source: &noon::Mobject) -> Result<noon::Mobject, AuthoringFailure> {
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), source.integration_store()) {
             return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
                 .with_message("mobject belongs to another authoring store"));
         }
         source.validate().map_err(AuthoringFailure::from)?;
-        match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => source.target_editor().map_err(AuthoringFailure::from),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .target_editor(source)
-                .map_err(AuthoringFailure::from),
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
-    }
-
-    #[cfg(test)]
-    fn live_family(
-        &mut self,
-        members: &[noon::MobjectTarget<'_>],
-        z_index: f64,
-    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
-                self.active_live_player()?.live_family(members, z_index)
-            }
-            PlayerOwnership::Unstarted => {
-                Err("live family creation requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
-    }
-
-    #[cfg(test)]
-    fn live_family_with_color(
-        &mut self,
-        members: &[noon::MobjectTarget<'_>],
-        z_index: f64,
-        color: noon::Color,
-    ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        self.live_family_with_presentation(members, z_index, color, true)
+        self.local_authoring_scene()?
+            .target_editor(source)
+            .map_err(AuthoringFailure::from_scene_capture)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_family_with_presentation(
+    fn create_family(
         &mut self,
         members: &[noon::MobjectTarget<'_>],
         z_index: f64,
         color: noon::Color,
         draw_enabled: bool,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_family_with_presentation(members, z_index, color, draw_enabled),
-            PlayerOwnership::Unstarted => {
-                Err("live family creation requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        self.local_authoring_scene()?
+            .family_with_presentation(members, z_index, color, draw_enabled)
+            .map_err(Into::into)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_shift_family(
+    fn shift_family(
         &mut self,
         family: &noon::MobjectFamily,
         x: f64,
         y: f64,
         z: f64,
     ) -> Result<(), AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_shift_family(family, x, y, z),
-            PlayerOwnership::Unstarted => {
-                Err("live family shift requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        self.place(|scene| scene.shift_family_3d(family, noon::SemanticVec3::new(x, y, z)))
     }
 
-    /// Delegate live family layout to the reusable Rust semantic facade.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_arrange_family(
+    fn edit_family_members(
+        &mut self,
+        family: noon::MobjectTarget<'_>,
+        members: &[noon::MobjectTarget<'_>],
+        adding: bool,
+    ) -> Result<Vec<bool>, AuthoringFailure> {
+        let running = !self.player_ownership.is_unstarted();
+        let scene = self.local_authoring_scene()?;
+        if adding {
+            scene.add_family_members(family, members)
+        } else {
+            scene.remove_family_members(family, members)
+        }
+        .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn arrange_family(
         &mut self,
         family: &noon::MobjectFamily,
         options: &noon::FamilyArrangeOptions,
     ) -> Result<(), AuthoringFailure> {
-        self.active_live_player()?
-            .live_arrange_family(family, options)
+        self.place(|scene| scene.arrange_family_with_options(family, options))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3519,10 +3383,19 @@ impl CanonicalAuthoringScene {
             return Err("subset-display family belongs to another authoring store".into());
         }
         match &mut self.player_ownership {
-            PlayerOwnership::Unstarted => family.prepare_subset_display(),
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .prepare_family_subset_display(family),
+            PlayerOwnership::Unstarted => {
+                self.scene.prepare_family_subset_display(family).map(|_| ())
+            }
+            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => {
+                let player = self.active_live_player()?;
+                player
+                    .require_completed_live_segment()
+                    .map_err(|error| error.to_string())?;
+                player
+                    .scene_mut()
+                    .prepare_family_subset_display(family)
+                    .map(|_| ())
+            }
             PlayerOwnership::Transferred(_) => {
                 Err("live execution session is running in the semantic engine".into())
             }
@@ -3530,7 +3403,7 @@ impl CanonicalAuthoringScene {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_become_mobject(
+    fn become_mobject(
         &mut self,
         target: &noon::Mobject,
         other: &noon::Mobject,
@@ -3544,148 +3417,42 @@ impl CanonicalAuthoringScene {
                     ));
             }
         }
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .live_become_mobject(target, other, options),
-            PlayerOwnership::Unstarted => {
-                Err("live become requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        self.local_authoring_scene()?
+            .become_mobject(target, other, options)
+            .map(|_| ())
+            .map_err(AuthoringFailure::from_scene_capture)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_create_manim_geometry(
+    fn create_manim_geometry(
         &mut self,
         options: noon::ManimGeometryOptions,
     ) -> Result<noon::Mobject, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .geometry(options)
-                .map_err(|error| AuthoringFailure::from_scene_mutation(error, true)),
-            PlayerOwnership::Unstarted => {
-                Err("live primitive construction requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
+            .geometry(options)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn live_create_manim_arrow(
-        &mut self,
-        options: noon::ManimArrowOptions,
-    ) -> Result<noon::ManimArrow, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .manim_arrow(options)
-                .map_err(|error| noon::LiveSessionError::from(error).into()),
-            PlayerOwnership::Unstarted => {
-                Err("live Arrow construction requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn live_create_image(
+    fn create_image(
         &mut self,
         options: noon::ImageMobjectOptions,
     ) -> Result<noon::Mobject, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .image(options)
-                .map_err(|error| AuthoringFailure::from_scene_mutation(error, true)),
-            PlayerOwnership::Unstarted => {
-                Err("live image construction requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
+            .image(options)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_create_text(&mut self, text: noon::Text) -> Result<noon::Mobject, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .text(text)
-                .map_err(noon::integration::live_text_failure),
-            PlayerOwnership::Unstarted => {
-                Err("live Text construction requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn live_create_typst(&mut self, text: noon::Typst) -> Result<noon::Mobject, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .typst(text)
-                .map_err(noon::integration::live_text_failure),
-            PlayerOwnership::Unstarted => {
-                Err("live Typst construction requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn live_create_math_typst(
+    fn author_text<T>(
         &mut self,
-        text: noon::MathTypst,
-    ) -> Result<noon::Mobject, AuthoringFailure> {
-        match &mut self.player_ownership {
-            PlayerOwnership::Active(_) | PlayerOwnership::Returned(_) => self
-                .active_live_player()?
-                .scene_mut()
-                .math_typst(text)
-                .map_err(noon::integration::live_text_failure),
-            PlayerOwnership::Unstarted => {
-                Err("live MathTypst construction requires an active canonical session".into())
-            }
-            PlayerOwnership::Transferred(_) => {
-                Err("live execution session is running in the semantic engine".into())
-            }
-        }
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn live_add_mobject(
-        &mut self,
-        id: ObjectId,
-        handle: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        self.edit_membership(SceneMembershipBatch {
-            kind: SceneMembershipBatchKind::Add,
-            spatial_domain: None,
-            members: vec![OwnedSceneMembershipMember::Mobject {
-                wrapper_id: Some(id),
-                handle: handle.clone(),
-            }],
-            bindings: vec![(id, handle.clone())],
-        })
+        publish: impl FnOnce(&mut noon::Scene) -> Result<T, noon::TextAuthoringError>,
+    ) -> Result<T, AuthoringFailure> {
+        let running = !self.player_ownership.is_unstarted();
+        publish(self.local_authoring_scene()?)
+            .map_err(|error| AuthoringFailure::from_scene_text(error, running))
     }
 
     fn validate_membership_bindings(
@@ -3784,22 +3551,24 @@ impl CanonicalAuthoringScene {
         &mut self,
         batch: SceneMembershipBatch,
     ) -> Result<(), AuthoringFailure> {
-        let player = self
-            .player_ownership
-            .local()
-            .ok_or("published association requires the local completed execution player")?;
-        if player.has_pending_live_segment() {
-            return Err("published association cannot precede segment completion".into());
-        }
-        if player.scene_revision() != self.scene.revision() {
-            return Err("published association requires a coherent execution revision".into());
+        if !self.player_ownership.is_unstarted() {
+            let player = self
+                .player_ownership
+                .local()
+                .ok_or("published association requires the local completed execution player")?;
+            if player.has_pending_live_segment() {
+                return Err("published association cannot precede segment completion".into());
+            }
+            if player.scene_revision() != self.scene.revision() {
+                return Err("published association requires a coherent execution revision".into());
+            }
         }
         self.associate_published_binding_reservations(batch)
     }
 
     /// Validate and atomically install derived bindings for already-published
-    /// direct-root Mobjects. Both local completed-segment and leased callback
-    /// acknowledgement paths share this proof.
+    /// Mobjects. Setup, completed-segment and leased callback acknowledgement
+    /// share this proof.
     #[cfg(any(target_arch = "wasm32", test))]
     fn associate_published_binding_reservations(
         &mut self,
@@ -4058,122 +3827,38 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn contains_mobject(&self, target: &noon::Mobject) -> Result<bool, AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        target.validate().map_err(AuthoringFailure::from)?;
-        noon_core::semantic_scene_root_contains(
-            &self.scene.integration_store().borrow(),
-            self.scene.root(),
-            target.node_id(),
-        )
-        .map_err(AuthoringFailure::from)
+        self.scene.contains(target).map_err(AuthoringFailure::from)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_remove_mobject(&mut self, handle: &noon::Mobject) -> Result<(), AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        let node = handle.node_id();
-        let id = *self
-            .identities
-            .get(&node)
-            .ok_or("live Mobject is not bound to this Scene")?;
-        self.edit_membership(SceneMembershipBatch {
-            kind: SceneMembershipBatchKind::Remove,
-            spatial_domain: None,
-            members: vec![OwnedSceneMembershipMember::Mobject {
-                wrapper_id: Some(id),
-                handle: handle.clone(),
-            }],
-            bindings: vec![(id, handle.clone())],
-        })
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn live_scale_arrow(
+    fn scale_arrow(
         &mut self,
         arrow: &noon::ManimArrow,
         factor: f64,
         scale_tips: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.active_live_player()
-            .map_err(AuthoringFailure::from)?
-            .live_scale_arrow(arrow, factor, scale_tips)
+        let running = !self.player_ownership.is_unstarted();
+        self.local_authoring_scene()?
+            .scale_arrow(arrow, factor, scale_tips)
+            .map_err(|error| match error {
+                noon::ArrowScaleError::Authoring(noon::AuthoringError::ForeignStore) if running => {
+                    noon::LiveSessionError::ForeignMobjectStore.into()
+                }
+                noon::ArrowScaleError::Authoring(error) => {
+                    AuthoringFailure::from_scene_mutation(error, running)
+                }
+                other => AuthoringFailure::unclassified("live.unclassified", &other),
+            })
     }
 
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn live_replace_content(
+    #[cfg(target_arch = "wasm32")]
+    fn author_number<T>(
         &mut self,
-        target: &noon::Mobject,
-        source: &noon::Mobject,
-    ) -> Result<(), AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store())
-            || !std::rc::Rc::ptr_eq(self.scene.integration_store(), source.integration_store())
-        {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        self.active_live_player()?
-            .live_replace_content(target, source)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn live_set_decimal_value(
-        &mut self,
-        target: &noon::Mobject,
-        compiler: &mut crate::WasmLatexCompiler,
-        value: f64,
-    ) -> Result<(), AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        let number = noon::DecimalNumber::from_mobject(target.clone())
-            .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
-        self.active_live_player()?
-            .scene_mut()
-            .set_decimal_value(&number, compiler, value)
-            .map_err(noon::integration::live_numeric_failure)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn live_increment_decimal_value(
-        &mut self,
-        target: &noon::Mobject,
-        compiler: &mut crate::WasmLatexCompiler,
-        delta: f64,
-    ) -> Result<(), AuthoringFailure> {
-        let number = noon::DecimalNumber::from_mobject(target.clone())
-            .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
-        self.active_live_player()?
-            .scene_mut()
-            .increment_decimal_value(&number, compiler, delta)
-            .map_err(noon::integration::live_numeric_failure)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn live_decimal_value(&mut self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        let number = noon::DecimalNumber::from_mobject(target.clone())
-            .map_err(|error| AuthoringFailure::new("invalid_input", "numeric.metadata", error))?;
-        self.active_live_player()?
-            .scene_mut()
-            .effective_decimal_value(&number)
-            .map_err(noon::integration::live_numeric_failure)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn live_decimal_font_size(&mut self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
-        if !std::rc::Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-            return Err(noon::AuthoringError::ForeignStore.into());
-        }
-        let number = noon::DecimalNumber::from_mobject(target.clone())?;
-        self.active_live_player()?
-            .scene_mut()
-            .effective_decimal_font_size(&number)
-            .map_err(noon::integration::live_numeric_failure)
+        operation: impl FnOnce(&mut noon::Scene) -> Result<T, noon::NumericAuthoringError>,
+    ) -> Result<T, AuthoringFailure> {
+        let running = !self.player_ownership.is_unstarted();
+        operation(self.local_authoring_scene()?)
+            .map_err(|error| AuthoringFailure::from_scene_number(error, running))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -4296,6 +3981,36 @@ impl CanonicalAuthoringScene {
         }
         player.drain_delta_json()
     }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn running_scene_error(error: noon::AuthoringError) -> AuthoringFailure {
+    AuthoringFailure::from_scene_mutation(error, true)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn running_placement_error(error: noon::AuthoringError) -> AuthoringFailure {
+    noon::LiveSessionError::from(error).into()
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn layout_dimension_length(
+    scene: &noon::Scene,
+    anchor: &noon::LayoutAnchor,
+    dimension: noon::LayoutDimension,
+    running: bool,
+) -> Result<f64, AuthoringFailure> {
+    scene
+        .layout_dimension_length(anchor, dimension)
+        .map_err(|error| {
+            if !running {
+                error.into()
+            } else if dimension == noon::LayoutDimension::Depth {
+                running_scene_error(error)
+            } else {
+                running_placement_error(error)
+            }
+        })
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -4562,13 +4277,6 @@ mod wasm {
 
     #[wasm_bindgen]
     impl CanonicalAuthoringSceneContext {
-        pub(crate) fn publish_live_path_family(
-            &mut self,
-            paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
-        ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-            self.inner.live_create_path_family(paths)
-        }
-
         /// Reconcile wrapper IDs only after Rust has published the completion.
         #[wasm_bindgen(js_name = associatePublishedMobjects)]
         pub fn associate_published_mobjects(
@@ -4637,6 +4345,14 @@ mod wasm {
                 return Err("copy references require an add batch".into());
             }
             self.inner.family_members()
+        }
+
+        fn single_member(&self) -> Result<noon::MobjectTarget<'_>, String> {
+            let members = self.copy_references()?;
+            let [member] = members.as_slice() else {
+                return Err("insertion requires exactly one member".into());
+            };
+            Ok(*member)
         }
 
         pub(crate) fn create_family(
@@ -4774,11 +4490,6 @@ mod wasm {
     }
 
     #[wasm_bindgen]
-    pub struct WasmLiveMobjectState {
-        state: noon::EffectiveMobjectState,
-    }
-
-    #[wasm_bindgen]
     pub struct WasmMobjectLayoutObservation {
         center_x: f64,
         center_y: f64,
@@ -4910,18 +4621,6 @@ mod wasm {
     pub struct WasmTrackerPositionHandle {
         position: noon::TrackerPosition,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
-    }
-
-    #[wasm_bindgen]
-    impl WasmLiveMobjectState {
-        #[wasm_bindgen(getter, js_name = translationX)]
-        pub fn translation_x(&self) -> f64 {
-            self.state.transform.translation.x as f64
-        }
-        #[wasm_bindgen(getter, js_name = translationY)]
-        pub fn translation_y(&self) -> f64 {
-            self.state.transform.translation.y as f64
-        }
     }
 
     #[wasm_bindgen]
@@ -7512,6 +7211,8 @@ mod wasm {
         pub fn pointer_position_signal(&mut self) -> Result<WasmNativeVectorSignalHandle, JsValue> {
             let signal = self
                 .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .pointer_position_signal()
                 .map_err(typed_js_error)?;
             Ok(WasmNativeVectorSignalHandle {
@@ -7522,7 +7223,12 @@ mod wasm {
 
         #[wasm_bindgen(js_name = viewportSizeSignal)]
         pub fn viewport_size_signal(&mut self) -> Result<WasmNativeVectorSignalHandle, JsValue> {
-            let signal = self.inner.viewport_size_signal().map_err(typed_js_error)?;
+            let signal = self
+                .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .viewport_size_signal()
+                .map_err(typed_js_error)?;
             Ok(WasmNativeVectorSignalHandle {
                 signal,
                 store: std::rc::Rc::clone(self.inner.scene.integration_store()),
@@ -7531,7 +7237,12 @@ mod wasm {
 
         #[wasm_bindgen(js_name = wheelDeltaSignal)]
         pub fn wheel_delta_signal(&mut self) -> Result<WasmNativeVectorSignalHandle, JsValue> {
-            let signal = self.inner.wheel_delta_signal().map_err(typed_js_error)?;
+            let signal = self
+                .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .wheel_delta_signal()
+                .map_err(typed_js_error)?;
             Ok(WasmNativeVectorSignalHandle {
                 signal,
                 store: std::rc::Rc::clone(self.inner.scene.integration_store()),
@@ -7546,6 +7257,8 @@ mod wasm {
         ) -> Result<WasmNativeBoolSignalHandle, JsValue> {
             let signal = self
                 .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .key_state_signal(code, initial)
                 .map_err(typed_js_error)?;
             Ok(WasmNativeBoolSignalHandle {
@@ -7562,6 +7275,8 @@ mod wasm {
         ) -> Result<WasmValueTrackerHandle, JsValue> {
             let tracker = self
                 .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .control_signal(name, initial)
                 .map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle {
@@ -7577,6 +7292,8 @@ mod wasm {
         ) -> Result<WasmValueTrackerHandle, JsValue> {
             let tracker = self
                 .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .pointer_down_events(parse_button(button)?)
                 .map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle {
@@ -7587,7 +7304,12 @@ mod wasm {
 
         #[wasm_bindgen(js_name = wheelEvents)]
         pub fn wheel_events(&mut self) -> Result<WasmValueTrackerHandle, JsValue> {
-            let tracker = self.inner.wheel_events().map_err(typed_js_error)?;
+            let tracker = self
+                .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .wheel_events()
+                .map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle {
                 tracker,
                 store: std::rc::Rc::clone(self.inner.scene.integration_store()),
@@ -7601,6 +7323,8 @@ mod wasm {
         ) -> Result<WasmValueTrackerHandle, JsValue> {
             let tracker = self
                 .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .control_commit_events(name)
                 .map_err(typed_js_error)?;
             Ok(WasmValueTrackerHandle {
@@ -7621,6 +7345,8 @@ mod wasm {
             )?;
             let signal = signal.signal_in(self.inner.scene.integration_store())?;
             self.inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .bind_native_translation(object.semantic_mobject(), signal)
                 .map_err(typed_js_error)
         }
@@ -7634,6 +7360,8 @@ mod wasm {
             object.id_in_store(self.inner.scene.integration_store(), "rotation binding")?;
             let signal = signal.tracker_in(self.inner.scene.integration_store())?;
             self.inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .bind_rotation(object.semantic_mobject(), signal)
                 .map_err(typed_js_error)
         }
@@ -7647,6 +7375,8 @@ mod wasm {
             object.id_in_store(self.inner.scene.integration_store(), "opacity binding")?;
             let signal = signal.tracker_in(self.inner.scene.integration_store())?;
             self.inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .bind_opacity(object.semantic_mobject(), signal)
                 .map_err(typed_js_error)
         }
@@ -7660,6 +7390,8 @@ mod wasm {
             object.id_in_store(self.inner.scene.integration_store(), "presence binding")?;
             let signal = signal.signal_in(self.inner.scene.integration_store())?;
             self.inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
                 .bind_presence(object.semantic_mobject(), signal)
                 .map_err(typed_js_error)
         }
@@ -7676,7 +7408,9 @@ mod wasm {
             let tracker = tracker.tracker_in(self.inner.scene.integration_store())?;
             let position = self
                 .inner
-                .tracker_position(
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .position_from_tracker(
                     tracker,
                     SemanticVec3::new(direction_x, direction_y, 0.0),
                     SemanticVec3::new(offset_x, offset_y, 0.0),
@@ -7700,7 +7434,9 @@ mod wasm {
             )?;
             let position = position.position_in(self.inner.scene.integration_store())?;
             self.inner
-                .bind_tracker_position(object.semantic_mobject(), position)
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .bind_position(object.semantic_mobject(), position)
                 .map_err(typed_js_error)
         }
 
@@ -7973,12 +7709,14 @@ mod wasm {
             operands: &crate::authoring_geometry::WasmBooleanOperands,
         ) -> Result<crate::WasmManimGeometryOptions, JsValue> {
             self.inner
-                .begin_boolean_geometry(
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .boolean_geometry_options(
                     crate::authoring_geometry::boolean_operation(name)?,
                     &operands.objects,
                 )
                 .map(crate::WasmManimGeometryOptions::from_options)
-                .map_err(typed_js_error)
+                .map_err(|error| typed_js_error(AuthoringFailure::from(error)))
         }
 
         #[wasm_bindgen(js_name = beginUnderline)]
@@ -8047,7 +7785,9 @@ mod wasm {
                 .inner
                 .active_live_player()
                 .map_err(typed_js_error)?
-                .live_family_layout(&family)
+                .scene()
+                .effective_family_layout(&family)
+                .map_err(running_placement_error)
                 .map_err(typed_js_error)?;
             Ok(WasmMobjectLayoutObservation {
                 center_x: layout.center.0,
@@ -8076,6 +7816,16 @@ mod wasm {
             self.inner
                 .family_point_array(&handle.semantic_family()?)
                 .map(crate::authoring_mobject::point_array_to_js)
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = queryFamilyPointCount)]
+        pub fn query_family_point_count(
+            &self,
+            handle: &crate::WasmAuthoringFamilyHandle,
+        ) -> Result<usize, JsValue> {
+            self.inner
+                .family_point_count(&handle.semantic_family()?)
                 .map_err(typed_js_error)
         }
 
@@ -8209,9 +7959,9 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMoveFamilyToPoint)]
+        #[wasm_bindgen(js_name = moveFamilyToPoint)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_move_family_to_point(
+        pub fn move_family_to_point(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             x: f64,
@@ -8224,20 +7974,20 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_move_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Point(x, y),
-                    (edge_x, edge_y),
-                    (mask_x, mask_y),
-                )
+                .place(|scene| {
+                    scene.move_family_to(
+                        &family,
+                        noon::LayoutTarget::Point(x, y),
+                        (edge_x, edge_y),
+                        (mask_x, mask_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMoveFamilyToMobject)]
+        #[wasm_bindgen(js_name = moveFamilyToMobject)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_move_family_to_mobject(
+        pub fn move_family_to_mobject(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             target: &crate::WasmAuthoringMobjectHandle,
@@ -8249,20 +7999,20 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_move_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
-                    (edge_x, edge_y),
-                    (mask_x, mask_y),
-                )
+                .place(|scene| {
+                    scene.move_family_to(
+                        &family,
+                        noon::LayoutTarget::Mobject(target.semantic_mobject()),
+                        (edge_x, edge_y),
+                        (mask_x, mask_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMoveFamilyToFamily)]
+        #[wasm_bindgen(js_name = moveFamilyToFamily)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_move_family_to_family(
+        pub fn move_family_to_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             target: &crate::WasmAuthoringFamilyHandle,
@@ -8274,14 +8024,14 @@ mod wasm {
             let family = handle.semantic_family()?;
             let target = target.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_move_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Family(&target),
-                    (edge_x, edge_y),
-                    (mask_x, mask_y),
-                )
+                .place(|scene| {
+                    scene.move_family_to(
+                        &family,
+                        noon::LayoutTarget::Family(&target),
+                        (edge_x, edge_y),
+                        (mask_x, mask_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -8291,13 +8041,10 @@ mod wasm {
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             dimension: u32,
         ) -> Result<f64, JsValue> {
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_layout_dimension_length(
-                    &source.anchor,
-                    dimension.try_into().map_err(typed_js_error)?,
-                )
+            let dimension = dimension.try_into().map_err(typed_js_error)?;
+            let running = !self.inner.player_ownership.is_unstarted();
+            let scene = self.inner.local_authoring_scene().map_err(typed_js_error)?;
+            layout_dimension_length(scene, &source.anchor, dimension, running)
                 .map_err(typed_js_error)
         }
 
@@ -8309,20 +8056,28 @@ mod wasm {
             direction_y: f64,
             direction_z: f64,
         ) -> Result<Vec<f64>, JsValue> {
+            let running = !self.inner.player_ownership.is_unstarted();
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .live_layout_critical_point_3d(
+                .layout_critical_point_3d(
                     &source.anchor,
                     noon::SemanticVec3::new(direction_x, direction_y, direction_z),
                 )
+                .map_err(|error| {
+                    if running {
+                        running_placement_error(error)
+                    } else {
+                        error.into()
+                    }
+                })
                 .map(|point| vec![point.x, point.y, point.z])
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRescaleToFit)]
+        #[wasm_bindgen(js_name = rescaleToFit)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_rescale_to_fit(
+        pub fn rescale_to_fit(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             length: f64,
@@ -8334,41 +8089,38 @@ mod wasm {
             about_point: bool,
         ) -> Result<(), JsValue> {
             let pivot = crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point);
+            let dimension = dimension.try_into().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_rescale_to_fit(
-                    &source.anchor,
-                    length,
-                    dimension.try_into().map_err(typed_js_error)?,
-                    stretch,
-                    pivot,
-                )
+                .place(|scene| {
+                    scene.rescale_to_fit_with_pivot(
+                        &source.anchor,
+                        length,
+                        dimension,
+                        stretch,
+                        pivot,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveReplaceLayout)]
-        pub fn live_replace_layout(
+        #[wasm_bindgen(js_name = replaceLayout)]
+        pub fn replace_layout(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
             dimension: u32,
             stretch: bool,
         ) -> Result<(), JsValue> {
+            let dimension = dimension.try_into().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_replace_layout(
-                    &source.anchor,
-                    &target.anchor,
-                    dimension.try_into().map_err(typed_js_error)?,
-                    stretch,
-                )
+                .place(|scene| {
+                    scene.replace_layout(&source.anchor, &target.anchor, dimension, stretch)
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSurroundCircle)]
-        pub fn live_surround_circle(
+        #[wasm_bindgen(js_name = surroundCircle)]
+        pub fn surround_circle(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
@@ -8377,21 +8129,21 @@ mod wasm {
             buffer_factor: f64,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_surround_circle(
-                    &source.anchor,
-                    &target.anchor,
-                    dimension,
-                    stretch,
-                    buffer_factor,
-                )
+                .place(|scene| {
+                    scene.surround_circle(
+                        &source.anchor,
+                        &target.anchor,
+                        dimension,
+                        stretch,
+                        buffer_factor,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMatchDimSize)]
+        #[wasm_bindgen(js_name = matchDimSize)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_match_dim_size(
+        pub fn match_dim_size(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
@@ -8403,22 +8155,23 @@ mod wasm {
             about_point: bool,
         ) -> Result<(), JsValue> {
             let pivot = crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point);
+            let dimension = dimension.try_into().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_match_dim_size(
-                    &source.anchor,
-                    &target.anchor,
-                    dimension.try_into().map_err(typed_js_error)?,
-                    stretch,
-                    pivot,
-                )
+                .place(|scene| {
+                    scene.match_dim_size_with_pivot(
+                        &source.anchor,
+                        &target.anchor,
+                        dimension,
+                        stretch,
+                        pivot,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveNextLayoutTo)]
+        #[wasm_bindgen(js_name = nextLayoutTo)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_next_layout_to(
+        pub fn next_layout_to(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
@@ -8432,25 +8185,25 @@ mod wasm {
             mask_y: f64,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_next_layout_to_aligned(
-                    &source.anchor,
-                    noon::LiveLayoutTarget::Anchor(&target.anchor),
-                    &aligner.anchor,
-                    noon::ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (edge_x, edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
+                .place(|scene| {
+                    scene.next_layout_to_aligned(
+                        &source.anchor,
+                        noon::LayoutTarget::Anchor(&target.anchor),
+                        &aligner.anchor,
+                        noon::ManimNextToArgs {
+                            direction: (direction_x, direction_y),
+                            buff,
+                            aligned_edge: (edge_x, edge_y),
+                            mask: (mask_x, mask_y),
+                        },
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveNextLayoutToEdgeInFrame)]
+        #[wasm_bindgen(js_name = nextLayoutToEdgeInFrame)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_next_layout_to_edge_in_frame(
+        pub fn next_layout_to_edge_in_frame(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
@@ -8462,26 +8215,26 @@ mod wasm {
             frame_buff: f64,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_next_layout_to_edge_in_frame(
-                    &source.anchor,
-                    &target.anchor,
-                    (edge_x, edge_y),
-                    noon::ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (0.0, 0.0),
-                        mask: (1.0, 1.0),
-                    },
-                    frame_buff,
-                )
+                .place(|scene| {
+                    scene.next_layout_to_edge_in_frame(
+                        &source.anchor,
+                        &target.anchor,
+                        (edge_x, edge_y),
+                        noon::ManimNextToArgs {
+                            direction: (direction_x, direction_y),
+                            buff,
+                            aligned_edge: (0.0, 0.0),
+                            mask: (1.0, 1.0),
+                        },
+                        frame_buff,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveNextLayoutToPoint)]
+        #[wasm_bindgen(js_name = nextLayoutToPoint)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_next_layout_to_point(
+        pub fn next_layout_to_point(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             x: f64,
@@ -8496,24 +8249,24 @@ mod wasm {
             mask_y: f64,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_next_layout_to_aligned(
-                    &source.anchor,
-                    noon::LiveLayoutTarget::Point(x, y),
-                    &aligner.anchor,
-                    noon::ManimNextToArgs {
-                        direction: (direction_x, direction_y),
-                        buff,
-                        aligned_edge: (edge_x, edge_y),
-                        mask: (mask_x, mask_y),
-                    },
-                )
+                .place(|scene| {
+                    scene.next_layout_to_aligned(
+                        &source.anchor,
+                        noon::LayoutTarget::Point(x, y),
+                        &aligner.anchor,
+                        noon::ManimNextToArgs {
+                            direction: (direction_x, direction_y),
+                            buff,
+                            aligned_edge: (edge_x, edge_y),
+                            mask: (mask_x, mask_y),
+                        },
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAlignFamilyOnFrame)]
-        pub fn live_align_family_on_frame(
+        #[wasm_bindgen(js_name = alignFamilyOnFrame)]
+        pub fn align_family_on_frame(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             direction_x: f64,
@@ -8522,14 +8275,14 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_align_family_on_frame(&family, (direction_x, direction_y), buff)
+                .place(|scene| {
+                    scene.align_family_on_frame(&family, (direction_x, direction_y), buff)
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAlignMobjectOnFrame)]
-        pub fn live_align_mobject_on_frame(
+        #[wasm_bindgen(js_name = alignMobjectOnFrame)]
+        pub fn align_mobject_on_frame(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             direction_x: f64,
@@ -8541,19 +8294,19 @@ mod wasm {
                 "live execution context",
             )?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_align_mobject_on_frame(
-                    handle.semantic_mobject(),
-                    (direction_x, direction_y),
-                    buff,
-                )
+                .place(|scene| {
+                    scene.align_mobject_on_frame(
+                        handle.semantic_mobject(),
+                        (direction_x, direction_y),
+                        buff,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAlignFamilyToPoint)]
+        #[wasm_bindgen(js_name = alignFamilyToPoint)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_align_family_to_point(
+        pub fn align_family_to_point(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             x: f64,
@@ -8564,19 +8317,19 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_align_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Point(x, y),
-                    (axis_x, axis_y),
-                )
+                .place(|scene| {
+                    scene.align_family_to(
+                        &family,
+                        noon::LayoutTarget::Point(x, y),
+                        (axis_x, axis_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAlignFamilyToMobject)]
+        #[wasm_bindgen(js_name = alignFamilyToMobject)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_align_family_to_mobject(
+        pub fn align_family_to_mobject(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             target: &crate::WasmAuthoringMobjectHandle,
@@ -8586,19 +8339,19 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_align_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
-                    (axis_x, axis_y),
-                )
+                .place(|scene| {
+                    scene.align_family_to(
+                        &family,
+                        noon::LayoutTarget::Mobject(target.semantic_mobject()),
+                        (axis_x, axis_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAlignFamilyToFamily)]
+        #[wasm_bindgen(js_name = alignFamilyToFamily)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_align_family_to_family(
+        pub fn align_family_to_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             target: &crate::WasmAuthoringFamilyHandle,
@@ -8608,13 +8361,13 @@ mod wasm {
             let family = handle.semantic_family()?;
             let target = target.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_align_family_to(
-                    &family,
-                    noon::LiveLayoutTarget::Family(&target),
-                    (axis_x, axis_y),
-                )
+                .place(|scene| {
+                    scene.align_family_to(
+                        &family,
+                        noon::LayoutTarget::Family(&target),
+                        (axis_x, axis_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
@@ -8909,36 +8662,33 @@ mod wasm {
                 .map(|cap| cap.as_str().to_owned())
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSetColorGradient)]
-        pub fn live_set_color_gradient(
+        #[wasm_bindgen(js_name = setColorGradient)]
+        pub fn set_color_gradient(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             values: &[f64],
         ) -> Result<(), JsValue> {
-            let colors =
-                crate::authoring_mobject::gradient_colors(values).map_err(typed_js_error)?;
+            let colors = noon::integration::gradient_colors(values).map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_color_gradient(&target.semantic_mobject(), &colors)
+                .edit_scene(|scene| {
+                    scene.set_color_by_gradient(&target.semantic_mobject(), &colors)
+                })
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSetFamilyColorGradient)]
-        pub fn live_set_family_color_gradient(
+        #[wasm_bindgen(js_name = setFamilyColorGradient)]
+        pub fn set_family_color_gradient(
             &mut self,
             target: &crate::WasmAuthoringFamilyHandle,
             values: &[f64],
         ) -> Result<(), JsValue> {
-            let colors =
-                crate::authoring_mobject::gradient_colors(values).map_err(typed_js_error)?;
+            let colors = noon::integration::gradient_colors(values).map_err(typed_js_error)?;
+            let family = target.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_color_gradient(&target.semantic_family()?, &colors)
+                .edit_scene(|scene| scene.set_family_color_by_gradient(&family, &colors))
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSetColorRadialGradient)]
-        pub fn live_set_color_radial_gradient(
+        #[wasm_bindgen(js_name = setColorRadialGradient)]
+        pub fn set_color_radial_gradient(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             center_x: f64,
@@ -8948,21 +8698,21 @@ mod wasm {
             values: &[f64],
         ) -> Result<(), JsValue> {
             let (inner, outer) =
-                crate::authoring_mobject::radial_gradient_colors(values).map_err(typed_js_error)?;
+                noon::integration::radial_gradient_colors(values).map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_color_radial_gradient(
-                    &target.semantic_mobject(),
-                    (center_x, center_y, center_z),
-                    radius,
-                    inner,
-                    outer,
-                )
+                .edit_scene(|scene| {
+                    scene.set_color_by_radial_gradient(
+                        &target.semantic_mobject(),
+                        (center_x, center_y, center_z),
+                        radius,
+                        inner,
+                        outer,
+                    )
+                })
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSetFamilyColorRadialGradient)]
-        pub fn live_set_family_color_radial_gradient(
+        #[wasm_bindgen(js_name = setFamilyColorRadialGradient)]
+        pub fn set_family_color_radial_gradient(
             &mut self,
             target: &crate::WasmAuthoringFamilyHandle,
             center_x: f64,
@@ -8972,17 +8722,18 @@ mod wasm {
             values: &[f64],
         ) -> Result<(), JsValue> {
             let (inner, outer) =
-                crate::authoring_mobject::radial_gradient_colors(values).map_err(typed_js_error)?;
+                noon::integration::radial_gradient_colors(values).map_err(typed_js_error)?;
+            let family = target.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_color_radial_gradient(
-                    &target.semantic_family()?,
-                    (center_x, center_y, center_z),
-                    radius,
-                    inner,
-                    outer,
-                )
+                .edit_scene(|scene| {
+                    scene.set_family_color_by_radial_gradient(
+                        &family,
+                        (center_x, center_y, center_z),
+                        radius,
+                        inner,
+                        outer,
+                    )
+                })
                 .map_err(typed_js_error)
         }
         #[wasm_bindgen(js_name = queryMobjectColor)]
@@ -8996,34 +8747,31 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = queryMobjectDecimalValue)]
-        pub fn query_mobject_decimal_value(
+        #[wasm_bindgen(js_name = decimalValue)]
+        pub fn decimal_value(
             &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
+            number: &crate::WasmDecimalNumberHandle,
         ) -> Result<f64, JsValue> {
             self.inner
-                .live_decimal_value(handle.semantic_mobject())
+                .author_number(|scene| scene.effective_decimal_value(number.number()))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = queryMobjectIntegerValue)]
-        pub fn query_mobject_integer_value(
+        #[wasm_bindgen(js_name = integerValue)]
+        pub fn integer_value(
             &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
+            number: &crate::WasmDecimalNumberHandle,
         ) -> Result<i64, JsValue> {
-            self.inner
-                .live_decimal_value(handle.semantic_mobject())
-                .and_then(|value| noon::integer_value(value).map_err(AuthoringFailure::from))
-                .map_err(typed_js_error)
+            noon::integer_value(self.decimal_value(number)?).map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = queryMobjectDecimalFontSize)]
-        pub fn query_mobject_decimal_font_size(
+        #[wasm_bindgen(js_name = decimalFontSize)]
+        pub fn decimal_font_size(
             &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
+            number: &crate::WasmDecimalNumberHandle,
         ) -> Result<f64, JsValue> {
             self.inner
-                .live_decimal_font_size(handle.semantic_mobject())
+                .author_number(|scene| scene.effective_decimal_font_size(number.number()))
                 .map_err(typed_js_error)
         }
 
@@ -9178,111 +8926,108 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        /// Query shared root membership after an exact fade completion. Python
-        /// uses it only to attach/detach its derived wrapper identity.
-        #[wasm_bindgen(js_name = liveContainsMobject)]
-        pub fn live_contains_mobject(
+        /// Query the direct children of this Scene's root in setup and playback.
+        #[wasm_bindgen(js_name = containsDirectMobject)]
+        pub fn contains_direct_mobject(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<bool, JsValue> {
             target.id_in_store(
                 self.inner.scene.integration_store(),
-                "live execution context",
+                "scene membership query",
             )?;
             self.inner
-                .live_contains_mobject(target.semantic_mobject())
+                .contains_direct_mobject(target.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveTargetEditor)]
-        pub fn live_target_editor(
+        #[wasm_bindgen(js_name = targetEditor)]
+        pub fn target_editor(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
-            source.id_in_store(self.inner.scene.integration_store(), "live target editor")?;
+            source.id_in_store(self.inner.scene.integration_store(), "scene target editor")?;
             self.inner
-                .live_target_editor(source.semantic_mobject())
+                .target_editor(source.semantic_mobject())
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
 
         /// Promote own points through one coherent copy/clear/member publication.
-        #[wasm_bindgen(js_name = livePromoteFamilyOwnPoints)]
-        pub fn live_promote_family_own_points(
+        #[wasm_bindgen(js_name = promoteFamilyOwnPoints)]
+        pub fn promote_family_own_points(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             references: WasmSceneMembershipBatch,
         ) -> Result<crate::WasmFamilyCopy, JsValue> {
             let source = source.semantic_family()?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .live_promote_own_points(
+                .promote_own_points(
                     (&source).into(),
                     &references.copy_references().map_err(typed_js_error)?,
                 )
                 .map(crate::WasmFamilyCopy::from_entry_copy)
-                .map_err(typed_js_error)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
-        #[wasm_bindgen(js_name = livePromoteMobjectOwnPoints)]
-        pub fn live_promote_mobject_own_points(
+        #[wasm_bindgen(js_name = promoteMobjectOwnPoints)]
+        pub fn promote_mobject_own_points(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             references: WasmSceneMembershipBatch,
         ) -> Result<crate::WasmFamilyCopy, JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .live_promote_own_points(
+                .promote_own_points(
                     source.semantic_mobject().into(),
                     &references.copy_references().map_err(typed_js_error)?,
                 )
                 .map(crate::WasmFamilyCopy::from_entry_copy)
-                .map_err(typed_js_error)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
-        /// Copy the complete family through one coherent live publication.
-        #[wasm_bindgen(js_name = liveCopyFamily)]
-        pub fn live_copy_family(
+        /// Copy a family through the owning Scene publication.
+        #[wasm_bindgen(js_name = copyFamily)]
+        pub fn copy_family(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             references: WasmSceneMembershipBatch,
         ) -> Result<crate::WasmFamilyCopy, JsValue> {
             let source = source.semantic_family()?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .copy_family_with_references(
                     &source,
                     &references.copy_references().map_err(typed_js_error)?,
                 )
                 .map(crate::WasmFamilyCopy::from_copy)
-                .map_err(typed_js_error)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
-        #[wasm_bindgen(js_name = liveCyclicReplaceTarget)]
-        pub fn live_cyclic_replace_target(
+        #[wasm_bindgen(js_name = cyclicReplaceTarget)]
+        pub fn cyclic_replace_target(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             references: WasmSceneMembershipBatch,
         ) -> Result<crate::WasmFamilyCopy, JsValue> {
             let source = source.semantic_family()?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .cyclic_replace_target_with_references(
                     &source,
                     &references.copy_references().map_err(typed_js_error)?,
                 )
                 .map(crate::WasmFamilyCopy::from_copy)
-                .map_err(typed_js_error)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
-        #[wasm_bindgen(js_name = liveBecomeFamily)]
-        pub fn live_become_family(
+        #[wasm_bindgen(js_name = becomeFamily)]
+        pub fn become_family(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             target: &crate::WasmAuthoringFamilyHandle,
@@ -9292,9 +9037,9 @@ mod wasm {
             stretch: bool,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .live_become_family(
+                .become_family(
                     &source.semantic_family()?,
                     &target.semantic_family()?,
                     noon::ManimBecomeOptions {
@@ -9304,191 +9049,124 @@ mod wasm {
                         stretch,
                     },
                 )
-                .map_err(typed_js_error)
+                .map(|_| ())
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyPoints)]
-        pub fn live_set_family_points(
-            &mut self,
-            source: &crate::WasmAuthoringFamilyHandle,
-            values: Vec<f64>,
-        ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points_f64(&values)?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_family_points_f64(&source.semantic_family()?, &points)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveSetFamilyEmptyPointArray)]
-        pub fn live_set_family_empty_point_array(
+        #[wasm_bindgen(js_name = setFamilyEmptyPointArray)]
+        pub fn set_family_empty_point_array(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             dimensions: Vec<f64>,
         ) -> Result<(), JsValue> {
             let shape = crate::authoring_geometry::point_array_shape(&dimensions)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_empty_point_array(noon::MobjectTarget::from(&source.semantic_family()?), shape)
                 .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyPoints3D)]
-        pub fn live_set_family_points_3d(
+        #[wasm_bindgen(js_name = setFamilyPoints3D)]
+        pub fn set_family_points_3d(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_family_points_3d(&source.semantic_family()?, &points)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAppendFamilyPoints)]
-        pub fn live_append_family_points(
-            &mut self,
-            source: &crate::WasmAuthoringFamilyHandle,
-            values: Vec<f64>,
-        ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points_f64(&values)?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .append_family_points_f64(&source.semantic_family()?, &points)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveAppendFamilyPoints3D)]
-        pub fn live_append_family_points_3d(
+        #[wasm_bindgen(js_name = appendFamilyPoints3D)]
+        pub fn append_family_points_3d(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .append_family_points_3d(&source.semantic_family()?, &points)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveClearFamilyPoints)]
-        pub fn live_clear_family_points(
+        #[wasm_bindgen(js_name = clearFamilyPoints)]
+        pub fn clear_family_points(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .clear_family_points(&source.semantic_family()?)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetPoints)]
-        pub fn live_set_points(
-            &mut self,
-            source: &crate::WasmAuthoringMobjectHandle,
-            values: Vec<f64>,
-        ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points_f64(&values)?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_points_f64(source.semantic_mobject(), &points)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveSetEmptyPointArray)]
-        pub fn live_set_empty_point_array(
+        #[wasm_bindgen(js_name = setEmptyPointArray)]
+        pub fn set_empty_point_array(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             dimensions: Vec<f64>,
         ) -> Result<(), JsValue> {
             let shape = crate::authoring_geometry::point_array_shape(&dimensions)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_empty_point_array(noon::MobjectTarget::from(source.semantic_mobject()), shape)
                 .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetPoints3D)]
-        pub fn live_set_points_3d(
+        #[wasm_bindgen(js_name = setPoints3D)]
+        pub fn set_points_3d(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_points_3d(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAppendPoints)]
-        pub fn live_append_points(
-            &mut self,
-            source: &crate::WasmAuthoringMobjectHandle,
-            values: Vec<f64>,
-        ) -> Result<(), JsValue> {
-            let points = crate::authoring_geometry::points_f64(&values)?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .append_points_f64(source.semantic_mobject(), &points)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveAppendPoints3D)]
-        pub fn live_append_points_3d(
+        #[wasm_bindgen(js_name = appendPoints3D)]
+        pub fn append_points_3d(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .append_points_3d(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetPointsAsCorners)]
-        pub fn live_set_points_as_corners(
+        #[wasm_bindgen(js_name = setPointsAsCorners)]
+        pub fn set_points_as_corners(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_points_as_corners_3d(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetPointsAsCornersWithSamples)]
-        pub fn live_set_points_as_corners_with_samples(
+        #[wasm_bindgen(js_name = setPointsAsCornersWithSamples)]
+        pub fn set_points_as_corners_with_samples(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -9501,9 +9179,8 @@ mod wasm {
                 ))
             })?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_points_as_corners_3d_with_samples(
                     source.semantic_mobject(),
                     &points,
@@ -9512,21 +9189,20 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveClearPoints)]
-        pub fn live_clear_points(
+        #[wasm_bindgen(js_name = clearPoints)]
+        pub fn clear_points(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .clear_points(source.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveStartNewPath)]
-        pub fn live_start_new_path(
+        #[wasm_bindgen(js_name = startNewPath)]
+        pub fn start_new_path(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
@@ -9535,15 +9211,14 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .start_new_path_3d(source.semantic_mobject(), point)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveStartNewPathWithStride)]
-        pub fn live_start_new_path_with_stride(
+        #[wasm_bindgen(js_name = startNewPathWithStride)]
+        pub fn start_new_path_with_stride(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
@@ -9553,15 +9228,14 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .start_new_path_3d_with_stride(source.semantic_mobject(), point, stride)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddLineTo)]
-        pub fn live_add_line_to(
+        #[wasm_bindgen(js_name = addLineTo)]
+        pub fn add_line_to(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
@@ -9571,15 +9245,14 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let point = crate::authoring_geometry::point_3d(point_x, point_y, point_z)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_line_to_3d_with_stride(source.semantic_mobject(), point, stride.unwrap_or(4))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddLineToWithSamples)]
-        pub fn live_add_line_to_with_samples(
+        #[wasm_bindgen(js_name = addLineToWithSamples)]
+        pub fn add_line_to_with_samples(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             point_x: f64,
@@ -9593,9 +9266,8 @@ mod wasm {
                 JsValue::from_str("add_line_to requires four constructor interpolation samples")
             })?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_line_to_3d_with_stride_and_samples(
                     source.semantic_mobject(),
                     point,
@@ -9605,8 +9277,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddQuadraticBezierCurveTo)]
-        pub fn live_add_quadratic_bezier_curve_to(
+        #[wasm_bindgen(js_name = addQuadraticBezierCurveTo)]
+        pub fn add_quadratic_bezier_curve_to(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             control_x: f64,
@@ -9620,9 +9292,8 @@ mod wasm {
             let control = crate::authoring_geometry::point_3d(control_x, control_y, control_z)?;
             let anchor = crate::authoring_geometry::point_3d(anchor_x, anchor_y, anchor_z)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_quadratic_bezier_curve_to_3d_with_stride(
                     source.semantic_mobject(),
                     control,
@@ -9632,8 +9303,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddCubicBezierCurveTo)]
-        pub fn live_add_cubic_bezier_curve_to(
+        #[wasm_bindgen(js_name = addCubicBezierCurveTo)]
+        pub fn add_cubic_bezier_curve_to(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             control1_x: f64,
@@ -9651,9 +9322,8 @@ mod wasm {
             let control2 = crate::authoring_geometry::point_3d(control2_x, control2_y, control2_z)?;
             let anchor = crate::authoring_geometry::point_3d(anchor_x, anchor_y, anchor_z)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_cubic_bezier_curve_to_3d_with_stride(
                     source.semantic_mobject(),
                     control1,
@@ -9664,8 +9334,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddSmoothCurveTo)]
-        pub fn live_add_smooth_curve_to(
+        #[wasm_bindgen(js_name = addSmoothCurveTo)]
+        pub fn add_smooth_curve_to(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -9682,9 +9352,8 @@ mod wasm {
                 }
             };
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_smooth_curve_to_with_stride(
                     source.semantic_mobject(),
                     handle2,
@@ -9694,22 +9363,21 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveScaleHandleToAnchorDistances)]
-        pub fn live_scale_handle_to_anchor_distances(
+        #[wasm_bindgen(js_name = scaleHandleToAnchorDistances)]
+        pub fn scale_handle_to_anchor_distances(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             factor: f64,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .scale_handle_to_anchor_distances(source.semantic_mobject(), factor)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddCubicBezierCurve)]
-        pub fn live_add_cubic_bezier_curve(
+        #[wasm_bindgen(js_name = addCubicBezierCurve)]
+        pub fn add_cubic_bezier_curve(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             anchor1_x: f64,
@@ -9730,9 +9398,8 @@ mod wasm {
             let handle2 = crate::authoring_geometry::point_3d(handle2_x, handle2_y, handle2_z)?;
             let anchor2 = crate::authoring_geometry::point_3d(anchor2_x, anchor2_y, anchor2_z)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_cubic_bezier_curve_3d(
                     source.semantic_mobject(),
                     anchor1,
@@ -9743,53 +9410,50 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddCubicBezierCurves)]
-        pub fn live_add_cubic_bezier_curves(
+        #[wasm_bindgen(js_name = addCubicBezierCurves)]
+        pub fn add_cubic_bezier_curves(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
             let curves = crate::authoring_geometry::cubic_curves_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_cubic_bezier_curves_3d(source.semantic_mobject(), &curves)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetCubicBezierCurves)]
-        pub fn live_set_cubic_bezier_curves(
+        #[wasm_bindgen(js_name = setCubicBezierCurves)]
+        pub fn set_cubic_bezier_curves(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
             let curves = crate::authoring_geometry::cubic_curves_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_cubic_bezier_curves_3d(source.semantic_mobject(), &curves)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddPointsAsCorners)]
-        pub fn live_add_points_as_corners(
+        #[wasm_bindgen(js_name = addPointsAsCorners)]
+        pub fn add_points_as_corners(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_points_as_corners_3d(source.semantic_mobject(), &points)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAddPointsAsCornersWithStride)]
-        pub fn live_add_points_as_corners_with_stride(
+        #[wasm_bindgen(js_name = addPointsAsCornersWithStride)]
+        pub fn add_points_as_corners_with_stride(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -9798,9 +9462,8 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let points = crate::authoring_geometry::points_3d(&values)?;
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .add_points_as_corners_3d_with_stride(
                     source.semantic_mobject(),
                     &points,
@@ -9810,31 +9473,29 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAppendVectorizedMobject)]
-        pub fn live_append_vectorized_mobject(
+        #[wasm_bindgen(js_name = appendVectorizedMobject)]
+        pub fn append_vectorized_mobject(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             source: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .append_vectorized_mobject(object.semantic_mobject(), source.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAppendVectorizedMobjectWithStride)]
-        pub fn live_append_vectorized_mobject_with_stride(
+        #[wasm_bindgen(js_name = appendVectorizedMobjectWithStride)]
+        pub fn append_vectorized_mobject_with_stride(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             source: &crate::WasmAuthoringMobjectHandle,
             stride: i32,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .append_vectorized_mobject_with_stride(
                     object.semantic_mobject(),
                     source.semantic_mobject(),
@@ -9843,170 +9504,158 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetPointsSmoothly)]
-        pub fn live_set_points_smoothly(
+        #[wasm_bindgen(js_name = setPointsSmoothly)]
+        pub fn set_points_smoothly(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             coordinates: Vec<f64>,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .set_points_smoothly(
                     object.semantic_mobject(),
                     &crate::authoring_geometry::points(&coordinates)?,
                 )
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveChangeAnchorMode)]
-        pub fn live_change_anchor_mode(
+        #[wasm_bindgen(js_name = changeAnchorMode)]
+        pub fn change_anchor_mode(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             smooth: bool,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .change_anchor_mode(object.semantic_mobject(), smooth)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveChangeFamilyAnchorMode)]
-        pub fn live_change_family_anchor_mode(
+        #[wasm_bindgen(js_name = changeFamilyAnchorMode)]
+        pub fn change_family_anchor_mode(
             &mut self,
             family: &crate::WasmAuthoringFamilyHandle,
             smooth: bool,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .change_family_anchor_mode(&family.semantic_family()?, smooth)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveReverseFamilyPoints)]
-        pub fn live_reverse_family_points(
+        #[wasm_bindgen(js_name = reverseFamilyPoints)]
+        pub fn reverse_family_points(
             &mut self,
             family: &crate::WasmAuthoringFamilyHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .reverse_family_points(&family.semantic_family()?)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveRepeatFamilyPoints)]
-        pub fn live_repeat_family_points(
+        #[wasm_bindgen(js_name = repeatFamilyPoints)]
+        pub fn repeat_family_points(
             &mut self,
             family: &crate::WasmAuthoringFamilyHandle,
             count: u32,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .repeat_family_points(&family.semantic_family()?, count as usize)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveInsertNCurves)]
-        pub fn live_insert_n_curves(
+        #[wasm_bindgen(js_name = insertNCurves)]
+        pub fn insert_n_curves(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             additional: u32,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .insert_n_curves(object.semantic_mobject(), additional as usize)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveReverseDirection)]
-        pub fn live_reverse_direction(
+        #[wasm_bindgen(js_name = reverseDirection)]
+        pub fn reverse_direction(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .reverse_direction(object.semantic_mobject())
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveReversePoints)]
-        pub fn live_reverse_points(
+        #[wasm_bindgen(js_name = reversePoints)]
+        pub fn reverse_points(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .reverse_points(object.semantic_mobject())
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveRepeatPoints)]
-        pub fn live_repeat_points(
+        #[wasm_bindgen(js_name = repeatPoints)]
+        pub fn repeat_points(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             count: u32,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .repeat_points(object.semantic_mobject(), count as usize)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSubcurve)]
-        pub fn live_subcurve(
+        #[wasm_bindgen(js_name = subcurve)]
+        pub fn subcurve(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             a: f64,
             b: f64,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .subcurve(source.semantic_mobject(), a, b)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveAlignPoints)]
-        pub fn live_align_points(
+        #[wasm_bindgen(js_name = alignPoints)]
+        pub fn align_points(
             &mut self,
             left: &crate::WasmAuthoringMobjectHandle,
             right: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .align_points(left.semantic_mobject(), right.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveAlignRootPoints)]
-        pub fn live_align_root_points(
+        #[wasm_bindgen(js_name = alignRootPoints)]
+        pub fn align_root_points(
             &mut self,
             left: &crate::WasmLayoutAnchor,
             right: &crate::WasmLayoutAnchor,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .align_path_points(&left.anchor, &right.anchor)
                 .map_err(noon::LiveSessionError::from)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = livePointwiseBecomePartial)]
-        pub fn live_pointwise_become_partial(
+        #[wasm_bindgen(js_name = pointwiseBecomePartial)]
+        pub fn pointwise_become_partial(
             &mut self,
             object: &crate::WasmAuthoringMobjectHandle,
             source: &crate::WasmAuthoringMobjectHandle,
@@ -10014,9 +9663,8 @@ mod wasm {
             b: f64,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .pointwise_become_partial(
                     object.semantic_mobject(),
                     source.semantic_mobject(),
@@ -10026,21 +9674,20 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveClosePath)]
-        pub fn live_close_path(
+        #[wasm_bindgen(js_name = closePath)]
+        pub fn close_path(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .close_path(source.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveClosePathWithStride)]
-        pub fn live_close_path_with_stride(
+        #[wasm_bindgen(js_name = closePathWithStride)]
+        pub fn close_path_with_stride(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             stride: i32,
@@ -10048,9 +9695,8 @@ mod wasm {
             bezier_t_values: Vec<f64>,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .close_path_with_stride(
                     source.semantic_mobject(),
                     stride,
@@ -10060,23 +9706,22 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMatchPoints)]
-        pub fn live_match_points(
+        #[wasm_bindgen(js_name = matchPoints)]
+        pub fn match_points(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             target: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .match_points(source.semantic_mobject(), target.semantic_mobject())
                 .map_err(typed_js_error)
         }
 
         /// Replace one object's content and presentation through the shared semantic owner.
-        #[wasm_bindgen(js_name = liveBecomeMobject)]
-        pub fn live_become_mobject(
+        #[wasm_bindgen(js_name = becomeMobject)]
+        pub fn become_mobject(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             other: &crate::WasmAuthoringMobjectHandle,
@@ -10086,7 +9731,7 @@ mod wasm {
             stretch: bool,
         ) -> Result<(), JsValue> {
             self.inner
-                .live_become_mobject(
+                .become_mobject(
                     target.semantic_mobject(),
                     other.semantic_mobject(),
                     noon::ManimBecomeOptions {
@@ -10100,20 +9745,20 @@ mod wasm {
         }
 
         /// Publish a detached coordinate family through the same retained owner.
-        #[wasm_bindgen(js_name = liveCreateCoordinates)]
-        pub fn live_create_coordinates(
+        #[wasm_bindgen(js_name = createCoordinates)]
+        pub fn create_coordinates(
             &mut self,
             candidate: crate::WasmCoordinateOptions,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
             use crate::authoring_coordinates::CoordinateRequest;
-            use noon::integration::{live_coordinate_failure, live_coordinate_publication_failure};
-            let scene = self
-                .inner
-                .active_live_player()
-                .map_err(AuthoringFailure::from)
-                .map_err(typed_js_error)?
-                .scene_mut();
-            let failure = if matches!(&candidate.request, CoordinateRequest::PolarPlane(_)) {
+            use noon::integration::{
+                coordinate_failure, live_coordinate_failure, live_coordinate_publication_failure,
+            };
+            let running = self.inner.requires_live_mutation_routing();
+            let scene = self.inner.local_authoring_scene().map_err(typed_js_error)?;
+            let failure = if !running {
+                coordinate_failure
+            } else if matches!(&candidate.request, CoordinateRequest::PolarPlane(_)) {
                 live_coordinate_publication_failure
             } else {
                 live_coordinate_failure
@@ -10142,47 +9787,45 @@ mod wasm {
         }
 
         /// Publish a fully configured geometry through the current live session.
-        #[wasm_bindgen(js_name = liveCreateManimGeometry)]
-        pub fn live_create_manim_geometry(
+        #[wasm_bindgen(js_name = createManimGeometry)]
+        pub fn create_manim_geometry(
             &mut self,
             candidate: crate::WasmManimGeometryOptions,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
             self.inner
-                .live_create_manim_geometry(candidate.options)
+                .create_manim_geometry(candidate.options)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
 
-        /// Publish one retained Arrow family through the current live session.
-        #[wasm_bindgen(js_name = liveCreateManimArrow)]
-        pub fn live_create_manim_arrow(
+        /// Publish an Arrow or ArrowVectorField through its Scene.
+        #[wasm_bindgen(js_name = createManimArrow)]
+        pub fn create_manim_arrow(
             &mut self,
             candidate: crate::WasmManimArrowOptions,
         ) -> Result<crate::WasmAuthoringArrowHandle, JsValue> {
-            let options = candidate.into_live_arrow_options()?;
-            self.inner
-                .live_create_manim_arrow(options)
-                .map(crate::WasmAuthoringArrowHandle::from_manim_arrow)
-                .map_err(typed_js_error)
+            let running = !self.inner.player_ownership.is_unstarted();
+            candidate.publish_in_scene(
+                self.inner.local_authoring_scene().map_err(typed_js_error)?,
+                running,
+            )
         }
 
-        /// Publish a fully configured image through the current live session.
-        #[wasm_bindgen(js_name = liveCreateImage)]
-        pub fn live_create_image(
+        /// Publish a fully configured image through its Scene.
+        #[wasm_bindgen(js_name = createImage)]
+        pub fn create_image(
             &mut self,
             candidate: crate::WasmImageMobjectOptions,
         ) -> Result<crate::WasmAuthoringMobjectHandle, JsValue> {
             self.inner
-                .live_create_image(candidate.options)
+                .create_image(candidate.options)
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
 
-        /// Shape and publish one detached plain Text object through the current
-        /// retained session. The object has no root membership or execution row
-        /// until a later lifecycle operation admits it.
-        #[wasm_bindgen(js_name = liveCreateManimText)]
-        pub fn live_create_manim_text(
+        /// Shape and publish one detached plain Text object through its Scene.
+        #[wasm_bindgen(js_name = createManimText)]
+        pub fn create_manim_text(
             &mut self,
             source: &str,
             font_family: &str,
@@ -10213,13 +9856,13 @@ mod wasm {
             .set_opacity(checked_f32("text opacity", opacity)?)
             .with_text2color(colors.map_or_else(Vec::new, |batch| batch.colors));
             self.inner
-                .live_create_text(text)
+                .author_text(|scene| scene.text(text))
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveCreateManimMarkupText)]
-        pub fn live_create_manim_markup_text(
+        #[wasm_bindgen(js_name = createManimMarkupText)]
+        pub fn create_manim_markup_text(
             &mut self,
             source: &str,
             font_family: &str,
@@ -10248,66 +9891,63 @@ mod wasm {
             ))
             .set_opacity(checked_f32("text opacity", opacity)?);
             self.inner
-                .live_create_text(text)
+                .author_text(|scene| scene.text(text))
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
 
-        /// Compile and publish one detached Typst or MathTypst object through
-        /// the current retained session.
-        #[wasm_bindgen(js_name = liveCreateLatex)]
-        pub fn live_create_latex(
+        /// Compile and publish detached LaTeX parts through their Scene.
+        #[wasm_bindgen(js_name = createLatex)]
+        pub fn create_latex(
             &mut self,
             options: crate::WasmLatexOptions,
             compiler: &mut crate::WasmLatexCompiler,
         ) -> Result<crate::WasmLatexPartsHandle, JsValue> {
-            let scene = self
-                .inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut();
-            let parts = match options.text {
-                crate::authoring_latex::AuthoredLatex::Text(text) => {
-                    scene.tex_parts(text, compiler)
-                }
-                crate::authoring_latex::AuthoredLatex::Math(text) => {
-                    scene.math_tex_parts(text, compiler)
-                }
-            };
-            parts
+            self.inner
+                .author_text(|scene| options.text.publish(scene, compiler))
                 .map(crate::WasmLatexPartsHandle::new)
-                .map_err(noon::integration::live_text_failure)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetLatexMemberColors)]
-        pub fn live_set_latex_member_colors(
+        #[wasm_bindgen(js_name = setLatexMemberColors)]
+        pub fn set_latex_member_colors(
             &mut self,
             handle: &crate::WasmLatexPartsHandle,
             values: &[f64],
         ) -> Result<(), JsValue> {
-            let colors = crate::authoring_latex::member_colors(values)?;
+            let colors = noon::integration::latex_member_colors(values).map_err(typed_js_error)?;
+            let running = !self.inner.player_ownership.is_unstarted();
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .live_set_family_member_colors(handle.semantic_parts().family(), &colors)
-                .map_err(typed_js_error)
+                .set_family_member_colors(handle.semantic_parts().family(), &colors)
+                .map(|_| ())
+                .map_err(|error| {
+                    typed_js_error(AuthoringFailure::from_scene_mutation(error, running))
+                })
         }
 
-        #[wasm_bindgen(js_name = liveLatexFontSize)]
-        pub fn live_latex_font_size(
+        #[wasm_bindgen(js_name = latexFontSize)]
+        pub fn latex_font_size(
             &mut self,
             handle: &crate::WasmLatexPartsHandle,
         ) -> Result<f64, JsValue> {
+            let running = !self.inner.player_ownership.is_unstarted();
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .live_latex_font_size(handle.semantic_parts())
-                .map_err(typed_js_error)
+                .latex_font_size(handle.semantic_parts())
+                .map_err(|error| {
+                    if running {
+                        typed_js_error(running_placement_error(error))
+                    } else {
+                        js_error(error)
+                    }
+                })
         }
 
-        #[wasm_bindgen(js_name = liveCreateManimTypst)]
-        pub fn live_create_manim_typst(
+        #[wasm_bindgen(js_name = createManimTypst)]
+        pub fn create_manim_typst(
             &mut self,
             source: &str,
             math: bool,
@@ -10327,22 +9967,24 @@ mod wasm {
                 checked_f32("text alpha", alpha)?,
             );
             let opacity = checked_f32("text opacity", opacity)?;
-            let result = if math {
-                self.inner.live_create_math_typst(
-                    noon::MathTypst::new(source)
-                        .with_font_size(font_size)
-                        .color(color)
-                        .set_opacity(opacity),
-                )
-            } else {
-                self.inner.live_create_typst(
-                    noon::Typst::new(source)
-                        .with_font_size(font_size)
-                        .color(color)
-                        .set_opacity(opacity),
-                )
-            };
-            result
+            self.inner
+                .author_text(|scene| {
+                    if math {
+                        scene.math_typst(
+                            noon::MathTypst::new(source)
+                                .with_font_size(font_size)
+                                .color(color)
+                                .set_opacity(opacity),
+                        )
+                    } else {
+                        scene.typst(
+                            noon::Typst::new(source)
+                                .with_font_size(font_size)
+                                .color(color)
+                                .set_opacity(opacity),
+                        )
+                    }
+                })
                 .map(crate::WasmAuthoringMobjectHandle::from_semantic_mobject)
                 .map_err(typed_js_error)
         }
@@ -10459,9 +10101,9 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = liveBindClickIndicate)]
+        #[wasm_bindgen(js_name = bindClickIndicate)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_bind_click_indicate(
+        pub fn bind_click_indicate(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             scale_factor: f64,
@@ -10496,8 +10138,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveBindClickGlowPulse)]
-        pub fn live_bind_click_glow_pulse(
+        #[wasm_bindgen(js_name = bindClickGlowPulse)]
+        pub fn bind_click_glow_pulse(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             intensity: f64,
@@ -10522,8 +10164,8 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveClearClickAction)]
-        pub fn live_clear_click_action(
+        #[wasm_bindgen(js_name = clearClickAction)]
+        pub fn clear_click_action(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
@@ -10533,26 +10175,21 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetTranslation)]
-        pub fn live_set_translation(
+        #[wasm_bindgen(js_name = setTranslation)]
+        pub fn set_translation(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             x: f64,
             y: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_translation(handle.semantic_mobject(), x, y)
+                .edit_scene(|scene| scene.set_translation(handle.semantic_mobject(), x, y))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetAngleValue)]
-        pub fn live_set_angle_value(
+        #[wasm_bindgen(js_name = setAngleValue)]
+        pub fn set_angle_value(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             radians: f64,
@@ -10562,14 +10199,12 @@ mod wasm {
                 "live execution context",
             )?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_angle_value(handle.semantic_mobject(), radians)
+                .edit_scene(|scene| scene.set_angle_value(handle.semantic_mobject(), radians))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMoveToLayout)]
-        pub fn live_move_to_layout(
+        #[wasm_bindgen(js_name = moveToLayout)]
+        pub fn move_to_layout(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             target: &crate::authoring_mobject::WasmLayoutAnchor,
@@ -10583,20 +10218,20 @@ mod wasm {
                 "live execution context",
             )?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_move_to(
-                    handle.semantic_mobject(),
-                    noon::LiveLayoutTarget::Anchor(&target.anchor),
-                    (edge_x, edge_y),
-                    (mask_x, mask_y),
-                )
+                .place(|scene| {
+                    scene.move_to(
+                        handle.semantic_mobject(),
+                        noon::LayoutTarget::Anchor(&target.anchor),
+                        (edge_x, edge_y),
+                        (mask_x, mask_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMoveToPoint)]
+        #[wasm_bindgen(js_name = moveToPoint)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_move_to_point(
+        pub fn move_to_point(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             x: f64,
@@ -10611,19 +10246,19 @@ mod wasm {
                 "live execution context",
             )?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_move_to(
-                    handle.semantic_mobject(),
-                    noon::LiveLayoutTarget::Point(x, y),
-                    (edge_x, edge_y),
-                    (mask_x, mask_y),
-                )
+                .place(|scene| {
+                    scene.move_to(
+                        handle.semantic_mobject(),
+                        noon::LayoutTarget::Point(x, y),
+                        (edge_x, edge_y),
+                        (mask_x, mask_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMoveToMobject)]
-        pub fn live_move_to_mobject(
+        #[wasm_bindgen(js_name = moveToMobject)]
+        pub fn move_to_mobject(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             target: &crate::WasmAuthoringMobjectHandle,
@@ -10641,142 +10276,116 @@ mod wasm {
                 "live execution context",
             )?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_move_to(
-                    handle.semantic_mobject(),
-                    noon::LiveLayoutTarget::Mobject(target.semantic_mobject()),
-                    (edge_x, edge_y),
-                    (mask_x, mask_y),
-                )
+                .place(|scene| {
+                    scene.move_to(
+                        handle.semantic_mobject(),
+                        noon::LayoutTarget::Mobject(target.semantic_mobject()),
+                        (edge_x, edge_y),
+                        (mask_x, mask_y),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFillImage)]
-        pub fn live_set_fill_image(
+        #[wasm_bindgen(js_name = setFillImage)]
+        pub fn set_fill_image(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             paint: &crate::WasmImagePaintOptions,
             opacity: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_image(handle.semantic_mobject(), paint.options.clone(), opacity)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| {
+                    scene.set_fill_image(handle.semantic_mobject(), paint.options.clone(), opacity)
+                })
+                .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSetFillImageMapping)]
-        pub fn live_set_fill_image_mapping(
+        #[wasm_bindgen(js_name = setFillImageMapping)]
+        pub fn set_fill_image_mapping(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             mapping: &crate::WasmImageMapping,
             opacity: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_image_mapping(handle.semantic_mobject(), mapping.value, opacity)
-                .map(|_| ())
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| {
+                    scene.set_fill_image_mapping(handle.semantic_mobject(), mapping.value, opacity)
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFillHatch)]
-        pub fn live_set_fill_hatch(
+        #[wasm_bindgen(js_name = setFillHatch)]
+        pub fn set_fill_hatch(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             paint: &crate::WasmHatchPaint,
             opacity: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_hatch(handle.semantic_mobject(), paint.value.clone(), opacity)
-                .map_err(noon::LiveSessionError::from)
+                .edit_scene(|scene| {
+                    scene.set_fill_hatch(handle.semantic_mobject(), paint.value.clone(), opacity)
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFillNoise)]
-        pub fn live_set_fill_noise(
+        #[wasm_bindgen(js_name = setFillNoise)]
+        pub fn set_fill_noise(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             gradient: &crate::WasmNoisePaint,
             opacity: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_noise(handle.semantic_mobject(), gradient.value.clone(), opacity)
-                .map_err(noon::LiveSessionError::from)
+                .edit_scene(|scene| {
+                    scene.set_fill_noise(handle.semantic_mobject(), gradient.value.clone(), opacity)
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFillRadialGradient)]
-        pub fn live_set_fill_radial_gradient(
+        #[wasm_bindgen(js_name = setFillRadialGradient)]
+        pub fn set_fill_radial_gradient(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             gradient: &crate::WasmRadialGradient,
             opacity: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_radial_gradient(
-                    handle.semantic_mobject(),
-                    gradient.value.clone(),
-                    opacity,
-                )
-                .map_err(noon::LiveSessionError::from)
+                .edit_scene(|scene| {
+                    scene.set_fill_radial_gradient(
+                        handle.semantic_mobject(),
+                        gradient.value.clone(),
+                        opacity,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFillGradient)]
-        pub fn live_set_fill_gradient(
+        #[wasm_bindgen(js_name = setFillGradient)]
+        pub fn set_fill_gradient(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             gradient: &crate::WasmLinearGradient,
             opacity: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_gradient(handle.semantic_mobject(), gradient.value.clone(), opacity)
-                .map_err(noon::LiveSessionError::from)
+                .edit_scene(|scene| {
+                    scene.set_fill_gradient(
+                        handle.semantic_mobject(),
+                        gradient.value.clone(),
+                        opacity,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFill)]
-        pub fn live_set_fill(
+        #[wasm_bindgen(js_name = setFill)]
+        pub fn set_fill(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             red: f64,
@@ -10784,20 +10393,16 @@ mod wasm {
             blue: f64,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_rgb(handle.semantic_mobject(), red, green, blue, opacity)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| {
+                    scene.set_fill_rgb(handle.semantic_mobject(), red, green, blue, opacity)
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFillColor)]
-        pub fn live_set_fill_color(
+        #[wasm_bindgen(js_name = setFillColor)]
+        pub fn set_fill_color(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             red: f64,
@@ -10805,71 +10410,41 @@ mod wasm {
             blue: f64,
             alpha: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| {
+                    scene.set_fill_color(handle.semantic_mobject(), red, green, blue, alpha)
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveDisableFill)]
-        pub fn live_disable_fill(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .disable_fill(handle.semantic_mobject())
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
-        }
-
-        #[wasm_bindgen(js_name = liveSetFillOpacity)]
-        pub fn live_set_fill_opacity(
+        #[wasm_bindgen(js_name = setFillOpacity)]
+        pub fn set_fill_opacity(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_fill_opacity(handle.semantic_mobject(), opacity)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| scene.set_fill_opacity(handle.semantic_mobject(), opacity))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetImageSampling)]
-        pub fn live_set_image_sampling(
+        #[wasm_bindgen(js_name = setImageSampling)]
+        pub fn set_image_sampling(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             value: &str,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(self.inner.scene.integration_store(), "live image sampling")?;
+            handle.id_in_store(self.inner.scene.integration_store(), "image sampling")?;
             let sampling = crate::authoring_image::sampling(value)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_image_sampling(handle.semantic_mobject(), sampling)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| scene.set_image_sampling(handle.semantic_mobject(), sampling))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetColor)]
-        pub fn live_set_color(
+        #[wasm_bindgen(js_name = setColor)]
+        pub fn set_color(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             red: f64,
@@ -10877,58 +10452,30 @@ mod wasm {
             blue: f64,
             alpha: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_color_rgba(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| {
+                    scene.set_color_rgba(handle.semantic_mobject(), red, green, blue, alpha)
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetUpdatingSuspended)]
-        pub fn live_set_updating_suspended(
+        #[wasm_bindgen(js_name = setUpdatingSuspended)]
+        pub fn set_updating_suspended(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             suspended: bool,
             recursive: bool,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live updater suspension",
-            )?;
-            self.inner.active_live_player().map_err(typed_js_error)?;
-            noon::MobjectTarget::from(handle.semantic_mobject())
-                .set_updating_suspended(suspended, recursive)
+            self.inner
+                .edit_scene(|scene| {
+                    scene.set_updating_suspended(handle.semantic_mobject(), suspended, recursive)
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetStroke)]
-        pub fn live_set_stroke(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-            red: f64,
-            green: f64,
-            blue: f64,
-            opacity: f64,
-        ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_stroke(handle.semantic_mobject(), red, green, blue, opacity)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
-        }
-
-        #[wasm_bindgen(js_name = liveSetStrokeColor)]
-        pub fn live_set_stroke_color(
+        #[wasm_bindgen(js_name = setStrokeColor)]
+        pub fn set_stroke_color(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             red: f64,
@@ -10936,109 +10483,64 @@ mod wasm {
             blue: f64,
             alpha: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_stroke_color(handle.semantic_mobject(), red, green, blue, alpha)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| {
+                    scene.set_stroke_color(handle.semantic_mobject(), red, green, blue, alpha)
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveDisableStroke)]
-        pub fn live_disable_stroke(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .disable_stroke(handle.semantic_mobject())
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
-        }
-
-        #[wasm_bindgen(js_name = liveSetStrokeOpacity)]
-        pub fn live_set_stroke_opacity(
+        #[wasm_bindgen(js_name = setStrokeOpacity)]
+        pub fn set_stroke_opacity(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_stroke_opacity(handle.semantic_mobject(), opacity)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| scene.set_stroke_opacity(handle.semantic_mobject(), opacity))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetStrokeCap)]
-        pub fn live_set_stroke_cap(
+        #[wasm_bindgen(js_name = setStrokeCap)]
+        pub fn set_stroke_cap(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             cap: &str,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_stroke_cap(handle.semantic_mobject(), cap)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| scene.set_stroke_cap(handle.semantic_mobject(), cap))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetOpacity)]
-        pub fn live_set_opacity(
+        #[wasm_bindgen(js_name = setOpacity)]
+        pub fn set_opacity(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_opacity(handle.semantic_mobject(), opacity)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| scene.set_opacity(handle.semantic_mobject(), opacity))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveFade)]
-        pub fn live_fade(
+        #[wasm_bindgen(js_name = fade)]
+        pub fn fade(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             darkness: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .fade(handle.semantic_mobject(), darkness)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| scene.fade(handle.semantic_mobject(), darkness))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveFadeTo)]
-        pub fn live_fade_to(
+        #[wasm_bindgen(js_name = fadeTo)]
+        pub fn fade_to(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             red: f64,
@@ -11047,90 +10549,44 @@ mod wasm {
             alpha: f64,
             amount: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .fade_to(
-                    handle.semantic_mobject(),
-                    noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
-                    amount,
-                )
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| {
+                    scene.fade_to(
+                        handle.semantic_mobject(),
+                        noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
+                        amount,
+                    )
+                })
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetEmission)]
-        pub fn live_set_emission(
+        #[wasm_bindgen(js_name = setEmission)]
+        pub fn set_emission(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             strength: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_emission(handle.semantic_mobject(), strength)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| scene.set_emission(handle.semantic_mobject(), strength))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetObjectOpacity)]
-        pub fn live_set_object_opacity(
+        #[wasm_bindgen(js_name = setObjectOpacity)]
+        pub fn set_object_opacity(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_object_opacity(handle.semantic_mobject(), opacity)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
-        }
-
-        #[wasm_bindgen(js_name = liveAdd)]
-        pub fn live_add(
-            &mut self,
-            object_id: &str,
-            handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            let id = parse_object_id("object ID", object_id)?;
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
-            self.inner
-                .live_add_mobject(id, handle.semantic_mobject())
+                .edit_scene(|scene| scene.set_object_opacity(handle.semantic_mobject(), opacity))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRemove)]
-        pub fn live_remove(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
-            self.inner
-                .live_remove_mobject(handle.semantic_mobject())
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveReplaceContent)]
-        pub fn live_replace_content(
+        #[wasm_bindgen(js_name = replaceContent)]
+        pub fn replace_content(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             source: &crate::WasmAuthoringMobjectHandle,
@@ -11144,118 +10600,82 @@ mod wasm {
                 "live execution context",
             )?;
             self.inner
-                .live_replace_content(target.semantic_mobject(), source.semantic_mobject())
+                .edit_scene(|scene| {
+                    scene.replace_content(target.semantic_mobject(), source.semantic_mobject())
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetDecimalValue)]
-        pub fn live_set_decimal_value(
+        #[wasm_bindgen(js_name = setDecimalValue)]
+        pub fn set_decimal_value(
             &mut self,
-            target: &crate::WasmAuthoringMobjectHandle,
+            number: &crate::WasmDecimalNumberHandle,
             compiler: &mut crate::WasmLatexCompiler,
             value: f64,
         ) -> Result<(), JsValue> {
-            target.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
             self.inner
-                .live_set_decimal_value(target.semantic_mobject(), compiler, value)
+                .author_number(|scene| scene.set_decimal_value(number.number(), compiler, value))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveIncrementDecimalValue)]
-        pub fn live_increment_decimal_value(
+        #[wasm_bindgen(js_name = incrementDecimalValue)]
+        pub fn increment_decimal_value(
             &mut self,
-            target: &crate::WasmAuthoringMobjectHandle,
+            number: &crate::WasmDecimalNumberHandle,
             compiler: &mut crate::WasmLatexCompiler,
             delta: f64,
         ) -> Result<(), JsValue> {
-            target.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
             self.inner
-                .live_increment_decimal_value(target.semantic_mobject(), compiler, delta)
+                .author_number(|scene| {
+                    scene.increment_decimal_value(number.number(), compiler, delta)
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveShift)]
-        pub fn live_shift(
+        #[wasm_bindgen(js_name = shift)]
+        pub fn shift(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             x: f64,
             y: f64,
             z: Option<f64>,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_shift(handle.semantic_mobject(), x, y, z.unwrap_or(0.0))
+                .edit_scene(|scene| {
+                    scene.shift_3d(
+                        handle.semantic_mobject(),
+                        noon::SemanticVec3::new(x, y, z.unwrap_or(0.0)),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        /// Create a complete detached family through the current live publication.
-        #[wasm_bindgen(js_name = liveCreateFamily)]
-        pub fn live_create_family(
+        /// Create a detached family with its root presentation in one Scene transaction.
+        #[wasm_bindgen(js_name = createFamily)]
+        pub fn create_family(
             &mut self,
             batch: WasmSceneMembershipBatch,
             z_index: f64,
-            draw_enabled: Option<bool>,
-        ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
-            let batch = batch.into_inner().map_err(typed_js_error)?;
-            if batch.kind != SceneMembershipBatchKind::Add {
-                return Err(typed_js_error("family creation requires an add batch"));
-            }
-            let members = batch.family_members().map_err(typed_js_error)?;
-            self.inner
-                .live_family_with_presentation(
-                    &members,
-                    z_index,
-                    noon::Color::WHITE,
-                    draw_enabled.unwrap_or(true),
-                )
-                .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveCreateFamilyWithColor)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn live_create_family_with_color(
-            &mut self,
-            batch: WasmSceneMembershipBatch,
-            z_index: f64,
+            draw_enabled: bool,
             red: f64,
             green: f64,
             blue: f64,
             alpha: f64,
-            draw_enabled: Option<bool>,
         ) -> Result<crate::WasmAuthoringFamilyHandle, JsValue> {
-            let color = crate::authoring_mobject::family_color(true, red, green, blue, alpha)
+            let color = noon::integration::family_color(true, red, green, blue, alpha)
                 .map_err(typed_js_error)?
                 .expect("required family color");
-            let batch = batch.into_inner().map_err(typed_js_error)?;
-            if batch.kind != SceneMembershipBatchKind::Add {
-                return Err(typed_js_error("family creation requires an add batch"));
-            }
+            let members = batch.copy_references().map_err(typed_js_error)?;
             self.inner
-                .live_family_with_presentation(
-                    &batch.family_members().map_err(typed_js_error)?,
-                    z_index,
-                    color,
-                    draw_enabled.unwrap_or(true),
-                )
+                .create_family(&members, z_index, color, draw_enabled)
                 .map(crate::WasmAuthoringFamilyHandle::from_semantic_family)
                 .map_err(typed_js_error)
         }
 
         /// Commit all requested direct-member edits before returning wrapper decisions.
-        #[wasm_bindgen(js_name = liveEditFamilyMembership)]
-        pub fn live_edit_family_membership(
+        #[wasm_bindgen(js_name = editFamilyMembership)]
+        pub fn edit_family_membership(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             batch: WasmSceneMembershipBatch,
@@ -11269,71 +10689,40 @@ mod wasm {
             let family = handle.semantic_family()?;
             let members = batch.family_members().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_edit_family_members((&family).into(), &members, adding)
+                .edit_family_members((&family).into(), &members, adding)
                 .map(|changed| changed.into_iter().map(u8::from).collect())
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = livePrependFamilyMembers)]
-        pub fn live_prepend_family_members(
+        #[wasm_bindgen(js_name = prependFamilyMembers)]
+        pub fn prepend_family_members(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             batch: WasmSceneMembershipBatch,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
-            if !std::rc::Rc::ptr_eq(
-                family.integration_store(),
-                self.inner.scene.integration_store(),
-            ) {
-                return Err(typed_js_error(
-                    "family and canonical context belong to different authoring stores",
-                ));
-            }
             let members = batch.copy_references().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_prepend_family_members((&family).into(), &members)
+                .edit_scene(|scene| scene.prepend_family_members(&family, &members))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveInsertFamilyMember)]
-        pub fn live_insert_family_member(
+        #[wasm_bindgen(js_name = insertFamilyMember)]
+        pub fn insert_family_member(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             index: usize,
             batch: WasmSceneMembershipBatch,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
-            if !std::rc::Rc::ptr_eq(
-                family.integration_store(),
-                self.inner.scene.integration_store(),
-            ) {
-                return Err(typed_js_error(
-                    "family and canonical context belong to different authoring stores",
-                ));
-            }
-            let batch = batch.into_inner().map_err(typed_js_error)?;
-            if batch.kind != SceneMembershipBatchKind::Add {
-                return Err(typed_js_error("family insertion requires an add batch"));
-            }
-            let members = batch.family_members().map_err(typed_js_error)?;
-            let [member] = members.as_slice() else {
-                return Err(typed_js_error(
-                    "family insertion requires exactly one member",
-                ));
-            };
+            let member = batch.single_member().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_insert_family_member((&family).into(), index, *member)
+                .edit_scene(|scene| scene.insert_family_member(&family, index, member))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveEditObjectMembership)]
-        pub fn live_edit_object_membership(
+        #[wasm_bindgen(js_name = editObjectMembership)]
+        pub fn edit_object_membership(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             batch: WasmSceneMembershipBatch,
@@ -11346,57 +10735,52 @@ mod wasm {
             };
             let members = batch.family_members().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_edit_family_members(handle.semantic_mobject().into(), &members, adding)
+                .edit_family_members(handle.semantic_mobject().into(), &members, adding)
                 .map(|changed| changed.into_iter().map(u8::from).collect())
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = livePrependObjectMembers)]
-        pub fn live_prepend_object_members(
+        #[wasm_bindgen(js_name = prependObjectMembers)]
+        pub fn prepend_object_members(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             batch: WasmSceneMembershipBatch,
         ) -> Result<(), JsValue> {
             let members = batch.copy_references().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_prepend_family_members(handle.semantic_mobject().into(), &members)
+                .edit_scene(|scene| {
+                    scene.prepend_family_members(handle.semantic_mobject(), &members)
+                })
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveInsertObjectMember)]
-        pub fn live_insert_object_member(
+        #[wasm_bindgen(js_name = insertObjectMember)]
+        pub fn insert_object_member(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             index: usize,
             batch: WasmSceneMembershipBatch,
         ) -> Result<(), JsValue> {
-            let members = batch.copy_references().map_err(typed_js_error)?;
-            let [member] = members.as_slice() else {
-                return Err(typed_js_error("insertion requires exactly one member"));
-            };
+            let member = batch.single_member().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_insert_family_member(handle.semantic_mobject().into(), index, *member)
+                .edit_scene(|scene| {
+                    scene.insert_family_member(handle.semantic_mobject(), index, member)
+                })
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveReplaceObjectMembers)]
-        pub fn live_replace_object_members(
+        #[wasm_bindgen(js_name = replaceObjectMembers)]
+        pub fn replace_object_members(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             batch: WasmSceneMembershipBatch,
         ) -> Result<(), JsValue> {
             let members = batch.copy_references().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_replace_members(handle.semantic_mobject().into(), &members)
+                .edit_scene(|scene| {
+                    scene.replace_members(handle.semantic_mobject().into(), &members)
+                })
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveReplaceFamilyMembers)]
-        pub fn live_replace_family_members(
+        #[wasm_bindgen(js_name = replaceFamilyMembers)]
+        pub fn replace_family_members(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             batch: WasmSceneMembershipBatch,
@@ -11404,52 +10788,39 @@ mod wasm {
             let family = handle.semantic_family()?;
             let members = batch.copy_references().map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_replace_members((&family).into(), &members)
+                .edit_scene(|scene| scene.replace_members((&family).into(), &members))
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveCopyMobjectFamily)]
-        pub fn live_copy_mobject_family(
+        #[wasm_bindgen(js_name = copyMobjectFamily)]
+        pub fn copy_mobject_family(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             references: WasmSceneMembershipBatch,
         ) -> Result<crate::WasmFamilyCopy, JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .scene_mut()
                 .copy_mobject_with_references(
                     source.semantic_mobject(),
                     &references.copy_references().map_err(typed_js_error)?,
                 )
                 .map(crate::WasmFamilyCopy::from_object_copy)
-                .map_err(typed_js_error)
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
-        #[wasm_bindgen(js_name = liveInvertFamilyMembers)]
-        pub fn live_invert_family_members(
+        #[wasm_bindgen(js_name = invertFamilyMembers)]
+        pub fn invert_family_members(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             recursive: bool,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
-            if !std::rc::Rc::ptr_eq(
-                family.integration_store(),
-                self.inner.scene.integration_store(),
-            ) {
-                return Err(typed_js_error(
-                    "family and canonical context belong to different authoring stores",
-                ));
-            }
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_invert_family_members(&family, recursive)
+                .edit_scene(|scene| scene.invert_family_members(&family, recursive))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveShiftFamily)]
-        pub fn live_shift_family(
+        #[wasm_bindgen(js_name = shiftFamily)]
+        pub fn shift_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             x: f64,
@@ -11466,13 +10837,13 @@ mod wasm {
                 ));
             }
             self.inner
-                .live_shift_family(&family, x, y, z.unwrap_or(0.0))
+                .shift_family(&family, x, y, z.unwrap_or(0.0))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetStyle)]
+        #[wasm_bindgen(js_name = setStyle)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_style(
+        pub fn set_style(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             fill_enabled: bool,
@@ -11526,15 +10897,12 @@ mod wasm {
             )
             .map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .set_style(&source.semantic_mobject(), update)
-                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_mutation(error, true)))
+                .edit_scene(|scene| scene.set_style(&source.semantic_mobject(), update))
+                .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveInterpolateMobjectStyle)]
-        pub fn live_interpolate_mobject_style(
+        #[wasm_bindgen(js_name = interpolateMobjectStyle)]
+        pub fn interpolate_mobject_style(
             &mut self,
             receiver: &crate::WasmAuthoringMobjectHandle,
             start: &crate::WasmAuthoringMobjectHandle,
@@ -11546,20 +10914,19 @@ mod wasm {
             start.id_in_store(store, "style interpolation start")?;
             end.id_in_store(store, "style interpolation end")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_interpolate_manim_style(
-                    receiver.semantic_mobject(),
-                    start.semantic_mobject(),
-                    end.semantic_mobject(),
-                    alpha,
-                )
-                .map(|_| ())
+                .edit_scene(|scene| {
+                    scene.interpolate_manim_style(
+                        receiver.semantic_mobject(),
+                        start.semantic_mobject(),
+                        end.semantic_mobject(),
+                        alpha,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveInterpolateMobject)]
-        pub fn live_interpolate_mobject(
+        #[wasm_bindgen(js_name = interpolateMobject)]
+        pub fn interpolate_mobject(
             &mut self,
             receiver: &crate::WasmAuthoringMobjectHandle,
             start: &crate::WasmAuthoringMobjectHandle,
@@ -11571,19 +10938,19 @@ mod wasm {
             start.id_in_store(store, "interpolation start")?;
             end.id_in_store(store, "interpolation end")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_interpolate_manim(
-                    receiver.semantic_mobject(),
-                    start.semantic_mobject(),
-                    end.semantic_mobject(),
-                    alpha,
-                )
+                .edit_scene(|scene| {
+                    scene.interpolate_manim(
+                        receiver.semantic_mobject(),
+                        start.semantic_mobject(),
+                        end.semantic_mobject(),
+                        alpha,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetMobjectSheenDirection)]
-        pub fn live_set_mobject_sheen_direction(
+        #[wasm_bindgen(js_name = setMobjectSheenDirection)]
+        pub fn set_mobject_sheen_direction(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             x: f64,
@@ -11598,14 +10965,12 @@ mod wasm {
             );
             let target = noon::MobjectTarget::from(source.semantic_mobject());
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_sheen_direction(&target, direction, family)
+                .edit_scene(|scene| scene.set_sheen_direction(&target, direction, family))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRotateMobjectSheenDirection)]
-        pub fn live_rotate_mobject_sheen_direction(
+        #[wasm_bindgen(js_name = rotateMobjectSheenDirection)]
+        pub fn rotate_mobject_sheen_direction(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             angle: f64,
@@ -11616,32 +10981,34 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let target = noon::MobjectTarget::from(source.semantic_mobject());
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_rotate_sheen_direction(
-                    &target,
-                    angle,
-                    noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
-                    family,
-                )
+                .edit_scene(|scene| {
+                    scene.rotate_sheen_direction(
+                        &target,
+                        angle,
+                        noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
+                        family,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveMatchStyle)]
-        pub fn live_match_style(
+        #[wasm_bindgen(js_name = matchStyle)]
+        pub fn match_style(
             &mut self,
             source: &crate::WasmAuthoringMobjectHandle,
             target: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .live_match_style(&source.semantic_mobject(), &target.semantic_mobject())
-                .map_err(typed_js_error)
+                .match_style(&source.semantic_mobject(), &target.semantic_mobject())
+                .map(|_| ())
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
-        #[wasm_bindgen(js_name = liveSetFamilyStyle)]
+
+        #[wasm_bindgen(js_name = setFamilyStyle)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_style(
+        pub fn set_family_style(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             fill_enabled: bool,
@@ -11694,15 +11061,14 @@ mod wasm {
                 background_stroke_opacity,
             )
             .map_err(typed_js_error)?;
+            let family = source.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_style(&source.semantic_family()?, update)
+                .edit_scene(|scene| scene.set_family_style(&family, update))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilySheenDirection)]
-        pub fn live_set_family_sheen_direction(
+        #[wasm_bindgen(js_name = setFamilySheenDirection)]
+        pub fn set_family_sheen_direction(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             x: f64,
@@ -11718,14 +11084,12 @@ mod wasm {
             let family_target = source.semantic_family()?;
             let target = noon::MobjectTarget::from(&family_target);
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_sheen_direction(&target, direction, family)
+                .edit_scene(|scene| scene.set_sheen_direction(&target, direction, family))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveRotateFamilySheenDirection)]
-        pub fn live_rotate_family_sheen_direction(
+        #[wasm_bindgen(js_name = rotateFamilySheenDirection)]
+        pub fn rotate_family_sheen_direction(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             angle: f64,
@@ -11737,20 +11101,20 @@ mod wasm {
             let family_target = source.semantic_family()?;
             let target = noon::MobjectTarget::from(&family_target);
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_rotate_sheen_direction(
-                    &target,
-                    angle,
-                    noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
-                    family,
-                )
+                .edit_scene(|scene| {
+                    scene.rotate_sheen_direction(
+                        &target,
+                        angle,
+                        noon_core::SemanticVec3::new(axis_x, axis_y, axis_z),
+                        family,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyOwnStyle)]
+        #[wasm_bindgen(js_name = setFamilyOwnStyle)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_own_style(
+        pub fn set_family_own_style(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             fill_enabled: bool,
@@ -11783,36 +11147,33 @@ mod wasm {
                 stroke_opacity,
             )
             .map_err(typed_js_error)?;
+            let family = source.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_own_style(&source.semantic_family()?, update)
+                .edit_scene(|scene| scene.set_family_own_style(&family, update))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveInterpolateFamilyManimStyle)]
-        pub fn live_interpolate_family_manim_style(
+        #[wasm_bindgen(js_name = interpolateFamilyManimStyle)]
+        pub fn interpolate_family_manim_style(
             &mut self,
             receiver: &crate::WasmAuthoringFamilyHandle,
             start: &crate::WasmAuthoringFamilyHandle,
             end: &crate::WasmAuthoringFamilyHandle,
             alpha: f64,
         ) -> Result<(), JsValue> {
+            let receiver = receiver.semantic_family()?;
+            let start = start.semantic_family()?;
+            let end = end.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_interpolate_family_manim_style(
-                    &receiver.semantic_family()?,
-                    &start.semantic_family()?,
-                    &end.semantic_family()?,
-                    alpha,
-                )
+                .edit_scene(|scene| {
+                    scene.interpolate_family_manim_style(&receiver, &start, &end, alpha)
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyOwnStyleWithBackgroundStroke)]
+        #[wasm_bindgen(js_name = setFamilyOwnStyleWithBackgroundStroke)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_own_style_with_background_stroke(
+        pub fn set_family_own_style_with_background_stroke(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             fill_enabled: bool,
@@ -11860,140 +11221,58 @@ mod wasm {
                 background_stroke_alpha,
             )
             .map_err(typed_js_error)?;
+            let family = source.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_own_style_with_background_stroke(
-                    &source.semantic_family()?,
-                    update,
-                    background_stroke_color,
-                    background_stroke_width,
-                    background_stroke_opacity,
-                )
+                .edit_scene(|scene| {
+                    scene.set_family_own_style_with_background_stroke(
+                        &family,
+                        update,
+                        background_stroke_color,
+                        background_stroke_width,
+                        background_stroke_opacity,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyOwnBackgroundStrokeOpacity)]
-        pub fn live_set_family_own_background_stroke_opacity(
-            &mut self,
-            source: &crate::WasmAuthoringFamilyHandle,
-            opacity: f64,
-        ) -> Result<(), JsValue> {
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_own_background_stroke_opacity(&source.semantic_family()?, opacity)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveFadeFamilyOwn)]
-        pub fn live_fade_family_own(
+        #[wasm_bindgen(js_name = fadeFamilyOwn)]
+        pub fn fade_family_own(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             darkness: f64,
         ) -> Result<(), JsValue> {
+            let family = source.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_fade_family_own(&source.semantic_family()?, darkness)
+                .edit_scene(|scene| scene.fade_family_own(&family, darkness))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyOwnStrokeCap)]
-        pub fn live_set_family_own_stroke_cap(
+        #[wasm_bindgen(js_name = setFamilyOwnStrokeCap)]
+        pub fn set_family_own_stroke_cap(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             cap: &str,
         ) -> Result<(), JsValue> {
+            let family = source.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_own_stroke_cap(&source.semantic_family()?, cap)
+                .edit_scene(|scene| scene.set_family_own_stroke_cap(&family, cap))
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSetFamilyOwnFill)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_own_fill(
-            &mut self,
-            source: &crate::WasmAuthoringFamilyHandle,
-            fill_enabled: bool,
-            fill_red: f64,
-            fill_green: f64,
-            fill_blue: f64,
-            fill_alpha: f64,
-            fill_opacity: Option<f64>,
-        ) -> Result<(), JsValue> {
-            let update = crate::authoring_mobject::style_update(
-                fill_enabled,
-                fill_red,
-                fill_green,
-                fill_blue,
-                fill_alpha,
-                fill_opacity,
-                false,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                None,
-                None,
-            )
-            .map_err(typed_js_error)?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_own_style(&source.semantic_family()?, update)
-                .map_err(typed_js_error)
-        }
-        #[wasm_bindgen(js_name = liveSetFamilyOwnStroke)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_own_stroke(
-            &mut self,
-            source: &crate::WasmAuthoringFamilyHandle,
-            stroke_enabled: bool,
-            stroke_red: f64,
-            stroke_green: f64,
-            stroke_blue: f64,
-            stroke_alpha: f64,
-            stroke_width: Option<f64>,
-            stroke_opacity: Option<f64>,
-        ) -> Result<(), JsValue> {
-            let update = crate::authoring_mobject::style_update(
-                false,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-                None,
-                stroke_enabled,
-                stroke_red,
-                stroke_green,
-                stroke_blue,
-                stroke_alpha,
-                stroke_width,
-                stroke_opacity,
-            )
-            .map_err(typed_js_error)?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_own_style(&source.semantic_family()?, update)
-                .map_err(typed_js_error)
-        }
-        #[wasm_bindgen(js_name = liveSetFamilyOwnOpacity)]
-        pub fn live_set_family_own_opacity(
+
+        #[wasm_bindgen(js_name = setFamilyOwnOpacity)]
+        pub fn set_family_own_opacity(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
+            let family = source.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_own_opacity(&source.semantic_family()?, opacity)
+                .edit_scene(|scene| scene.set_family_own_opacity(&family, opacity))
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveSetFamilyEmission)]
-        pub fn live_set_family_emission(
+
+        #[wasm_bindgen(js_name = setFamilyEmission)]
+        pub fn set_family_emission(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             strength: f64,
@@ -12001,45 +11280,48 @@ mod wasm {
             let emission = noon_core::Emission::new(strength)
                 .map_err(noon::AuthoringError::Emission)
                 .map_err(typed_js_error)?;
+            let family = source.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_style(
-                    &source.semantic_family()?,
-                    noon::StyleUpdate {
-                        emission: Some(emission),
-                        ..noon::StyleUpdate::default()
-                    },
-                )
+                .edit_scene(|scene| {
+                    scene.set_family_style(
+                        &family,
+                        noon::StyleUpdate {
+                            emission: Some(emission),
+                            ..noon::StyleUpdate::default()
+                        },
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyObjectOpacity)]
-        pub fn live_set_family_object_opacity(
+        #[wasm_bindgen(js_name = setFamilyObjectOpacity)]
+        pub fn set_family_object_opacity(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             opacity: f64,
         ) -> Result<(), JsValue> {
+            let family = source.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_object_opacity(&source.semantic_family()?, opacity)
+                .edit_scene(|scene| scene.set_family_object_opacity(&family, opacity))
                 .map_err(typed_js_error)
         }
-        #[wasm_bindgen(js_name = liveMatchFamilyStyle)]
-        pub fn live_match_family_style(
+
+        #[wasm_bindgen(js_name = matchFamilyStyle)]
+        pub fn match_family_style(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
             target: &crate::WasmAuthoringFamilyHandle,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .live_match_family_style(&source.semantic_family()?, &target.semantic_family()?)
-                .map_err(typed_js_error)
+                .match_family_style(&source.semantic_family()?, &target.semantic_family()?)
+                .map(|_| ())
+                .map_err(|error| typed_js_error(AuthoringFailure::from_scene_capture(error)))
         }
-        #[wasm_bindgen(js_name = liveSetFamilyOwnColor)]
-        pub fn live_set_family_own_color(
+
+        #[wasm_bindgen(js_name = setFamilyOwnColor)]
+        pub fn set_family_own_color(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             red: f64,
@@ -12049,35 +11331,26 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_own_color(&family, red, green, blue, alpha)
+                .edit_scene(|scene| scene.set_family_own_color(&family, red, green, blue, alpha))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyUpdatingSuspended)]
-        pub fn live_set_family_updating_suspended(
+        #[wasm_bindgen(js_name = setFamilyUpdatingSuspended)]
+        pub fn set_family_updating_suspended(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             suspended: bool,
             recursive: bool,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
-            if !std::rc::Rc::ptr_eq(
-                family.integration_store(),
-                self.inner.scene.integration_store(),
-            ) {
-                return Err(typed_js_error(noon::AuthoringError::ForeignStore));
-            }
-            self.inner.active_live_player().map_err(typed_js_error)?;
-            noon::MobjectTarget::from(&family)
-                .set_updating_suspended(suspended, recursive)
+            self.inner
+                .edit_scene(|scene| scene.set_updating_suspended(&family, suspended, recursive))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyColor)]
+        #[wasm_bindgen(js_name = setFamilyColor)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_color(
+        pub fn set_family_color(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             red: f64,
@@ -12088,15 +11361,13 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_color(&family, red, green, blue, alpha)
+                .edit_scene(|scene| scene.set_family_color(&family, red, green, blue, alpha))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyFill)]
+        #[wasm_bindgen(js_name = setFamilyFill)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_fill(
+        pub fn set_family_fill(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             has_color: bool,
@@ -12110,15 +11381,13 @@ mod wasm {
             let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
                 .map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_fill(&family, color, opacity)
+                .edit_scene(|scene| scene.set_family_fill(&family, color, opacity))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyStroke)]
+        #[wasm_bindgen(js_name = setFamilyStroke)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_stroke(
+        pub fn set_family_stroke(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             has_color: bool,
@@ -12133,15 +11402,13 @@ mod wasm {
             let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
                 .map_err(typed_js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_stroke(&family, color, width, opacity)
+                .edit_scene(|scene| scene.set_family_stroke(&family, color, width, opacity))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyOpacity)]
+        #[wasm_bindgen(js_name = setFamilyOpacity)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_set_family_opacity(
+        pub fn set_family_opacity(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             opacity: f64,
@@ -12149,14 +11416,12 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_opacity(&family, opacity)
+                .edit_scene(|scene| scene.set_family_opacity(&family, opacity))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyFade)]
-        pub fn live_set_family_fade(
+        #[wasm_bindgen(js_name = fadeFamily)]
+        pub fn fade_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             darkness: f64,
@@ -12164,14 +11429,12 @@ mod wasm {
             let family = handle.semantic_family()?;
 
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_fade(&family, darkness)
+                .edit_scene(|scene| scene.fade_family(&family, darkness))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetFamilyFadeTo)]
-        pub fn live_set_family_fade_to(
+        #[wasm_bindgen(js_name = fadeToFamily)]
+        pub fn fade_to_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             red: f64,
@@ -12182,32 +11445,30 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_family_fade_to(
-                    &family,
-                    noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
-                    amount,
-                )
+                .edit_scene(|scene| {
+                    scene.fade_to_family(
+                        &family,
+                        noon::Color::rgba(red as f32, green as f32, blue as f32, alpha as f32),
+                        amount,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveArrangeFamilyInGrid)]
-        pub fn live_arrange_family_in_grid(
+        #[wasm_bindgen(js_name = arrangeFamilyInGrid)]
+        pub fn arrange_family_in_grid(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             options: &crate::authoring_mobject::WasmFamilyGridOptions,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_arrange_family_in_grid(&family, &options.options)
+                .place(|scene| scene.arrange_family_in_grid_with_options(&family, &options.options))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveScaleArrow)]
-        pub fn live_scale_arrow(
+        #[wasm_bindgen(js_name = scaleArrow)]
+        pub fn scale_arrow(
             &mut self,
             handle: &crate::WasmAuthoringArrowHandle,
             factor: f64,
@@ -12215,57 +11476,37 @@ mod wasm {
         ) -> Result<(), JsValue> {
             let arrow = handle.arrow()?;
             self.inner
-                .live_scale_arrow(arrow, factor, scale_tips)
+                .scale_arrow(arrow, factor, scale_tips)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveScaleFamily)]
-        pub fn live_scale_family(
-            &mut self,
-            handle: &crate::WasmAuthoringFamilyHandle,
-            x: f64,
-            y: f64,
-        ) -> Result<(), JsValue> {
-            let family = handle.semantic_family()?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_scale_family(&family, x, y)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveArrangeFamily)]
-        pub fn live_arrange_family(
+        #[wasm_bindgen(js_name = arrangeFamily)]
+        pub fn arrange_family(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
             options: &crate::authoring_mobject::WasmFamilyArrangeOptions,
         ) -> Result<(), JsValue> {
             let family = handle.semantic_family()?;
             self.inner
-                .live_arrange_family(&family, &options.options)
+                .arrange_family(&family, &options.options)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetScale)]
-        pub fn live_set_scale(
+        #[wasm_bindgen(js_name = setScale)]
+        pub fn set_scale(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             x: f64,
             y: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_scale(handle.semantic_mobject(), x, y)
+                .edit_scene(|scene| scene.set_scale(handle.semantic_mobject(), x, y))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveApplyMatrix)]
-        pub fn live_apply_matrix(
+        #[wasm_bindgen(js_name = applyMatrix)]
+        pub fn apply_matrix(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             values: Vec<f64>,
@@ -12274,64 +11515,36 @@ mod wasm {
             about_x: f64,
             about_y: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene_mut()
-                .apply_matrix(
-                    handle.semantic_mobject(),
-                    &values,
-                    rows as usize,
-                    columns as usize,
-                    about_x,
-                    about_y,
-                )
-                .map_err(noon::LiveSessionError::from)
+                .place(|scene| {
+                    scene.apply_matrix(
+                        handle.semantic_mobject(),
+                        &values,
+                        rows as usize,
+                        columns as usize,
+                        about_x,
+                        about_y,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveScale)]
-        pub fn live_scale(
-            &mut self,
-            handle: &crate::WasmAuthoringMobjectHandle,
-            x: f64,
-            y: f64,
-        ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_scale(handle.semantic_mobject(), x, y)
-                .map_err(typed_js_error)
-        }
-
-        #[wasm_bindgen(js_name = liveSetRotation)]
-        pub fn live_set_rotation(
+        #[wasm_bindgen(js_name = setRotation)]
+        pub fn set_rotation(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
             angle: f64,
         ) -> Result<(), JsValue> {
-            handle.id_in_store(
-                self.inner.scene.integration_store(),
-                "live execution context",
-            )?;
+            handle.id_in_store(self.inner.scene.integration_store(), "authoring context")?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_rotation(handle.semantic_mobject(), angle)
+                .edit_scene(|scene| scene.set_rotation(handle.semantic_mobject(), angle))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveStretchLayout)]
+        #[wasm_bindgen(js_name = stretchLayout)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_stretch_layout(
+        pub fn stretch_layout(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             factor: f64,
@@ -12341,21 +11554,22 @@ mod wasm {
             z: f64,
             about_point: bool,
         ) -> Result<(), JsValue> {
+            let dimension = dimension.try_into().map_err(js_error)?;
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_stretch_layout(
-                    &source.anchor,
-                    factor,
-                    dimension.try_into().map_err(js_error)?,
-                    crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point),
-                )
+                .place(|scene| {
+                    scene.stretch(
+                        &source.anchor,
+                        factor,
+                        dimension,
+                        crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveScaleLayout3d)]
+        #[wasm_bindgen(js_name = scaleLayout3d)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_scale_layout_3d(
+        pub fn scale_layout_3d(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             scale_x: f64,
@@ -12367,40 +11581,18 @@ mod wasm {
             about_point: bool,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_scale_layout_3d(
-                    &source.anchor,
-                    noon::SemanticVec3::new(scale_x, scale_y, scale_z),
-                    crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point),
-                )
+                .place(|scene| {
+                    scene.scale_layout_3d(
+                        &source.anchor,
+                        noon::SemanticVec3::new(scale_x, scale_y, scale_z),
+                        crate::authoring_geometry::affine_pivot_3d(x, y, z, about_point),
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveScaleLayout)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn live_scale_layout(
-            &mut self,
-            source: &crate::authoring_mobject::WasmLayoutAnchor,
-            scale_x: f64,
-            scale_y: f64,
-            x: f64,
-            y: f64,
-            about_point: bool,
-        ) -> Result<(), JsValue> {
-            let pivot = if about_point {
-                noon::ManimRotationPivot::Point(x, y)
-            } else {
-                noon::ManimRotationPivot::Edge(x, y)
-            };
-            self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_scale_layout(&source.anchor, scale_x, scale_y, pivot)
-                .map_err(typed_js_error)
-        }
-        #[wasm_bindgen(js_name = liveRotateLayout)]
-        pub fn live_rotate_layout(
+        #[wasm_bindgen(js_name = rotateLayout)]
+        pub fn rotate_layout(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             angle: f64,
@@ -12414,41 +11606,38 @@ mod wasm {
                 noon::ManimRotationPivot::Edge(x, y)
             };
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_rotate_layout(&source.anchor, angle, pivot)
+                .place(|scene| scene.rotate_layout(&source.anchor, angle, pivot))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveZIndex)]
-        pub fn live_z_index(
+        #[wasm_bindgen(js_name = zIndex)]
+        pub fn z_index(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
         ) -> Result<f64, JsValue> {
             self.inner
-                .active_live_player()
+                .local_authoring_scene()
                 .map_err(typed_js_error)?
-                .live_z_index(&source.anchor)
+                .z_index(&source.anchor)
+                .map_err(AuthoringFailure::from)
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveSetZIndex)]
-        pub fn live_set_z_index(
+        #[wasm_bindgen(js_name = setZIndex)]
+        pub fn set_z_index(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             value: f64,
             family: bool,
         ) -> Result<(), JsValue> {
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_set_z_index(&source.anchor, value, family)
+                .edit_scene(|scene| scene.set_z_index(&source.anchor, value, family))
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveFlipLayout)]
+        #[wasm_bindgen(js_name = flipLayout)]
         #[allow(clippy::too_many_arguments)]
-        pub fn live_flip_layout(
+        pub fn flip_layout(
             &mut self,
             source: &crate::authoring_mobject::WasmLayoutAnchor,
             axis_x: f64,
@@ -12464,33 +11653,35 @@ mod wasm {
                 noon::ManimRotationPivot::Edge(x, y)
             };
             self.inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .live_flip_layout(
-                    &source.anchor,
-                    noon::SemanticVec3::new(axis_x, axis_y, axis_z),
-                    pivot,
-                )
+                .place(|scene| {
+                    scene.flip_layout(
+                        &source.anchor,
+                        noon::SemanticVec3::new(axis_x, axis_y, axis_z),
+                        pivot,
+                    )
+                })
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = liveEffectiveMobject)]
-        pub fn live_effective_mobject(
+        #[wasm_bindgen(js_name = queryEffectiveTranslation)]
+        pub fn query_effective_translation(
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
-        ) -> Result<WasmLiveMobjectState, JsValue> {
+        ) -> Result<Vec<f64>, JsValue> {
             handle.id_in_store(
                 self.inner.scene.integration_store(),
-                "live execution context",
+                "scene effective translation",
             )?;
-            Ok(WasmLiveMobjectState {
-                state: self
-                    .inner
-                    .active_live_player()
-                    .map_err(typed_js_error)?
-                    .live_effective(handle.semantic_mobject())
-                    .map_err(typed_js_error)?,
-            })
+            let translation = self
+                .inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .effective(handle.semantic_mobject())
+                .map_err(running_scene_error)
+                .map_err(typed_js_error)?
+                .transform
+                .translation;
+            Ok(vec![translation.x.into(), translation.y.into()])
         }
 
         #[wasm_bindgen(js_name = returnExecutionPlayer)]
@@ -13257,6 +12448,20 @@ mod tests {
     }
 
     #[test]
+    fn direct_membership_uses_the_scene_root_before_and_after_bootstrap() {
+        let mut context = CanonicalAuthoringScene::default();
+        let nested = context.scene.circle(0.5).unwrap();
+        let family = context.scene.family(&[(&nested).into()]).unwrap();
+        context.scene.add_many(&[(&family).into()]).unwrap();
+        assert!(context.contains_mobject(&nested).unwrap());
+        assert!(!context.contains_direct_mobject(&nested).unwrap());
+
+        context.live_player(1.0).unwrap();
+        assert!(context.contains_mobject(&nested).unwrap());
+        assert!(!context.contains_direct_mobject(&nested).unwrap());
+    }
+
+    #[test]
     fn live_membership_uses_the_existing_session_and_registers_detached_handles() {
         let mut context = CanonicalAuthoringScene::default();
         let anchor = context.scene.circle(0.5).unwrap();
@@ -13272,11 +12477,9 @@ mod tests {
             .unwrap();
         assert_eq!(context.ordinary_wait(0.3).unwrap(), 0.3);
         // New detached state must publish through the active session as well.
-        let collision = context.live_target_editor(&anchor).unwrap();
+        let collision = context.target_editor(&anchor).unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
-        assert!(context
-            .live_add_mobject(ObjectId::new(0), &collision)
-            .is_err());
+        assert!(context.bind_mobject(ObjectId::new(0), &collision).is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
             revision
@@ -13287,22 +12490,29 @@ mod tests {
             .live_effective(&collision)
             .is_err());
 
-        context.live_remove_mobject(&toggled).unwrap();
+        context
+            .edit_membership(SceneMembershipBatch {
+                kind: SceneMembershipBatchKind::Remove,
+                spatial_domain: None,
+                members: vec![OwnedSceneMembershipMember::Mobject {
+                    wrapper_id: None,
+                    handle: toggled.clone(),
+                }],
+                bindings: Vec::new(),
+            })
+            .unwrap();
         assert!(context
             .active_live_player()
             .unwrap()
             .live_effective(&toggled)
             .is_err());
-        context
-            .live_add_mobject(ObjectId::new(1), &toggled)
-            .unwrap();
-        context
-            .live_add_mobject(ObjectId::new(2), &appended)
-            .unwrap();
+        context.bind_mobject(ObjectId::new(1), &toggled).unwrap();
+        context.bind_mobject(ObjectId::new(2), &appended).unwrap();
         context
             .active_live_player()
             .unwrap()
-            .live_set_translation(&appended, 2.0, -1.0)
+            .scene_mut()
+            .set_translation(&appended, 2.0, -1.0)
             .unwrap();
 
         assert_eq!(
@@ -13360,7 +12570,11 @@ mod tests {
             )
         };
 
-        context.live_replace_content(&target, &replacement).unwrap();
+        context
+            .local_authoring_scene()
+            .unwrap()
+            .replace_content(&target, &replacement)
+            .unwrap();
         {
             let player = context.active_live_player().unwrap();
             let session = player.session_mut_for_test();
@@ -13565,7 +12779,10 @@ mod tests {
             assert!(player.live_wait(0.5).is_err());
             assert!(!player.live_advance_segment_to(1.0).unwrap());
 
-            assert!(player.live_set_translation(&circle, 100.0, 0.0).is_err());
+            assert!(player
+                .scene_mut()
+                .set_translation(&circle, 100.0, 0.0)
+                .is_err());
             assert_eq!(
                 store
                     .borrow()
@@ -13621,7 +12838,10 @@ mod tests {
 
         assert!(!recovered.live_advance_segment_to(2.0).unwrap());
         recovered.live_complete_segment().unwrap();
-        recovered.live_set_translation(&circle, 100.0, 0.0).unwrap();
+        recovered
+            .scene_mut()
+            .set_translation(&circle, 100.0, 0.0)
+            .unwrap();
         assert_eq!(
             recovered
                 .live_effective(&circle)
@@ -13643,7 +12863,7 @@ mod tests {
             .unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
 
-        let mut target = context.live_target_editor(&circle).unwrap();
+        let mut target = context.target_editor(&circle).unwrap();
         target.set_translation(2.0, -1.0).unwrap();
 
         assert!(context.player_ownership.is_unstarted());
@@ -13674,7 +12894,7 @@ mod tests {
         let id = source.node_id();
         let target_before = target.state().unwrap();
         context
-            .live_become_mobject(
+            .become_mobject(
                 &source,
                 &target,
                 noon::ManimBecomeOptions {
@@ -13693,7 +12913,7 @@ mod tests {
         let revision = context.scene.integration_store().borrow().scene_revision();
         let before = source.state().unwrap();
         let error = context
-            .live_become_mobject(&source, &target, Default::default())
+            .become_mobject(&source, &target, Default::default())
             .unwrap_err();
         assert_eq!(
             (error.category, error.code),
@@ -13706,11 +12926,34 @@ mod tests {
         assert_eq!(source.state().unwrap(), before);
         context.return_execution_player(handed_off).unwrap();
         context
-            .live_become_mobject(&source, &target, Default::default())
+            .become_mobject(&source, &target, Default::default())
             .unwrap();
         assert_eq!(source.center().unwrap(), (3.0, -1.0));
         assert_eq!(context.live_execution_ownership(), "returned");
-        context.live_target_editor(&source).unwrap();
+        context.target_editor(&source).unwrap();
+    }
+
+    #[test]
+    fn family_placement_edits_follow_the_local_scene_owner() {
+        let mut context = CanonicalAuthoringScene::default();
+        let child = context.scene.square(1.0).unwrap();
+        let family = context.scene.family(&[(&child).into()]).unwrap();
+        context.scene.add_many(&[(&family).into()]).unwrap();
+        context.shift_family(&family, 1.0, 0.0, 0.25).unwrap();
+        context.live_player(1.0).unwrap();
+        context.shift_family(&family, 1.0, 0.0, 0.25).unwrap();
+        let player = context.take_execution_player(1.0, 42).unwrap();
+        assert!(context.shift_family(&family, 1.0, 0.0, 0.25).is_err());
+        assert_eq!(
+            child.state().unwrap().transform.translation,
+            noon::SemanticVec3::new(2.0, 0.0, 0.5)
+        );
+        context.return_execution_player(player).unwrap();
+        context.shift_family(&family, 1.0, 0.0, 0.25).unwrap();
+        assert_eq!(
+            child.state().unwrap().transform.translation,
+            noon::SemanticVec3::new(3.0, 0.0, 0.75)
+        );
     }
 
     #[test]
@@ -13741,7 +12984,12 @@ mod tests {
         let mut foreign_scene = noon::Scene::new();
         let foreign = foreign_scene.family(&[]).unwrap();
         assert!(context.family_own_path_query(&foreign).is_err());
+        assert!(context.family_point_count(&foreign).is_err());
+        assert_eq!(context.family_point_count(&empty).unwrap(), 0);
+        assert_eq!(context.family_point_count(&owned).unwrap(), 4);
         context.live_player(1.0).unwrap();
+        assert_eq!(context.family_point_count(&empty).unwrap(), 0);
+        assert_eq!(context.family_point_count(&owned).unwrap(), 4);
         assert!(context
             .family_own_path_query(&empty)
             .unwrap()
@@ -13757,9 +13005,12 @@ mod tests {
             points
         );
         let transferred = context.take_execution_player(1.0, 41).unwrap();
+        assert!(context.family_point_count(&empty).is_err());
+        assert!(context.family_point_count(&owned).is_err());
         assert!(context.family_own_path_query(&empty).is_err());
         assert!(context.family_own_path_query(&owned).is_err());
         context.return_execution_player(transferred).unwrap();
+        assert_eq!(context.family_point_count(&owned).unwrap(), 4);
         assert_eq!(
             context
                 .family_own_path_query(&owned)
@@ -13780,12 +13031,7 @@ mod tests {
             context.live_player(1.0).unwrap();
             let revision = context.scene.revision();
             let family = context
-                .live_family_with_presentation(
-                    &[(&child).into()],
-                    3.0,
-                    noon::Color::GREEN,
-                    draw_enabled,
-                )
+                .create_family(&[(&child).into()], 3.0, noon::Color::GREEN, draw_enabled)
                 .unwrap();
             assert_eq!(context.scene.revision(), revision.checked_next().unwrap());
             let revision = context.scene.revision();
@@ -13836,33 +13082,65 @@ mod tests {
     }
 
     #[test]
-    fn live_family_constructor_color_preserves_children_and_owner_revision() {
+    fn scene_family_membership_preserves_order_and_revision_in_setup_and_playback() {
         let mut context = CanonicalAuthoringScene::default();
-        let child = context.scene.square(0.5).unwrap();
-        let before = child.state().unwrap();
-        context.bind_mobject(ObjectId::new(0), &child).unwrap();
-        assert!(context
-            .live_family_with_color(&[(&child).into()], 0.0, noon::Color::GREEN)
-            .is_err());
-        context.live_player(1.0).unwrap();
-        let revision = context.scene.revision();
+        let first = context.scene.square(0.5).unwrap();
+        let second = context.scene.circle(0.3).unwrap();
+        let foreign = noon::Scene::new().circle(0.2).unwrap();
+        let before = first.state().unwrap();
         let family = context
-            .live_family_with_color(&[(&child).into()], 3.0, noon::Color::GREEN)
+            .create_family(&[(&first).into()], 3.0, noon::Color::GREEN, true)
             .unwrap();
         assert_eq!(family.own_color().unwrap(), noon::Color::GREEN);
-        assert_eq!(child.state().unwrap(), before);
-        assert_eq!(context.scene.revision(), revision.checked_next().unwrap());
-        context.live_target_editor(&child).unwrap();
+        let members = |context: &CanonicalAuthoringScene| {
+            context
+                .scene
+                .integration_store()
+                .borrow()
+                .semantic_family_members_checked(family.node_id())
+                .unwrap()
+                .to_vec()
+        };
+
+        for running in [false, true] {
+            if running {
+                context.live_player(1.0).unwrap();
+            }
+            let revision = context.scene.revision();
+            assert_eq!(
+                context
+                    .edit_family_members((&family).into(), &[(&second).into()], true)
+                    .unwrap(),
+                vec![true]
+            );
+            assert_eq!(members(&context), [first.node_id(), second.node_id()]);
+            assert_eq!(context.scene.revision(), revision.checked_next().unwrap());
+            let revision = context.scene.revision();
+            assert!(context
+                .edit_family_members(
+                    (&family).into(),
+                    &[(&foreign).into(), (&first).into()],
+                    true
+                )
+                .is_err());
+            assert_eq!(members(&context), [first.node_id(), second.node_id()]);
+            assert_eq!(context.scene.revision(), revision);
+            assert_eq!(
+                context
+                    .edit_family_members((&family).into(), &[(&second).into()], false)
+                    .unwrap(),
+                vec![true]
+            );
+            assert_eq!(members(&context), [first.node_id()]);
+        }
+        assert_eq!(first.state().unwrap(), before);
+        let transferred = context.take_execution_player(1.0, 42).unwrap();
         let revision = context.scene.revision();
         assert!(context
-            .live_family_with_color(
-                &[(&child).into()],
-                0.0,
-                noon::Color::rgba(f32::NAN, 0.0, 0.0, 1.0)
-            )
+            .edit_family_members((&family).into(), &[(&second).into()], true)
             .is_err());
         assert_eq!(context.scene.revision(), revision);
-        assert_eq!(child.state().unwrap(), before);
+        context.return_execution_player(transferred).unwrap();
     }
 
     #[test]
@@ -13871,12 +13149,22 @@ mod tests {
         let circle = context.scene.circle(0.4).unwrap();
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
         context.live_player(1.0).unwrap();
-        let target = context.live_target_editor(&circle).unwrap();
+        let target = context.target_editor(&circle).unwrap();
         let family = context
-            .live_family(&[noon::MobjectTarget::Object(&target)], 0.0)
+            .create_family(
+                &[noon::MobjectTarget::Object(&target)],
+                0.0,
+                noon::Color::WHITE,
+                true,
+            )
             .unwrap();
         let nested = context
-            .live_family(&[noon::MobjectTarget::Family(&family)], 0.0)
+            .create_family(
+                &[noon::MobjectTarget::Family(&family)],
+                0.0,
+                noon::Color::WHITE,
+                true,
+            )
             .unwrap();
         assert_eq!(
             context
@@ -13890,7 +13178,12 @@ mod tests {
         let foreign = noon::Scene::new().circle(0.2).unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
         assert!(context
-            .live_family(&[noon::MobjectTarget::Object(&foreign)], 0.0)
+            .create_family(
+                &[noon::MobjectTarget::Object(&foreign)],
+                0.0,
+                noon::Color::WHITE,
+                true
+            )
             .is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
@@ -13898,7 +13191,7 @@ mod tests {
         );
         // Another owner-mediated mutation remains valid after both publications
         // and the rejected foreign member: no stale execution revision is hidden.
-        context.live_target_editor(&circle).unwrap();
+        context.target_editor(&circle).unwrap();
     }
 
     #[test]
@@ -13917,11 +13210,12 @@ mod tests {
             bound_transform_child(&anchor, first_target.clone(), options),
         )
         .unwrap();
-        let second_target = context.live_target_editor(&anchor).unwrap();
+        let second_target = context.target_editor(&anchor).unwrap();
         context
             .active_live_player()
             .unwrap()
-            .live_set_translation(&second_target, 1.0, 0.0)
+            .scene_mut()
+            .set_translation(&second_target, 1.0, 0.0)
             .unwrap();
         play_request(
             &mut context,
@@ -13934,10 +13228,10 @@ mod tests {
         assert_eq!(context.live_execution_ownership(), "returned");
 
         let left = context
-            .live_create_manim_geometry(noon::ManimGeometryOptions::circle(0.15).unwrap())
+            .create_manim_geometry(noon::ManimGeometryOptions::circle(0.15).unwrap())
             .unwrap();
         let right = context
-            .live_create_manim_geometry(noon::ManimGeometryOptions::square(0.3).unwrap())
+            .create_manim_geometry(noon::ManimGeometryOptions::square(0.3).unwrap())
             .unwrap();
         let batch = SceneMembershipBatch {
             kind: SceneMembershipBatchKind::Add,
@@ -13955,45 +13249,48 @@ mod tests {
             bindings: Vec::new(),
         };
         let pair = context
-            .live_family(&batch.family_members().unwrap(), 0.0)
+            .create_family(
+                &batch.family_members().unwrap(),
+                0.0,
+                noon::Color::WHITE,
+                true,
+            )
             .unwrap();
         assert_eq!(
             context
-                .active_live_player()
-                .unwrap()
-                .live_edit_family_members((&pair).into(), &[(&right).into()], false)
+                .edit_family_members((&pair).into(), &[(&right).into()], false)
                 .unwrap(),
             vec![true]
         );
         assert_eq!(
             context
-                .active_live_player()
-                .unwrap()
-                .live_edit_family_members((&pair).into(), &[(&right).into(), (&right).into()], true)
+                .edit_family_members((&pair).into(), &[(&right).into(), (&right).into()], true)
                 .unwrap(),
             vec![false, true]
         );
         context
-            .live_arrange_family(
+            .arrange_family(
                 &pair,
                 &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.15, true),
             )
             .unwrap();
         let player = context.active_live_player().unwrap();
-        let before = player.live_family_layout(&pair).unwrap();
+        let before = player.scene().effective_family_layout(&pair).unwrap();
         player
-            .live_move_family_to(
+            .scene_mut()
+            .move_family_to(
                 &pair,
-                noon::LiveLayoutTarget::Point(before.center.0, before.center.1),
+                noon::LayoutTarget::Point(before.center.0, before.center.1),
                 (0.0, 0.0),
                 (1.0, 1.0),
             )
             .unwrap();
         let placement = noon::LayoutAnchor::from(&pair);
         player
-            .live_next_layout_to_aligned(
+            .scene_mut()
+            .next_layout_to_aligned(
                 &placement,
-                noon::LiveLayoutTarget::Point(before.center.0, before.center.1),
+                noon::LayoutTarget::Point(before.center.0, before.center.1),
                 &placement,
                 noon::ManimNextToArgs {
                     direction: (0.0, 0.0),
@@ -14004,9 +13301,13 @@ mod tests {
             )
             .unwrap();
         player
-            .live_align_family_to(&pair, noon::LiveLayoutTarget::Family(&pair), (1.0, 1.0))
+            .scene_mut()
+            .align_family_to(&pair, noon::LayoutTarget::Family(&pair), (1.0, 1.0))
             .unwrap();
-        assert_eq!(player.live_family_layout(&pair).unwrap(), before);
+        assert_eq!(
+            player.scene().effective_family_layout(&pair).unwrap(),
+            before
+        );
 
         let arranged_left = left.center().unwrap();
         let arranged_right = right.center().unwrap();
@@ -14015,9 +13316,9 @@ mod tests {
         // Repeated explicit `Scene.live_execution()` helpers may adjust the loop
         // duration, but must preserve the returned continuation lease.
         context.live_player(handoff).unwrap();
-        context.live_add_mobject(ObjectId::new(1), &left).unwrap();
+        context.bind_mobject(ObjectId::new(1), &left).unwrap();
         context.live_player(handoff).unwrap();
-        context.live_add_mobject(ObjectId::new(2), &right).unwrap();
+        context.bind_mobject(ObjectId::new(2), &right).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
 
         let copied = context
@@ -14031,9 +13332,7 @@ mod tests {
         assert_ne!(left_target.node_id(), left.node_id());
         assert_ne!(right_target.node_id(), right.node_id());
         let target_pair = copied.root().clone();
-        context
-            .live_shift_family(&target_pair, 0.0, 1.0, 0.0)
-            .unwrap();
+        context.shift_family(&target_pair, 0.0, 1.0, 0.0).unwrap();
 
         let family_play = [OrdinaryCompositionChild::FamilyTransformTo {
             method_target: false,
@@ -14106,7 +13405,14 @@ mod tests {
         let mut context = CanonicalAuthoringScene::default();
         let mut options = noon::ManimArrowOptions::arrow(-1.0, 0.0, 1.0, 0.0).unwrap();
         options.set_buff(0.0).unwrap();
-        let arrow = context.scene.manim_arrow(options).unwrap();
+        let arrow = context
+            .local_authoring_scene()
+            .and_then(|scene| {
+                scene
+                    .manim_arrow(options.clone())
+                    .map_err(AuthoringFailure::from)
+            })
+            .unwrap();
         context.scene.add_many(&[arrow.family().into()]).unwrap();
         context.live_player(1.0).unwrap();
         let player = context.take_execution_player(1.0, 17).unwrap();
@@ -14114,7 +13420,13 @@ mod tests {
         let before_shaft = arrow.shaft().state().unwrap();
         let before_tip = arrow.end_tip().state().unwrap();
 
-        assert!(context.live_scale_arrow(&arrow, 0.5, false).is_err());
+        assert!(context.scale_arrow(&arrow, 0.5, false).is_err());
+        assert!(context
+            .local_authoring_scene()
+            .and_then(|scene| scene
+                .manim_arrow(options.clone())
+                .map_err(AuthoringFailure::from))
+            .is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
             revision
@@ -14123,8 +13435,14 @@ mod tests {
         assert_eq!(arrow.end_tip().state().unwrap(), before_tip);
 
         context.return_execution_player(player).unwrap();
-        context.live_scale_arrow(&arrow, 0.5, false).unwrap();
+        context.scale_arrow(&arrow, 0.5, false).unwrap();
         assert!((arrow.manim_length().unwrap() - 1.0).abs() < 1e-5);
+        let detached = context
+            .local_authoring_scene()
+            .unwrap()
+            .manim_arrow(options)
+            .unwrap();
+        assert!((detached.manim_length().unwrap() - 2.0).abs() < 1e-5);
     }
 
     #[test]
@@ -14136,7 +13454,7 @@ mod tests {
         let player = context.take_execution_player(1.0, 17).unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
 
-        assert!(context.live_target_editor(&circle).is_err());
+        assert!(context.target_editor(&circle).is_err());
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
             revision
@@ -14144,7 +13462,7 @@ mod tests {
         assert_eq!(context.live_execution_ownership(), "transferred");
 
         context.return_execution_player(player).unwrap();
-        let target = context.live_target_editor(&circle).unwrap();
+        let target = context.target_editor(&circle).unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
         assert!(target.validate().is_ok());
     }
@@ -14184,7 +13502,8 @@ mod tests {
         context
             .active_live_player()
             .unwrap()
-            .live_shift(&circle, 1.0, 0.0, 0.0)
+            .scene_mut()
+            .shift_3d(&circle, noon::SemanticVec3::new(1.0, 0.0, 0.0))
             .unwrap();
         assert_eq!(
             context
@@ -14200,11 +13519,12 @@ mod tests {
         // Python's ordinary `Transform` creates this target after the runtime
         // exists. The target and its edit publish through that same runtime, so
         // the second activation neither rebuilds nor resets the live session.
-        let second_target = context.live_target_editor(&circle).unwrap();
+        let second_target = context.target_editor(&circle).unwrap();
         context
             .active_live_player()
             .unwrap()
-            .live_set_translation(&second_target, 5.0, -1.0)
+            .scene_mut()
+            .set_translation(&second_target, 5.0, -1.0)
             .unwrap();
         let second_options = AnimationOptions::new()
             .run_time(1.0)
@@ -14321,15 +13641,16 @@ mod tests {
                 bindings: Vec::new(),
             })
             .unwrap();
-        assert!(!context.live_contains_mobject(&label).unwrap());
+        assert!(!context.contains_direct_mobject(&label).unwrap());
         assert_eq!(context.bindings.get(&id), Some(&label.node_id()));
         assert_eq!(context.identities.get(&label.node_id()), Some(&id));
 
-        let target = context.live_target_editor(&label).unwrap();
+        let target = context.target_editor(&label).unwrap();
         context
             .active_live_player()
             .unwrap()
-            .live_shift(&target, 2.0, -1.0, 0.0)
+            .scene_mut()
+            .shift_3d(&target, noon::SemanticVec3::new(2.0, -1.0, 0.0))
             .unwrap();
         let options = AnimationOptions::new()
             .run_time(1.0)
@@ -14351,7 +13672,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(context.live_contains_mobject(&label).unwrap());
+        assert!(context.contains_direct_mobject(&label).unwrap());
         assert_eq!(context.bindings.get(&id), Some(&label.node_id()));
         assert_eq!(context.identities.get(&label.node_id()), Some(&id));
         assert_eq!(
@@ -14454,7 +13775,7 @@ mod tests {
                 .unwrap(),
             2.0
         );
-        assert!(!context.live_contains_mobject(&line).unwrap());
+        assert!(!context.contains_direct_mobject(&line).unwrap());
         assert_eq!(context.bindings.get(&id), Some(&line.node_id()));
         assert_eq!(context.identities.get(&line.node_id()), Some(&id));
     }
@@ -14530,7 +13851,7 @@ mod tests {
             2.0
         );
         for target in [&leaf, &left, &right] {
-            assert!(context.live_contains_mobject(target).unwrap());
+            assert!(context.contains_direct_mobject(target).unwrap());
         }
         assert_eq!(context.bindings.len(), 3);
         let publication: crate::RetainedExecutionDeltaEnvelope = serde_json::from_str(
@@ -14576,7 +13897,7 @@ mod tests {
                 .unwrap(),
             1.0
         );
-        assert!(context.live_contains_mobject(&writing).unwrap());
+        assert!(context.contains_direct_mobject(&writing).unwrap());
         assert_eq!(
             context
                 .active_live_player()
@@ -14616,7 +13937,7 @@ mod tests {
                 AnimationOptions::new(),
             )
             .unwrap();
-        assert!(!context.live_contains_mobject(&writing).unwrap());
+        assert!(!context.contains_direct_mobject(&writing).unwrap());
 
         let mut rejected = CanonicalAuthoringScene::default();
         let shared = rejected.scene.text(noon::Text::new("ONE")).unwrap();
@@ -15036,8 +14357,8 @@ mod tests {
                 .unwrap(),
             2.0
         );
-        assert!(context.live_contains_mobject(&left).unwrap());
-        assert!(context.live_contains_mobject(&right).unwrap());
+        assert!(context.contains_direct_mobject(&left).unwrap());
+        assert!(context.contains_direct_mobject(&right).unwrap());
         assert_eq!(context.bindings.len(), 2);
     }
 
@@ -15083,8 +14404,8 @@ mod tests {
             2.0
         );
         assert_eq!(context.bindings.len(), 2);
-        assert!(context.live_contains_mobject(&left).unwrap());
-        assert!(context.live_contains_mobject(&right).unwrap());
+        assert!(context.contains_direct_mobject(&left).unwrap());
+        assert!(context.contains_direct_mobject(&right).unwrap());
     }
 
     #[test]
@@ -15154,11 +14475,11 @@ mod tests {
             )
             .unwrap();
         assert!(end > 0.0);
-        assert!(!context.live_contains_mobject(&bound).unwrap());
-        assert!(context.live_contains_mobject(&add_target).unwrap());
-        assert!(context.live_contains_mobject(&create_target).unwrap());
-        assert!(context.live_contains_mobject(&fade_target).unwrap());
-        assert!(context.live_contains_mobject(&lifecycle_target).unwrap());
+        assert!(!context.contains_direct_mobject(&bound).unwrap());
+        assert!(context.contains_direct_mobject(&add_target).unwrap());
+        assert!(context.contains_direct_mobject(&create_target).unwrap());
+        assert!(context.contains_direct_mobject(&fade_target).unwrap());
+        assert!(context.contains_direct_mobject(&lifecycle_target).unwrap());
 
         let revision = context.scene.integration_store().borrow().scene_revision();
         let mut foreign = CanonicalAuthoringScene::default();
@@ -15220,7 +14541,7 @@ mod tests {
                 .unwrap(),
             1.0
         );
-        assert!(context.live_contains_mobject(&shape).unwrap());
+        assert!(context.contains_direct_mobject(&shape).unwrap());
         assert_eq!(context.bindings.len(), 1);
         assert_eq!(context.bindings.get(&id), Some(&shape.node_id()));
         assert_eq!(context.identities.get(&shape.node_id()), Some(&id));
@@ -15432,6 +14753,7 @@ mod tests {
                 AnimationOptions::new(),
             )
             .unwrap_err()
+            .message
             .contains("reverse_rate_function"));
         assert!(context
             .ordinary_play_mixed_composition(
@@ -15775,7 +15097,7 @@ mod tests {
         assert_eq!(end, 1.0);
         let player = context.active_live_player().unwrap();
         player.live_advance_segment_to(0.5).unwrap();
-        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 2.0);
+        assert_eq!(player.scene().value_tracker_value(&tracker).unwrap(), 2.0);
         assert!(
             (player.live_effective(&square).unwrap().transform.rotation
                 - std::f32::consts::FRAC_PI_2)
@@ -16109,14 +15431,15 @@ mod tests {
         let returned = context.take_execution_player(1.0, 73).unwrap();
         context.return_execution_player(returned).unwrap();
         let pulse = context
-            .live_create_manim_geometry(noon::ManimGeometryOptions::circle(0.05).unwrap())
+            .create_manim_geometry(noon::ManimGeometryOptions::circle(0.05).unwrap())
             .unwrap();
         context
             .active_live_player()
             .unwrap()
-            .live_move_to(
+            .scene_mut()
+            .move_to(
                 &pulse,
-                noon::LiveLayoutTarget::Point(2.0, -1.0),
+                noon::LayoutTarget::Point(2.0, -1.0),
                 (0.0, 0.0),
                 (1.0, 1.0),
             )
@@ -16184,7 +15507,7 @@ mod tests {
                 AnimationOptions::new(),
             )
             .unwrap();
-        assert!(context.live_contains_mobject(&pulse).unwrap());
+        assert!(context.contains_direct_mobject(&pulse).unwrap());
     }
 
     #[test]
@@ -16380,6 +15703,13 @@ mod tests {
         line.set_fill(0.0, 1.0, 0.0, 0.2).unwrap();
         line.set_stroke_color(0.0, 0.0, 1.0, 1.0).unwrap();
         line.set_stroke_opacity(0.8).unwrap();
+        line.set_style(noon::StyleUpdate {
+            background_stroke_color: Some(Color::WHITE),
+            background_stroke_width: Some(0.125),
+            background_stroke_opacity: Some(0.25),
+            ..Default::default()
+        })
+        .unwrap();
         line.set_object_opacity(0.3).unwrap();
         assert!(context.mobject_line_endpoints(&line).is_err());
         assert!(context.mobject_path_query(&line).is_err());
@@ -16427,6 +15757,18 @@ mod tests {
         let color = context.mobject_color(&line).unwrap();
         assert!((context.mobject_fill_opacity(&line).unwrap() - 0.2).abs() < 1e-6);
         assert!((context.mobject_stroke_opacity(&line).unwrap() - 0.6).abs() < 1e-6);
+        assert_eq!(
+            context.mobject_background_stroke_color(&line).unwrap(),
+            Some(Color::WHITE)
+        );
+        assert_eq!(
+            context.mobject_background_stroke_width(&line).unwrap(),
+            0.125
+        );
+        assert_eq!(
+            context.mobject_background_stroke_opacity(&line).unwrap(),
+            0.25
+        );
         assert_eq!(line.stroke_opacity().unwrap(), 0.8);
         assert_eq!(color, Color::rgb(0.0, 1.0, 0.0));
         assert_eq!(line.manim_line_endpoints().unwrap().start, (-1.0, 0.0));
@@ -16434,6 +15776,7 @@ mod tests {
         let player = context.take_execution_player(2.0, 17).unwrap();
         assert!(context.mobject_path_query(&line).is_err());
         assert!(context.mobject_point_count(&line).is_err());
+        assert!(context.mobject_background_stroke_color(&line).is_err());
         {
             let error = context.mobject_line_endpoints(&line).unwrap_err();
             assert_eq!(
@@ -16523,15 +15866,15 @@ mod tests {
         player.live_advance_segment_to(2.0).unwrap();
         player.live_complete_segment().unwrap();
         let options = context.begin_underline(&circle, 0.15).unwrap();
-        let underline = context.live_create_manim_geometry(options).unwrap();
+        let underline = context.create_manim_geometry(options).unwrap();
         assert_eq!(underline.center().unwrap(), (4.0, -3.15));
         assert_eq!(underline.width().unwrap(), 2.0);
 
         let mut options = noon::ManimGeometryOptions::circle(0.5).unwrap();
         options.set_translation(8.0, 7.0).unwrap();
-        let detached = context.live_create_manim_geometry(options).unwrap();
+        let detached = context.create_manim_geometry(options).unwrap();
         let options = context.begin_underline(&detached, 0.15).unwrap();
-        let detached_underline = context.live_create_manim_geometry(options).unwrap();
+        let detached_underline = context.create_manim_geometry(options).unwrap();
         assert_eq!(detached_underline.center().unwrap(), (8.0, 6.35));
         let foreign = noon::Scene::new().circle(1.0).unwrap();
         let error = context.begin_underline(&foreign, 0.15).unwrap_err();
@@ -16690,7 +16033,8 @@ mod tests {
         context
             .active_live_player()
             .unwrap()
-            .live_set_translation(&circle, 1.0, 0.0)
+            .scene_mut()
+            .set_translation(&circle, 1.0, 0.0)
             .unwrap();
         let json = context.drain_returned_publication_json().unwrap().unwrap();
         let delta: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -16777,7 +16121,8 @@ mod tests {
         context
             .active_live_player()
             .unwrap()
-            .live_set_translation(&target, 2.0, 0.0)
+            .scene_mut()
+            .set_translation(&target, 2.0, 0.0)
             .unwrap();
         let final_delta = context.drain_returned_publication_json().unwrap().unwrap();
         let delta: serde_json::Value = serde_json::from_str(&final_delta).unwrap();
@@ -16804,8 +16149,12 @@ mod tests {
     }
 
     #[test]
-    fn empty_wait_then_live_text_fade_reuses_one_returned_player() {
+    fn scene_text_admission_in_setup_and_after_wait_reuses_the_returned_player() {
         let mut context = CanonicalAuthoringScene::default();
+        let setup = context
+            .author_text(|scene| scene.text(noon::Text::new("Setup")))
+            .unwrap();
+        assert!(!context.contains_direct_mobject(&setup).unwrap());
         assert_eq!(context.begin_ordinary_wait(0.5).unwrap(), 0.5);
         let mut player = context.take_execution_player(1.0, 17).unwrap();
         assert!(player.live_advance_segment_to(0.5).unwrap());
@@ -16814,34 +16163,39 @@ mod tests {
         assert_eq!(context.live_execution_ownership(), "returned");
 
         let label = context
-            .live_create_text(
-                noon::Text::new("Late")
-                    .with_font_size(36.0)
-                    .color(Color::rgba(0.2, 0.4, 0.8, 1.0)),
-            )
+            .author_text(|scene| {
+                scene.text(
+                    noon::Text::new("Late")
+                        .with_font_size(36.0)
+                        .color(Color::rgba(0.2, 0.4, 0.8, 1.0)),
+                )
+            })
             .unwrap();
         assert_eq!(context.live_execution_ownership(), "returned");
         assert!(!context
             .active_live_player()
             .unwrap()
-            .live_contains(&label)
+            .scene()
+            .contains_direct(&label)
             .unwrap());
         let typst = context
-            .live_create_typst(noon::Typst::new("#circle(radius: 1em)"))
+            .author_text(|scene| scene.typst(noon::Typst::new("#circle(radius: 1em)")))
             .unwrap();
         let math = context
-            .live_create_math_typst(noon::MathTypst::new("x^2"))
+            .author_text(|scene| scene.math_typst(noon::MathTypst::new("x^2")))
             .unwrap();
         assert_ne!(typst.node_id(), math.node_id());
         assert!(!context
             .active_live_player()
             .unwrap()
-            .live_contains(&typst)
+            .scene()
+            .contains_direct(&typst)
             .unwrap());
         assert!(!context
             .active_live_player()
             .unwrap()
-            .live_contains(&math)
+            .scene()
+            .contains_direct(&math)
             .unwrap());
 
         let end = begin_request(
@@ -16858,52 +16212,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(end, 1.25);
-        assert!(context.live_contains_mobject(&label).unwrap());
+        assert!(context.contains_direct_mobject(&label).unwrap());
         assert_eq!(
             context.bindings.get(&ObjectId::new(0)),
             Some(&label.node_id())
         );
 
         let leased = context.take_execution_player(end, 18).unwrap();
-        {
-            let error = context
-                .live_create_text(noon::Text::new("Rejected"))
-                .unwrap_err();
-            assert_eq!(
-                (error.category, error.code),
-                ("unclassified", "unclassified")
-            );
-            assert_eq!(
-                error.message,
-                "live execution session is running in the semantic engine"
-            );
-        }
-        {
-            let error = context
-                .live_create_typst(noon::Typst::new("Rejected"))
-                .unwrap_err();
-            assert_eq!(
-                (error.category, error.code),
-                ("unclassified", "unclassified")
-            );
-            assert_eq!(
-                error.message,
-                "live execution session is running in the semantic engine"
-            );
-        }
-        {
-            let error = context
-                .live_create_math_typst(noon::MathTypst::new("Rejected"))
-                .unwrap_err();
-            assert_eq!(
-                (error.category, error.code),
-                ("unclassified", "unclassified")
-            );
-            assert_eq!(
-                error.message,
-                "live execution session is running in the semantic engine"
-            );
-        }
+        let error = context
+            .author_text::<()>(|_| panic!("a transferred Scene must reject before compiling text"))
+            .unwrap_err();
+        assert_eq!(
+            (error.category, error.code),
+            ("unclassified", "unclassified")
+        );
+        assert_eq!(
+            error.message,
+            "live execution session is running in the semantic engine"
+        );
         context.return_execution_player(leased).unwrap();
     }
 
@@ -16987,11 +16313,12 @@ mod tests {
             (2.0, -1.0, f64::from(0.8_f32), f64::from(0.8_f32))
         );
 
-        let next_target = context.live_target_editor(&circle).unwrap();
+        let next_target = context.target_editor(&circle).unwrap();
         context
             .active_live_player()
             .unwrap()
-            .live_shift(&next_target, 2.0, 0.0, 0.0)
+            .scene_mut()
+            .shift_3d(&next_target, noon::SemanticVec3::new(2.0, 0.0, 0.0))
             .unwrap();
         let next_endpoint = begin_request(
             &mut context,
@@ -17087,13 +16414,19 @@ mod tests {
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
         let tracker = context.create_value_tracker(0.0).unwrap();
         let position = context
-            .tracker_position(
+            .local_authoring_scene()
+            .unwrap()
+            .position_from_tracker(
                 &tracker,
                 SemanticVec3::new(1.0, 0.0, 0.0),
                 SemanticVec3::new(-2.0, 0.0, 0.0),
             )
             .unwrap();
-        context.bind_tracker_position(&circle, &position).unwrap();
+        context
+            .local_authoring_scene()
+            .unwrap()
+            .bind_position(&circle, &position)
+            .unwrap();
         assert_eq!(
             context
                 .scene
@@ -17113,10 +16446,10 @@ mod tests {
         let player = context.live_player(2.0).unwrap();
         assert!(player.live_evaluate(2.25).is_err());
         assert_eq!(player.time(), 0.0);
-        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 0.0);
+        assert_eq!(player.scene().value_tracker_value(&tracker).unwrap(), 0.0);
 
         player.live_evaluate(1.0).unwrap();
-        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 2.0);
+        assert_eq!(player.scene().value_tracker_value(&tracker).unwrap(), 2.0);
         assert_eq!(
             player
                 .live_effective(&circle)
@@ -17127,7 +16460,7 @@ mod tests {
         );
 
         player.live_evaluate(2.0).unwrap();
-        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 4.0);
+        assert_eq!(player.scene().value_tracker_value(&tracker).unwrap(), 4.0);
         assert_eq!(
             player
                 .live_effective(&circle)
@@ -17136,7 +16469,7 @@ mod tests {
                 .translation,
             Vec2::new(2.0, 0.0)
         );
-        assert!(player.live_set_signal(&tracker, 3.0).is_err());
+        assert!(player.scene_mut().set_value(&tracker, 3.0).is_err());
     }
 
     #[test]
@@ -17253,13 +16586,19 @@ mod tests {
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
         let tracker = context.create_value_tracker(0.0).unwrap();
         let position = context
-            .tracker_position(
+            .local_authoring_scene()
+            .unwrap()
+            .position_from_tracker(
                 &tracker,
                 SemanticVec3::new(1.0, 0.0, 0.0),
                 SemanticVec3::new(-2.0, 0.0, 0.0),
             )
             .unwrap();
-        context.bind_tracker_position(&circle, &position).unwrap();
+        context
+            .local_authoring_scene()
+            .unwrap()
+            .bind_position(&circle, &position)
+            .unwrap();
         let revision = context.scene.integration_store().borrow().scene_revision();
 
         assert!(begin_request(
@@ -17293,7 +16632,7 @@ mod tests {
         assert_eq!(end, 2.0);
         let player = context.active_live_player().unwrap();
         player.live_advance_segment_to(1.0).unwrap();
-        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 1.0);
+        assert_eq!(player.scene().value_tracker_value(&tracker).unwrap(), 1.0);
         assert_eq!(
             player
                 .live_effective(&circle)
@@ -17305,8 +16644,8 @@ mod tests {
         );
         player.live_advance_segment_to(2.0).unwrap();
         player.live_complete_segment().unwrap();
-        player.live_set_signal(&tracker, 3.0).unwrap();
-        assert_eq!(player.live_effective_signal(&tracker).unwrap(), 3.0);
+        player.scene_mut().set_value(&tracker, 3.0).unwrap();
+        assert_eq!(player.scene().value_tracker_value(&tracker).unwrap(), 3.0);
         assert_eq!(
             player
                 .live_effective(&circle)
@@ -17383,7 +16722,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(end, 1.0);
-        assert!(!context.live_contains_mobject(&square).unwrap());
+        assert!(!context.contains_direct_mobject(&square).unwrap());
         assert_eq!(square.state().unwrap(), before);
         assert_eq!(
             context.bindings.get(&ObjectId::new(0)),
@@ -17410,14 +16749,14 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(context.live_contains_mobject(&circle).unwrap());
+        assert!(context.contains_direct_mobject(&circle).unwrap());
         {
             let player = context.active_live_player().unwrap();
             assert_eq!(player.time(), 0.0);
             player.live_advance_segment_to(fade_in_end).unwrap();
             player.live_complete_segment().unwrap();
         }
-        assert!(context.live_contains_mobject(&circle).unwrap());
+        assert!(context.contains_direct_mobject(&circle).unwrap());
 
         let fade_out_end = begin_request(
             &mut context,
@@ -17435,12 +16774,12 @@ mod tests {
             player.live_advance_segment_to(fade_out_end).unwrap();
             player.live_complete_segment().unwrap();
         }
-        assert!(!context.live_contains_mobject(&circle).unwrap());
+        assert!(!context.contains_direct_mobject(&circle).unwrap());
 
         // The original derived ObjectId re-enters through the shared session;
         // no replacement semantic handle or second runtime is allocated.
-        context.live_add_mobject(ObjectId::new(0), &circle).unwrap();
-        assert!(context.live_contains_mobject(&circle).unwrap());
+        context.bind_mobject(ObjectId::new(0), &circle).unwrap();
+        assert!(context.contains_direct_mobject(&circle).unwrap());
     }
 
     #[test]
@@ -17496,7 +16835,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(end, 1.0);
-        assert!(context.live_contains_mobject(&circle).unwrap());
+        assert!(context.contains_direct_mobject(&circle).unwrap());
         assert!(begin_request(
             &mut context,
             create_request(
@@ -17521,13 +16860,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(end, 1.0);
-        assert!(context.live_contains_mobject(&square).unwrap());
+        assert!(context.contains_direct_mobject(&square).unwrap());
         let player = context.active_live_player().unwrap();
         player.live_advance_segment_to(end).unwrap();
         player.live_complete_segment().unwrap();
-        assert!(!context.live_contains_mobject(&square).unwrap());
-        context.live_add_mobject(id, &square).unwrap();
-        assert!(context.live_contains_mobject(&square).unwrap());
+        assert!(!context.contains_direct_mobject(&square).unwrap());
+        context.bind_mobject(id, &square).unwrap();
+        assert!(context.contains_direct_mobject(&square).unwrap());
         assert_eq!(context.identities.get(&square.node_id()), Some(&id));
     }
 
@@ -17550,11 +16889,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(context.bindings.get(&id), Some(&square.node_id()));
-        assert!(context.live_contains_mobject(&square).unwrap());
+        assert!(context.contains_direct_mobject(&square).unwrap());
         let player = context.active_live_player().unwrap();
         player.live_advance_segment_to(end).unwrap();
         player.live_complete_segment().unwrap();
-        assert!(!context.live_contains_mobject(&square).unwrap());
+        assert!(!context.contains_direct_mobject(&square).unwrap());
         assert_eq!(context.bindings.get(&id), Some(&square.node_id()));
         assert_eq!(context.identities.get(&square.node_id()), Some(&id));
     }
@@ -17583,7 +16922,7 @@ mod tests {
         let player = context.active_live_player().unwrap();
         player.live_advance_segment_to(end).unwrap();
         player.live_complete_segment().unwrap();
-        assert!(context.live_contains_mobject(&circle).unwrap());
+        assert!(context.contains_direct_mobject(&circle).unwrap());
     }
 
     #[test]
@@ -17656,8 +16995,8 @@ mod tests {
         assert_eq!(player.time(), 0.0);
         player.live_advance_segment_to(end).unwrap();
         player.live_complete_segment().unwrap();
-        assert!(context.live_contains_mobject(&circle).unwrap());
-        assert!(context.live_contains_mobject(&square).unwrap());
+        assert!(context.contains_direct_mobject(&circle).unwrap());
+        assert!(context.contains_direct_mobject(&square).unwrap());
     }
 
     #[test]
@@ -17777,30 +17116,24 @@ mod tests {
     }
 
     #[test]
-    fn native_signal_declarations_bind_through_the_canonical_scene() {
+    fn local_authoring_scene_routes_signal_edits_to_the_execution_owner() {
         let mut context = CanonicalAuthoringScene::default();
-        let square = context.scene.square(0.9).unwrap();
-        context.bind_mobject(ObjectId::new(0), &square).unwrap();
-
-        let pointer = context.pointer_position_signal().unwrap();
-        context.bind_native_translation(&square, &pointer).unwrap();
-        let opacity = context.control_signal("opacity".into(), 1.0).unwrap();
-        context.bind_opacity(&square, &opacity).unwrap();
-        let clicks = context.pointer_down_events(0).unwrap();
-        context.bind_rotation(&square, &clicks).unwrap();
-        let visible = context.key_state_signal("Space".into(), false).unwrap();
-        context.bind_presence(&square, &visible).unwrap();
-        context.viewport_size_signal().unwrap();
-        context.wheel_delta_signal().unwrap();
-        context.wheel_events().unwrap();
-        context.control_commit_events("opacity".into()).unwrap();
-
-        let foreign = CanonicalAuthoringScene::default();
-        assert!(foreign.bind_native_translation(&square, &pointer).is_err());
+        context
+            .local_authoring_scene()
+            .unwrap()
+            .pointer_position_signal()
+            .unwrap();
 
         context.live_player(1.0).unwrap();
-        assert!(context.pointer_position_signal().is_err());
-        assert!(context.bind_opacity(&square, &opacity).is_err());
+        assert!(matches!(
+            context
+                .local_authoring_scene()
+                .unwrap()
+                .pointer_position_signal(),
+            Err(noon::AuthoringError::Unsupported(
+                noon::UnsupportedAuthoringOperation::SignalAuthoringRequiresSetup
+            ))
+        ));
     }
 
     #[test]

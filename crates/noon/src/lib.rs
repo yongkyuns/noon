@@ -82,17 +82,18 @@
 //! its persistent edits to these Scene-owned operations. Raw handle edits remain authored
 //! operations; they do not publish to an already running execution.
 //!
-//! [`Scene::live`] and [`LiveContinuation`] are explicit execution integration
-//! facilities. A Rust continuation receives the owning [`ContinuationScene`] and
-//! borrows [`ContinuationScene::live`] for segment control. Scene scripts handle
-//! their segment and callback plumbing internally.
+//! [`Scene::into_execution`] keeps authoring and execution together. Borrow
+//! [`SceneExecution::live`] or [`ContinuationScene::live`] for segment control.
+//! Scene scripts manage segments and callback phases internally. Hosts that
+//! configure a runtime before installation use [`integration::scene_execution`].
 //!
 //! # Public surface
 //!
 //! - The crate root and [`prelude`] contain explicit authoring values, handles,
 //!   live operations, logical completion, and their errors.
 //! - [`integration`] contains raw arena access types, host/callback plumbing and
-//!   renderer observations. These are advanced facilities, not ordinary authoring.
+//!   renderer observations. Host-managed runtimes use
+//!   [`integration::scene_execution::ExecutionSession`].
 //! - `diagnostics` (feature gated) provides explicit debug/export observations.
 //!
 //! Use [`Scene::authored`] for base state and [`Scene::effective`] for the current
@@ -110,6 +111,10 @@
 //!
 //! ```compile_fail,E0432
 //! use noon::FrameState;
+//! ```
+//!
+//! ```compile_fail,E0603
+//! use noon::ExecutionSession;
 //! ```
 //!
 //! Implementation modules are not an alternative public facade:
@@ -284,6 +289,7 @@ pub mod time_series_plotting_example;
 #[cfg(feature = "latex")]
 mod variable_authoring;
 mod vector_field_authoring;
+mod vector_field_options;
 mod vector_space_authoring;
 mod z_index;
 mod zoomed_scene;
@@ -327,11 +333,12 @@ pub use elbow_authoring::ElbowAuthoringError;
 pub use execution_segment::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentError, ExecutionSegmentState,
 };
+use execution_session::ExecutionSession;
 pub use execution_session::{
-    ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
-    ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
-    ExecutionSessionContentError, ExecutionSessionCreateError, ExecutionSessionFadeError,
-    ExecutionSessionInputError, ExecutionSessionInset2DError, ExecutionSessionMaintenanceError,
+    ExecutionSegmentCompletionError, ExecutionSessionAnimationError, ExecutionSessionCallbackError,
+    ExecutionSessionCallbackReadError, ExecutionSessionCameraError, ExecutionSessionContentError,
+    ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
+    ExecutionSessionInset2DError, ExecutionSessionMaintenanceError,
     ExecutionSessionPublicationError, InspectionNavigationError, PointerHoverTransition,
     SignalTimelineAppendError, StagedEffectPublication, TranslationDragError,
     TranslationDragReceipt, TranslationDragUndo,
@@ -345,7 +352,7 @@ pub use family_callback_paint::{FamilyCallbackPaintError, FamilyPaint};
 pub use family_callback_translation::{CallbackFamilyTranslation, FamilyCallbackTranslationError};
 pub use family_copy::{FamilyCopy, MobjectCopy, SemanticCopy};
 pub use family_grid::{FamilyGridOptions, GridFlow};
-pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor, LiveLayoutTarget};
+pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor, LayoutTarget};
 pub use family_style::StyleUpdate;
 pub use focus_on_authoring::FocusOnOptions;
 pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHostCallbackTable};
@@ -372,9 +379,8 @@ pub use live_program::{
 };
 pub use live_session::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
-    DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,
-    FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, SubsetDisplayMode,
-    TransformToRequest,
+    DrawBorderThenFillOptions, FadeEndpoint, FadeTranslation, IndicateOptions, LiveSession,
+    LiveSessionError, SubsetDisplayMode, TransformToRequest,
 };
 #[cfg(feature = "latex")]
 pub use matrix_display::{
@@ -464,8 +470,8 @@ pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use sample_space::{SampleSpace, SampleSpaceError, SampleSpaceOptions};
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
 pub use scene::{
-    Scene, SceneExecution, SceneExecutionError, SceneSection, SceneSectionNavigation,
-    SectionNavigation, SectionType,
+    EffectiveMobjectLayout, EffectiveMobjectState, Scene, SceneExecution, SceneExecutionError,
+    SceneSection, SceneSectionNavigation, SectionNavigation, SectionType,
 };
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
@@ -501,6 +507,7 @@ pub use text_part_authoring::TextPartAuthoringError;
 #[cfg(feature = "latex")]
 pub use variable_authoring::{Variable, VariableAuthoringError};
 pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVectorField};
+pub use vector_field_options::ArrowVectorFieldOptions;
 pub use vector_space_authoring::{
     linear_transformation_path_arc, LinearTransformationAuthoring, LinearTransformationOptions,
 };
@@ -527,16 +534,16 @@ pub mod prelude {
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
         BooleanOperation, Color, ContinuationEffects, ContinuationScene, ContinuationStep,
-        DeclaredAnimation, DiGraph, DrawBorderThenFillOptions, EffectiveMobjectState,
-        ExecutionSession, FadeEndpoint, FadeTranslation, Graph, GraphAuthoringError,
-        GraphEdgeMobject, GraphOptions, LiveContinuation, LiveProgram, LiveSession,
-        LiveSessionError, ManimArrow, ManimArrowOptions, ManimArrowVectorField, Mobject,
-        MobjectFamily, MobjectTarget, NativeBoolSignal, NativeVectorSignal, PlotAuthoringError,
-        PlotSamplingOptions, RateFunction, Scene, SceneSection, SceneSectionNavigation,
-        SectionNavigation, SectionType, SemanticObjectState, SemanticStyle,
-        SpatialCompositionError, StoredGeometry, StyleUpdate, SvgAuthoringError, SvgDefaultStyle,
-        SvgImportOptions, SvgUnsupportedFeature, TrackerPosition, ValueTracker, Vec2,
-        VectorFieldAxisRange, VectorFieldPoint, VectorFieldRanges2D, VectorPath,
+        DeclaredAnimation, DiGraph, DrawBorderThenFillOptions, EffectiveMobjectState, FadeEndpoint,
+        FadeTranslation, Graph, GraphAuthoringError, GraphEdgeMobject, GraphOptions,
+        LiveContinuation, LiveProgram, LiveSession, LiveSessionError, ManimArrow,
+        ManimArrowOptions, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget,
+        NativeBoolSignal, NativeVectorSignal, PlotAuthoringError, PlotSamplingOptions,
+        RateFunction, Scene, SceneSection, SceneSectionNavigation, SectionNavigation, SectionType,
+        SemanticObjectState, SemanticStyle, SpatialCompositionError, StoredGeometry, StyleUpdate,
+        SvgAuthoringError, SvgDefaultStyle, SvgImportOptions, SvgUnsupportedFeature,
+        TrackerPosition, ValueTracker, Vec2, VectorFieldAxisRange, VectorFieldPoint,
+        VectorFieldRanges2D, VectorPath,
     };
     pub use crate::{
         AudioClipOptions, AudioResource, PlaybackControl, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,

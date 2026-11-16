@@ -92,7 +92,7 @@ fn public_gradient_transform_samples_shared_fill_and_reconciles_exact_endpoint()
         &target_paint
     ));
     scene.live(&mut session).complete_segment(segment).unwrap();
-    let state = scene.live(&mut session).authored(&source).unwrap();
+    let state = scene.authored(&source).unwrap();
     assert_eq!(
         state.style.fill,
         Some(SemanticPaint::LinearGradient(target_paint))
@@ -115,7 +115,7 @@ fn public_solid_to_gradient_and_live_target_capture_keep_effective_paint() {
     let segment = running.live().play_animation(&animation).unwrap();
     running.live().advance_segment_to(segment, 0.5).unwrap();
     let current = row(running.session(), &source).fill_paint.clone().unwrap();
-    let effective = running.live().effective(&source).unwrap();
+    let effective = running.scene().effective(&source).unwrap();
     assert_eq!(effective.fill_paint.as_ref(), Some(&current));
     assert!(
         running.scene().effective_fill_color(&source).is_err(),
@@ -129,7 +129,7 @@ fn public_solid_to_gradient_and_live_target_capture_keep_effective_paint() {
             .unwrap(),
         [0.5, 0.25, 0.25, 1.0]
     );
-    let source_style = running.live().authored(&source).unwrap().style;
+    let source_style = running.scene().authored(&source).unwrap().style;
     assert_eq!(
         source_style
             .capture_effective_fill(row(running.session(), &source).style.fill, Some(&current))
@@ -142,7 +142,7 @@ fn public_solid_to_gradient_and_live_target_capture_keep_effective_paint() {
     running.live().complete_segment(segment).unwrap();
     let current = row(running.session(), &source).fill_paint.clone().unwrap();
     let captured = running.scene_mut().target_editor(&source).unwrap();
-    let state = running.live().authored(&captured).unwrap();
+    let state = running.scene().authored(&captured).unwrap();
     assert_eq!(state.style.fill, Some(current.as_ref().clone()));
     assert_eq!(
         running.session().frame().objects.len(),
@@ -206,7 +206,7 @@ fn bounded_returning_and_reversed_paint_tracks_restore_exact_source() {
                 .unwrap();
         }
         scene.live(&mut session).complete_segment(segment).unwrap();
-        let state = scene.live(&mut session).authored(&source).unwrap();
+        let state = scene.authored(&source).unwrap();
         assert_eq!(state.style.fill_opacity, 0.123456789012345);
         assert_eq!(
             state.style.fill,

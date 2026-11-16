@@ -518,13 +518,9 @@ class PlottingQualification(Scene):
         fresh.shift(LEFT)
         line = NumberLine([0, 2, 1], length=2, include_tip=True,
                           scaling=LogBase(custom_labels=False)).shift(DOWN)
-        for observe in (lambda: fresh.c2p(0, 0), lambda: line.n2p(1)):
-            try:
-                observe()
-            except NotImplementedError:
-                pass
-            else:
-                raise AssertionError("unsupported detached live query was silently accepted")
+        near(fresh.c2p(0, 0), (-1, 0))
+        near(fresh.p2c(fresh.c2p(0.5, 0.25)), (0.5, 0.25))
+        near(line.n2p(100), (1, -1))
         self.add(fresh, line)
         near(fresh.c2p(0, 0), (-1, 0))
         near(fresh.p2c(fresh.c2p(0.5, 0.25)), (0.5, 0.25))

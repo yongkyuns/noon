@@ -58,8 +58,10 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             .scene_mut()
             .set_z_index(&(&back_target).into(), 2.0, true)?;
         let front_target = execution.scene_mut().target_editor(&front)?;
+        execution
+            .scene_mut()
+            .shift_3d(&front_target, crate::SemanticVec3::new(-1.0, 0.0, 0.0))?;
         let mut live = execution.live();
-        live.shift(&front_target, -1.0, 0.0)?;
         let request = Request::Composition {
             kind: crate::SemanticAnimationCompositionKind::Parallel,
             options: AnimationOptions::new().rate_func(RateFunction::Linear),

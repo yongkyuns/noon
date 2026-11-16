@@ -205,7 +205,10 @@ fn ownership_observations_and_continuation_follow_one_runtime() {
     assert_eq!(player.ownership_identity(), identity);
     assert_eq!(player.time(), 0.25);
     // Return/resume did not reset the initial-snapshot/encoder state.
-    player.live_set_translation(&circle, 1.0, 0.0).unwrap();
+    player
+        .scene_mut()
+        .set_translation(&circle, 1.0, 0.0)
+        .unwrap();
     let delta: serde_json::Value =
         serde_json::from_str(&player.drain_delta_json().unwrap().unwrap()).unwrap();
     assert_eq!(delta["session"], 41);
@@ -220,7 +223,7 @@ fn transferred_context_cannot_drive_query_publish_or_take_again() {
     let identity = player.ownership_identity();
     let revision = scene.scene.integration_store().borrow().scene_revision();
     assert!(scene.mobject_layout(&circle).is_err());
-    assert!(scene.live_contains_mobject(&circle).is_err());
+    assert!(scene.contains_direct_mobject(&circle).is_err());
     assert!(scene.active_live_player().is_err());
     assert!(scene.begin_ordinary_wait(0.25).is_err());
     assert!(scene.take_execution_player(1.0, 42).is_err());
@@ -416,7 +419,10 @@ fn publication_while_leased_does_not_invalidate_the_ownership_identity() {
     let mut player = scene.take_execution_player(1.0, 41).unwrap();
     let identity = player.ownership_identity();
     let revision = player.scene_revision();
-    player.live_set_translation(&circle, 3.0, -1.0).unwrap();
+    player
+        .scene_mut()
+        .set_translation(&circle, 3.0, -1.0)
+        .unwrap();
     assert_ne!(player.scene_revision(), revision);
     assert_eq!(player.ownership_identity(), identity);
     scene.return_execution_player(player).unwrap();
@@ -459,7 +465,7 @@ fn only_a_stale_returned_runtime_can_be_replaced_at_a_rerun_boundary() {
     );
     scene.prepare_execution_run().unwrap();
     assert!(scene.player_ownership.is_unstarted());
-    let mut rerun = scene.take_execution_player(1.0, 41).unwrap();
+    let rerun = scene.take_execution_player(1.0, 41).unwrap();
     // Same transport session, but a genuinely new runtime incarnation.
     assert_ne!(rerun.ownership_identity(), identity);
     assert_eq!(
