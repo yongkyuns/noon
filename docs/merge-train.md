@@ -19,6 +19,14 @@ A failed candidate is not merged; subsequent queue entries must be tested agains
 
 To remove a candidate before merge, remove `merge-train` and use Mergify's **dequeue** command/control. Do both: removing only the label may leave a previously queued PR in the queue. To stop merges, pause the queue in Mergify. Avoid direct merges outside the queue once adoption is complete.
 
+## First queue trial
+
+Validate the queue with a **documentation-only** pull request targeting `master`, rather than enrolling an existing feature PR. Record the exact original head and base SHA, and inspect the GitHub status checks for that head. A ready PR becomes eligible only after the four PR Fast Gate jobs and two always-on architecture/layer jobs succeed; the `merge-train` label is required even for manual admission.
+
+After the six admission checks pass, inspect the Mergify queue status and any temporary draft pull request. Verify the **actual combined revision** and all GitHub Actions checks selected for it, including relevant path-scoped jobs, before allowing Mergify to merge. A successful first-in-queue direct merge may be valid when no new combined revision is needed, but it does **not** establish that multiple PRs were tested cumulatively. Qualify a second PR after `master` advances before claiming that property.
+
+Do not manually merge the trial PR to make the queue appear successful. If Mergify cannot recognize the configuration, required checks remain queued, or a selected check fails, leave the candidate unmerged, capture the Mergify/CI diagnostics and correct the specific cause without relaxing the gates. Keep the rollout acceptance open until an actual queue merge and safe failure behavior have both been observed.
+
 ## Boundary and caveats
 
 The train changes **merge orchestration only**, not test selection, benchmark thresholds, CI timeouts, test baselines, release permissions, or GitHub Pages deployment. Normal PR workflows (including conditional browser/renderer gates) still select the relevant paths. The queue's dynamic failed/pending predicates use Mergify's [app-qualified check conditions and glob operator](https://docs.mergify.com/configuration/conditions/); their live behavior must be confirmed in the installed Mergify product. A workflow that is neither triggered nor reported cannot be qualified by a status check, so maintainers must still verify any explicit/manual qualifications required by a PR or release.
