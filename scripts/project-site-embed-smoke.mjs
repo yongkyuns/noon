@@ -109,16 +109,18 @@ async function captureFrameState(frame) {
     return {url:frame.url(),captureError:String(error)};
   } finally { clearTimeout(timer); }
 }
-async function sample(frame, prefix, time, expectedCenter = null) {
-  // The regular playback controls remain the authority even though the embed
-  // hides their toolbar. Use the same input events, not an alternative renderer.
-  if (await frame.locator('#status').getAttribute('data-playback-playing')==='true') {
-    await frame.locator('.playback-toggle').evaluate(button=>button.click());
-  }
-  await frame.waitForFunction(() => {
+async function pause(frame) {
+  await frame.locator('.playback-controls').evaluate(controls => {
+    if (controls.dataset.playing === 'true') controls.querySelector('.playback-toggle').click();
+  });
+  await waitForBrowserObservation(frame, () => {
     const controls = document.querySelector('.playback-controls');
     return controls.dataset.playing === 'false' && controls.dataset.busy === 'false';
   });
+}
+async function sample(frame, prefix, time, expectedCenter = null) {
+  // Use the regular playback controller for the frame being captured.
+  await pause(frame);
   const target = await frame.locator('.playback-scrubber').evaluate((element,time)=>{
     element.value=String(time);
     const target = Number(element.value);
@@ -282,10 +284,7 @@ try {
           await Promise.all(frames.map(({frame})=>ready(frame)));
           assert.ok(workers.size>=selection.length,'all live contexts created runtime workers');
           assert.equal(await page.locator('video, .demo-poster, [data-demo-open]').count(),0);
-          for (const [index,{id,element,frame}] of frames.entries()) {
-            await page.setViewportSize({width:index%2 ? 390 : 1280,height:1000});
-            const prefix = `${name}-${surface}-${id}`;
-            mark('authored-frames',id);
+          const playback = await Promise.all(frames.map(async ({frame}) => {
             const initialGeneration = await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration);
             assert.equal(initialGeneration,1,'exactly one canonical automatic initial Run');
             // A frame may have played thousands of real frames while Firefox
@@ -307,6 +306,17 @@ try {
               frames: Number(document.querySelector('#status').dataset.presentedFrames),
               time: Number.parseFloat(document.querySelector('#metric-time').value),
             }));
+            return {initialGeneration,autoplayBefore,autoplayAfter};
+          }));
+          // After proving concurrent autoplay, pause the other embeds while
+          // each scene is checked for canvas pixels and editor behavior.
+          mark('pause-after-autoplay');
+          await Promise.all(frames.map(({frame})=>pause(frame)));
+          for (const [index,{id,element,frame}] of frames.entries()) {
+            await page.setViewportSize({width:index%2 ? 390 : 1280,height:1000});
+            const prefix = `${name}-${surface}-${id}`;
+            mark('authored-frames',id);
+            const {initialGeneration,autoplayBefore,autoplayAfter}=playback[index];
             assert.equal(await frame.locator('#auto-run').isChecked(),true);
             assert.equal(await frame.locator('button:visible').count(),2,'no playback/editor toolbar in View');
             const duration = await frame.locator('.playback-scrubber').evaluate(element=>Number(element.max));
