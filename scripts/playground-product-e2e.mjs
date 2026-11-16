@@ -29,6 +29,7 @@ assert.ok(["baseline", "candidate"].includes(label), "product measurement role m
 const allowLegacyBaseline = label === "baseline";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
 const measurement = productMeasurement(exampleId);
+const readinessWait = { polling: 100, timeout: 30_000 };
 const profileExpectation = SHOWCASE_PROFILE_EXPECTATIONS.find(entry => entry.id === exampleId);
 const completionExpectation = { attachedProfile: profileExpectation?.attachedProfile ?? "incremental",
   disposition: profileExpectation?.disposition ?? "looped" };
@@ -141,11 +142,8 @@ async function waitForServer() {
 }
 
 async function waitForApplied(page, previousGeneration) {
-  // A new explicit Run can race the previous run's still-applied patch DOM.
-  // Wait for the exact new generation's terminal patch, not a stale one;
-  // retain the original 30s deadline and genuine source-completion gates.
-  await page.waitForFunction(freshProductRunSettled, { previousGeneration, allowLegacyBaseline },
-    { timeout: 30_000 });
+  // The source worker can settle the current Run independently of page animation frames.
+  await page.waitForFunction(freshProductRunSettled, { previousGeneration, allowLegacyBaseline }, readinessWait);
   const state = await page.evaluate(() => ({
     patchState: document.querySelector("#patch-status")?.dataset.state ?? null,
     patchText:
@@ -238,8 +236,7 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
         !events.some(event => event.stage === "profile-change") && dispositionReady;
     }, { exampleId, expectedProfile: completionExpectation.attachedProfile,
       expectedDisposition: completionExpectation.disposition, durationSeconds: measurement.sourceEndSeconds,
-      allowLegacyBaseline },
-    { timeout: 30_000 });
+      allowLegacyBaseline }, readinessWait);
     const lifecycle = await page.evaluate(() => {
       const gallery = window.__noonExampleGallery;
       return { runInFlight: gallery.runInFlight, run: gallery.runPhaseMetrics,
