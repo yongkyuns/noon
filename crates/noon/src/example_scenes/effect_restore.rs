@@ -60,7 +60,6 @@ impl LiveContinuation for EffectRestore {
                     )
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_family_object_opacity(&self.group, 0.25)
                     .map_err(message)?;
             }
@@ -74,11 +73,9 @@ impl LiveContinuation for EffectRestore {
             3 | 5 => {
                 let (leaf, group) = self.saved()?;
                 scene
-                    .live()
                     .become_mobject(&self.leaf, leaf, Default::default())
                     .map_err(message)?;
                 scene
-                    .live()
                     .become_family(&self.group, group, Default::default())
                     .map_err(message)?;
             }
@@ -88,7 +85,6 @@ impl LiveContinuation for EffectRestore {
                     .set_effect(leaf, "halo", EffectUpdate::default().intensity(0.0))
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_family_object_opacity(group, 0.0)
                     .map_err(message)?;
             }
@@ -99,7 +95,6 @@ impl LiveContinuation for EffectRestore {
                     .remove_effect(&self.group, "soften")
                     .map_err(message)?;
                 scene
-                    .live()
                     .set_family_object_opacity(&self.group, 1.0)
                     .map_err(message)?;
             }

@@ -21,7 +21,7 @@ class FamilyOwnPathTests(unittest.TestCase):
                 query = self.query(count)
                 family = SimpleNamespace(pathQuery=Mock(return_value=query), memberKeys=Mock(side_effect=AssertionError('child capture')))
                 value._semantic_family_handle = family
-                with patch.object(handles, '_live_mutation_context', return_value=None), patch.object(handles, '_live_constructor_context', return_value=None), patch.object(handles, '_group_target_context', side_effect=AssertionError('child context search')):
+                with patch.object(handles, '_path_authoring_context', return_value=None), patch.object(handles, '_group_target_context', side_effect=AssertionError('child context search')):
                     result = value.get_anchors()
                 self.assertEqual([list(point) for point in result], [] if count == 0 else [[1 + 2 ** -40, 0., 7.125], [3., 2., -0.75]])
                 family.pathQuery.assert_called_once_with()
@@ -34,7 +34,7 @@ class FamilyOwnPathTests(unittest.TestCase):
         family = SimpleNamespace(pathQuery=Mock(side_effect=AssertionError('stale authored query')))
         value._semantic_family_handle = family
         context = SimpleNamespace(queryFamilyOwnPath=Mock(return_value=query))
-        with patch.object(handles, '_live_mutation_context', return_value=context), patch.object(handles, '_live_constructor_context', side_effect=AssertionError('unused global context')), patch.object(handles, '_group_target_context', side_effect=AssertionError('child context search')):
+        with patch.object(handles, '_path_authoring_context', return_value=context), patch.object(handles, '_group_target_context', side_effect=AssertionError('child context search')):
             result = value.get_anchors()
         self.assertEqual(float(result[0][0]), 1 + 2 ** -40)
         context.queryFamilyOwnPath.assert_called_once_with(family)

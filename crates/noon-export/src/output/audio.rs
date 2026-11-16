@@ -4,10 +4,10 @@ use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     AudioMixFormat, ExportAudioGrid, ExportFrameSummary, MAX_AUDIO_MIX_BLOCK_FRAMES,
 };
-use noon::ExecutionSession;
 
 use super::check_publication_cancellation;
 use crate::CaptureCancellation;

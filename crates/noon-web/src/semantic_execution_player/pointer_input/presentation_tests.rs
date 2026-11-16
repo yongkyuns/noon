@@ -4,6 +4,7 @@
 use super::*;
 use crate::worker_pointer_presentation::WorkerPointerReceipt;
 use crate::{PointerPresentationView, RetainedFamilyExecutionDeltaEnvelope};
+use noon::integration::scene_execution;
 use noon_core::{NativeInputValue, NativeStateSource};
 
 fn player() -> SemanticExecutionPlayer {
@@ -529,7 +530,7 @@ fn drag_player() -> (SemanticExecutionPlayer, noon::Mobject, WorkerPointerReceip
     circle.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
     scene.add(&circle).unwrap();
     let mut p = SemanticExecutionPlayer::from_live_session(
-        scene.execution_session().unwrap(),
+        scene_execution::lower(&scene).unwrap(),
         std::rc::Rc::clone(scene.integration_store()),
         scene.root(),
         2.0,
@@ -740,7 +741,7 @@ fn captured_drag_does_not_remap_after_an_unrelated_camera_timeline_changes() {
                 .rate_func(noon_core::RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     session
         .activate_animation_segment(
             &mut scene.integration_store().borrow_mut(),
@@ -780,8 +781,8 @@ fn captured_drag_does_not_remap_after_an_unrelated_camera_timeline_changes() {
         noon_core::SemanticVec3::ZERO
     );
     assert_eq!(
-        scene
-            .live(p.source.session_mut())
+        p.source
+            .scene()
             .effective(&circle)
             .unwrap()
             .transform

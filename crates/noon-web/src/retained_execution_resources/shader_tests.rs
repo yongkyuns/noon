@@ -4,7 +4,8 @@ use super::*;
 use crate::{
     RetainedFamilyExecutionDeltaEncoder, TransportEffectDefinition, TransportShaderProgramHandle,
 };
-use noon::{effects::*, Color, ExecutionSession, Mobject, Scene};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{effects::*, Color, Mobject, Scene};
 use noon_core::ShaderParameterDefinition as Parameter;
 
 fn program(source: String) -> WgslEffectProgram {
@@ -318,7 +319,7 @@ fn composed_local_shader_worker_rejection_preserves_resources_frame_and_sequence
     scene
         .add_effect(&family, ShaderEffect::new(material), "material")
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
     let mut encoder = RetainedFamilyExecutionDeltaEncoder::new(17);
     let valid = encode(&mut encoder, &mut session, true);
     // The real receiver must check a valid program's unsupported source role,

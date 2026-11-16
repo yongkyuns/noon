@@ -271,10 +271,7 @@ mod tests {
             let old = family.member_view().unwrap();
             let revision = scene.revision();
             if running {
-                scene
-                    .owned_live()
-                    .add_family_members(&family, &[(&c).into()])
-                    .unwrap();
+                scene.add_family_members(&family, &[(&c).into()]).unwrap();
             } else {
                 family.add_many(&[(&c).into()]).unwrap();
             }
@@ -284,7 +281,6 @@ mod tests {
             assert_eq!(current.len().unwrap(), 3);
             if running {
                 scene
-                    .owned_live()
                     .remove_family_members(&family, &[(&a).into()])
                     .unwrap();
             } else {
@@ -302,7 +298,6 @@ mod tests {
             let revision = scene.revision();
             if running {
                 assert!(scene
-                    .owned_live()
                     .add_family_members(&family, &[(&family).into()])
                     .is_err());
             } else {
@@ -313,13 +308,12 @@ mod tests {
             // Even an empty add replaces the list; a later in-place removal
             // must leave this captured list unchanged.
             if running {
-                scene.owned_live().add_family_members(&family, &[]).unwrap();
+                scene.add_family_members(&family, &[]).unwrap();
             } else {
                 family.add_many(&[]).unwrap();
             }
             if running {
                 scene
-                    .owned_live()
                     .remove_family_members(&family, &[(&b).into()])
                     .unwrap();
             } else {

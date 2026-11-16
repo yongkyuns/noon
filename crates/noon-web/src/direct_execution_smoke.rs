@@ -126,9 +126,10 @@ pub async fn create_direct_glow_churn_renderer(
 pub async fn create_direct_retained_locality_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-    let (scene, objects) = noon::example_scenes::retained_locality::scene().map_err(js_error)?;
+    let (mut scene, objects) =
+        noon::example_scenes::retained_locality::scene().map_err(js_error)?;
     let animation = noon::example_scenes::retained_locality::target_animation_with_duration(
-        &scene,
+        &mut scene,
         &objects[noon::example_scenes::retained_locality::TARGET_INDEX],
         10.0,
     )
@@ -564,8 +565,8 @@ pub async fn create_direct_execution_smoke_renderer(
         .add_semantic_family_member(root, label.node_id())
         .map_err(js_error)?;
 
-    let mut session = scene.execution_session().map_err(js_error)?;
-    let resolved_camera = session.camera().map_err(js_error)?;
+    let mut execution = scene.into_execution().map_err(js_error)?;
+    let resolved_camera = execution.session().camera().map_err(js_error)?;
     if resolved_camera
         != (Camera2DState {
             center: Vec2::new(2.0, -1.0),
@@ -576,17 +577,16 @@ pub async fn create_direct_execution_smoke_renderer(
             "direct Rust/WASM smoke did not resolve its authored semantic camera",
         ));
     }
-    session
-        .activate_animation(
-            &mut store.borrow_mut(),
-            animation,
-            AnimationOptions::new()
-                .run_time(0.1)
-                .rate_func(RateFunction::Linear),
-        )
-        .map_err(js_error)?;
-    let execution = scene
-        .into_execution_with_session(session)
+    execution
+        .with_store_and_session(|store, session| {
+            session.activate_animation_segment(
+                store,
+                animation,
+                AnimationOptions::new()
+                    .run_time(0.1)
+                    .rate_func(RateFunction::Linear),
+            )
+        })
         .map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, execution).await
 }

@@ -2,7 +2,7 @@
 from __future__ import annotations
 import math
 from _noon_errors import engine_call
-from _manim_typst import _RetainedTextMobject, _live_text_context
+from _manim_typst import _RetainedTextMobject
 import _manim_semantic_handles as _semantic
 import _manim_compat as _compat
 import noon as _base
@@ -26,7 +26,7 @@ class DecimalNumber(_RetainedTextMobject):
         semantic = engine_call(handle.mobject)
         number._initialize_text(
             str(engine_call(handle.text)),
-            float(engine_call(handle.fontSize, _semantic._live_mutation_context(number))),
+            float(engine_call(handle.fontSize, context)),
             semantic,
             _base.WHITE if color is None else color,
             1.0,
@@ -44,7 +44,7 @@ class DecimalNumber(_RetainedTextMobject):
         if not math.isfinite(value): raise ValueError("DecimalNumber value must be finite")
         if isinstance(num_decimal_places, bool) or not isinstance(num_decimal_places, int) or not 0 <= num_decimal_places <= 12: raise ValueError("num_decimal_places must be an integer from 0 through 12")
         if unit is not None and not isinstance(unit, str): raise TypeError("unit must be a string or None")
-        context = _live_text_context()
+        context = _semantic._path_authoring_context()
         handle = engine_call(_create_decimal, value, num_decimal_places, bool(include_sign), bool(group_with_commas), bool(show_ellipsis), unit, float(font_size), context)
         if context is not None:
             self._canonical_live_target_context = context
@@ -53,28 +53,27 @@ class DecimalNumber(_RetainedTextMobject):
         self._initialize_text(engine_call(handle.text), float(font_size), semantic, color, opacity)
     @property
     def font_size(self) -> float:
-        context = _semantic._live_mutation_context(self) if self._scene is not None else None
+        context = _semantic._object_authoring_context(self) if self._scene is not None else None
         return float(engine_call(self._numeric_handle.fontSize, context))
     def get_value(self) -> float:
-        context = _semantic._live_mutation_context(self) if self._scene is not None else None
+        context = _semantic._object_authoring_context(self) if self._scene is not None else None
         return float(engine_call(self._numeric_handle.value, context))
     def set_value(self, number: float):
-        value = float(number)
-        context = _semantic._live_mutation_context(self)
-        if context is None: engine_call(self._numeric_handle.setValue, value)
-        else: engine_call(self._numeric_handle.setValueLive, context, value)
-        self._source = str(engine_call(self._numeric_handle.text)); return self
+        context = _semantic._path_authoring_context(self)
+        engine_call(self._numeric_handle.setValue, float(number), context)
+        self._source = str(engine_call(self._numeric_handle.text))
+        return self
+
     def increment_value(self, delta: float):
-        value = float(delta)
-        context = _semantic._live_mutation_context(self)
-        if context is None: engine_call(self._numeric_handle.incrementValue, value)
-        else: engine_call(self._numeric_handle.incrementValueLive, context, value)
-        self._source = str(engine_call(self._numeric_handle.text)); return self
+        context = _semantic._path_authoring_context(self)
+        engine_call(self._numeric_handle.incrementValue, float(delta), context)
+        self._source = str(engine_call(self._numeric_handle.text))
+        return self
 
 class Integer(DecimalNumber):
     def __init__(self, number: float = 0, **kwargs): kwargs["num_decimal_places"] = 0; super().__init__(number, **kwargs)
     def get_value(self) -> int:
-        context = _semantic._live_mutation_context(self) if self._scene is not None else None
+        context = _semantic._object_authoring_context(self) if self._scene is not None else None
         return int(engine_call(self._numeric_handle.integerValue, context))
 
 
@@ -87,7 +86,7 @@ class Variable(_compat.VGroup):
         from _manim_semantic_handles import (
             _attach_shared_family,
             _family_wrapper_key,
-            _live_constructor_context,
+            _path_authoring_context,
         )
 
         if _create_variable is None:
@@ -108,7 +107,7 @@ class Variable(_compat.VGroup):
             raise NotImplementedError(
                 "unsupported Variable option(s): " + ", ".join(sorted(kwargs))
             )
-        context = _live_constructor_context("Variable", allow_unstarted=True)
+        context = _path_authoring_context()
         if context is None:
             raise RuntimeError("Variable requires a canonical Scene authoring context")
         handle = engine_call(

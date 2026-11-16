@@ -179,7 +179,7 @@ fn qualify_image_emission(emission: f64) {
                     let mut session = scene.into_execution().unwrap();
                     let mut tx = SemanticMutationTransaction::new();
                     tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
-                    session.live().apply(tx).unwrap();
+                    noon::integration::scene_execution::publish(session.scene_mut(), tx).unwrap();
                     let mut renderer =
                         GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba16Float);
                     renderer.set_viewport(&device, &queue, SIZE, SIZE);

@@ -100,11 +100,12 @@ fn live_reorder_keeps_alias_identity_and_updates_painter_order() {
         .family(&[(&a).into(), (&nested).into(), (&c).into()])
         .unwrap();
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene.into_execution().unwrap();
     let before = a.state().unwrap();
     {
-        let mut live = scene.live(&mut session);
-        live.add_family_members(&family, &[(&a).into(), (&nested).into()])
+        session
+            .scene_mut()
+            .add_family_members(&family, &[(&a).into(), (&nested).into()])
             .unwrap();
     }
     assert_eq!(
@@ -112,9 +113,10 @@ fn live_reorder_keeps_alias_identity_and_updates_painter_order() {
         [c.node_id(), a.node_id(), nested.node_id()]
     );
     let ids: Vec<_> = session
+        .session()
         .painter_order()
         .iter()
-        .map(|&row| session.frame().objects[row as usize].id)
+        .map(|&row| session.session().frame().objects[row as usize].id)
         .collect();
     assert_eq!(
         ids,

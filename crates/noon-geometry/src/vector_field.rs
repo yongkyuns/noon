@@ -170,30 +170,12 @@ where
         for y in &y_values {
             let point = VectorFieldPoint::new(*x, *y);
             let raw_vector = field(point);
-            let raw_norm = raw_vector.length();
-            if !raw_vector.x.is_finite() || !raw_vector.y.is_finite() || !raw_norm.is_finite() {
-                return Err(StaticVectorFieldError::NonFiniteFieldOutput {
-                    sample_index: samples.len(),
-                });
-            }
-
-            let display_vector = if raw_norm == 0.0 {
-                VectorFieldPoint::ZERO
-            } else {
-                let display_length = length(raw_norm);
-                if !display_length.is_finite() {
-                    return Err(StaticVectorFieldError::NonFiniteDisplayedLength {
-                        sample_index: samples.len(),
-                    });
-                }
-                raw_vector.scaled(display_length / raw_norm)
-            };
-            samples.push(VectorFieldSample {
+            samples.push(prepare_vector_field_sample(
                 point,
                 raw_vector,
-                raw_norm,
-                display_vector,
-            });
+                samples.len(),
+                &mut length,
+            )?);
         }
     }
 
@@ -201,6 +183,35 @@ where
         samples,
         x_samples: x_values.len(),
         y_samples: y_values.len(),
+    })
+}
+
+/// Prepare one vector at a known grid position, applying the shared length policy.
+pub fn prepare_vector_field_sample(
+    point: VectorFieldPoint,
+    raw_vector: VectorFieldPoint,
+    sample_index: usize,
+    length: impl FnOnce(f64) -> f64,
+) -> Result<VectorFieldSample, StaticVectorFieldError> {
+    let raw_norm = raw_vector.length();
+    if !raw_vector.x.is_finite() || !raw_vector.y.is_finite() || !raw_norm.is_finite() {
+        return Err(StaticVectorFieldError::NonFiniteFieldOutput { sample_index });
+    }
+
+    let display_vector = if raw_norm == 0.0 {
+        VectorFieldPoint::ZERO
+    } else {
+        let display_length = length(raw_norm);
+        if !display_length.is_finite() {
+            return Err(StaticVectorFieldError::NonFiniteDisplayedLength { sample_index });
+        }
+        raw_vector.scaled(display_length / raw_norm)
+    };
+    Ok(VectorFieldSample {
+        point,
+        raw_vector,
+        raw_norm,
+        display_vector,
     })
 }
 

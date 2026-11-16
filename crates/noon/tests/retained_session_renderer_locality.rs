@@ -9,7 +9,7 @@ fn one_typed_session_edit_stays_local_through_retained_upload() {
     let changed_index = retained_locality::TARGET_INDEX;
 
     let mut session = scene
-        .execution_session()
+        .into_execution()
         .expect("large scene must lower into one execution session");
     // This backend verifies renderer writes and command encoding, not GPU execution.
     let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
@@ -35,7 +35,7 @@ fn one_typed_session_edit_stays_local_through_retained_upload() {
     let target_view = target.create_view(&Default::default());
 
     {
-        let initial = session.take_renderer_publication();
+        let initial = session.session_mut().take_renderer_publication();
         let prepared = preparer
             .prepare_publication_visible(&device, &initial, &visible_candidates, metrics)
             .expect("initial publication must prepare");
@@ -59,12 +59,12 @@ fn one_typed_session_edit_stays_local_through_retained_upload() {
     for edit in 0..64 {
         let translation_x = 0.75 + edit as f64 * 0.01;
         let translation = Vec2::new(translation_x as f32, -0.25);
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .set_translation(&objects[changed_index], translation_x, -0.25)
             .expect("one live edit must publish");
 
-        let publication = session.take_renderer_publication();
+        let publication = session.session_mut().take_renderer_publication();
         assert_eq!(publication.frame().objects.len(), object_count);
         assert_eq!(publication.changes().object_indices(), &[changed_index]);
 
@@ -100,8 +100,8 @@ fn one_typed_session_edit_stays_local_through_retained_upload() {
         assert_eq!(draws.instances_drawn(), 1, "edit {edit} visible submission");
         queue.submit([encoder.finish()]);
 
-        let effective = scene
-            .live(&mut session)
+        let effective = session
+            .scene()
             .effective(&objects[changed_index])
             .expect("live query must resolve the changed identity");
         assert_eq!(effective.transform.translation, translation);

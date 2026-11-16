@@ -132,7 +132,7 @@ fn live_empty_point_array_publication_preserves_shapes_and_invalid_edits_are_ato
                 &shape
             );
             let copied = running
-                .live()
+                .scene_mut()
                 .promote_own_points(source.as_target(), &[])
                 .unwrap();
             assert_eq!(

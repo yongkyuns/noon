@@ -10,8 +10,8 @@ mod highlight;
 mod tests;
 
 use crate::{
-    AuthoringError, Color, LiveSession, LiveSessionError, Mobject, MobjectFamily, NativeFontFace,
-    Scene, TextAuthoringError, TextPartAuthoringError, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
+    AuthoringError, Color, Mobject, MobjectFamily, NativeFontFace, Scene, TextAuthoringError,
+    TextPartAuthoringError, DEFAULT_NATIVE_TEXT_FONT_FAMILY,
 };
 use noon_core::SemanticStore;
 use std::{cell::RefCell, path::Path, rc::Rc, sync::Arc};
@@ -110,7 +110,6 @@ pub enum CodeAuthoringError {
     Text(TextAuthoringError),
     TextPart(TextPartAuthoringError),
     Semantic(AuthoringError),
-    LiveSession(LiveSessionError),
     Io(std::io::Error),
 }
 impl std::fmt::Display for CodeAuthoringError {
@@ -128,7 +127,6 @@ impl std::fmt::Display for CodeAuthoringError {
             Self::Text(error) => error.fmt(f),
             Self::TextPart(error) => error.fmt(f),
             Self::Semantic(error) => error.fmt(f),
-            Self::LiveSession(error) => error.fmt(f),
             Self::Io(error) => error.fmt(f),
         }
     }
@@ -173,14 +171,6 @@ impl Code {
         options: CodeOptions,
     ) -> Result<Self, CodeAuthoringError> {
         admission::publish(admission::Publisher::Store(store), source, options)
-    }
-
-    pub fn in_live_session(
-        live: &mut LiveSession<'_>,
-        source: &str,
-        options: CodeOptions,
-    ) -> Result<Self, CodeAuthoringError> {
-        admission::publish(admission::Publisher::Live(live), source, options)
     }
 
     /// Read a UTF-8 file at the native host input boundary, then use shared admission.

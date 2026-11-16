@@ -69,8 +69,9 @@ pub fn scene() -> Result<
     let z_label = scene
         .text(crate::Text::new("z"))
         .map_err(|error| error.to_string())?;
-    let labels = axes
-        .create_axis_label_targets(
+    let labels = scene
+        .three_d_axis_labels(
+            &axes,
             &[
                 (0, crate::MobjectTarget::Object(&x_label)),
                 (1, crate::MobjectTarget::Object(&y_label)),
@@ -132,19 +133,12 @@ pub fn scene() -> Result<
 
 pub fn session() -> Result<crate::SceneExecution, String> {
     let (scene, _, _, _, movement) = scene()?;
-    let mut session = scene
-        .execution_session()
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
+        .play_animation(&movement)
         .map_err(|error| error.to_string())?;
-    session
-        .activate_animation_segment(
-            &mut scene.integration_store().borrow_mut(),
-            movement.node_id(),
-            AnimationOptions::new(),
-        )
-        .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 /// Circle screen-stroke qualification under the same finite moving 3D camera.
@@ -188,19 +182,12 @@ pub fn circle_screen_stroke_session() -> Result<crate::SceneExecution, String> {
     let movement = scene
         .declare_camera_profile_move(&camera, end_profile(), options)
         .map_err(|error| error.to_string())?;
-    let mut session = scene
-        .execution_session()
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
+        .play_animation(&movement)
         .map_err(|error| error.to_string())?;
-    session
-        .activate_animation_segment(
-            &mut scene.integration_store().borrow_mut(),
-            movement.node_id(),
-            AnimationOptions::new(),
-        )
-        .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 #[cfg(test)]
@@ -209,7 +196,7 @@ mod tests {
 
     #[test]
     fn configured_axes_and_coordinate_point_share_the_finite_camera_track() {
-        let (scene, axes, point, camera, _) = scene().unwrap();
+        let (scene, axes, point, camera, movement) = scene().unwrap();
         let frame = axes.authored_frame().unwrap();
         let point_state = point.state().unwrap();
         let expected = frame.c2p(2.0, -1.0, 1.5).unwrap();
@@ -225,19 +212,16 @@ mod tests {
             .unwrap()
             .len();
         assert_eq!(x_tick_count, 12, "tipless X axis keeps both endpoint ticks");
-        let mut session = session().unwrap();
+        assert!(scene.integration_store().borrow().text_resources().len() >= 3);
+        let mut session = scene.into_execution().unwrap();
+        session.live().play_animation(&movement).unwrap();
         assert_eq!(session.session().frame().objects.len(), 98);
         for (time, expected_profile) in [(0.0, start_profile()), (1.0, end_profile())] {
             session.session_mut().advance_to(time).unwrap();
             assert_eq!(
-                session
-                    .session()
-                    .effective_camera_profile(camera.node_id())
-                    .unwrap()
-                    .0,
+                session.scene().effective_camera_profile(&camera).unwrap().0,
                 expected_profile
             );
         }
-        assert!(scene.integration_store().borrow().text_resources().len() >= 3);
     }
 }

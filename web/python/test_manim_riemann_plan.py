@@ -16,10 +16,9 @@ class RiemannPlanOwnershipTests(TestCase):
             publish=Mock(return_value=self.family), free=Mock())
         self.prepare = Mock(return_value=self.plan)
         self.axes = SimpleNamespace(
-            x_axis=SimpleNamespace(shaft=object()), y_axis=SimpleNamespace(shaft=object()),
             _semantic_family_handle=SimpleNamespace(riemannSamplePlan=self.prepare))
         self.graph = SimpleNamespace(_semantic_handle=object(), underlying_function=lambda x: x*x)
-        self.context = patch.object(plotting, '_coordinate_context', return_value=None).start()
+        self.context = patch.object(plotting._shared, '_path_authoring_context', return_value=None).start()
         self.factory = Mock(return_value=self.options)
         patch.object(plotting, '_coordinate_options', SimpleNamespace(riemann=self.factory)).start()
         patch.object(plotting, '_to_js', side_effect=lambda values: values).start()
@@ -87,12 +86,12 @@ class RiemannPlanOwnershipTests(TestCase):
         self.plan.publish.assert_called_once()
         self.plan.free.assert_called_once_with()
 
-    def test_live_plan_uses_only_the_selected_execution_owner(self):
-        live = Mock(return_value=self.family)
+    def test_scene_plan_uses_its_authoring_owner(self):
+        publish = Mock(return_value=self.family)
         self.context.return_value = SimpleNamespace(
-            liveEffectiveRiemannSamplePlan=self.prepare, livePublishRiemannPlan=live)
+            prepareRiemannPlan=self.prepare, publishRiemannPlan=publish)
         self.assertIs(self.invoke(), self.family)
-        live.assert_called_once_with(self.plan, [0.5625, 0.0625, 0.0625, 0.5625], [])
+        publish.assert_called_once_with(self.plan, [0.5625, 0.0625, 0.0625, 0.5625], [])
         self.plan.publish.assert_not_called()
         self.plan.free.assert_called_once_with()
 

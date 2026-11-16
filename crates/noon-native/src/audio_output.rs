@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, StreamInstant};
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{AudioMixFormat, PreparedAudioMix, MAX_AUDIO_MIX_BLOCK_FRAMES};
-use noon::ExecutionSession;
 
 use crate::{NativeHostError, RealtimeClock};
 

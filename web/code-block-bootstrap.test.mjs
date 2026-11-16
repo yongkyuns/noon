@@ -18,7 +18,7 @@ const options = self.noonCodeOptions("python", undefined, "vim", 4, true, 1, "re
 assert.equal(options.args[0], "python");
 self.noonCreateAuthoringCodeHandle("raw\n\tsource", options, null);
 assert.deepEqual(calls[0], ["store", "raw\n\tsource", options]);
-const context = { liveCreateCode: (...args) => calls.push(["live", ...args]) };
+const context = { createCode: (...args) => calls.push(["live", ...args]) };
 self.noonCreateAuthoringCodeHandle("raw\n\tsource", options, context);
 assert.deepEqual(calls[1], ["live", "raw\n\tsource", options]);
 const family = { asCode: () => "retained code handle" };

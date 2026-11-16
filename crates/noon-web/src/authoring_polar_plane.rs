@@ -146,27 +146,19 @@ impl WasmAuthoringFamilyHandle {
 impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = queryPolarPlaneFrame)]
     pub fn query_polar_plane_frame(
-        &mut self,
+        &self,
         handle: &WasmAuthoringFamilyHandle,
     ) -> Result<WasmPolarFrame, JsValue> {
         let plane = ManimPolarPlane::from_family(handle.semantic_family()?)
             .map_err(coordinate_failure)
             .map_err(js_error)?;
-        let x = plane
-            .x_axis()
+        self.inner
+            .coordinate_scene()
+            .map_err(js_error)?
+            .polar_plane_frame(&plane)
+            .map(|frame| WasmPolarFrame { frame })
             .map_err(coordinate_failure)
-            .map_err(js_error)?;
-        let y = plane
-            .y_axis()
-            .map_err(coordinate_failure)
-            .map_err(js_error)?;
-        let axes = noon::AxesFrame::new(
-            self.coordinate_line_frame(&x)?,
-            self.coordinate_line_frame(&y)?,
-        );
-        Ok(WasmPolarFrame {
-            frame: PolarFrame::new(axes),
-        })
+            .map_err(js_error)
     }
 }
 

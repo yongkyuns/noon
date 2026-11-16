@@ -1711,6 +1711,38 @@ class Scene:
     def bind_morph(self, mobject: object, tracker: object) -> Any:
         return _scene_operations()._canonical_bind_morph_dispatch(self, mobject, tracker)
 
+    def set_translation(self, mobject: Mobject, x: float, y: float) -> Scene:
+        """Set the planar translation of a typed object on this Scene."""
+        return _scene_operations()._edit_scene_transform(
+            self, mobject, "setTranslation", "Scene.set_translation", x, y,
+        )
+
+    def shift(self, mobject: Mobject, x: float, y: float) -> Scene:
+        """Offset the planar translation of a typed object on this Scene."""
+        return _scene_operations()._edit_scene_transform(
+            self, mobject, "shift", "Scene.shift", x, y,
+        )
+
+    def set_scale(self, mobject: Mobject, x: float, y: float) -> Scene:
+        """Set the object's planar scale about its local origin."""
+        return _scene_operations()._edit_scene_transform(
+            self, mobject, "setScale", "Scene.set_scale", x, y,
+        )
+
+    def set_rotation(self, mobject: Mobject, angle: float) -> Scene:
+        """Set the object's planar rotation about its local origin."""
+        return _scene_operations()._edit_scene_transform(
+            self, mobject, "setRotation", "Scene.set_rotation", angle,
+        )
+
+    def replace_content(self, target: Mobject, source: Mobject) -> Scene:
+        """Replace retained content while preserving the target's other state."""
+        return _scene_operations()._replace_scene_content(self, target, source)
+
+    def effective_translation(self, mobject: Mobject) -> Vec2:
+        """Read the object's translation from the current execution publication."""
+        return _scene_operations()._effective_scene_translation(self, mobject)
+
     def live_execution(self, duration: float | None = None) -> Any:
         return _scene_operations()._live_execution(self, duration)
 

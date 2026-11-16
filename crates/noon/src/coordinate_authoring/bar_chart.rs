@@ -245,17 +245,13 @@ impl Scene {
                 |node| {
                     let object = crate::Mobject::from_node(Rc::clone(store), node)?;
                     crate::effective_capture::capture_mobject_state(store, execution, &object)
-                        .map_err(crate::LiveSessionError::from)
                         .map_err(Into::into)
                 },
             )?
         };
-        self.with_running_execution(|store, root, execution| {
-            crate::path_editing::publish_running_path_edits(store, root, execution, prepared)
-        })
-        .map(|_| ())
-        .map_err(crate::LiveSessionError::from)
-        .map_err(Into::into)
+        self.publish_path_edits(prepared)
+            .map(|_| ())
+            .map_err(Into::into)
     }
 }
 
@@ -787,12 +783,11 @@ impl Scene {
         backend: &mut impl crate::LatexBackend,
     ) -> Result<ManimBarChart, crate::plot_presentation::NumberLabelAuthoringError> {
         let prepared = PreparedLabeledChart::prepare(options, labels, backend)?;
-        let (result, [chart, axes, bars]) =
-            self.with_semantic_publication(|store, publish| {
-                Ok(prepared.publish(store, |store, transaction| {
-                    publish(store, transaction).map_err(crate::TextAuthoringError::Semantic)
-                }))
-            })??;
+        let (result, [chart, axes, bars]) = self.with_semantic_publication(|store, publish| {
+            prepared.publish(store, |store, transaction| {
+                publish(store, transaction).map_err(crate::TextAuthoringError::Semantic)
+            })
+        })?;
         ManimBarChart::from_result(
             Rc::clone(self.integration_store()),
             &result,

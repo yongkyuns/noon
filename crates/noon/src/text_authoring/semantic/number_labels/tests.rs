@@ -346,7 +346,8 @@ fn late_transaction_failure_discards_text_without_interning_fonts() {
     // Real shaped resources are inserted before this late non-authoring-parent
     // failure. No scene cloning, deletion of existing text, or leaked fonts.
     assert!(publish(
-        Rc::clone(scene.integration_store()),
+        scene.integration_store(),
+        None,
         vec![(Some(invalid_parent), prepared)]
     )
     .is_err());
@@ -355,7 +356,8 @@ fn late_transaction_failure_discards_text_without_interning_fonts() {
     assert_eq!(sentinel.state().unwrap(), before);
     let prepared = prepare(frame, None, &NumberLabelOptions::default()).unwrap();
     let labels = publish(
-        Rc::clone(scene.integration_store()),
+        scene.integration_store(),
+        None,
         vec![(Some(sentinel.node_id()), prepared)],
     )
     .unwrap();

@@ -26,49 +26,58 @@ impl LiveContinuation for FollowingGraphCamera {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.declare_and_activate_transform_to(
-                    &self.frame,
-                    &self.zoomed_frame,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Smooth),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(
+                        &self.frame,
+                        &self.zoomed_frame,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Smooth),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
                 let mut transaction = SemanticMutationTransaction::new();
                 transaction.add_updater(self.frame.node_id(), FOLLOW_CAMERA, FOLLOW_START, None);
-                live.apply(transaction).map_err(|error| error.to_string())?;
+                scene
+                    .apply_semantic_transaction(transaction)
+                    .map_err(|error| error.to_string())?;
                 self.stage = 2;
-                live.declare_and_activate_move_along_path(
-                    &self.moving_dot,
-                    &self.path,
-                    AnimationOptions::new()
-                        .run_time(FOLLOW_END - FOLLOW_START)
-                        .rate_func(RateFunction::Linear),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_move_along_path(
+                        &self.moving_dot,
+                        &self.path,
+                        AnimationOptions::new()
+                            .run_time(FOLLOW_END - FOLLOW_START)
+                            .rate_func(RateFunction::Linear),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             2 => {
                 let mut transaction = SemanticMutationTransaction::new();
                 transaction.remove_updater(self.frame.node_id(), FOLLOW_CAMERA, FOLLOW_END);
-                live.apply(transaction).map_err(|error| error.to_string())?;
+                scene
+                    .apply_semantic_transaction(transaction)
+                    .map_err(|error| error.to_string())?;
                 self.stage = 3;
-                live.declare_and_activate_transform_to(
-                    &self.frame,
-                    &self.restored_frame,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Smooth),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(
+                        &self.frame,
+                        &self.restored_frame,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Smooth),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             3 => {
                 self.stage = 4;

@@ -230,40 +230,23 @@ def _shape_matcher_buff(buff: object) -> tuple[float, float]:
     )
 
 
-def _shape_matcher_target(target: object):
+def _shape_matcher_bounds(target: object):
     if not isinstance(target, _base.Mobject):
         raise TypeError("shape matcher target must be a Mobject")
     if isinstance(target, (_compat.Group, _compat.VGroup)):
         if not _shared._is_shared_family(target):
-            raise NotImplementedError(
-                "shape matcher Group/VGroup targets require shared semantic family bounds"
-            )
-        return _shared._group_layout_observation(target)
-    handle = _shared._handle_for(target)
-    if handle is None:
-        raise NotImplementedError(
-            "shape matcher target requires current shared semantic geometry"
-        )
-    if _shared._is_bound(target):
-        observation = _shared._bound_layout_observation(target)
-        if observation is None:
-            raise NotImplementedError(
-                "shape matcher bound target requires current shared runtime layout"
-            )
-        return observation
-    return handle
-
-
-def _shape_matcher_options(target: object, method: str, *args: float):
-    if _shared._create_geometry_handle is None:
-        raise RuntimeError("shape matchers require the shared browser geometry bridge")
-    source = _shape_matcher_target(target)
-    constructor = getattr(source, method, None)
-    if constructor is None:
-        raise NotImplementedError(
-            "shape matcher target bridge does not expose shared matcher construction"
-        )
-    return engine_call(constructor, *args)
+            raise NotImplementedError("shape matcher Group/VGroup targets require shared semantic family bounds")
+        handle = target._semantic_family_handle
+        context = _shared._group_layout_context(target)
+        read = handle.shapeMatcherBounds if context is None else context.familyShapeMatcherBounds
+    else:
+        handle = _shared._handle_for(target)
+        if handle is None:
+            raise NotImplementedError("shape matcher target requires current shared semantic geometry")
+        context = _shared._path_authoring_context(target)
+        read = handle.shapeMatcherBounds if context is None else context.mobjectShapeMatcherBounds
+    value = engine_call(read) if context is None else engine_call(read, handle)
+    return value, context
 
 
 class SurroundingRectangle(RoundedRectangle):
@@ -279,17 +262,12 @@ class SurroundingRectangle(RoundedRectangle):
     ) -> None:
         buff_x, buff_y = _shape_matcher_buff(buff)
         radius = _shared._ir._finite_number("corner_radius", corner_radius)
-        candidate = _shape_matcher_options(
-            mobject,
-            "beginSurroundingRectangle",
-            buff_x,
-            buff_y,
-            radius,
-        )
+        bounds, context = _shape_matcher_bounds(mobject)
+        candidate = engine_call(_shared._geometry_options.surroundingRectangle, bounds, buff_x, buff_y, radius)
         options = dict(kwargs)
         _shared._apply_shared_constructor_options(candidate, options)
         _apply_candidate_color(candidate, color)
-        _shared._attach_geometry_options(self, candidate, "SurroundingRectangle")
+        _shared._attach_geometry_options(self, candidate, "SurroundingRectangle", context=context)
         self.buff = buff
         self.corner_radius = radius
 
@@ -313,20 +291,16 @@ class BackgroundRectangle(SurroundingRectangle):
         )
         buff_x, buff_y = _shape_matcher_buff(buff)
         fill_value = _shared._compat._opacity("fill_opacity", fill_opacity)
-        candidate = _shape_matcher_options(
-            mobject,
-            "beginBackgroundRectangle",
-            buff_x,
-            buff_y,
-            corner_radius,
-            fill_value,
+        bounds, context = _shape_matcher_bounds(mobject)
+        candidate = engine_call(
+            _shared._geometry_options.backgroundRectangle, bounds, buff_x, buff_y, corner_radius, fill_value
         )
         options["stroke_width"] = stroke_width
         options["stroke_opacity"] = stroke_opacity
         options["fill_opacity"] = fill_value
         _shared._apply_shared_constructor_options(candidate, options)
         _apply_candidate_color(candidate, color)
-        _shared._attach_geometry_options(self, candidate, "BackgroundRectangle")
+        _shared._attach_geometry_options(self, candidate, "BackgroundRectangle", context=context)
         self.buff = buff
         self.corner_radius = corner_radius
 
@@ -346,23 +320,18 @@ class Cross(_compat.VGroup):
             raise RuntimeError("Cross requires the shared browser geometry bridge")
         scale_value = _shared._ir._finite_number("scale_factor", scale_factor)
         stroke_value = _shared._ir._finite_number("stroke_width", stroke_width)
-        source = None if mobject is None else _shape_matcher_target(mobject)
+        bounds, context = (None, None) if mobject is None else _shape_matcher_bounds(mobject)
         leaf_options = dict(kwargs)
         z_index = _shared._ir._finite_number("z_index", leaf_options.pop("z_index", 0.0))
 
         members = []
-        for index in range(2):
-            candidate = (
-                engine_call(_shared._geometry_options.crossLine, index, scale_value)
-                if source is None
-                else engine_call(source.beginCrossLine, index, scale_value)
-            )
+        for candidate in engine_call(_shared._geometry_options.crossLines, bounds, scale_value):
             options = dict(leaf_options)
             options["stroke_width"] = stroke_value
             _shared._apply_shared_constructor_options(candidate, options)
             _apply_candidate_color(candidate, stroke_color)
             line = object.__new__(_compat.Line)
-            _shared._attach_geometry_options(line, candidate, "Cross")
+            _shared._attach_geometry_options(line, candidate, "Cross", context=context)
             members.append(line)
 
         _compat.VGroup.__init__(self, *members, z_index=z_index)
@@ -393,7 +362,7 @@ class Underline(_compat.Line):
         buff_value = _shared._ir._finite_number("buff", buff)
         options = dict(kwargs)
         color = options.pop("color", None)
-        context = _shared._live_constructor_context("Underline")
+        context = _shared._path_authoring_context(mobject)
         candidate = (
             engine_call(target_handle.beginUnderline, buff_value)
             if context is None
@@ -401,7 +370,7 @@ class Underline(_compat.Line):
         )
         _shared._apply_shared_constructor_options(candidate, options)
         _apply_candidate_color(candidate, color)
-        _shared._attach_geometry_options(self, candidate, "Underline")
+        _shared._attach_geometry_options(self, candidate, "Underline", context=context)
         self.buff = buff_value
 
 
@@ -587,7 +556,7 @@ def _boolean_init(self, operation: str, mobjects: tuple, options: dict) -> None:
     try:
         for handle in handles:
             engine_call(operands.push, handle)
-        context = _shared._live_constructor_context(operation)
+        context = _shared._path_authoring_context(*mobjects)
         candidate = (
             engine_call(_shared._geometry_options.booleanGeometry, operation, operands)
             if context is None
@@ -600,9 +569,11 @@ def _boolean_init(self, operation: str, mobjects: tuple, options: dict) -> None:
         _shared._apply_shared_constructor_options(candidate, options)
         _apply_candidate_color(candidate, color)
     except Exception:
-        candidate.free()
+        release = getattr(candidate, "free", None)
+        if release is not None:
+            release()
         raise
-    _shared._attach_geometry_options(self, candidate, operation)
+    _shared._attach_geometry_options(self, candidate, operation, context=context)
 
 
 class Union(_compat.VMobject):

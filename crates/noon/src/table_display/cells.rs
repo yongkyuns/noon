@@ -36,15 +36,15 @@ impl Table {
     ) -> Result<Mobject, TableAuthoringError> {
         self.cell_rows()?.select_row(row)?.get_cell(column)
     }
-    pub fn get_cell_in_live_session(
+    pub fn get_cell_in_scene(
         &self,
-        live: &mut crate::LiveSession<'_>,
+        scene: &mut Scene,
         row: impl Into<IntegerIndex>,
         column: impl Into<IntegerIndex>,
     ) -> Result<Mobject, TableAuthoringError> {
         self.cell_rows()?
             .select_row(row)?
-            .get_cell_in_live_session(live, column)
+            .get_cell_in_scene(scene, column)
     }
     pub fn highlight_cell(
         &self,
@@ -69,9 +69,9 @@ impl Table {
             .select_row(row)?
             .get_highlighted_cell(column, color, opacity)
     }
-    pub fn get_highlighted_cell_in_live_session(
+    pub fn get_highlighted_cell_in_scene(
         &self,
-        live: &mut crate::LiveSession<'_>,
+        scene: &mut Scene,
         row: impl Into<IntegerIndex>,
         column: impl Into<IntegerIndex>,
         color: Color,
@@ -79,11 +79,11 @@ impl Table {
     ) -> Result<Mobject, TableAuthoringError> {
         self.cell_rows()?
             .select_row(row)?
-            .get_highlighted_cell_in_live_session(live, column, color, opacity)
+            .get_highlighted_cell_in_scene(scene, column, color, opacity)
     }
-    pub fn highlight_cell_in_live_session(
+    pub fn highlight_cell_in_scene(
         &self,
-        live: &mut crate::LiveSession<'_>,
+        scene: &mut Scene,
         row: impl Into<IntegerIndex>,
         column: impl Into<IntegerIndex>,
         color: Color,
@@ -91,7 +91,7 @@ impl Table {
     ) -> Result<Mobject, TableAuthoringError> {
         self.cell_rows()?
             .select_row(row)?
-            .highlight_cell_in_live_session(live, column, color, opacity)
+            .highlight_cell_in_scene(scene, column, color, opacity)
     }
 }
 impl TableCellRows {
@@ -140,14 +140,14 @@ impl TableCellColumns {
             &column,
         )
     }
-    pub fn get_cell_in_live_session(
+    pub fn get_cell_in_scene(
         &self,
-        live: &mut crate::LiveSession<'_>,
+        scene: &mut Scene,
         column: impl Into<IntegerIndex>,
     ) -> Result<Mobject, TableAuthoringError> {
         let column = self.column(column.into())?;
         admission::cell_in_publisher(
-            admission::TablePublisher::Live(live),
+            admission::TablePublisher::Scene(scene),
             &self.table.family,
             self.table.options()?,
             &self.row,
@@ -187,16 +187,16 @@ impl TableCellColumns {
             opacity,
         )
     }
-    pub fn get_highlighted_cell_in_live_session(
+    pub fn get_highlighted_cell_in_scene(
         &self,
-        live: &mut crate::LiveSession<'_>,
+        scene: &mut Scene,
         column: impl Into<IntegerIndex>,
         color: Color,
         opacity: f64,
     ) -> Result<Mobject, TableAuthoringError> {
         let column = self.column(column.into())?;
         admission::highlighted_cell_in_publisher(
-            admission::TablePublisher::Live(live),
+            admission::TablePublisher::Scene(scene),
             &self.table.family,
             self.table.options()?,
             &self.row,
@@ -205,16 +205,16 @@ impl TableCellColumns {
             opacity,
         )
     }
-    pub fn highlight_cell_in_live_session(
+    pub fn highlight_cell_in_scene(
         &self,
-        live: &mut crate::LiveSession<'_>,
+        scene: &mut Scene,
         column: impl Into<IntegerIndex>,
         color: Color,
         opacity: f64,
     ) -> Result<Mobject, TableAuthoringError> {
         let column = self.column(column.into())?;
         admission::highlight_in_publisher(
-            admission::TablePublisher::Live(live),
+            admission::TablePublisher::Scene(scene),
             &self.table.family,
             &self.table.highlight_family,
             self.table.options()?,

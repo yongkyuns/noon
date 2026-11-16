@@ -6,8 +6,15 @@
 use noon::integration::AuthoringFailure;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+mod arrow;
+mod audio;
+#[cfg(feature = "latex")]
+mod bar_chart;
+mod brace;
 mod callback;
 mod callback_values;
+#[cfg(feature = "code")]
+mod code;
 mod composition;
 mod context;
 mod coordinates;
@@ -16,17 +23,28 @@ mod effects;
 mod export;
 mod family;
 mod geometry;
+mod graph;
 mod image;
+#[cfg(feature = "latex")]
+mod latex;
+#[cfg(feature = "latex")]
+mod matrix;
 mod mobject;
+#[cfg(feature = "latex")]
+mod numbers;
 mod options;
 mod paints;
 mod path_input;
 mod path_query;
 mod plotting;
+mod riemann;
+mod sample_space;
 mod shaders;
 mod signals;
 mod spatial;
 mod svg;
+#[cfg(feature = "latex")]
+mod table;
 #[cfg(feature = "native-text")]
 mod text;
 #[cfg(feature = "typst")]
@@ -65,6 +83,19 @@ fn engine_error(error: impl Into<AuthoringFailure>) -> PyErr {
 #[pymodule]
 fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<viewer::PreparedScene>()?;
+    arrow::register(m)?;
+    riemann::register(m)?;
+    audio::register(m)?;
+    m.add_class::<graph::GraphOptions>()?;
+    sample_space::register(m)?;
+    #[cfg(feature = "latex")]
+    {
+        bar_chart::register(m)?;
+        latex::register(m)?;
+        matrix::register(m)?;
+        numbers::register(m)?;
+        table::register(m)?;
+    }
     #[cfg(feature = "capture")]
     {
         m.add_class::<export::ExportCancellation>()?;
@@ -75,6 +106,8 @@ fn _noon_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<svg::SvgDefaults>()?;
     #[cfg(feature = "native-text")]
     text::register(m)?;
+    #[cfg(feature = "code")]
+    code::register(m)?;
     m.add_class::<effects::EffectUpdate>()?;
     m.add_class::<effects::EffectDefinition>()?;
     m.add_class::<effects::EffectHandle>()?;

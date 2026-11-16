@@ -29,6 +29,12 @@ pub enum UnsupportedAuthoringOperation {
     EffectivePathRenderOverride,
     /// Effective observations require Scene-owned execution to be running.
     EffectiveStateUnavailable,
+    /// The tracker has no value in the current execution projection.
+    EffectiveTrackerUnavailable,
+    /// Native-reactive declarations and subscriptions are lowered at bootstrap.
+    SignalAuthoringRequiresSetup,
+    /// The execution plan fixes its camera at bootstrap.
+    CameraRequiresSetup,
     /// Text and external content do not expose a vector path.
     PathQueryContent,
     /// effective layout queries currently support affine and style drivers only.
@@ -97,6 +103,9 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::ManimStyleInterpolation => "Manim style interpolation requires matching solid-paint channels and compatible sheen directions",
             Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
             Self::EffectiveStateUnavailable => "effective state requires a running Scene",
+            Self::EffectiveTrackerUnavailable => "ValueTracker is not lowered into this execution session",
+            Self::SignalAuthoringRequiresSetup => "signal declarations and bindings must be authored before execution",
+            Self::CameraRequiresSetup => "camera initialization must precede execution",
             Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
             Self::SpatialMeshBounds2D => "2D bounds queries do not support spatial mesh geometry",
@@ -162,6 +171,8 @@ pub enum AuthoringError {
     InvalidCameraAutoFrame(&'static str),
     /// A camera-motion input or sampled endpoint is not representable.
     InvalidCameraMotionInput(&'static str),
+    /// A declaration's endpoint or options violate its animation profile.
+    InvalidAnimationDeclaration(&'static str),
     /// A second camera-motion interval cannot begin while the camera has an open owner.
     CameraMotionAlreadyActive,
     /// A committed creation did not resolve its prepared local token.
@@ -304,6 +315,8 @@ pub enum AuthoringError {
     Transaction(noon_core::SemanticMutationTransactionError),
     /// Scene-owned running authoring failed during execution publication.
     ExecutionPublication(crate::ExecutionSessionPublicationError),
+    /// Effective state capture was blocked by an ordered host callback phase.
+    ExecutionCallback(crate::ExecutionSessionCallbackError),
     /// Scene-owned running authoring failed while activating an execution operation.
     ///
     /// This keeps the exact runtime cause for operations such as live tracker
@@ -402,6 +415,7 @@ impl std::fmt::Display for AuthoringError {
                 f.write_str("geometry, transform, and style must be finite")
             }
             Self::InvalidCameraMotionInput(message) => f.write_str(message),
+            Self::InvalidAnimationDeclaration(message) => f.write_str(message),
             Self::CameraMotionAlreadyActive => {
                 f.write_str("camera already has an open rotation; stop it before beginning another")
             }
@@ -475,6 +489,7 @@ impl std::fmt::Display for AuthoringError {
             Self::Semantic(error) => error.fmt(f),
             Self::Transaction(error) => error.fmt(f),
             Self::ExecutionPublication(error) => error.fmt(f),
+            Self::ExecutionCallback(error) => error.fmt(f),
             Self::ExecutionAnimation(error) => error.fmt(f),
             Self::VectorLowering(error) => error.fmt(f),
             Self::GeometryResource(error) => error.fmt(f),
@@ -511,6 +526,7 @@ impl std::error::Error for AuthoringError {
             Self::Semantic(error) => Some(error),
             Self::Transaction(error) => Some(error),
             Self::ExecutionPublication(error) => Some(error),
+            Self::ExecutionCallback(error) => Some(error),
             Self::ExecutionAnimation(error) => Some(error),
             Self::VectorLowering(error) => Some(error),
             Self::GeometryResource(error) => Some(error),

@@ -25,22 +25,25 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         let family = scene.family(&[(&a).into(), (&b).into(), (&a).into()])?;
         family.add((&b).into())?;
         scene.add_many(&[(&family).into()])?;
-        let mut session = scene.execution_session()?;
+        let mut session = scene.into_execution()?;
         {
-            let mut live = scene.live(&mut session);
-            let initial = live.wait_segment(0.05)?;
-            live.advance_segment_to(initial, initial.end_time())?;
-            live.complete_segment(initial)?;
-            live.add_family_members(&family, &[(&a).into()])?;
-            let wait = live.wait_segment(0.15)?;
-            live.advance_segment_to(wait, wait.end_time())?;
-            live.complete_segment(wait)?;
+            let initial = session.live().wait_segment(0.05)?;
+            session
+                .live()
+                .advance_segment_to(initial, initial.end_time())?;
+            session.live().complete_segment(initial)?;
+            session
+                .scene_mut()
+                .add_family_members(&family, &[(&a).into()])?;
+            let wait = session.live().wait_segment(0.15)?;
+            session.live().advance_segment_to(wait, wait.end_time())?;
+            session.live().complete_segment(wait)?;
         }
         assert_eq!(
             MobjectTarget::from(&family).family_nodes()?,
             [family.node_id(), b.node_id(), a.node_id()]
         );
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(session)
     };
     build().map_err(|error| error.to_string())
 }

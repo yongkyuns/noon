@@ -3,7 +3,7 @@
 //! These handles retain only their owning store and one `SemanticNodeId`.
 //! Routing and effective values are lowered into the canonical `ExecutionSession`.
 
-use crate::AuthoringError;
+use crate::{AuthoringError, UnsupportedAuthoringOperation};
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
@@ -69,20 +69,29 @@ impl NativeBoolSignal {
 }
 
 impl Scene {
-    pub fn pointer_position_signal(&self) -> Result<NativeVectorSignal, AuthoringError> {
+    // Incremental publication supports scalar values and tracks, but cannot
+    // install new input routes, derived expressions or property subscriptions.
+    pub(crate) fn require_signal_setup(&self) -> Result<(), AuthoringError> {
+        if self.running_execution().is_some() {
+            return Err(UnsupportedAuthoringOperation::SignalAuthoringRequiresSetup.into());
+        }
+        Ok(())
+    }
+
+    pub fn pointer_position_signal(&mut self) -> Result<NativeVectorSignal, AuthoringError> {
         self.native_vector_signal(NativeStateSource::PointerPosition)
     }
 
-    pub fn viewport_size_signal(&self) -> Result<NativeVectorSignal, AuthoringError> {
+    pub fn viewport_size_signal(&mut self) -> Result<NativeVectorSignal, AuthoringError> {
         self.native_vector_signal(NativeStateSource::ViewportSize)
     }
 
-    pub fn wheel_delta_signal(&self) -> Result<NativeVectorSignal, AuthoringError> {
+    pub fn wheel_delta_signal(&mut self) -> Result<NativeVectorSignal, AuthoringError> {
         self.native_vector_signal(NativeStateSource::WheelDelta)
     }
 
     pub fn key_state_signal(
-        &self,
+        &mut self,
         code: impl Into<String>,
         initial: bool,
     ) -> Result<NativeBoolSignal, AuthoringError> {
@@ -91,7 +100,7 @@ impl Scene {
     }
 
     pub fn control_signal(
-        &self,
+        &mut self,
         name: impl Into<String>,
         initial: f64,
     ) -> Result<ValueTracker, AuthoringError> {
@@ -103,7 +112,7 @@ impl Scene {
         Ok(ValueTracker::from_semantic_node(store, node))
     }
 
-    pub fn pointer_down_events(&self, button: u8) -> Result<ValueTracker, AuthoringError> {
+    pub fn pointer_down_events(&mut self, button: u8) -> Result<ValueTracker, AuthoringError> {
         let (store, node) = self.native_signal(
             SemanticSignalValue::Scalar(0.0),
             SemanticNativeInputSource::Event(NativeEventSource::PointerDown { button }),
@@ -111,7 +120,7 @@ impl Scene {
         Ok(ValueTracker::from_semantic_node(store, node))
     }
 
-    pub fn wheel_events(&self) -> Result<ValueTracker, AuthoringError> {
+    pub fn wheel_events(&mut self) -> Result<ValueTracker, AuthoringError> {
         let (store, node) = self.native_signal(
             SemanticSignalValue::Scalar(0.0),
             SemanticNativeInputSource::Event(NativeEventSource::Wheel),
@@ -120,7 +129,7 @@ impl Scene {
     }
 
     pub fn control_commit_events(
-        &self,
+        &mut self,
         name: impl Into<String>,
     ) -> Result<ValueTracker, AuthoringError> {
         let name = nonempty_name("control name", name.into())?;
@@ -133,7 +142,7 @@ impl Scene {
 
     /// Bind a native vector input directly to authored translation semantics.
     pub fn bind_native_translation(
-        &self,
+        &mut self,
         object: &Mobject,
         signal: &NativeVectorSignal,
     ) -> Result<(), AuthoringError> {
@@ -148,7 +157,7 @@ impl Scene {
 
     /// Bind a scalar input/event counter to rotation around the semantic z axis.
     pub fn bind_rotation(
-        &self,
+        &mut self,
         object: &Mobject,
         signal: &ValueTracker,
     ) -> Result<(), AuthoringError> {
@@ -159,7 +168,7 @@ impl Scene {
 
     /// Bind a scalar input to the object's composed opacity.
     pub fn bind_opacity(
-        &self,
+        &mut self,
         object: &Mobject,
         signal: &ValueTracker,
     ) -> Result<(), AuthoringError> {
@@ -174,7 +183,7 @@ impl Scene {
 
     /// Bind a native bool state to whether the object participates in rendering.
     pub fn bind_presence(
-        &self,
+        &mut self,
         object: &Mobject,
         signal: &NativeBoolSignal,
     ) -> Result<(), AuthoringError> {
@@ -184,7 +193,7 @@ impl Scene {
     }
 
     fn native_vector_signal(
-        &self,
+        &mut self,
         source: NativeStateSource,
     ) -> Result<NativeVectorSignal, AuthoringError> {
         let (store, node) = self.native_signal(
@@ -195,7 +204,7 @@ impl Scene {
     }
 
     fn native_bool_signal(
-        &self,
+        &mut self,
         source: NativeStateSource,
         initial: bool,
     ) -> Result<NativeBoolSignal, AuthoringError> {
@@ -207,31 +216,31 @@ impl Scene {
     }
 
     fn native_signal(
-        &self,
+        &mut self,
         initial: SemanticSignalValue,
         source: SemanticNativeInputSource,
     ) -> Result<(Rc<RefCell<SemanticStore>>, SemanticNodeId), AuthoringError> {
+        self.require_signal_setup()?;
         let store = Rc::clone(self.integration_store());
         let creation = noon_core::SemanticNodeCreation::native_input_signal(initial, source)
             .map_err(AuthoringError::from)?;
         let mut transaction = SemanticMutationTransaction::new();
         let pending = transaction.create_node(creation);
         transaction.scope_signal(self.root(), pending);
-        let result = transaction
-            .apply(&mut store.borrow_mut())
-            .map_err(AuthoringError::from)?;
+        let result = self.apply_semantic_transaction(transaction)?;
         let node = result
             .resolve(pending)
             .expect("committed native input resolves its transaction-local identity");
         Ok((store, node))
     }
 
-    fn bind_signal(
-        &self,
+    pub(crate) fn bind_signal(
+        &mut self,
         object: &Mobject,
         signal: SemanticNodeId,
         property: SemanticObjectProperty,
     ) -> Result<(), AuthoringError> {
+        self.require_signal_setup()?;
         self.integration_store()
             .borrow_mut()
             .bind_semantic_signal(signal, object.node_id(), property)
@@ -260,7 +269,7 @@ mod tests {
 
     #[test]
     fn stale_scene_rejects_native_input_creation_without_allocating_a_signal() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         scene
             .integration_store()
             .borrow_mut()
@@ -273,6 +282,58 @@ mod tests {
         assert!(scene.control_signal("gain", 1.0).is_err());
         let store = scene.integration_store().borrow();
         assert_eq!((store.len(), store.scene_revision()), before);
+    }
+
+    #[test]
+    fn running_scene_rejects_signal_topology_changes_without_invalidating_execution() {
+        let mut scene = Scene::new();
+        let square = scene.square(1.0).unwrap();
+        scene.add(&square).unwrap();
+        let tracker = scene.value_tracker(0.25).unwrap();
+        let position = scene
+            .position_from_tracker(
+                &tracker,
+                SemanticVec3::new(1.0, 0.0, 0.0),
+                SemanticVec3::ZERO,
+            )
+            .unwrap();
+        scene.bind_position(&square, &position).unwrap();
+        let mut running = scene.into_execution().unwrap();
+        let revision = running
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision();
+        let publication = running.session().publication_context();
+        let scene = running.scene_mut();
+
+        use AuthoringError::Unsupported;
+        use UnsupportedAuthoringOperation::SignalAuthoringRequiresSetup;
+        assert!(matches!(
+            scene.wheel_events(),
+            Err(Unsupported(SignalAuthoringRequiresSetup))
+        ));
+        assert!(matches!(
+            scene.position_from_tracker(&tracker, SemanticVec3::ZERO, SemanticVec3::ZERO),
+            Err(Unsupported(SignalAuthoringRequiresSetup))
+        ));
+        assert!(matches!(
+            scene.bind_opacity(&square, &tracker),
+            Err(Unsupported(SignalAuthoringRequiresSetup))
+        ));
+        assert!(scene.play_value(&tracker, 1.0).run_time(1.0).is_err());
+        assert_eq!(scene.time(), 0.0);
+        assert_eq!(
+            scene.integration_store().borrow().scene_revision(),
+            revision
+        );
+        assert_eq!(scene.owned_execution().publication_context(), publication);
+
+        scene.set_value(&tracker, 0.75).unwrap();
+        assert_eq!(
+            scene.effective(&square).unwrap().transform.translation,
+            Vec2::new(0.75, 0.0)
+        );
     }
 
     #[test]
@@ -365,7 +426,7 @@ mod tests {
 
     #[test]
     fn invalid_names_and_foreign_handles_fail_before_semantic_mutation() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let before = scene.integration_store().borrow().slot_capacity();
         assert!(scene.key_state_signal(" ", false).is_err());
         assert!(scene.control_signal("", 1.0).is_err());

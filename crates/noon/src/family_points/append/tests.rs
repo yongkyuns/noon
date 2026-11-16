@@ -80,38 +80,27 @@ fn invalid_root_appends_preserve_payload_publication_and_resource_ownership() {
             family.set_points_f64(&PREFIX).unwrap();
         }
         scene.add_many(&[(&family).into()]).unwrap();
-        let mut execution = scene.execution_session().unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
         let revision = scene.revision();
-        let publication = execution.publication_context();
+        let publication = scene.owned_execution().publication_context();
         let resources = scene
             .integration_store()
             .borrow()
             .geometry_resources()
             .len();
         let before = family.own_path_query().unwrap().points().unwrap();
-        assert!(publish_append_family_points(
-            scene.integration_store(),
-            scene.root(),
-            &mut execution,
-            &family,
-            &[(f64::NAN, 0.0)],
-        )
-        .is_err());
+        assert!(scene
+            .append_family_points_f64(&family, &[(f64::NAN, 0.0)],)
+            .is_err());
         let foreign = Scene::new().family(&[]).unwrap();
         for points in [&SUFFIX[..], &[][..]] {
-            assert!(publish_append_family_points(
-                scene.integration_store(),
-                scene.root(),
-                &mut execution,
-                &foreign,
-                points,
-            )
-            .is_err());
+            assert!(scene.append_family_points_f64(&foreign, points,).is_err());
         }
         assert_eq!(family.own_path_query().unwrap().points().unwrap(), before);
         assert_eq!(family.own_object().unwrap().is_some(), materialized);
         assert_eq!(scene.revision(), revision);
-        assert_eq!(execution.publication_context(), publication);
+        assert_eq!(scene.owned_execution().publication_context(), publication);
         assert_eq!(
             scene
                 .integration_store()
@@ -120,16 +109,9 @@ fn invalid_root_appends_preserve_payload_publication_and_resource_ownership() {
                 .len(),
             resources
         );
-        let empty = scene.family(&[]).unwrap();
+        let empty = MobjectFamily::create(Rc::clone(scene.integration_store()), &[]).unwrap();
         for points in [&SUFFIX[..], &[][..]] {
-            assert!(publish_append_family_points(
-                scene.integration_store(),
-                scene.root(),
-                &mut execution,
-                &empty,
-                points,
-            )
-            .is_err());
+            assert!(scene.append_family_points_f64(&empty, points,).is_err());
         }
         assert!(empty.own_object().unwrap().is_none());
         assert_eq!(
@@ -156,19 +138,13 @@ fn empty_root_appends_do_not_materialize_payload_or_advance_publication() {
     family.append_points_f64(&[]).unwrap();
     assert!(family.own_object().unwrap().is_none());
     assert_eq!(scene.revision(), revision);
-    let mut execution = scene.execution_session().unwrap();
-    let publication = execution.publication_context();
-    publish_append_family_points(
-        scene.integration_store(),
-        scene.root(),
-        &mut execution,
-        &family,
-        &[],
-    )
-    .unwrap();
+    let execution = scene.execution_session().unwrap();
+    scene.install_execution(execution);
+    let publication = scene.owned_execution().publication_context();
+    scene.append_family_points_f64(&family, &[]).unwrap();
     assert!(family.own_object().unwrap().is_none());
     assert_eq!(scene.revision(), revision);
-    assert_eq!(execution.publication_context(), publication);
+    assert_eq!(scene.owned_execution().publication_context(), publication);
     assert_eq!(
         scene
             .integration_store()
@@ -200,9 +176,10 @@ fn deleted_family_handles_cannot_mutate_replacement_identity() {
             .unwrap();
         let replacement = scene.family(&[]).unwrap();
         assert_ne!(family.node_id(), replacement.node_id());
-        execution = scene.execution_session().unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
         let revision = scene.revision();
-        let publication = execution.publication_context();
+        let publication = scene.owned_execution().publication_context();
         let resources = scene
             .integration_store()
             .borrow()
@@ -210,17 +187,10 @@ fn deleted_family_handles_cannot_mutate_replacement_identity() {
             .len();
         for points in [&SUFFIX[..], &[][..]] {
             assert!(family.append_points_f64(points).is_err());
-            assert!(publish_append_family_points(
-                scene.integration_store(),
-                scene.root(),
-                &mut execution,
-                &family,
-                points,
-            )
-            .is_err());
+            assert!(scene.append_family_points_f64(&family, points,).is_err());
         }
         assert_eq!(scene.revision(), revision);
-        assert_eq!(execution.publication_context(), publication);
+        assert_eq!(scene.owned_execution().publication_context(), publication);
         assert_eq!(
             scene
                 .integration_store()

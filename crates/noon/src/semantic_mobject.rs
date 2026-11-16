@@ -655,9 +655,8 @@ impl Mobject {
     /// Raw shared arena access for explicit integration, not live mutation.
     ///
     /// External edits can invalidate generational handles and leave an existing
-    /// execution session on a stale scene revision. Use `Scene::live` and its
-    /// coherent publication operations for edits after lowering. No revision
-    /// validation is bypassed by this accessor; see [`crate::integration`].
+    /// execution session on a stale scene revision. Use the owning Scene for
+    /// persistent edits after lowering. See [`crate::integration`].
     pub fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         &self.store
     }

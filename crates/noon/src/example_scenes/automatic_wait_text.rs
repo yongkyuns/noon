@@ -50,8 +50,7 @@ impl LiveContinuation for AutomaticWaitText {
                 ];
                 for object in &late_objects {
                     if scene
-                        .live()
-                        .contains(object)
+                        .contains_direct(object)
                         .map_err(|error| error.to_string())?
                     {
                         return Err(
@@ -76,8 +75,7 @@ impl LiveContinuation for AutomaticWaitText {
                     .ok_or("late text identities disappeared")?;
                 for object in objects {
                     if !scene
-                        .live()
-                        .contains(object)
+                        .contains_direct(object)
                         .map_err(|error| error.to_string())?
                     {
                         return Err("FadeIn did not admit every late text scene root".into());
@@ -94,8 +92,7 @@ impl LiveContinuation for AutomaticWaitText {
                     .ok_or("late text identities disappeared")?;
                 for object in objects {
                     if scene
-                        .live()
-                        .contains(object)
+                        .contains_direct(object)
                         .map_err(|error| error.to_string())?
                     {
                         return Err("FadeOut did not remove every late text scene root".into());

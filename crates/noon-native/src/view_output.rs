@@ -633,7 +633,7 @@ impl noon::LiveContinuation for BloomAnimation {
 }
 
 fn bloom_program() -> noon::LiveProgram<BloomAnimation> {
-    let (scene, camera, _) = scene();
+    let (mut scene, camera, _) = scene();
     let mut target = camera.target_editor().unwrap();
     target
         .set_effect("bloom", EffectUpdate::default().intensity(2.0))

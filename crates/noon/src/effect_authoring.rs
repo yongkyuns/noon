@@ -170,8 +170,7 @@ fn remove_glow_transaction(
 }
 
 impl Mobject {
-    /// Author the canonical glow. Like other raw Mobject mutators, this is for
-    /// pre-execution/target editing; running scenes must use Scene or LiveSession.
+    /// Edit authored glow on this handle. Use [`Scene::set_glow`] during playback.
     pub fn set_glow(&mut self, update: EffectUpdate) -> Result<(), AuthoringError> {
         glow_transaction((&*self).into(), update)?
             .apply(&mut self.integration_store().borrow_mut())?;

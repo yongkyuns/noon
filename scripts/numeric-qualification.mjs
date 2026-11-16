@@ -22,6 +22,12 @@ await qualifyPairedAuthoring({
 class VariableLifecycle(Scene):
     async def construct(self):
         await prepare_latex()
+        setup = DecimalNumber(12.5, font_size=32)
+        setup.set_value(7).increment_value(0.5)
+        assert setup.get_value() == 7.5
+        self.add(setup)
+        assert setup.font_size == 32
+        self.remove(setup)
         await self.wait(0.05)
         number = DecimalNumber(12.5, font_size=32, include_sign=True)
         assert not self.mobjects

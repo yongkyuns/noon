@@ -1,3 +1,4 @@
+use noon::integration::scene_execution;
 use std::collections::BTreeSet;
 
 use noon_core::{
@@ -82,7 +83,7 @@ fn copied_graph_ordinary_motion_is_local_and_reuses_endpoint_content() {
         ])
         .unwrap();
 
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let original_start = session
         .execution_object_id(graph.vertex(&"a").unwrap().node_id())
         .unwrap();
@@ -103,7 +104,10 @@ fn copied_graph_ordinary_motion_is_local_and_reuses_endpoint_content() {
     assert!(initial.resource_additions.is_some());
     mirror.apply_family(initial.clone()).unwrap();
 
-    player.live_shift(&copied_start, -0.5, 0.25, 0.0).unwrap();
+    player
+        .scene_mut()
+        .shift_3d(&copied_start, noon::SemanticVec3::new(-0.5, 0.25, 0.0))
+        .unwrap();
     let delta = player.delta(false).unwrap().unwrap();
 
     assert_transform_only_graph_delta(&delta, copied_ids, &initial);
@@ -133,7 +137,7 @@ fn native_motion_expands_zero_length_arrow_without_resource_admission() {
     scene
         .add_many(&[noon::MobjectTarget::Family(graph.family())])
         .unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let ids = [
         session
             .execution_object_id(graph.vertex(&"a").unwrap().node_id())
@@ -199,7 +203,7 @@ fn callback_motion_publishes_vertex_and_endpoints_in_one_retained_delta() {
     transaction
         .apply(&mut scene.integration_store().borrow_mut())
         .unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let ids = [
         session.execution_object_id(start.node_id()).unwrap(),
         session
@@ -252,12 +256,12 @@ fn callback_motion_publishes_vertex_and_endpoints_in_one_retained_delta() {
 
 #[test]
 fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
-    use crate::authoring_graph::{GraphOperation, NativeGraph};
+    use noon::integration::graph::{GraphOperation, HostGraph};
 
     let mut scene = noon::Scene::new();
     let sentinel = scene.circle(0.1).unwrap();
     scene.add(&sentinel).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let mut player = live_player(&scene, session);
     let resources = player.resource_bundle_bytes();
     let mut mirror =
@@ -266,7 +270,7 @@ fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
         .apply_family(player.delta(true).unwrap().unwrap())
         .unwrap();
 
-    let mut graph = NativeGraph::new(
+    let mut graph = HostGraph::new(
         player.scene_mut(),
         true,
         vec![(1, (-1.0, 0.0)), (2, (1.0, 0.0))],
@@ -281,9 +285,10 @@ fn late_directed_graph_admission_and_layout_publish_endpoint_transforms() {
         )
         .unwrap();
     player
-        .with_live_session(|live| live.add_many(&[noon::MobjectTarget::Family(graph.family())]))
+        .scene_mut()
+        .add_many(&[noon::MobjectTarget::Family(graph.family())])
         .unwrap();
-    let NativeGraph::Directed(digraph) = &graph else {
+    let HostGraph::Directed(digraph) = &graph else {
         panic!("created directed graph must retain directed wrapper");
     };
     let arrow = digraph.edge(&1, &2).unwrap().arrow().unwrap();

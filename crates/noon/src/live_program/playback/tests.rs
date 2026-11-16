@@ -224,16 +224,15 @@ impl LiveContinuation for CallbackSource {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let step = self.calls.get();
         self.calls.set(step + 1);
         Ok(match step {
-            0 => ContinuationStep::Await(live.wait_segment(1.0)?),
+            0 => ContinuationStep::Await(scene.live().wait_segment(1.0)?),
             1 => {
                 let mut tx = SemanticMutationTransaction::new();
                 tx.add_updater(self.target.node_id(), CALLBACK, 1.0, None);
-                live.apply(tx)?;
-                ContinuationStep::Await(live.wait_segment(1.0)?)
+                scene.apply_semantic_transaction(tx)?;
+                ContinuationStep::Await(scene.live().wait_segment(1.0)?)
             }
             2 => ContinuationStep::Finished,
             _ => panic!("source was restarted"),

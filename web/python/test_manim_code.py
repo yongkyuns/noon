@@ -91,7 +91,7 @@ class CodeFacadeTests(unittest.TestCase):
             patch.object(code, "_new_code_options", side_effect=options),
             patch.object(code, "_create_code", side_effect=lambda *_: self.handle),
             patch.object(code, "_code_from_family", side_effect=lambda *_: self.handle),
-            patch.object(code, "_live_constructor_context", return_value=self.context),
+            patch.object(code, "_path_authoring_context", return_value=self.context),
             patch.object(code, "_attach_shared_family", side_effect=attach),
             patch.object(code, "_code_styles_list", return_value=["vim", "monokai"]),
             patch.object(code, "_code_languages_list", return_value=["Python", "Rust"]),

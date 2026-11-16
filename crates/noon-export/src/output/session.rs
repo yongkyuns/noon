@@ -2,11 +2,12 @@
 
 use std::{error::Error, fmt, io};
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     ExportEndReason, ExportFrameOptions, ExportFramePolicy, ExportFramePolicyError,
     ExportFramePolicyStatus, SampleObservation,
 };
-use noon::{EvaluationError, ExecutionSession, ExecutionSessionInputError, SceneExecution};
+use noon::{EvaluationError, ExecutionSessionInputError, SceneExecution};
 
 use super::{audio::Soundtrack, check_publication_cancellation, FileExportSummary, FileSink};
 use super::{OutputFormat, OutputOptions};

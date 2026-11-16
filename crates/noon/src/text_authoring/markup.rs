@@ -376,7 +376,10 @@ mod tests {
             .borrow()
             .text_resources()
             .stats();
-        execution.live().set_translation(&text, 1.0, -0.5).unwrap();
+        execution
+            .scene_mut()
+            .set_translation(&text, 1.0, -0.5)
+            .unwrap();
         assert_eq!(execution.scene().authored(&text).unwrap().content, content);
         assert_eq!(
             execution

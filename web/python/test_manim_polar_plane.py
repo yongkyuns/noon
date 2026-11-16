@@ -11,10 +11,10 @@ class PolarPlaneAdapterTests(TestCase):
         self.addCleanup(patch.stopall)
         self.options = Mock(name="polar-options")
         self.context = SimpleNamespace(
-            liveCreateCoordinates=Mock(name="live-create", return_value=Mock(name="handle")),
+            createCoordinates=Mock(name="live-create", return_value=Mock(name="handle")),
             queryPolarPlaneFrame=Mock(name="polar-frame"),
         )
-        self.handle = self.context.liveCreateCoordinates.return_value
+        self.handle = self.context.createCoordinates.return_value
         self.parts = [Mock(name=f"part-{index}") for index in range(4)]
         self.handle.polarPlanePart.side_effect = lambda index: self.parts[index]
         patch.object(polar_plane._plot, "_coordinate_constructor_context", return_value=self.context).start()
@@ -46,7 +46,7 @@ class PolarPlaneAdapterTests(TestCase):
             polar_plane._plot._coordinate_options.polarPlane.call_args.args,
             (3.0, 6.0, .5, 12.0, .25, True, 2),
         )
-        self.context.liveCreateCoordinates.assert_called_once_with(self.options)
+        self.context.createCoordinates.assert_called_once_with(self.options)
         self.assertEqual(plane.submobjects, self.members)
         self.assertIs(plane.faded_lines, self.members[0])
         self.assertIs(plane.background_lines, self.members[1])

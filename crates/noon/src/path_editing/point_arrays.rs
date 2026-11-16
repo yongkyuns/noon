@@ -86,15 +86,7 @@ impl crate::Scene {
         object: &Mobject,
         points: &[SemanticVec3],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::RawPoints3d(points),
-            )
-        })
+        self.edit_object_path(object, PathEdit::RawPoints3d(points))
     }
 
     pub fn append_points_3d(
@@ -102,15 +94,7 @@ impl crate::Scene {
         object: &Mobject,
         points: &[SemanticVec3],
     ) -> Result<(), AuthoringError> {
-        self.with_running_execution(|store, root, execution| {
-            publish_running_object_edit(
-                store,
-                root,
-                execution,
-                object,
-                PathEdit::AppendRawPoints3d(points),
-            )
-        })
+        self.edit_object_path(object, PathEdit::AppendRawPoints3d(points))
     }
 }
 

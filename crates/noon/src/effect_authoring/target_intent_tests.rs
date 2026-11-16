@@ -86,7 +86,10 @@ fn copied_target_intent_only_write_has_one_coherent_publication_without_render_d
     let mut invalid = SemanticMutationTransaction::new();
     invalid.update_effect(target_effect, EffectUpdate::default().radius(Pixels(3.25)));
     invalid.update_effect(source_effect, EffectUpdate::default().intensity(-1.0));
-    assert!(session.live().apply(invalid).is_err());
+    assert!(session
+        .scene_mut()
+        .apply_semantic_transaction(invalid)
+        .is_err());
     assert_eq!(session.session().publication_context(), committed);
     assert_eq!(session.session().frame().objects, objects);
     assert_eq!(
@@ -105,7 +108,7 @@ fn copied_target_intent_only_write_has_one_coherent_publication_without_render_d
 #[test]
 fn copied_motion_and_radius_target_preserves_later_intensity_during_parallel_pulse() {
     for pulse_first in [false, true] {
-        let (scene, source) = fixture();
+        let (mut scene, source) = fixture();
         let mut target = source.target_editor().unwrap();
         target.shift(2.0, 0.0).unwrap();
         target

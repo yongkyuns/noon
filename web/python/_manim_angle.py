@@ -69,7 +69,7 @@ class Angle(_compat.VMobject):
     @angle_value.setter
     def angle_value(self, value):
         radians = _shared._ir._finite_number("angle_value", value)
-        context = _shared._live_mutation_context(self)
+        context = _shared._path_authoring_context(self)
         handle = _shared._handle_for(self)
         if handle is None and context is not None:
             handle = getattr(self, "_semantic_handle", None)
@@ -77,7 +77,7 @@ class Angle(_compat.VMobject):
             raise RuntimeError("Angle value mutation requires a current shared Rust handle")
         try:
             if context is not None:
-                engine_call(context.liveSetAngleValue, handle, radians)
+                engine_call(context.setAngleValue, handle, radians)
             else:
                 engine_call(handle.setAngleValue, radians)
         except Exception as error:

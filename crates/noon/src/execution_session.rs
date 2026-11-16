@@ -1458,7 +1458,7 @@ impl ExecutionSession {
     }
 
     /// Effective unwrapped profile and clipping planes from the same frame epoch.
-    pub fn effective_camera_profile(
+    pub(crate) fn effective_camera_profile(
         &self,
         object: SemanticNodeId,
     ) -> Option<(noon_core::ManimCamera3DProfile, f64, f64)> {
@@ -1857,7 +1857,7 @@ impl ExecutionSession {
     }
 
     /// Atomically create and enroll one input-only scalar in this live root.
-    pub fn create_scoped_value_tracker(
+    pub(crate) fn create_scoped_value_tracker(
         &mut self,
         store: &mut SemanticStore,
         root: SemanticNodeId,
@@ -1962,7 +1962,7 @@ impl ExecutionSession {
 
     /// Atomically associate and, when necessary, sparsely enroll one existing
     /// detached scalar signal in this execution root.
-    pub fn associate_value_tracker(
+    pub(crate) fn associate_value_tracker(
         &mut self,
         store: &mut SemanticStore,
         root: SemanticNodeId,
@@ -3201,7 +3201,9 @@ impl ExecutionSession {
             } => {
                 let options =
                     crate::animation_authoring::normalized_passing_flash_options(*options)
-                        .map_err(ExecutionSessionAnimationError::InvalidComposition)?;
+                        .map_err(|error| {
+                            ExecutionSessionAnimationError::InvalidComposition(error.into())
+                        })?;
                 if self.require_uncreate_target(store, root, *target)? {
                     admit(*target, admitted)?;
                 }

@@ -8,9 +8,9 @@
 use crate::integration::MANIM_CAIRO_LINE_WIDTH_MULTIPLE;
 use crate::{AuthoringError, MobjectFamily, Scene, StyleUpdate};
 use noon_core::{
-    Color, SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectState, SemanticPaint,
-    SemanticStore, SemanticStyle, SemanticTransform2_5D, SemanticVec3, SourceIdentity,
-    StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, VectorPath,
+    Color, SemanticMutationTransaction, SemanticNodeCreation, SemanticNodeId, SemanticObjectState,
+    SemanticPaint, SemanticStore, SemanticStyle, SemanticTransform2_5D, SemanticVec3,
+    SourceIdentity, StoredGeometry, StrokeCap, StrokeJoin, StrokeWidthMode, Vec2, VectorPath,
 };
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
@@ -283,153 +283,169 @@ impl MobjectFamily {
         style: StyleUpdate,
         import_key: Option<&str>,
     ) -> Result<Self, SvgAuthoringError> {
-        let mut prepared = prepare_svg(source, options)?;
-        apply_style_update(&mut prepared.leaves, style)?;
-        let mut paths = Vec::with_capacity(prepared.leaves.len());
-        let mut metadata = Vec::with_capacity(prepared.leaves.len());
-        for leaf in prepared.leaves {
-            paths.push(leaf.path);
-            metadata.push((leaf.style, leaf.identity_locator));
-        }
-
-        let family_id = {
-            let mut store = store_rc.borrow_mut();
-            store.with_geometry_paths(paths, |store, handles| {
-                let mut transaction = SemanticMutationTransaction::new();
-                let family_creation =
-                    with_svg_source_identity(SemanticNodeCreation::family(), import_key, "root");
-                let family = transaction.create_node(family_creation);
-                for (handle, (style, identity_locator)) in handles.iter().copied().zip(metadata) {
-                    let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
-                    state.transform = prepared.transform.into();
-                    state.style = style;
-                    let creation = with_svg_source_identity(
-                        SemanticNodeCreation::object(state),
-                        import_key,
-                        &identity_locator,
-                    );
-                    let object = transaction.create_node(creation);
-                    transaction.add_member(family, object);
-                }
-                let result = transaction
-                    .apply(store)
-                    .map_err(AuthoringError::from)
-                    .map_err(SvgAuthoringError::from)?;
-                result.resolve(family).ok_or(SvgAuthoringError::Authoring(
-                    AuthoringError::UnresolvedCreatedNode(family),
-                ))
-            })?
-        };
-
-        Self::from_node(store_rc, family_id).map_err(SvgAuthoringError::from)
+        let prepared = prepare_styled_svg(source, options, style)?;
+        let family_id = publish_svg(
+            &mut store_rc.borrow_mut(),
+            prepared,
+            import_key,
+            |store, transaction| transaction.apply(store).map_err(AuthoringError::from),
+        )?;
+        Self::from_node(store_rc, family_id).map_err(Into::into)
     }
 }
 
+fn prepare_styled_svg(
+    source: &str,
+    options: SvgImportOptions,
+    style: StyleUpdate,
+) -> Result<PreparedSvg, SvgAuthoringError> {
+    let mut prepared = prepare_svg(source, options)?;
+    apply_style_update(&mut prepared.leaves, style)?;
+    Ok(prepared)
+}
+
+fn publish_svg(
+    store: &mut SemanticStore,
+    prepared: PreparedSvg,
+    import_key: Option<&str>,
+    publish: impl FnOnce(
+        &mut SemanticStore,
+        SemanticMutationTransaction,
+    ) -> Result<noon_core::SemanticMutationTransactionResult, AuthoringError>,
+) -> Result<SemanticNodeId, SvgAuthoringError> {
+    let (paths, metadata): (Vec<_>, Vec<_>) = prepared
+        .leaves
+        .into_iter()
+        .map(|leaf| (leaf.path, (leaf.style, leaf.identity_locator)))
+        .unzip();
+    store.with_geometry_paths(paths, |store, handles| {
+        let mut transaction = SemanticMutationTransaction::new();
+        let family = transaction.create_node(with_svg_source_identity(
+            SemanticNodeCreation::family(),
+            import_key,
+            "root",
+        ));
+        for (handle, (style, identity_locator)) in handles.iter().copied().zip(metadata) {
+            let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
+            state.transform = prepared.transform.into();
+            state.style = style;
+            let creation = with_svg_source_identity(
+                SemanticNodeCreation::object(state),
+                import_key,
+                &identity_locator,
+            );
+            let object = transaction.create_node(creation);
+            transaction.add_member(family, object);
+        }
+        let result = publish(store, transaction)?;
+        Ok(result
+            .resolve(family)
+            .ok_or(AuthoringError::UnresolvedCreatedNode(family))?)
+    })
+}
+
 impl Scene {
-    /// Parse one static SVG string into a detached semantic family.
-    ///
-    /// Supported content is normalized before one atomic semantic publication.
-    /// The returned family and its leaves are ordinary Noon identities backed by
-    /// immutable geometry resources; later transforms/styles never reparse SVG.
-    pub fn svg_from_str(&self, source: &str) -> Result<MobjectFamily, SvgAuthoringError> {
-        MobjectFamily::from_svg_str(Rc::clone(self.integration_store()), source)
+    /// Parse static SVG into a detached Scene-owned path family.
+    pub fn svg_from_str(&mut self, source: &str) -> Result<MobjectFamily, SvgAuthoringError> {
+        self.svg_from_str_with_options(source, SvgImportOptions::default())
     }
 
-    /// Parse one static SVG string with explicit post-import placement options.
+    /// Parse SVG with explicit post-import placement.
     pub fn svg_from_str_with_options(
-        &self,
+        &mut self,
         source: &str,
         options: SvgImportOptions,
     ) -> Result<MobjectFamily, SvgAuthoringError> {
-        MobjectFamily::from_svg_str_with_options(
-            Rc::clone(self.integration_store()),
-            source,
-            options,
-        )
+        self.svg_from_str_with_options_and_style(source, options, StyleUpdate::default())
     }
 
-    /// Parse one SVG and override supplied paint fields on every imported leaf.
+    /// Parse SVG and apply the supplied paint fields to the imported leaves.
     pub fn svg_from_str_with_style(
-        &self,
+        &mut self,
         source: &str,
         style: StyleUpdate,
     ) -> Result<MobjectFamily, SvgAuthoringError> {
-        MobjectFamily::from_svg_str_with_style(Rc::clone(self.integration_store()), source, style)
+        self.svg_from_str_with_options_and_style(source, SvgImportOptions::default(), style)
     }
 
-    /// Parse one SVG with explicit placement and whole-import paint overrides.
+    /// Parse SVG with explicit placement and paint overrides.
     pub fn svg_from_str_with_options_and_style(
-        &self,
+        &mut self,
         source: &str,
         options: SvgImportOptions,
         style: StyleUpdate,
     ) -> Result<MobjectFamily, SvgAuthoringError> {
-        MobjectFamily::from_svg_str_with_options_and_style(
-            Rc::clone(self.integration_store()),
-            source,
-            options,
-            style,
-        )
+        self.publish_svg(source, options, style, None)
     }
 
-    /// Parse one SVG with a stable caller-owned import key.
+    /// Parse SVG with a stable caller-owned import key.
     pub fn svg_from_str_with_import_key(
-        &self,
+        &mut self,
         source: &str,
         import_key: &str,
     ) -> Result<MobjectFamily, SvgAuthoringError> {
-        MobjectFamily::from_svg_str_with_import_key(
-            Rc::clone(self.integration_store()),
+        self.svg_from_str_with_options_and_import_key(
             source,
+            SvgImportOptions::default(),
             import_key,
         )
     }
 
-    /// Parse one SVG with paint overrides and a stable caller-owned import key.
+    /// Parse SVG with paint overrides and a stable import key.
     pub fn svg_from_str_with_style_and_import_key(
-        &self,
+        &mut self,
         source: &str,
         style: StyleUpdate,
         import_key: &str,
     ) -> Result<MobjectFamily, SvgAuthoringError> {
-        MobjectFamily::from_svg_str_with_style_and_import_key(
-            Rc::clone(self.integration_store()),
+        self.svg_from_str_with_options_and_style_and_import_key(
             source,
+            SvgImportOptions::default(),
             style,
             import_key,
         )
     }
 
-    /// Parse one SVG with explicit placement and stable caller-owned import key.
+    /// Parse SVG with explicit placement and a stable import key.
     pub fn svg_from_str_with_options_and_import_key(
-        &self,
+        &mut self,
         source: &str,
         options: SvgImportOptions,
         import_key: &str,
     ) -> Result<MobjectFamily, SvgAuthoringError> {
-        MobjectFamily::from_svg_str_with_options_and_import_key(
-            Rc::clone(self.integration_store()),
+        self.svg_from_str_with_options_and_style_and_import_key(
             source,
             options,
+            StyleUpdate::default(),
             import_key,
         )
     }
 
-    /// Parse one SVG with explicit placement, paint overrides, and stable identity.
+    /// Parse SVG with explicit placement, paint overrides, and a stable import key.
     pub fn svg_from_str_with_options_and_style_and_import_key(
-        &self,
+        &mut self,
         source: &str,
         options: SvgImportOptions,
         style: StyleUpdate,
         import_key: &str,
     ) -> Result<MobjectFamily, SvgAuthoringError> {
-        MobjectFamily::from_svg_str_with_options_and_style_and_import_key(
-            Rc::clone(self.integration_store()),
-            source,
-            options,
-            style,
-            import_key,
-        )
+        validate_import_key(import_key)?;
+        self.publish_svg(source, options, style, Some(import_key))
+    }
+
+    fn publish_svg(
+        &mut self,
+        source: &str,
+        options: SvgImportOptions,
+        style: StyleUpdate,
+        import_key: Option<&str>,
+    ) -> Result<MobjectFamily, SvgAuthoringError> {
+        self.require_resource_admission()?;
+        let prepared = prepare_styled_svg(source, options, style)?;
+        let family = self.with_semantic_publication(|store, publish| {
+            publish_svg(store, prepared, import_key, publish)
+        })?;
+        MobjectFamily::from_node(Rc::clone(self.integration_store()), family).map_err(Into::into)
     }
 }
 
@@ -950,7 +966,7 @@ mod tests {
     fn svg_cubic_fitting_uses_manim_control_points_not_tight_extrema() {
         // The curve reaches y=9, but its cubic handles reach y=12. Manim fits
         // the latter to height 2; visible curve height is therefore 1.5.
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">
             <path d="M0 0 C0 12 12 12 12 0 Z"/>
         </svg>"#;
@@ -966,7 +982,7 @@ mod tests {
     fn svg_quadratic_fitting_uses_promoted_cubic_control_points() {
         // Q's handle at y=12 promotes to cubic handles at y=8. Fitting the
         // quadratic handle itself (12) or tight trace (6) would both be wrong.
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">
             <path d="M0 0 Q6 12 12 0 Z"/>
         </svg>"#;
@@ -999,7 +1015,7 @@ mod tests {
 
     #[test]
     fn static_svg_paths_publish_as_one_retained_family_transaction() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let before = scene.revision();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
             <rect x="0" y="0" width="10" height="10" fill="#ff0000"/>
@@ -1142,7 +1158,7 @@ mod tests {
 
     #[test]
     fn duplicate_import_key_fails_atomically() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
             <rect id="box" width="10" height="10" fill="#ff0000"/>
         </svg>"##;
@@ -1160,7 +1176,7 @@ mod tests {
 
     #[test]
     fn ordinary_duplicate_imports_remain_allowed_without_import_key() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
             <rect id="box" width="10" height="10" fill="#ff0000"/>
         </svg>"##;
@@ -1171,7 +1187,7 @@ mod tests {
 
     #[test]
     fn empty_import_key_is_rejected_before_publication() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let before = scene.revision();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 L1 0"/></svg>"##;
 
@@ -1184,7 +1200,7 @@ mod tests {
 
     #[test]
     fn svg_transform_and_y_flip_are_baked_into_retained_path() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
             <path d="M 1 2 L 4 2" transform="translate(3 5)" fill="none" stroke="#112233"/>
         </svg>"##;
@@ -1203,7 +1219,7 @@ mod tests {
 
     #[test]
     fn inherited_solid_style_reaches_semantic_leaf() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
             <g fill="#123456" fill-opacity="0.25" stroke="#abcdef" stroke-opacity="0.5" stroke-width="2">
                 <path d="M 0 0 L 10 0 L 10 10 Z"/>
@@ -1230,7 +1246,7 @@ mod tests {
 
     #[test]
     fn svg_style_overrides_apply_before_one_publication() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let before = scene.revision();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
             <rect x="0" y="0" width="10" height="10" fill="#ff0000" stroke="none"/>
@@ -1276,7 +1292,7 @@ mod tests {
 
     #[test]
     fn invalid_svg_style_override_fails_before_publication() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let before = scene.revision();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
             <rect width="10" height="10" fill="#ff0000"/>
@@ -1297,7 +1313,7 @@ mod tests {
 
     #[test]
     fn svg_style_overrides_compose_with_stable_import_identity() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
             <rect id="box" width="10" height="10" fill="#ff0000"/>
         </svg>"##;
@@ -1336,7 +1352,7 @@ mod tests {
 
     #[test]
     fn manim_default_stroke_width_is_zero_and_explicit_width_wins() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
             <rect x="0" y="0" width="10" height="10" fill="#ffffff" stroke="#ff0000"/>
             <rect x="10" y="0" width="10" height="10" fill="#ffffff" stroke="#00ff00" stroke-width="3"/>
@@ -1355,7 +1371,7 @@ mod tests {
 
     #[test]
     fn unsupported_svg_fails_before_semantic_publication() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let before = scene.revision();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
             <defs><linearGradient id="g"><stop offset="0" stop-color="red"/></linearGradient></defs>
@@ -1373,7 +1389,7 @@ mod tests {
 
     #[test]
     fn group_compositing_is_rejected_instead_of_flattened() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let before = scene.revision();
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
             <g opacity="0.5"><rect width="10" height="10" fill="red"/></g>

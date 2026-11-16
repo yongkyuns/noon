@@ -194,16 +194,6 @@ impl ManimNumberPlane {
         ))
     }
 
-    pub fn effective_frame(
-        &self,
-        execution: &ExecutionSession,
-    ) -> Result<AxesFrame, CoordinateAuthoringError> {
-        Ok(AxesFrame::new(
-            self.x_axis()?.effective_frame(execution)?,
-            self.y_axis()?.effective_frame(execution)?,
-        ))
-    }
-
     fn grid_family(&self, index: usize) -> Result<MobjectFamily, CoordinateAuthoringError> {
         let id = plane_members(&self.family)?[index];
         MobjectFamily::from_node(Rc::clone(self.family.integration_store()), id).map_err(Into::into)
@@ -233,6 +223,19 @@ impl Scene {
             Rc::clone(self.integration_store()),
             root,
         )?)
+    }
+
+    /// Observe this coordinate family through the Scene in setup or playback.
+    pub fn number_plane_frame(
+        &self,
+        coordinates: &ManimNumberPlane,
+    ) -> Result<AxesFrame, CoordinateAuthoringError> {
+        crate::MobjectTarget::from(coordinates.family()).require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            self.effective_number_plane_frame(coordinates)
+        } else {
+            coordinates.authored_frame()
+        }
     }
 
     /// Read a coherent plane frame, including validated authored paths for detached shafts.

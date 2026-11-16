@@ -40,24 +40,17 @@ impl LiveContinuation for RasterImage {
                 // This constructor runs after bootstrap. The resource deduplicates,
                 // but the new object stays detached until the ordinary add operation.
                 let second = scene.image(image_options(1.0)?).map_err(message)?;
-                if scene.live().contains(&second).map_err(message)? {
+                if scene.contains_direct(&second).map_err(message)? {
                     return Err("new image was admitted before add".into());
                 }
-                scene
-                    .live()
-                    .set_translation(&second, 2.0, 0.0)
-                    .map_err(message)?;
-                scene.live().add(&second).map_err(message)?;
+                scene.set_translation(&second, 2.0, 0.0).map_err(message)?;
+                scene.add(&second).map_err(message)?;
                 let target = scene.target_editor(&self.image).map_err(message)?;
+                scene.set_translation(&target, 0.0, 0.0).map_err(message)?;
                 scene
-                    .live()
-                    .set_translation(&target, 0.0, 0.0)
-                    .map_err(message)?;
-                scene
-                    .live()
                     .rotate(&target, std::f64::consts::FRAC_PI_4)
                     .map_err(message)?;
-                scene.live().scale(&target, 0.75, 0.75).map_err(message)?;
+                scene.scale(&target, 0.75, 0.75).map_err(message)?;
                 scene.set_opacity(&target, 0.6).map_err(message)?;
                 scene
                     .live()
@@ -69,7 +62,7 @@ impl LiveContinuation for RasterImage {
                 options,
             ),
             3 => {
-                if scene.live().contains(&self.image).map_err(message)? {
+                if scene.contains_direct(&self.image).map_err(message)? {
                     return Err("FadeOut did not remove its image".into());
                 }
                 scene.live().wait_segment(1.0)

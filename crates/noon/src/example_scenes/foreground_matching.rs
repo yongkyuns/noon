@@ -40,24 +40,25 @@ impl LiveContinuation for ForegroundMatching {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let segment = match self.stage {
-            0 => live.declare_and_activate_matching_family_transform_to(
-                &self.source,
-                &self.target,
-                AnimationOptions::new()
-                    .run_time(2.0)
-                    .rate_func(RateFunction::Linear),
-            ),
+            0 => scene
+                .live()
+                .declare_and_activate_matching_family_transform_to(
+                    &self.source,
+                    &self.target,
+                    AnimationOptions::new()
+                        .run_time(2.0)
+                        .rate_func(RateFunction::Linear),
+                ),
             1 => {
                 self.check_completion(false)?;
-                live.wait_segment(0.2)
+                scene.live().wait_segment(0.2)
             }
             2 => {
                 self.check_completion(false)?;
-                live.add(&self.later).map_err(|error| error.to_string())?;
+                scene.add(&self.later).map_err(|error| error.to_string())?;
                 self.check_completion(true)?;
-                live.wait_segment(0.2)
+                scene.live().wait_segment(0.2)
             }
             3 => {
                 self.check_completion(true)?;

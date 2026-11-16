@@ -19,7 +19,7 @@ from _noon_errors import engine_call
 from _manim_semantic_handles import (
     _attach_shared_family, _attach_shared_handle,
     _group_target_context, _initialize_shared_wrapper,
-    _live_constructor_context, _live_mutation_context,
+    _path_authoring_context,
 )
 
 _DEFAULT_CHECKERBOARD = (_base.BLUE_D, _base.BLUE_E)
@@ -95,7 +95,7 @@ def _initialize_translucent_prism_family(
         raise NotImplementedError("mesh edge strokes are not supported")
     fill_opacity = _opacity("fill_opacity", fill_opacity)
     fill = _as_color("fill_color", fill_color)
-    context = _live_constructor_context("mesh")
+    context = _path_authoring_context()
     candidate = _prism_face_family_options(dimensions, shade_in_3d)
     try:
         engine_call(
@@ -238,7 +238,7 @@ class Surface(_Mesh3D, _compat.Group):
             return
         if _surface_plan is None or _mesh_family_options is None:
             raise RuntimeError("Surface construction requires the shared Rust authoring host")
-        context = _live_constructor_context("mesh")
+        context = _path_authoring_context()
         plan = engine_call(_surface_plan, *u_range, *v_range, *resolution)
         candidate = None
         try:

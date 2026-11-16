@@ -23,7 +23,7 @@ class ObjectMembershipTests(unittest.TestCase):
         root._semantic_handle.replaceMembers = Mock()
         root._semantic_handle.memberKeys.return_value = ['11:1']
         batch = object()
-        with patch.object(handles, '_live_constructor_context', return_value=None), patch.object(handles, '_family_membership_batch', return_value=batch):
+        with patch.object(handles, '_path_authoring_context', return_value=None), patch.object(handles, '_family_membership_batch', return_value=batch):
             self.assertIs(root.add(child), root)
             self.assertEqual(root.submobjects, [child])
             self.assertIs(root.add_to_back(child), root)
@@ -37,22 +37,22 @@ class ObjectMembershipTests(unittest.TestCase):
     def test_rejected_edit_does_not_publish_host_identity_references(self):
         root, child = self.object(10), self.object(11)
         root._semantic_handle.editMembership = Mock(side_effect=RuntimeError('rejected Rust transaction'))
-        with patch.object(handles, '_live_constructor_context', return_value=None), patch.object(handles, '_family_membership_batch', return_value=object()):
+        with patch.object(handles, '_path_authoring_context', return_value=None), patch.object(handles, '_family_membership_batch', return_value=object()):
             with self.assertRaisesRegex(RuntimeError, 'rejected Rust transaction'):
                 root.add(child)
         self.assertNotIn('_semantic_member_wrappers', root.__dict__)
 
     def test_live_object_edits_choose_object_bindings(self):
         root, child = self.object(10), self.object(11)
-        context = SimpleNamespace(liveEditObjectMembership=Mock(return_value=[1]), livePrependObjectMembers=Mock(), liveReplaceObjectMembers=Mock())
+        context = SimpleNamespace(editObjectMembership=Mock(return_value=[1]), prependObjectMembers=Mock(), replaceObjectMembers=Mock())
         batch = object()
-        with patch.object(handles, '_live_constructor_context', return_value=context), patch.object(handles, '_family_membership_batch', return_value=batch):
+        with patch.object(handles, '_path_authoring_context', return_value=context), patch.object(handles, '_family_membership_batch', return_value=batch):
             root.add(child)
             root.add_to_back(child)
             root.submobjects = [child]
-        context.liveEditObjectMembership.assert_called_once_with(root._semantic_handle, batch)
-        context.livePrependObjectMembers.assert_called_once_with(root._semantic_handle, batch)
-        context.liveReplaceObjectMembers.assert_called_once_with(root._semantic_handle, batch)
+        context.editObjectMembership.assert_called_once_with(root._semantic_handle, batch)
+        context.prependObjectMembers.assert_called_once_with(root._semantic_handle, batch)
+        context.replaceObjectMembers.assert_called_once_with(root._semantic_handle, batch)
 
     def test_invalid_members_reject_before_building_native_batch(self):
         root = self.object(10)

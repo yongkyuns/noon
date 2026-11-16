@@ -26,8 +26,14 @@ pub fn sampling_failure(error: crate::PlotPreparationError) -> AuthoringFailure 
 pub fn coordinate_failure(error: crate::CoordinateAuthoringError) -> AuthoringFailure {
     use crate::CoordinateAuthoringError::*;
     match error {
+        Authoring(
+            error @ (crate::AuthoringError::ExecutionCallback(_)
+            | crate::AuthoringError::ExecutionPublication(
+                crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+                | crate::ExecutionSessionPublicationError::ForeignSemanticStore,
+            )),
+        ) => AuthoringFailure::from_scene_capture(error),
         Authoring(error) => error.into(),
-        Live(error) => error.into(),
         Plot(error) => plot_failure(error),
         Coordinate(error) => coordinate_math_failure(error),
         InvalidOptions(reason) => {

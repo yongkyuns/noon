@@ -188,18 +188,19 @@ pub struct CameraContinuation {
 impl LiveContinuation for CameraContinuation {
     type Error = String;
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let step = match (self.case, self.stage) {
-            (CameraCase::FixedFrame, 0) => live.wait_segment(1.),
+            (CameraCase::FixedFrame, 0) => scene.live().wait_segment(1.),
             (CameraCase::Ambient, 0) => {
-                live.begin_ambient_camera_rotation(&self.camera, CameraRotationAxis::Theta, 0.1)
+                scene
+                    .begin_ambient_camera_rotation(&self.camera, CameraRotationAxis::Theta, 0.1)
                     .map_err(|e| e.to_string())?;
-                live.wait_segment(1.)
+                scene.live().wait_segment(1.)
             }
             (CameraCase::Ambient, 1) => {
-                live.stop_ambient_camera_rotation(&self.camera)
+                scene
+                    .stop_ambient_camera_rotation(&self.camera)
                     .map_err(|e| e.to_string())?;
-                live.move_camera_profile(
+                scene.live().move_camera_profile(
                     &self.camera,
                     profile(self.case),
                     AnimationOptions::new()
@@ -207,14 +208,16 @@ impl LiveContinuation for CameraContinuation {
                         .rate_func(RateFunction::Smooth),
                 )
             }
-            (CameraCase::Ambient, 2) => live.wait_segment(1.),
+            (CameraCase::Ambient, 2) => scene.live().wait_segment(1.),
             (CameraCase::Illusion, 0) => {
-                live.begin_3dillusion_camera_rotation(&self.camera, 2., None, None)
+                scene
+                    .begin_3dillusion_camera_rotation(&self.camera, 2., None, None)
                     .map_err(|e| e.to_string())?;
-                live.wait_segment(FRAC_PI_2)
+                scene.live().wait_segment(FRAC_PI_2)
             }
             (CameraCase::Illusion, 1) => {
-                live.stop_3dillusion_camera_rotation(&self.camera)
+                scene
+                    .stop_3dillusion_camera_rotation(&self.camera)
                     .map_err(|e| e.to_string())?;
                 self.stage += 1;
                 return Ok(ContinuationStep::Finished);

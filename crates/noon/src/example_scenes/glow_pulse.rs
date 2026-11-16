@@ -39,7 +39,9 @@ impl LiveContinuation for GlowPulseScene {
             }
             2 => {
                 let target = scene.target_editor(&self.persistent).map_err(message)?;
-                scene.live().shift(&target, 0.0, 0.4).map_err(message)?;
+                scene
+                    .shift_3d(&target, crate::SemanticVec3::new(0.0, 0.4, 0.0))
+                    .map_err(message)?;
                 scene
                     .set_glow(&target, EffectUpdate::default().radius(Pixels(12.0)))
                     .map_err(message)?;

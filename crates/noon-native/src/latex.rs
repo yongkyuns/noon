@@ -386,14 +386,22 @@ mod tests {
             .scene_mut()
             .add_many(&[live_parts.family().into()])
             .unwrap();
-        assert!((execution.live().latex_font_size(&live_parts).unwrap() - 36.0).abs() < 1e-6);
+        assert!(
+            (execution
+                .scene()
+                .effective_latex_font_size(&live_parts)
+                .unwrap()
+                - 36.0)
+                .abs()
+                < 1e-6
+        );
 
         let target = execution
             .scene_mut()
             .copy_family(live_parts.family())
             .unwrap();
         execution
-            .live()
+            .scene_mut()
             .scale_family(target.root(), 2.0, 2.0)
             .unwrap();
         let segment = execution
@@ -410,7 +418,15 @@ mod tests {
             .live()
             .advance_segment_to(segment, segment.start_time() + 0.5)
             .unwrap();
-        assert!((execution.live().latex_font_size(&live_parts).unwrap() - 54.0).abs() < 1e-4);
+        assert!(
+            (execution
+                .scene()
+                .effective_latex_font_size(&live_parts)
+                .unwrap()
+                - 54.0)
+                .abs()
+                < 1e-4
+        );
         execution
             .live()
             .advance_segment_to(segment, segment.end_time())
@@ -418,36 +434,39 @@ mod tests {
         execution.live().complete_segment(segment).unwrap();
 
         let before_rotation = execution
-            .live()
+            .scene()
             .effective_family_layout(live_parts.family())
             .unwrap();
         execution
-            .live()
+            .scene_mut()
             .rotate_family(
                 live_parts.family(),
                 std::f64::consts::FRAC_PI_2,
                 noon::ManimRotationPivot::Center,
             )
             .unwrap();
-        let rotated_size = execution.live().latex_font_size(&live_parts).unwrap();
+        let rotated_size = execution
+            .scene()
+            .effective_latex_font_size(&live_parts)
+            .unwrap();
         let expected = 72.0 * before_rotation.width / before_rotation.height;
         assert!((rotated_size - expected).abs() < 1e-4);
 
         let removed = live_parts.current_members().unwrap().remove(0);
         execution
-            .live()
+            .scene_mut()
             .remove_family_members(live_parts.family(), &[(&removed).into()])
             .unwrap();
         assert!(execution
-            .live()
-            .latex_font_size(&live_parts)
+            .scene()
+            .effective_latex_font_size(&live_parts)
             .unwrap()
             .is_finite());
 
         let rebound = live_parts.rebind_family(target.root().clone()).unwrap();
         assert!(execution
-            .live()
-            .latex_font_size(&rebound)
+            .scene()
+            .effective_latex_font_size(&rebound)
             .unwrap()
             .is_finite());
     }

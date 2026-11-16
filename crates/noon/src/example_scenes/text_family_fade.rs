@@ -18,7 +18,6 @@ impl LiveContinuation for TextFamilyFade {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 let family_options = AnimationOptions::new()
@@ -28,7 +27,8 @@ impl LiveContinuation for TextFamilyFade {
                 let write_options = AnimationOptions::new()
                     .run_time(2.0)
                     .rate_func(RateFunction::Linear);
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_animation_composition(
                         SemanticAnimationCompositionKind::Parallel,
                         &[
@@ -51,8 +51,8 @@ impl LiveContinuation for TextFamilyFade {
                 Ok(ContinuationStep::Await(segment))
             }
             1 => {
-                if !live
-                    .contains(&self.writing)
+                if !scene
+                    .contains_direct(&self.writing)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("Text Write did not admit its direct scene root".into());
@@ -75,20 +75,22 @@ impl LiveContinuation for TextFamilyFade {
                     }
                 }
                 self.stage = 2;
-                live.declare_and_activate_family_fade(
-                    &self.family,
-                    SemanticFadeDirection::Out,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Linear)
-                        .lag_ratio(0.25),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_family_fade(
+                        &self.family,
+                        SemanticFadeDirection::Out,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear)
+                            .lag_ratio(0.25),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             2 => {
-                if !live
-                    .contains(&self.writing)
+                if !scene
+                    .contains_direct(&self.writing)
                     .map_err(|error| error.to_string())?
                 {
                     return Err(
@@ -111,7 +113,9 @@ impl LiveContinuation for TextFamilyFade {
                     }
                 }
                 self.stage = 3;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }

@@ -40,7 +40,8 @@ impl PreparedCanvasFixture {
                 AnimationOptions::new().run_time(0.5),
             )
             .map_err(js_error)?;
-        let mut session = scene.execution_session().map_err(js_error)?;
+        let mut execution = scene.into_execution().map_err(js_error)?;
+        let session = execution.session_mut();
         session
             .begin_replay_retention(ReplayLimits {
                 revisions: 128,
@@ -53,9 +54,7 @@ impl PreparedCanvasFixture {
         reader.seek(0.5).map_err(js_error)?;
         Ok(Self {
             source: Some(Producer {
-                execution: scene
-                    .into_execution_with_session(session)
-                    .map_err(js_error)?,
+                execution,
                 target,
                 publisher,
             }),
@@ -120,8 +119,8 @@ impl PreparedCanvasFixture {
             .map_err(js_error)?;
         source
             .execution
-            .live()
-            .shift(&source.target, 1.0, 0.0)
+            .scene_mut()
+            .shift_3d(&source.target, noon::SemanticVec3::new(1.0, 0.0, 0.0))
             .map_err(js_error)?;
         let segment = source
             .execution
@@ -230,7 +229,7 @@ impl LiveContinuation for CooperativeScene {
         let x = -2.0 + f64::from(stage % 8) * 0.25;
         if self.animated {
             let target = scene.target_editor(&self.marker)?;
-            scene.live().set_translation(&target, x, 2.0)?;
+            scene.set_translation(&target, x, 2.0)?;
             return Ok(ContinuationStep::Await(
                 scene.live().declare_and_activate_transform_to(
                     &self.marker,
@@ -241,7 +240,7 @@ impl LiveContinuation for CooperativeScene {
                 )?,
             ));
         }
-        scene.live().set_translation(&self.marker, x, 2.0)?;
+        scene.set_translation(&self.marker, x, 2.0)?;
         Ok(ContinuationStep::Await(scene.live().wait_segment(0.25)?))
     }
 }

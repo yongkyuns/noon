@@ -43,9 +43,9 @@ pub fn session() -> Result<crate::SceneExecution, String> {
                 .run_time(1.0)
                 .rate_func(RateFunction::Linear),
         )?;
-        let mut session = scene.execution_session()?;
-        scene.live(&mut session).play_animation(&animation)?;
-        Ok(scene.into_execution_with_session(session)?)
+        let mut execution = scene.into_execution()?;
+        execution.live().play_animation(&animation)?;
+        Ok(execution)
     };
     build().map_err(|error| error.to_string())
 }

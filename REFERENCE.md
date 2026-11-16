@@ -214,8 +214,8 @@ scene.add(&circle)?;
 
 The script capability delegates these edits to its `Scene`. Validation and atomic
 publication stay in that shared operation path, including while execution is
-running. Borrowed `LiveSession` operations serve explicit external-session and
-callback integration.
+running. `SceneExecution::live` borrows execution controls for animation
+activation, segment progression, and completion.
 
 Families use the same scene capability for construction, membership, and layout.
 Objects can be grouped directly from an array of references. The group remains a
@@ -443,7 +443,14 @@ same scene through direct Rust/WASM and the production Python worker.
 
 ### LaTeX in a scene
 
-The browser loads the optional compiler when scene source references TeX APIs such as `MathTex`, or requests TeX-backed numeric labels. Use these APIs directly from ordinary Python. See the [LaTeX lesson](web/python/examples/showcase_latex_create.py).
+The browser loads the optional compiler when a scene uses TeX APIs such as
+`MathTex` or requests TeX-backed numeric labels. Native CPython uses the
+system TeX compiler and BaKoMa TrueType outlines. Set `NOON_LATEX_FONT_DIR`
+to the BaKoMa TTF directory and `NOON_LATEX_RESOURCE_IDENTITY` to a version
+label for that compiler and font set. Noon finds `latex` and `kpsewhich`
+through `PATH` or the standard macOS TeX directory. Set
+`NOON_LATEX_EXECUTABLE` and `NOON_KPSEWHICH_EXECUTABLE` for custom locations.
+See the [LaTeX lesson](web/python/examples/showcase_latex_create.py).
 
 ### Source-declared click indication
 
@@ -453,12 +460,10 @@ An authored primary click can run a restoring `Indicate` without a Python callba
 self.on_click(shape, Indicate(shape, run_time=0.4))
 ```
 
-The Rust equivalents publish the same semantic binding before or during live authoring:
+The Rust Scene method publishes the same semantic binding in setup and during playback.
 
 ```rust
 scene.on_click_indicate(&shape, IndicateOptions::default(), AnimationOptions::new().run_time(0.4))?;
-// Or, after execution starts:
-live.on_click_indicate(&shape, IndicateOptions::default(), AnimationOptions::new().run_time(0.4))?;
 ```
 
 The action uses restoring `there_and_back` timing. A click on an already active target is ignored. Clicks do not interrupt an active authored segment or signal/host driver. Input remains available after the introduction, including when playback is paused at its endpoint or its source program has completed; the runtime drives and settles the short effective animation without advancing authored time.
@@ -469,7 +474,7 @@ The selection gallery and native `pointer_selection` example also enable cursor-
 
 The crate root and `noon::prelude` expose ordinary authoring handles, values, live operations, completion, and typed errors. `noon::integration` is the explicit raw semantic/resource and host plumbing boundary; `noon::diagnostics` is opt-in debug/export access. Neither namespace creates another scene or runtime.
 
-After creating an execution session, `scene.live(&mut session)` applies supported persistent edits and animation/completion operations through the same staged semantic/execution publication path. Rust `Mobject` inspection reads authored/base state; live/effective queries read the latest coherent runtime state. Failed preparation leaves both authored and effective published state unchanged.
+Use `Scene::into_execution` to retain the authoring owner during playback. Use `execution.scene_mut()` for persistent edits and `execution.scene()` for current observations. Use `execution.live()` to activate, drive, and complete segments. `Scene::authored` reads the base declaration, and `Scene::effective` reads the latest coherent runtime state. Failed preparation leaves both states unchanged.
 
 Raw integration-store access is deliberately not a live-mutation shortcut: edits outside coherent publication can stale a session and must be handled explicitly. See [`shared_authoring.rs`](crates/noon/examples/shared_authoring.rs) for the public typed path and `docs/architecture.md` for the authored/effective and publication contracts.
 
@@ -562,13 +567,13 @@ H.264 through the shared native Rust exporter and an installed FFmpeg. Rational
 an existing output only after a successful export. The source is evaluated once;
 export replays its sealed history. Export consumes the prepared view, including
 on cancellation or runtime failure, and leaves a previous destination intact
-when it fails. Native Python audio export is not part of this profile.
+when it fails. Predeclared audio is encoded as AAC alongside the video.
 
-Arbitrary Python callbacks support the sampled `--headless` profile; prepared
-window playback rejects unrecorded callbacks or external input. Advanced plotting,
-audio bindings and full gallery parity remain outside this CPython profile.
-Native Rust retains its existing broader support. A geometry-only build can omit
-native window/capture/resource dependencies with `--minimal`.
+Arbitrary Python callbacks use the sampled `--headless` profile. A completed
+scene with translation drag targets opens at its authored endpoint with pointer
+input. Its snapshot uses the endpoint time, available as `view.duration`. MP4
+export requires a finite playback scene. A geometry-only build can omit native
+window, capture, and resource dependencies with `--minimal`.
 
 Validate the real extension with `PYTHONPATH=build/python python3
 scripts/test_native_python.py` and `python3 scripts/python_host_conformance.py`.

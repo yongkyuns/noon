@@ -17,22 +17,24 @@ impl LiveContinuation for LinePassingFlash {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
-                if live
-                    .contains(&self.line)
+                if scene
+                    .contains_direct(&self.line)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("PassingFlash Line must begin detached".into());
                 }
                 self.stage = 1;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             1 => {
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_passing_flash(
                         &self.line,
                         0.25,
@@ -41,8 +43,8 @@ impl LiveContinuation for LinePassingFlash {
                             .rate_func(RateFunction::Linear),
                     )
                     .map_err(|error| error.to_string())?;
-                if !live
-                    .contains(&self.line)
+                if !scene
+                    .contains_direct(&self.line)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("PassingFlash did not admit its transient Line".into());
@@ -51,8 +53,8 @@ impl LiveContinuation for LinePassingFlash {
                 Ok(ContinuationStep::Await(segment))
             }
             2 => {
-                if live
-                    .contains(&self.line)
+                if scene
+                    .contains_direct(&self.line)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("PassingFlash did not remove its transient Line".into());
@@ -60,9 +62,9 @@ impl LiveContinuation for LinePassingFlash {
                 if self.line.node_id() != self.identity {
                     return Err("PassingFlash changed the Line semantic identity".into());
                 }
-                live.add(&self.line).map_err(|error| error.to_string())?;
-                if !live
-                    .contains(&self.line)
+                scene.add(&self.line).map_err(|error| error.to_string())?;
+                if !scene
+                    .contains_direct(&self.line)
                     .map_err(|error| error.to_string())?
                 {
                     return Err(
@@ -70,7 +72,9 @@ impl LiveContinuation for LinePassingFlash {
                     );
                 }
                 self.stage = 3;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
@@ -137,14 +141,15 @@ impl LiveContinuation for SignalTrains {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         use crate::AnimationCompositionRequest as Request;
         use noon_core::SemanticAnimationCompositionKind as Kind;
 
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.wait_segment(0.5)
+                scene
+                    .live()
+                    .wait_segment(0.5)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
@@ -176,7 +181,8 @@ impl LiveContinuation for SignalTrains {
                         .lag_ratio(0.0)
                         .rate_func(RateFunction::Linear),
                 };
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_composition(&request, AnimationOptions::new())
                     .map_err(|error| error.to_string())?;
                 self.stage = 2;
@@ -185,13 +191,18 @@ impl LiveContinuation for SignalTrains {
             2 => {
                 for (signals, _) in &self.trains {
                     for signal in signals {
-                        if live.contains(signal).map_err(|error| error.to_string())? {
+                        if scene
+                            .contains_direct(signal)
+                            .map_err(|error| error.to_string())?
+                        {
                             return Err("PassingFlash did not retire a transient signal".into());
                         }
                     }
                 }
                 self.stage = 3;
-                live.wait_segment(0.5)
+                scene
+                    .live()
+                    .wait_segment(0.5)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
@@ -348,10 +359,9 @@ mod tests {
             &mut self,
             scene: &mut crate::ContinuationScene,
         ) -> Result<ContinuationStep, Self::Error> {
-            let live = &mut scene.live();
             if self.activated {
-                if live
-                    .contains(&self.line)
+                if scene
+                    .contains_direct(&self.line)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("PassingFlash did not remove its initially present Line".into());
@@ -359,13 +369,15 @@ mod tests {
                 return Ok(ContinuationStep::Finished);
             }
             self.activated = true;
-            live.declare_and_activate_passing_flash(
-                &self.line,
-                0.25,
-                AnimationOptions::new().run_time(1.0),
-            )
-            .map(ContinuationStep::Await)
-            .map_err(|error| error.to_string())
+            scene
+                .live()
+                .declare_and_activate_passing_flash(
+                    &self.line,
+                    0.25,
+                    AnimationOptions::new().run_time(1.0),
+                )
+                .map(ContinuationStep::Await)
+                .map_err(|error| error.to_string())
         }
     }
 

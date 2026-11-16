@@ -12,7 +12,8 @@ fn observation(width: f32, angle: f32) -> Value {
     )
     .unwrap();
     scene.add(&elbow).unwrap();
-    let session = scene.execution_session().unwrap();
+    let execution = scene.into_execution().unwrap();
+    let session = execution.session();
     let transform = session.frame().render_transform(0);
     let path = match session.frame().render_geometry(0).unwrap() {
         GeometryRef::VectorPath(path) => path.clone(),

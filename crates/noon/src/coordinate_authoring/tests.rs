@@ -82,9 +82,7 @@ fn scene_plane_frames_observe_detached_and_animating_axes() {
 
 #[test]
 fn scene_plane_frames_reject_unavailable_publications_for_detached_axes() {
-    use crate::{
-        ExecutionSessionCallbackError, ExecutionSessionPublicationError, LiveSessionError,
-    };
+    use crate::{ExecutionSessionCallbackError, ExecutionSessionPublicationError};
     use noon_core::HostCallbackId;
 
     let mut scene = Scene::new();
@@ -107,15 +105,15 @@ fn scene_plane_frames_reject_unavailable_publications_for_detached_axes() {
     let publication = running.session().publication_context();
     assert!(matches!(
         running.scene().effective_number_plane_frame(&plane),
-        Err(CoordinateAuthoringError::Live(LiveSessionError::Callback(
-            ExecutionSessionCallbackError::Pending(_)
-        )))
+        Err(CoordinateAuthoringError::Authoring(
+            AuthoringError::ExecutionCallback(ExecutionSessionCallbackError::Pending(_))
+        ))
     ));
     marker.shift(0.0, 1.0).unwrap();
     assert!(matches!(
         running.scene().effective_polar_plane_frame(&plane),
-        Err(CoordinateAuthoringError::Live(
-            LiveSessionError::Publication(
+        Err(CoordinateAuthoringError::Authoring(
+            AuthoringError::ExecutionPublication(
                 ExecutionSessionPublicationError::StaleSceneRevision { .. }
             )
         ))
@@ -1105,7 +1103,7 @@ fn effective_axis_queries_follow_active_drivers_without_semantic_churn() {
             .unwrap(),
         [0.0, 0.0],
     );
-    let frame = axes.effective_frame(program.session()).unwrap();
+    let frame = program.scene().axes_frame(&axes).unwrap();
     near(frame.coords_to_point(0.0, 0.0).unwrap(), [1.0, 2.0]);
     near(frame.point_to_coords([1.5, 2.25]).unwrap(), [0.5, 0.25]);
     assert_eq!(
@@ -1141,11 +1139,13 @@ fn graph_input_queries_choose_authored_or_effective_axes_without_publication() {
     );
     let calls = std::cell::Cell::new(0);
     near(
-        axes.effective_input_to_graph_point(program.session(), 0.5, |x| {
-            calls.set(calls.get() + 1);
-            x * x
-        })
-        .unwrap(),
+        program
+            .scene()
+            .input_to_graph_point(&axes, 0.5, |x| {
+                calls.set(calls.get() + 1);
+                x * x
+            })
+            .unwrap(),
         [1.5, 2.25],
     );
     assert_eq!(calls.get(), 1);
@@ -1165,8 +1165,8 @@ fn direct_and_forward_effective_coordinate_samples_agree() {
     forward.drive_to(&mut forward_callbacks, 0.25).unwrap();
     forward.drive_to(&mut forward_callbacks, 0.5).unwrap();
     assert_eq!(
-        direct_axes.effective_frame(direct.session()).unwrap(),
-        forward_axes.effective_frame(forward.session()).unwrap(),
+        direct.scene().axes_frame(&direct_axes).unwrap(),
+        forward.scene().axes_frame(&forward_axes).unwrap(),
     );
 }
 

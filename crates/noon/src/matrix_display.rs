@@ -70,7 +70,6 @@ pub enum MatrixAuthoringError {
     Text(TextAuthoringError),
     Numeric(NumericAuthoringError),
     Semantic(AuthoringError),
-    LiveSession(crate::LiveSessionError),
 }
 
 impl std::fmt::Display for MatrixAuthoringError {
@@ -86,7 +85,6 @@ impl std::fmt::Display for MatrixAuthoringError {
             Self::Text(error) => error.fmt(f),
             Self::Numeric(error) => error.fmt(f),
             Self::Semantic(error) => error.fmt(f),
-            Self::LiveSession(error) => error.fmt(f),
         }
     }
 }
@@ -177,28 +175,6 @@ impl Matrix {
         let shape = matrix_shape(&rows)?;
         publish_text_matrix(
             MatrixPublisher::Store(store),
-            backend,
-            rows.into_iter().flatten().collect(),
-            shape,
-            options,
-        )
-    }
-
-    pub fn from_rows_in_live_session<I, J, S>(
-        live: &mut crate::LiveSession<'_>,
-        backend: &mut impl LatexBackend,
-        rows: I,
-        options: MatrixOptions,
-    ) -> Result<Self, MatrixAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        let rows = collect_text_rows(rows);
-        let shape = matrix_shape(&rows)?;
-        publish_text_matrix(
-            MatrixPublisher::Live(live),
             backend,
             rows.into_iter().flatten().collect(),
             shape,
@@ -433,28 +409,6 @@ impl DecimalMatrix {
             options,
         )?))
     }
-    pub fn from_rows_in_live_session<I, J>(
-        live: &mut crate::LiveSession<'_>,
-        backend: &mut impl LatexBackend,
-        rows: I,
-        format: DecimalFormat,
-        options: MatrixOptions,
-    ) -> Result<Self, MatrixAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = f64>,
-    {
-        let rows = collect_numeric_rows(rows);
-        let shape = matrix_shape(&rows)?;
-        Ok(Self(publish_numeric_matrix(
-            MatrixPublisher::Live(live),
-            backend,
-            rows.into_iter().flatten().collect(),
-            shape,
-            format,
-            options,
-        )?))
-    }
     pub fn matrix(&self) -> &Matrix {
         &self.0
     }
@@ -521,27 +475,6 @@ impl IntegerMatrix {
         let shape = matrix_shape(&rows)?;
         Ok(Self(publish_numeric_matrix(
             MatrixPublisher::Store(store),
-            backend,
-            rows.into_iter().flatten().collect(),
-            shape,
-            integer_format(),
-            options,
-        )?))
-    }
-    pub fn from_rows_in_live_session<I, J>(
-        live: &mut crate::LiveSession<'_>,
-        backend: &mut impl LatexBackend,
-        rows: I,
-        options: MatrixOptions,
-    ) -> Result<Self, MatrixAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = f64>,
-    {
-        let rows = collect_numeric_rows(rows);
-        let shape = matrix_shape(&rows)?;
-        Ok(Self(publish_numeric_matrix(
-            MatrixPublisher::Live(live),
             backend,
             rows.into_iter().flatten().collect(),
             shape,
@@ -627,26 +560,6 @@ impl MobjectMatrix {
             options,
         )?))
     }
-    pub fn from_target_rows_in_live_session<'a, I, J>(
-        live: &mut crate::LiveSession<'_>,
-        backend: &mut impl LatexBackend,
-        rows: I,
-        options: MatrixOptions,
-    ) -> Result<Self, MatrixAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = MobjectTarget<'a>>,
-    {
-        let rows = collect_target_rows(rows);
-        let shape = matrix_shape(&rows)?;
-        Ok(Self(publish_target_mobject_matrix(
-            MatrixPublisher::Live(live),
-            backend,
-            rows.into_iter().flatten().collect(),
-            shape,
-            options,
-        )?))
-    }
     pub fn from_rows<I, J>(
         scene: &mut Scene,
         backend: &mut impl LatexBackend,
@@ -695,28 +608,6 @@ impl MobjectMatrix {
         validate_entries(&store, &rows)?;
         Ok(Self(publish_existing_mobject_matrix(
             MatrixPublisher::Store(store),
-            backend,
-            rows.into_iter().flatten().collect(),
-            shape,
-            options,
-        )?))
-    }
-    pub fn from_rows_in_live_session<I, J>(
-        live: &mut crate::LiveSession<'_>,
-        backend: &mut impl LatexBackend,
-        rows: I,
-        options: MatrixOptions,
-    ) -> Result<Self, MatrixAuthoringError>
-    where
-        I: IntoIterator<Item = J>,
-        J: IntoIterator<Item = Mobject>,
-    {
-        let rows = collect_mobject_rows(rows);
-        let shape = matrix_shape(&rows)?;
-        let store = Rc::clone(live.integration_store());
-        validate_entries(&store, &rows)?;
-        Ok(Self(publish_existing_mobject_matrix(
-            MatrixPublisher::Live(live),
             backend,
             rows.into_iter().flatten().collect(),
             shape,

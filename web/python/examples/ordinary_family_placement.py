@@ -41,3 +41,9 @@ class OrdinaryFamilyPlacement(Scene):
         first.move_to(target, coor_mask=(0, 0, 0))
         assert abs(first.get_center()[0] - before[0]) < 1e-6
         assert abs(first.get_center()[1] - before[1]) < 1e-6
+        first.move_to(target, coor_mask=(1, 0, 0))
+        assert abs(first.get_center()[0] - target.get_center()[0]) < 1e-6
+        assert abs(first.get_center()[1] - before[1]) < 1e-6
+        first.to_edge(UP, buff=0.5)
+        assert abs(first.get_top()[1] - 3.5) < 1e-6
+        first.move_to(before)
