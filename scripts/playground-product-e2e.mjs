@@ -11,7 +11,7 @@ import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRe
   freshProductRunSettled } from "./playground-product-fps.mjs";
 import { packageSizes } from "../.github/ci/wasm-build.mjs";
 import { captureAttemptedPage } from "./playground-browser-failure-evidence.mjs";
-import { waitForBrowserObservation } from "./playground-browser-support.mjs";
+import { holdPlaygroundPreload } from "./playground-browser-support.mjs";
 import { assertNaturalFirstPassPublication } from "./showcase-live-review.mjs";
 import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
@@ -30,7 +30,6 @@ assert.ok(["baseline", "candidate"].includes(label), "product measurement role m
 const allowLegacyBaseline = label === "baseline";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
 const measurement = productMeasurement(exampleId);
-const readinessWait = { interval: 100, timeout: 30_000 };
 const profileExpectation = SHOWCASE_PROFILE_EXPECTATIONS.find(entry => entry.id === exampleId);
 const completionExpectation = { attachedProfile: profileExpectation?.attachedProfile ?? "incremental",
   disposition: profileExpectation?.disposition ?? "looped" };
@@ -143,8 +142,9 @@ async function waitForServer() {
 }
 
 async function waitForApplied(page, previousGeneration) {
-  await waitForBrowserObservation(page, freshProductRunSettled,
-    { previousGeneration, allowLegacyBaseline }, readinessWait);
+  // Require the explicit Run's receipt even if the previous patch still says applied.
+  await page.waitForFunction(freshProductRunSettled, { previousGeneration, allowLegacyBaseline },
+    { timeout: 30_000 });
   const state = await page.evaluate(() => ({
     patchState: document.querySelector("#patch-status")?.dataset.state ?? null,
     patchText:
@@ -212,7 +212,7 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
     // completion signal. Wait for the same run's source cleanup and final
     // profile disposition, including one actual loop before accepting a
     // replayable pass.
-    await waitForBrowserObservation(page, ({ exampleId, expectedProfile, expectedDisposition, durationSeconds,
+    await page.waitForFunction(({ exampleId, expectedProfile, expectedDisposition, durationSeconds,
       allowLegacyBaseline }) => {
       const gallery = window.__noonExampleGallery;
       const run = gallery?.runPhaseMetrics;
@@ -238,7 +238,7 @@ async function runAndMeasure(page, { captureFrames = false } = {}) {
         !events.some(event => event.stage === "profile-change") && dispositionReady;
     }, { exampleId, expectedProfile: completionExpectation.attachedProfile,
       expectedDisposition: completionExpectation.disposition, durationSeconds: measurement.sourceEndSeconds,
-      allowLegacyBaseline }, readinessWait);
+      allowLegacyBaseline }, { timeout: 30_000 });
     const lifecycle = await page.evaluate(() => {
       const gallery = window.__noonExampleGallery;
       return { runInFlight: gallery.runInFlight, run: gallery.runPhaseMetrics,
@@ -404,6 +404,7 @@ async function synchronizeFinalFrame(page, seconds) {
 
 let browser = null;
 let page = null;
+let releasePreload = null;
 const pageErrors = [];
 const consoleErrors = [];
 try {
@@ -426,6 +427,8 @@ try {
     deviceScaleFactor: 1,
   });
   page = await context.newPage();
+  // Every measured pass starts through Run, including the first cold pass.
+  releasePreload = await holdPlaygroundPreload(page);
   await page.addInitScript(profileStages => {
     const NativeWorker = window.Worker;
     // The product client rejects this ID before issuing it (counter exhausted).
@@ -511,12 +514,16 @@ try {
   const shellReadyMs = performance.now() - navigationStarted;
   const shell = await page.evaluate(() => ({
     selected: window.__noonExampleGallery?.selectedExampleId ?? null,
+    runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
+    runAccepted: window.__noonExampleGallery?.runPhaseMetrics != null ||
+      window.__noonExampleGallery?.runInFlight === true,
     runtimeStartup: document.querySelector("#status")?.dataset.runtimeStartup ?? null,
     executionMode: document.querySelector("#status")?.dataset.executionMode ?? null,
     controls: document.querySelector(".playback-controls") !== null,
     statusText: document.querySelector("#status-text")?.textContent ?? "",
   }));
   assert.equal(shell.selected, exampleId, "product E2E loaded the wrong example");
+  assert.equal(shell.runAccepted, false, "product shell accepted a Run before the explicit cold pass");
   assert.equal(shell.executionMode, null, "page shell entered an execution mode before Run");
   assert.equal(shell.controls, false, "page shell allocated playback controls before Run");
 
@@ -692,7 +699,10 @@ try {
   }, null, 2)}\n`, "utf8");
   throw error;
 } finally {
-  await browser?.close();
-  server.kill("SIGTERM");
-  await serverClosed;
+  try { await browser?.close(); }
+  finally {
+    releasePreload?.();
+    server.kill("SIGTERM");
+    await serverClosed;
+  }
 }
