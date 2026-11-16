@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium, firefox, webkit } from 'playwright';
 import pngjs from 'pngjs';
 import { serveRepository } from './browser-test-server.mjs';
-import { playgroundLaunchOptions } from './playground-browser-support.mjs';
+import { playgroundLaunchOptions, waitForBrowserObservation } from './playground-browser-support.mjs';
 import { createPyodideResourceCache } from './pyodide-resource-cache.mjs';
 import { captureStalledRenderStacks } from './noon-site-worker-stack.mjs';
 import { observeUnpromptedPlayback, observedUnpromptedProgress } from './project-site-autoplay-observer.mjs';
@@ -32,13 +32,19 @@ async function workersRetired(workers) {
   while (workers.size && Date.now()<until) await new Promise(resolve=>setTimeout(resolve,25));
   assert.equal(workers.size,0,'navigation must retire all observed embedded workers');
 }
-function coloredPixels(bytes, minimumBuckets = 8) {
+function coloredPixels(bytes, minimumBuckets, expectedCenter) {
   const png = pngjs.PNG.sync.read(bytes), buckets = new Set();
   for (let i=0;i<png.data.length;i+=16) {
     const [r,g,b] = png.data.subarray(i,i+3); buckets.add(`${r>>4},${g>>4},${b>>4}`);
   }
   assert.ok(png.width>100 && png.height>60,'actual canvas dimensions');
   assert.ok(buckets.size>minimumBuckets,'canvas is not a flat placeholder');
+  if (expectedCenter) {
+    const center = (Math.floor(png.height / 2) * png.width + Math.floor(png.width / 2)) * 4;
+    const rgb = [...png.data.subarray(center, center + 3)];
+    assert.ok(rgb.every((channel, index) => Math.abs(channel - expectedCenter[index]) <= 4),
+      `edited square center is ${rgb.join(', ')}; expected ${expectedCenter.join(', ')}`);
+  }
   return {width:png.width,height:png.height,colorBuckets:buckets.size};
 }
 async function ready(frame, afterGeneration = 0) {
@@ -96,21 +102,36 @@ async function captureFrameState(frame) {
     return {url:frame.url(),captureError:String(error)};
   } finally { clearTimeout(timer); }
 }
-async function sample(frame, prefix, time, minimumBuckets = 8) {
+async function sample(frame, prefix, time, expectedCenter = null) {
   // The regular playback controls remain the authority even though the embed
   // hides their toolbar. Use the same input events, not an alternative renderer.
   if (await frame.locator('#status').getAttribute('data-playback-playing')==='true') {
     await frame.locator('.playback-toggle').evaluate(button=>button.click());
   }
-  await frame.waitForFunction(()=>document.querySelector('#status').dataset.playbackPlaying==='false');
-  await frame.locator('.playback-scrubber').evaluate((element,time)=>{
-    element.value=String(time);element.dispatchEvent(new Event('input',{bubbles:true}));
+  await frame.waitForFunction(() => {
+    const controls = document.querySelector('.playback-controls');
+    return controls.dataset.playing === 'false' && controls.dataset.busy === 'false';
+  });
+  const target = await frame.locator('.playback-scrubber').evaluate((element,time)=>{
+    element.value=String(time);
+    const target = Number(element.value);
+    element.dispatchEvent(new Event('input',{bubbles:true}));
     element.dispatchEvent(new Event('change',{bubbles:true}));
+    return target;
   },time);
-  await frame.waitForFunction(time=>Math.abs(parseFloat(document.querySelector('#metric-time').value)-time)<.2,time);
+  // The scrubber displays its requested time before the renderer draws it.
+  await waitForBrowserObservation(frame, async target => {
+    const controls = document.querySelector('.playback-controls');
+    if (controls.dataset.playing !== 'false' || controls.dataset.busy !== 'false') return false;
+    const report = await window.__noonExampleGallery.executionMetrics();
+    const presentedTime = report?.metrics?.latestPresentationSample?.time;
+    return Number.isFinite(presentedTime) && Math.abs(presentedTime - target) < 1e-7;
+  }, target);
+  // Allow the iframe compositor to display the acknowledged canvas publication.
+  await frame.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const bytes = await frame.locator('#scene').screenshot();
-  const pixels = coloredPixels(bytes,minimumBuckets);
   await writeFile(path.join(output,`${prefix}.png`),bytes);
+  const pixels = coloredPixels(bytes, expectedCenter ? 1 : 8, expectedCenter);
   return {target:time,time:await frame.locator('#metric-time').evaluate(element=>element.value),sha256:hash(bytes),...pixels};
 }
 async function edit(frame, page, source) {
@@ -286,7 +307,7 @@ try {
             await ready(frame,initialGeneration);
             const editedGeneration=await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration);
             await frame.getByRole('tab',{name:'View',exact:true}).click();
-            const edited=await sample(frame,`${prefix}-hot-edit`,1,1);
+            const edited=await sample(frame,`${prefix}-hot-edit`,1,[88,196,221]);
             assert.ok(samples.every(item=>item.sha256!==edited.sha256),'editing changed actual canvas output');
             let recovery=null;
             if (index===0) {
@@ -300,7 +321,7 @@ try {
               mark('recovery-ready',id);
               await ready(frame,failedGeneration);
               await frame.getByRole('tab',{name:'View',exact:true}).click();
-              recovery=await sample(frame,`${prefix}-recovered`,1,1);
+              recovery=await sample(frame,`${prefix}-recovered`,1,[209,71,189]);
               assert.notEqual(recovery.sha256,edited.sha256,'fixed code replaces blue pixels with pink pixels');
             }
             assert.equal(await element.evaluate(node=>node.isConnected),true,'hot reload keeps the same iframe/editor');
