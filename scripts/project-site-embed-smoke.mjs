@@ -145,8 +145,16 @@ async function sample(frame, prefix, time, expectedCenter = null) {
       await frame.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       bytes = await canvas.screenshot();
     } else {
+      // Firefox can stall an element screenshot while waiting for layout stability
+      // in a nested iframe. Capture the same visible region from the outer page.
+      const page = frame.page();
+      const remaining = () => Math.max(1, deadline - performance.now());
+      await canvas.evaluate(element => element.scrollIntoView({block:'center',behavior:'instant'}),
+        undefined, {timeout:remaining()});
       do {
-        bytes = await canvas.screenshot({timeout:Math.max(1, deadline - performance.now())});
+        const clip = await canvas.boundingBox({timeout:remaining()});
+        assert.ok(clip, 'edited canvas has a visible capture region');
+        bytes = await page.screenshot({clip,timeout:remaining()});
         if (matchesColor(centerRgb(pngjs.PNG.sync.read(bytes)), expectedCenter)) break;
         await frame.waitForTimeout(100);
       } while (performance.now() < deadline);
