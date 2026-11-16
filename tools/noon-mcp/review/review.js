@@ -2,6 +2,7 @@
   "use strict";
   const get = (id) => document.getElementById(id);
   const stage = get("frame-stage"), image = get("frame-image"), overlay = get("region-overlay");
+  const commentPin = get("comment-pin");
   const markButton = get("mark-region"), clearButton = get("clear-region"), regionEnabled = get("region-enabled");
   const startInput = get("interval-start"), endInput = get("interval-end");
   const observation = get("observation"), desiredChange = get("desired-change"), preserve = get("preserve");
@@ -9,6 +10,7 @@
   const regionFields = ["x", "y", "width", "height"].map((key) => get(`region-${key}`));
   const drafts = new Map(), buttons = new Map(), encoder = new TextEncoder();
   let data, selected = null, imageReady = false, generation = 0, marking = false, drag = null, downloadUrl = null;
+  let point = null, suppressClick = false;
   const numeric = (input) => input.value.trim() === "" ? NaN : Number(input.value);
   const boundedTime = (value) => Number.isFinite(value) && value >= 0 && value <= 600;
   const clamp = (value) => Math.max(0, Math.min(1, value));
@@ -17,13 +19,14 @@
 
   function initialDraft(entry) {
     const time = String(entry.frame.provenance.publishedTime);
-    return { start: time, end: time, observation: "", desiredChange: "", preserve: "", region: false,
-      coordinates: ["0", "0", "100", "100"] };
+    return { start: time, end: time, observation: "", desiredChange: "", preserve: "", point: null,
+      region: false, coordinates: ["0", "0", "100", "100"] };
   }
   function saveDraft() {
     if (!selected) return;
     drafts.set(selected.sampleIndex, { start: startInput.value, end: endInput.value,
       observation: observation.value, desiredChange: desiredChange.value, preserve: preserve.value,
+      point: point ? { ...point } : null,
       region: regionEnabled.checked, coordinates: regionFields.map((input) => input.value) });
   }
   function readRegion() {
@@ -51,13 +54,19 @@
   }
   function drawOverlay(value = readRegion()) {
     const bounds = fittedImage();
-    overlay.hidden = !bounds || !validRegion(value);
-    if (overlay.hidden) return;
     const box = stage.getBoundingClientRect();
-    overlay.style.left = `${bounds.left - box.left - stage.clientLeft + value.x * bounds.width}px`;
-    overlay.style.top = `${bounds.top - box.top - stage.clientTop + value.y * bounds.height}px`;
-    overlay.style.width = `${value.width * bounds.width}px`;
-    overlay.style.height = `${value.height * bounds.height}px`;
+    overlay.hidden = !bounds || !validRegion(value) || Boolean(point);
+    if (!overlay.hidden) {
+      overlay.style.left = `${bounds.left - box.left - stage.clientLeft + value.x * bounds.width}px`;
+      overlay.style.top = `${bounds.top - box.top - stage.clientTop + value.y * bounds.height}px`;
+      overlay.style.width = `${value.width * bounds.width}px`;
+      overlay.style.height = `${value.height * bounds.height}px`;
+    }
+    commentPin.hidden = !bounds || !point || marking;
+    if (!commentPin.hidden) {
+      commentPin.style.left = `${bounds.left - box.left - stage.clientLeft + point.x * bounds.width}px`;
+      commentPin.style.top = `${bounds.top - box.top - stage.clientTop + point.y * bounds.height}px`;
+    }
   }
   function setMarking(value) {
     marking = value && imageReady;
@@ -66,14 +75,16 @@
     markButton.textContent = marking ? "Cancel drawing" : "Draw region";
   }
   function updateRegion() {
+    get("region-grid").hidden = !regionEnabled.checked;
     for (const input of regionFields) input.disabled = !imageReady || !regionEnabled.checked;
     regionEnabled.disabled = !imageReady;
     markButton.disabled = !imageReady;
-    clearButton.disabled = !regionEnabled.checked && !marking;
+    clearButton.disabled = !regionEnabled.checked && !marking && !point;
     const value = readRegion();
     for (const input of regionFields) input.setAttribute("aria-invalid", String(regionEnabled.checked && !validRegion(value)));
     if (marking) status(get("region-status"), "Drag on the image to mark an area. Escape cancels drawing.");
-    else if (!regionEnabled.checked) status(get("region-status"), "No region marked. The note will refer to the whole frame.");
+    else if (point) status(get("region-status"), "Comment pin placed. Write your note to the right; click again to move it.");
+    else if (!regionEnabled.checked) status(get("region-status"), "Click the image to place a comment pin, or leave it unmarked for whole-frame feedback.");
     else if (!validRegion(value)) status(get("region-status"), "Use a positive width and height that fit within the image.", "error");
     else status(get("region-status"), "Region marked. Adjust the percentages to refine it, or draw again.");
     drawOverlay();
@@ -87,8 +98,10 @@
   }
   function feedback() {
     const interval = { start: numeric(startInput), end: numeric(endInput) };
-    const value = { interval, observation: observation.value, desiredChange: desiredChange.value };
-    if (regionEnabled.checked) value.region = readRegion();
+    const value = { interval, observation: observation.value,
+      desiredChange: desiredChange.value.trim() || "Propose a focused correction for this comment." };
+    if (point) value.point = { ...point };
+    else if (regionEnabled.checked) value.region = readRegion();
     if (preserve.value.trim() !== "") value.preserve = preserve.value;
     return value;
   }
@@ -103,7 +116,7 @@
     else if (!intervalValid) { message = "Set an interval from 0 to 600 seconds that includes the captured moment."; state = "error"; }
     else if (regionEnabled.checked && !validRegion(value.region)) { message = "Adjust the marked region so it fits within the image."; state = "error"; }
     for (const [input, countId, required] of [[observation, "observation-count", true],
-      [desiredChange, "desired-change-count", true], [preserve, "preserve-count", false]]) {
+      [desiredChange, "desired-change-count", false], [preserve, "preserve-count", false]]) {
       const count = encoder.encode(input.value).length;
       const invalid = count > 4000 || input.value.includes("\0");
       const counter = get(countId);
@@ -143,7 +156,8 @@
     const ticket = ++generation, draft = drafts.get(entry.sampleIndex) ?? initialDraft(entry);
     startInput.value = draft.start; endInput.value = draft.end;
     observation.value = draft.observation; desiredChange.value = draft.desiredChange; preserve.value = draft.preserve;
-    regionEnabled.checked = draft.region;
+    point = draft.point ? { ...draft.point } : null;
+    regionEnabled.checked = draft.region && !point;
     regionFields.forEach((input, index) => { input.value = draft.coordinates[index]; });
     for (const [index, button] of buttons) button.setAttribute("aria-pressed", String(index === entry.sampleIndex));
     get("frame-position").textContent = `${data.frames.indexOf(entry) + 1} of ${data.frames.length}`;
@@ -179,6 +193,27 @@
       width: Math.abs(drag.start.x - end.x), height: Math.abs(drag.start.y - end.y) };
   }
 
+  // Ordinary click-to-comment is the primary interaction; drawing is optional.
+  function placePin(position) {
+    point = position;
+    regionEnabled.checked = false;
+    updateRegion(); saveDraft(); validate();
+    observation.focus({ preventScroll: true });
+  }
+  stage.addEventListener("click", (event) => {
+    if (suppressClick) { suppressClick = false; return; }
+    if (!imageReady || marking || drag || event.button !== 0) return;
+    const bounds = fittedImage();
+    if (!bounds || event.clientX < bounds.left || event.clientX > bounds.left + bounds.width ||
+        event.clientY < bounds.top || event.clientY > bounds.top + bounds.height) return;
+    placePin(coordinates(event, bounds));
+  });
+  stage.addEventListener("keydown", (event) => {
+    if (event.target === stage && !marking && imageReady && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      placePin(point ?? { x: 0.5, y: 0.5 });
+    }
+  });
   stage.addEventListener("pointerdown", (event) => {
     if (!marking || !imageReady || drag || !event.isPrimary || event.button !== 0) return;
     const bounds = fittedImage();
@@ -186,6 +221,7 @@
         event.clientY < bounds.top || event.clientY > bounds.top + bounds.height) return;
     event.preventDefault(); stage.focus({ preventScroll: true });
     drag = { id: event.pointerId, start: coordinates(event, bounds) };
+    suppressClick = true; // A successful drag's synthetic click must not replace the rectangle with a pin.
     stage.setPointerCapture(event.pointerId);
     overlay.hidden = true; validate();
   });
@@ -199,6 +235,7 @@
     drag = null;
     if (stage.hasPointerCapture(id)) stage.releasePointerCapture(id);
     if (validRegion(value)) {
+      point = null;
       regionEnabled.checked = true;
       regionFields.forEach((input, index) => { input.value = String([value.x, value.y, value.width, value.height][index] * 100); });
     }
@@ -216,11 +253,12 @@
     validate();
   });
   clearButton.addEventListener("click", () => {
-    cancelDrag(); regionEnabled.checked = false;
+    cancelDrag(); point = null; regionEnabled.checked = false;
     updateRegion(); saveDraft(); validate();
   });
   regionEnabled.addEventListener("change", () => {
     cancelDrag();
+    if (regionEnabled.checked) point = null;
     if (regionEnabled.checked && !validRegion(readRegion())) {
       regionFields.forEach((input, index) => { input.value = index < 2 ? "0" : "100"; });
     }

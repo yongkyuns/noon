@@ -79,6 +79,24 @@ test("annotation intervals contain the actual published time, with bounded finit
   ]) assert.throws(() => buildFrameFeedback(captured, { ...note(), region }));
 });
 
+test("click-to-comment pins use bounded normalized coordinates and retain the original capture", () => {
+  const { region: _region, ...input } = note();
+  const marked = { ...input, point: { x: 0.375, y: 0.625 } };
+  const record = buildFrameFeedback(retained(), marked);
+  assert.deepEqual(record.feedback.point, marked.point);
+  assert.equal(record.feedback.region, null);
+  assert.equal(record.frame.provenance.publishedTime, 1.3);
+  marked.point.x = 0;
+  assert.equal(record.feedback.point.x, 0.375);
+  assert.ok(Object.isFrozen(record.feedback.point));
+  assert.deepEqual(readFrameFeedback(JSON.parse(JSON.stringify(record)), PNG), record);
+  for (const point of [
+    { x: -0.01, y: 0.3 }, { x: 0.3, y: 1.01 }, { x: NaN, y: 0.3 },
+    { x: 0.3, y: Infinity }, { x: 0.3, y: 0.4, sourceId: "forged" },
+  ]) assert.throws(() => buildFrameFeedback(retained(), { ...input, point }));
+  assert.doesNotThrow(() => buildFrameFeedback(retained(), { ...input, point: { x: 0, y: 1 } }));
+});
+
 test("review text is UTF-8 bounded and caller provenance, resolution and targeting claims are rejected", () => {
   const captured = retained();
   assert.doesNotThrow(() => buildFrameFeedback(captured, { ...note(), observation: "é".repeat(2000) }));

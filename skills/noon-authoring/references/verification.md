@@ -27,9 +27,12 @@ node tools/noon-mcp/bin/noon-feedback.mjs review \
   --preview preview-output/manifest.json --source scene.py --output review-page
 ```
 
-Open `review-page/index.html`. Select a captured frame, mark a region by dragging
-or entering coordinates, set the interval, and describe the correction and what
-must remain. Download the feedback note and keep it with the review folder. These
+Open `review-page/index.html`. Select a captured frame, **click the relevant visual
+to drop a comment pin, and type your feedback**. The comment alone is enough;
+the suggested correction and preservation details are optional. You can also
+choose Draw region for an area rather than a point. Adjust the interval only if
+the problem spans more than the captured instant. Download the feedback note and
+keep it with the review folder. These
 are discrete stills, not playback. Finalize the note through the shared builder:
 
 ```bash
@@ -44,7 +47,7 @@ review folder; use `check` and a fresh `compare` after the focused correction.
 
 Use `noon_annotate_frame` with the owned `session`, retained `artifactId`,
 `interval: {start,end}`, `observation`, `desiredChange`, optional `preserve`, and
-optional `region: {x,y,width,height}`. Region coordinates are fractions of the
+optional `point: {x,y}` or `region: {x,y,width,height}`. Coordinates are fractions of the
 captured image, from its top-left corner. The interval must contain the published
 capture time. Preserve the returned pending feedback record and PNG before the
 live artifact expires or the session closes. Do not fabricate provenance or

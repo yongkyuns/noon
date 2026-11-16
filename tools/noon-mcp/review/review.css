@@ -35,10 +35,14 @@ h1 { font-size: clamp(26px, 3.3vw, 39px); line-height: 1.15; letter-spacing: -.0
 h2 { font-size: 14px; line-height: 1.4; font-weight: 650; margin: 0; }
 .muted { color: var(--muted); font-size: 12px; }
 .frame-stage { position: relative; width: 100%; aspect-ratio: 4 / 3; overflow: hidden; border: 1px solid #344252; border-radius: 12px; background: #06090e; touch-action: pan-y; }
+.frame-stage:not(.is-marking) { cursor: crosshair; }
 .frame-stage.is-marking { cursor: crosshair; touch-action: none; border-color: var(--accent); }
 .frame-stage.is-marking::after { content: "Drag to mark · Esc to cancel"; position: absolute; left: 12px; top: 12px; padding: 5px 9px; border-radius: 5px; color: #e7fff7; background: rgb(12 30 30 / 92%); font-size: 11px; pointer-events: none; }
 #frame-image { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; }
 .region-overlay { position: absolute; border: 2px solid #b0ffe2; background: rgb(121 237 197 / 14%); box-shadow: 0 0 0 1px rgb(4 20 15 / 90%), 0 0 0 9999px rgb(0 0 0 / 25%); pointer-events: none; }
+/* The triangular tail, not the badge center, is anchored to the exact pixel. */
+.comment-pin { position: absolute; z-index: 2; width: 30px; height: 30px; transform: translate(-50%, -100%) translateY(-7px); display: grid; place-items: center; color: #0d2921; background: #a0ebd2; border: 2px solid #e7fff4; border-radius: 50%; font-size: 13px; font-weight: 750; box-shadow: 0 2px 8px rgb(0 0 0 / 65%); pointer-events: none; }
+.comment-pin::after { content: ""; position: absolute; bottom: -7px; left: calc(50% - 5px); width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 7px solid #a0ebd2; }
 .capture-caption { display: flex; align-items: baseline; justify-content: space-between; gap: 15px; padding: 11px 2px 13px; min-height: 42px; font-size: 12px; }
 .capture-caption strong { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 #image-status { color: var(--muted); text-align: right; }

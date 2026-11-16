@@ -96,8 +96,9 @@ alignment, captions, and dependent later timing. Keep unrelated passages reusabl
 
 Use `noon_annotate_frame` for a retained preview artifact, or the offline
 `noon-feedback` CLI for an existing preview manifest. For a human reviewer, generate
-a `noon-feedback review` page, collect the downloaded note, and finalize it with
-`noon-feedback import`. State the observed problem,
+a `noon-feedback review` page, click the visual that needs attention, type a
+comment, collect the downloaded note, and finalize it with `noon-feedback import`.
+The optional area tool is for cases where a single point is insufficient. State the observed problem,
 desired correction, and meaning/state to preserve; select an interval containing
 the published capture time and, when useful, a normalized image region. The tool
 retains the actual source/build/run/time/image evidence instead of asking you to

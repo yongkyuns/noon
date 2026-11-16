@@ -215,6 +215,40 @@ try {
   await page.locator("#interval-start").fill("1");
   await page.locator("#interval-end").fill("2");
 
+  stage = "click-to-comment pin and single-field note";
+  await page.locator("#frame-stage").scrollIntoViewIfNeeded();
+  const clickBounds = await paintedBounds(page);
+  const clickPoint = { x: 0.37, y: 0.58 };
+  await page.mouse.click(clickBounds.x + clickBounds.width * clickPoint.x,
+    clickBounds.y + clickBounds.height * clickPoint.y);
+  assert.equal(await page.locator("#comment-pin").isVisible(), true);
+  assert.equal(await page.locator("#observation").evaluate((element) => element === document.activeElement), true,
+    "clicking a visual referent should focus the comment field");
+  assert.equal(await page.locator("#region-enabled").isChecked(), false);
+  const pin = await page.locator("#comment-pin").boundingBox();
+  assert.ok(Math.abs(pin.x + pin.width / 2 - (clickBounds.x + clickBounds.width * clickPoint.x)) < 2,
+    "comment pin must target the clicked X coordinate");
+  assert.ok(Math.abs(pin.y + pin.height + 7 - (clickBounds.y + clickBounds.height * clickPoint.y)) < 2,
+    "comment pin tail must target the clicked Y coordinate");
+  await page.locator("#desired-change").fill("");
+  assert.equal(await page.locator("#download-note").isDisabled(), false,
+    "a single written comment must be sufficient without a separate correction field");
+  const clicked = await downloadNote(page, "clicked-note.json");
+  assert.ok(Math.abs(clicked.note.feedback.point.x - clickPoint.x) < 0.006);
+  assert.ok(Math.abs(clicked.note.feedback.point.y - clickPoint.y) < 0.006);
+  assert.equal(clicked.note.feedback.region, undefined);
+  assert.equal(clicked.note.feedback.desiredChange, "Propose a focused correction for this comment.");
+  const clickedImported = await feedbackCommand([
+    "import", "--review", review.outputDir, "--note", clicked.notePath, "--output", "clicked-feedback",
+  ]);
+  assert.equal(clickedImported.feedback.status, "pending_review");
+  assert.deepEqual(clickedImported.feedback.feedback.point, clicked.note.feedback.point);
+  assert.equal(clickedImported.feedback.frame.sha256,
+    preview.manifest.samples[1].artifact.sha256);
+  await page.locator("#desired-change").fill(NOTE.desiredChange);
+  await page.locator("#clear-region").click();
+  assert.equal(await page.locator("#comment-pin").isVisible(), false);
+
   stage = "reverse drag and fitted image";
   let bounds = await enableDrawing(page);
   await page.mouse.move(bounds.x + bounds.width * 0.8, bounds.y + bounds.height * 0.8);
@@ -354,7 +388,7 @@ try {
     importedFeedbackPath: imported.feedbackPath, downloadedNotePath: notePath,
     boundaryFeedbackPath: boundaryImported.feedbackPath,
     annotationStatus: imported.feedback.status, screenshots,
-    checks: ["offline-file-view", "embedded-data", "reverse-drag", "letterbox", "escape-cancel", "edge-clamp",
+    checks: ["offline-file-view", "embedded-data", "click-pin", "single-field-note", "reverse-drag", "letterbox", "escape-cancel", "edge-clamp",
       "overlay-geometry", "keyboard-region", "frame-draft-isolation", "download-import", "narrow-layout", "image-decode-failure"],
   });
   await writeFile(path.join(root, "report.json"), `${JSON.stringify(report, null, 2)}\n`);

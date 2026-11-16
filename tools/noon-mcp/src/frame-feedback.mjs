@@ -12,6 +12,12 @@ const boundedText = (maxBytes) => z.string().refine((value) =>
 const reviewerText = boundedText(MAX_FEEDBACK_TEXT_BYTES);
 const interval = z.strictObject({ start: time, end: time }).refine(
   (value) => value.end >= value.start, "interval end must not precede start");
+// A click pin is the default reviewer target. Coordinates are fractions of the
+// captured image, independent of viewport size and letterboxing.
+const point = z.strictObject({
+  x: z.number().finite().min(0).max(1),
+  y: z.number().finite().min(0).max(1),
+});
 const region = z.strictObject({
   x: z.number().finite().min(0).max(1),
   y: z.number().finite().min(0).max(1),
@@ -24,6 +30,7 @@ const region = z.strictObject({
 // semantic targets nor authorize mutations, schedule scenes, or retime cues.
 export const feedbackInputSchema = z.strictObject({
   interval,
+  point: point.optional(),
   region: region.optional(),
   observation: reviewerText,
   desiredChange: reviewerText,

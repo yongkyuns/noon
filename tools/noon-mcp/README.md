@@ -169,12 +169,18 @@ node bin/noon-feedback.mjs review \
 ```
 
 Open `review-page/index.html` directly in a browser. Choose a captured moment,
-mark a region by dragging or entering its coordinates, set the affected interval,
-and describe the problem, correction, and what must stay the same. Download the
-feedback note when ready. The page works locally without a server, network,
+**click the part that needs attention to place a numbered pin, then type a comment**.
+The comment field receives focus immediately. Click again to move the pin, or
+clear it to comment on the whole frame. A second correction field is optional:
+when left empty the note explicitly asks the agent to propose a focused correction.
+For larger visual problems, choose *Draw region* instead, or enter rectangle
+coordinates. Set the affected interval only when it differs from the captured instant.
+Download the feedback note when ready. The page works locally without a server, network,
 renderer, or provider. It shows the discrete frames that were captured; it does
 not provide playback between them.
 
+A pin is stored as `point: {x, y}`, normalized to the captured image (not the
+browser viewport); the previous `region: {x, y, width, height}` remains supported.
 The download is bound to the complete selected frame identity. Turn it into the
 same verified feedback bundle used by the CLI and MCP workflow:
 
@@ -200,8 +206,8 @@ the resulting feedback remains pending review. Use the existing `check` and
 ### Annotate through MCP or the command line
 
 Use feedback to describe an explanatory problem, the correction, and the meaning
-that must survive the edit. The rectangle uses normalized image coordinates with
-a top-left origin. Its positive width/height must stay inside the image. The
+that must survive the edit. A click pin and the optional rectangle use normalized image coordinates with
+a top-left origin. The pin is a review marker, not a semantic object identity. Its positive width/height must stay inside the image. The
 authored interval is in seconds, from 0 to 600, and must contain the **published**
 frame time. Each text field accepts at most 4,000 UTF-8 bytes. A region is a visual
 reference to this captured image, not an object handle or mutation authority.

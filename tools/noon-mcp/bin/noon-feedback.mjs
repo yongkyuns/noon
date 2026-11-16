@@ -9,12 +9,13 @@ const USAGE = `Usage:
   noon-feedback compare --feedback <feedback.json> --candidate <manifest.json> [--sample <index>] --source <revised.py> --output <new-dir>
 
 Use captured schema-2 noon-preview output. No renderer, provider, or credentials are needed.
-Review writes a portable page: open index.html, select a captured moment, mark a
-region, and download a feedback note. Import validates that note against the
+Review writes a portable page: open index.html, select a captured moment, click
+on the image to place a comment pin, type a comment, and download a feedback note.
+Optional rectangle drawing and a suggested correction remain available. Import validates that note against the
 preserved source and complete frame identity before creating a feedback bundle.
 The page displays captured stills; it does not play or seek an animation.
 Sample indices start at zero. Note JSON contains interval {start,end}, observation,
-desiredChange, optional preserve, and optional normalized region {x,y,width,height}
+desiredChange, optional preserve, and optional normalized point {x,y} or region {x,y,width,height}
 with a top-left origin. The interval must contain the published capture time.
 Bundles retain PNG and source snapshots. Existing output directories are never reused.
 Check exits 2 when the source is stale, 1 on error, and 0 when current.

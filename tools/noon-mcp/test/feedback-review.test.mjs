@@ -167,6 +167,24 @@ test("review export and bound note import retain exact original evidence and ful
   ] })).sourceStatus, "stale");
 });
 
+test("review import preserves a clicked point and rejects out-of-image coordinates", async (t) => {
+  const { root, data } = await readyReview(t);
+  const marked = noteFor(data);
+  delete marked.feedback.region;
+  marked.feedback.point = { x: 0.42, y: 0.61 };
+  marked.feedback.desiredChange = "Propose a focused correction for this comment.";
+  await writeFile(path.join(root, "downloaded-note.json"), JSON.stringify(marked));
+  const imported = await importNote(root);
+  assert.deepEqual(imported.feedback.feedback.point, marked.feedback.point);
+  assert.equal(imported.feedback.feedback.region, null);
+  assert.equal(imported.feedback.frame.provenance.publishedTime, TIME);
+  assert.deepEqual(await readFile(path.join(imported.outputDir, "frame.png")), PNG);
+  const invalid = { ...marked, feedback: { ...marked.feedback, point: { x: 1.001, y: 0.61 } } };
+  await writeFile(path.join(root, "downloaded-note.json"), JSON.stringify(invalid));
+  await assert.rejects(importNote(root, "invalid-point"));
+  await assertMissing(path.join(root, "invalid-point"));
+});
+
 test("embedded capture data escapes markup while retaining literal source and build text", async (t) => {
   const sourceName = "scene<&\"'>.py";
   const attack = "</script><script>globalThis.feedbackInjection=true</script><img src=x onerror=alert(1)>";
