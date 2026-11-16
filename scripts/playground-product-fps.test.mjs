@@ -2,8 +2,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts,
   freshProductRunSettled } from "./playground-product-fps.mjs";
+
+test("readiness polls the current receipt even without an in-page polling callback", async () => {
+  let observations = 0;
+  const page = {
+    async evaluate(predicate, argument) {
+      const patchGeneration = ++observations === 1 ? "4" : "5";
+      return predicate(argument, {
+        __noonExampleGallery: { generationDiagnostics: { runGeneration: 5 } },
+        document: { querySelector: () => ({ dataset: { state: "applied", runGeneration: patchGeneration } }) },
+      });
+    },
+    async waitForTimeout() {},
+  };
+  await waitForBrowserObservation(page, freshProductRunSettled, { previousGeneration: 4 },
+    { timeout: 1000, interval: 1 });
+  assert.equal(observations, 2);
+});
+
+test("a stalled readiness observation is bounded by the host deadline", async () => {
+  const page = { evaluate: () => new Promise(() => {}) };
+  await assert.rejects(waitForBrowserObservation(page, freshProductRunSettled, { previousGeneration: 4 },
+    { timeout: 10 }), /Timed out waiting for browser observation/);
+});
 
 test("product Run waits for its own generation, not the previous applied patch", () => {
   let runGeneration = 4, patchGeneration = "4", patchState = "applied", runInFlight = false;
