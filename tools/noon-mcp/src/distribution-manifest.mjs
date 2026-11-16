@@ -27,6 +27,7 @@ const PACKAGE_SOURCES = Object.freeze([
   "src/distribution-manifest.mjs",
   "src/feedback-cli.mjs",
   "src/feedback-files.mjs",
+  "src/feedback-live-import.mjs",
   "src/feedback-review.mjs",
   "src/frame-feedback.mjs",
   "src/preview-cli.mjs",
@@ -53,6 +54,9 @@ const CHECKOUT_RUNNER_SOURCES = Object.freeze([
   "web/authoring-diagnostic.js",
   "web/authoring-execution-client.js",
   "web/manim-raster-host.js",
+  "web/main.js",
+  "web/playground-feedback.js",
+  "web/playground-feedback-capture.js",
   "web/runtime-build-verifier.js",
   "web/semantic-preview-session.js",
 ]);

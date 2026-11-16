@@ -9,6 +9,7 @@ import { PresentationRate } from "./frame-metrics.js";
 import { PlaygroundPlaybackControls } from "./playground-playback-controls.js";
 import { createRunRequestRouter } from "./playground-run-request-router.js";
 import { installPreviewFullscreen } from "./playground-fullscreen.js";
+import { installPlaygroundFeedback } from "./playground-feedback.js";
 import {
   exampleUrl,
   filterGalleryExamples,
@@ -399,6 +400,38 @@ let metricsNextPollAt = 0;
 let metricsEpoch = 0;
 let autoRunTimer = null;
 let autoRunEpoch = 0;
+
+const feedbackReview = installPlaygroundFeedback(document.querySelector(".preview-pane"), {
+  getContext() {
+    const active = player;
+    const run = activeRunIdentity;
+    const client = authoringWorkers.activeClient;
+    if (active === null || client === null || (run?.outcome !== "complete" && run?.outcome !== "running") ||
+        !isPreparedPlayback(active) || !isCurrentRun(run.token) ||
+        busyDepth > 0 || playerNeedsRestart ||
+        runtimeRecoveryPromise !== null) {
+      throw new Error("Run a scene and wait for prepared playback before adding feedback.");
+    }
+    cancelAutoRun();
+    const capturedCanvas = canvas;
+    // Retire queued control intents while capturing, using the existing UI
+    // busy lease. The execution endpoint still owns pause/seek and its clock.
+    const release = beginBusy();
+    return {
+      player: active, canvas: capturedCanvas, source: run.source,
+      runGeneration: run.token.runGeneration,
+      buildIdentity: () => client.ready(),
+      isCurrent: () => player === active && canvas === capturedCanvas &&
+        activeRunIdentity === run && isCurrentRun(run.token) &&
+        !playerNeedsRestart && runtimeRecoveryPromise === null,
+      release,
+    };
+  },
+  onPaused(state) {
+    playbackControls?.sync(state);
+    setPlaybackRuntimeStatus(state);
+  },
+});
 
 function currentExample() {
   return SCENE_EXAMPLES.find((example) => example.id === selectedExampleId) ?? null;
@@ -1889,9 +1922,11 @@ try {
       activeSourceContinuation = null;
       diagnosticPanel.invalidate();
       previousPreview.clear();
+      feedbackReview.close();
       if (!event.persisted) {
         diagnosticPanel.dispose();
         previousPreview.dispose();
+        feedbackReview.dispose();
         disposeFullscreen();
       }
       stopMetricsPolling();

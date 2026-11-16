@@ -1,5 +1,6 @@
 # Verification
 
+- [Live viewer feedback](#live-viewer-feedback)
 - [Captured frame feedback](#captured-frame-feedback)
 - [Repository validation](#repository-validation)
 
@@ -17,6 +18,25 @@ observed scene times when the available tooling exposes them. Null or unavailabl
 metadata is not a license to guess. Compare raster evidence only within the
 qualified backend and tolerance policy; do not require universal cross-GPU bit
 identity or widen thresholds to make a failing scene pass.
+
+## Live viewer feedback
+
+For someone already viewing a prepared scene in the playground, prefer **Comment**
+above the preview: it pauses and captures the displayed Run, then lets them click
+a point and type one comment. No separate static review folder is needed.
+The download contains the exact source snapshot and PNG; confirm that sharing
+that source is appropriate. The agent imports it with:
+
+```bash
+node tools/noon-mcp/bin/noon-feedback.mjs import-live \
+  --input viewer-feedback.json --output review
+```
+
+Use the same `check` and fresh candidate `compare` flow below. Do not replace
+its source with unsubmitted editor text, silently retarget its time, or treat
+pending feedback as an accepted correction. See [viewer feedback boundaries](../../../docs/live-viewer-feedback.md).
+Unsupported playback profiles or missing presentation receipts fail visibly;
+use qualified captured-frame review instead of inventing a frame observation.
 
 ## Captured frame feedback
 

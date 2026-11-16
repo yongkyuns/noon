@@ -25,6 +25,8 @@ on:
       - "web/authoring-diagnostic.js"
       - "web/authoring-execution-client.js"
       - "web/runtime-build-verifier.js"
+      - "web/main.js"
+      - "web/playground-feedback*"
       - "web/ci-workflow-topology.test.mjs"
       - "scripts/build-web-demo.sh"
       - ".github/actions/dev-wasm-build/**"
@@ -55,6 +57,8 @@ on:
       - "web/authoring-diagnostic.js"
       - "web/authoring-execution-client.js"
       - "web/runtime-build-verifier.js"
+      - "web/main.js"
+      - "web/playground-feedback*"
       - "web/ci-workflow-topology.test.mjs"
       - "scripts/build-web-demo.sh"
       - ".github/actions/dev-wasm-build/**"
@@ -90,6 +94,8 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Verify service boundaries and real stdio client
         run: npm test
+      - name: Verify paused live feedback capture
+        run: node --test ../../web/playground-feedback-capture.test.mjs
       - name: Preserve explicit CI topology registration
         run: node ../../web/ci-workflow-topology.test.mjs
 
@@ -167,6 +173,12 @@ jobs:
         run: |
           set -o pipefail
           timeout --signal=TERM 180s node tools/noon-mcp/test/feedback-review-browser.mjs | tee "$RUNNER_TEMP/noon-feedback-review.log"
+      - name: Verify live viewer review interface
+        env:
+          NOON_LIVE_FEEDBACK_ARTIFACTS: ${{ runner.temp }}/noon-feedback-review/live
+        run: |
+          set -o pipefail
+          timeout --signal=TERM 180s node tools/noon-mcp/test/live-feedback-browser.mjs | tee "$RUNNER_TEMP/noon-live-feedback.log"
       - name: Retain review screenshots and interaction evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -175,6 +187,7 @@ jobs:
           path: |
             ${{ runner.temp }}/noon-feedback-review/
             ${{ runner.temp }}/noon-feedback-review.log
+            ${{ runner.temp }}/noon-live-feedback.log
           if-no-files-found: warn
           retention-days: 3
 

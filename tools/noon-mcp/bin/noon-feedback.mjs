@@ -2,11 +2,16 @@
 import { runFeedbackCli } from "../src/feedback-cli.mjs";
 
 const USAGE = `Usage:
+  noon-feedback import-live --input <viewer-feedback.json> --output <new-feedback-dir>
   noon-feedback review --preview <manifest.json> --source <scene.py> --output <new-review-dir>
   noon-feedback import --review <review-dir> --note <downloaded-note.json> --output <new-feedback-dir>
   noon-feedback annotate --preview <manifest.json> [--sample <index>] --source <scene.py> --input <note.json> --output <new-dir>
   noon-feedback check --feedback <feedback.json> --source <scene.py>
   noon-feedback compare --feedback <feedback.json> --candidate <manifest.json> [--sample <index>] --source <revised.py> --output <new-dir>
+
+In the playground, choose Comment, click the captured picture, and write one note.
+Import-live unpacks that download into the existing verified feedback bundle.
+It includes the source snapshot and PNG; do not share it where that source is private.
 
 Use captured schema-2 noon-preview output. No renderer, provider, or credentials are needed.
 Review writes a portable page: open index.html, select a captured moment, click

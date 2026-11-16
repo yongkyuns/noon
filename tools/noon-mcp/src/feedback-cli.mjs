@@ -3,6 +3,7 @@ import path from "node:path";
 import { buildFeedbackComparison, buildFrameFeedback, checkFeedbackSource } from "./frame-feedback.mjs";
 import { feedbackBundle, jsonBytes, jsonFile, previewFrame, sourceFile, writeBundle } from "./feedback-files.mjs";
 import { createFeedbackReview, importFeedbackReview } from "./feedback-review.mjs";
+import { importLiveFeedback } from "./feedback-live-import.mjs";
 
 export function parseFeedbackCliArgs(argv) {
   if (!Array.isArray(argv) || argv.some((value) => typeof value !== "string")) {
@@ -16,9 +17,10 @@ export function parseFeedbackCliArgs(argv) {
     compare: ["feedback", "candidate", "sample", "source", "output"],
     review: ["preview", "source", "output"],
     import: ["review", "note", "output"],
+    "import-live": ["input", "output"],
   };
   const flags = Object.hasOwn(commands, command) ? commands[command] : null;
-  if (!flags) throw new TypeError("expected feedback command: annotate, check, compare, review, or import");
+  if (!flags) throw new TypeError("expected feedback command: annotate, check, compare, review, import, or import-live");
   const args = { command, sample: 0 };
   for (let index = 1; index < argv.length; index += 2) {
     const name = argv[index].replace(/^--/, "");
@@ -50,6 +52,9 @@ export function parseFeedbackCliArgs(argv) {
 export async function runFeedbackCli({ argv, cwd = process.cwd() }) {
   const args = parseFeedbackCliArgs(argv);
   if (args.help) return Object.freeze({ help: true });
+  if (args.command === "import-live") return importLiveFeedback({
+    inputPath: path.resolve(cwd, args.input), outputDir: path.resolve(cwd, args.output),
+  });
   if (args.command === "review") return createFeedbackReview({
     previewPath: path.resolve(cwd, args.preview), sourcePath: path.resolve(cwd, args.source),
     outputDir: path.resolve(cwd, args.output),
