@@ -33,27 +33,26 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             (&right_target).into(),
             (&right_circle).into(),
         ])?;
-        let mut session = scene.execution_session()?;
-        let mut live = scene.live(&mut session);
-        let wait = live.wait_segment(0.1)?;
-        live.advance_segment_to(wait, wait.end_time())?;
-        live.complete_segment(wait)?;
-        assert!((live.effective_layout(&right_circle)?.width - 0.8).abs() < 1.0e-6);
-        live.surround_circle(
+        let mut session = scene.into_execution()?;
+        let wait = session.live().wait_segment(0.1)?;
+        session.live().advance_segment_to(wait, wait.end_time())?;
+        session.live().complete_segment(wait)?;
+        assert!((session.scene().effective_layout(&right_circle)?.width - 0.8).abs() < 1.0e-6);
+        session.scene_mut().surround_circle(
             &(&right_circle).into(),
             &(&right_target).into(),
             1,
             true,
             0.9,
         )?;
-        let left = live.effective_layout(&left_circle)?;
-        let right = live.effective_layout(&right_circle)?;
+        let left = session.scene().effective_layout(&left_circle)?;
+        let right = session.scene().effective_layout(&right_circle)?;
         assert!((left.width - 5.0_f64.sqrt() * 1.2).abs() < 1.0e-6);
         assert!((right.height / right.width - 0.5).abs() < 1.0e-6);
-        let wait = live.wait_segment(0.1)?;
-        live.advance_segment_to(wait, wait.end_time())?;
-        live.complete_segment(wait)?;
-        Ok(scene.into_execution_with_session(session)?)
+        let wait = session.live().wait_segment(0.1)?;
+        session.live().advance_segment_to(wait, wait.end_time())?;
+        session.live().complete_segment(wait)?;
+        Ok(session)
     };
     build().map_err(|error| error.to_string())
 }

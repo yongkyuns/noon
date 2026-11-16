@@ -406,7 +406,7 @@ class EffectHandle:
 
 def _target(value, scope=None):
     from _manim_semantic_handles import (
-        _handle_for, _is_shared_family, _live_mutation_context, _live_constructor_context,
+        _handle_for, _is_shared_family, _path_authoring_context,
     )
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
@@ -417,20 +417,17 @@ def _target(value, scope=None):
     handle = value._semantic_family_handle if family else _handle_for(value)
     if handle is None:
         raise RuntimeError("effects require a current shared Rust object handle")
-    context = _live_mutation_context(value)
-    if context is None and family:
-        context = _live_constructor_context("family effect")
-    return handle, context, family
+    return handle, _path_authoring_context(value), family
 
 
-_FAMILY_LIVE_METHODS = {
-    "setGlow": "liveSetFamilyGlow",
-    "addEffect": "liveAddFamilyEffect",
-    "setEffect": "liveSetFamilyEffect",
-    "setEffectHandle": "liveSetFamilyEffectHandle",
-    "removeEffect": "liveRemoveFamilyEffect",
-    "removeEffectHandle": "liveRemoveFamilyEffectHandle",
-    "removeGlow": "liveRemoveFamilyGlow",
+_FAMILY_SCENE_METHODS = {
+    "setGlow": "setFamilyGlow",
+    "addEffect": "addFamilyEffect",
+    "setEffect": "setFamilyEffect",
+    "setEffectHandle": "setFamilyEffectHandle",
+    "removeEffect": "removeFamilyEffect",
+    "removeEffectHandle": "removeFamilyEffectHandle",
+    "removeGlow": "removeFamilyGlow",
 }
 
 
@@ -438,8 +435,8 @@ def _call(value, method, *args, scope=None):
     handle, context, family = _target(value, scope)
     if context is None:
         return engine_call(getattr(handle, method), *args)
-    live_method = _FAMILY_LIVE_METHODS[method] if family else "live" + method[0].upper() + method[1:]
-    return engine_call(getattr(context, live_method), handle, *args)
+    scene_method = _FAMILY_SCENE_METHODS[method] if family else method
+    return engine_call(getattr(context, scene_method), handle, *args)
 
 
 def _selector(selector):
@@ -465,7 +462,7 @@ def add_effect(value, definition, *, name, scope=None):
         raise TypeError("effect name must be a string")
     if isinstance(definition, ShaderEffect):
         handle, context, family = _target(value, scope)
-        if context is not None:
+        if context is not None and engine_call(context.requiresLiveMutationRouting):
             from _manim_reactive import _current_authoring_scene
             from _manim_scene import (
                 _async_continuation_active, _synchronous_continuation_active,

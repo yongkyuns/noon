@@ -53,15 +53,15 @@ fn ordinary_members_edit_atomically_and_retain_old_containers() {
     );
     assert_ne!(copied_a.node_id(), a.node_id());
     scene.add_many(&[(&root).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let revision = scene.revision();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    let revision = session.scene().revision();
+    session
+        .scene_mut()
         .add_family_members(&root, &[(&c).into()])
         .unwrap();
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
-    scene
-        .live(&mut session)
+    assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
+    session
+        .scene_mut()
         .replace_members((&root).into(), &[(&a).into()])
         .unwrap();
     assert_eq!(ids(&root), vec![a.node_id()]);

@@ -73,9 +73,12 @@ class ManimArrowVectorFieldColorTests(unittest.TestCase):
                     ]
                     self._family = FakeFamily(300, self._families)
                 def family(self): return self._family
-                def vectorFamily(self, index): return self._families[index]
-                def vectorShaft(self, index): return self._shafts[index]
-                def vectorEndTip(self, index): return self._tips[index]
+                def vectorAt(self, index):
+                    family, shaft, tip = self._families[index], self._shafts[index], self._tips[index]
+                    return types.SimpleNamespace(
+                        family=lambda: family, shaft=lambda: shaft,
+                        endTip=lambda: tip, hasStartTip=False,
+                    )
 
             def create_arrow(draft):
                 calls.append(("publish",))

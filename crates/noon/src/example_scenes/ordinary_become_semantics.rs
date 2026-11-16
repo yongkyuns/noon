@@ -1,8 +1,8 @@
 //! Same-identity flagged `become` across a live continuation barrier.
 
 use crate::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveSession, ManimBecomeOptions,
-    ManimGeometryOptions, Mobject, MobjectTarget, Scene,
+    ContinuationStep, LiveContinuation, LiveProgram, ManimBecomeOptions, ManimGeometryOptions,
+    Mobject, MobjectTarget, Scene,
 };
 use std::rc::Rc;
 
@@ -23,60 +23,67 @@ impl LiveContinuation for OrdinaryBecomeSemantics {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.wait_segment(0.5)
+                scene
+                    .live()
+                    .wait_segment(0.5)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             1 => {
-                live.become_mobject(
-                    &self.fitted,
-                    &self.fitted_target,
-                    ManimBecomeOptions {
-                        match_height: true,
-                        match_width: true,
-                        match_center: true,
-                        stretch: false,
-                    },
-                )
-                .map_err(|error| error.to_string())?;
-                live.become_mobject(
-                    &self.stretched,
-                    &self.stretched_target,
-                    ManimBecomeOptions {
-                        match_height: true,
-                        match_width: true,
-                        match_center: true,
-                        stretch: true,
-                    },
-                )
-                .map_err(|error| error.to_string())?;
-                live.become_mobject(
-                    &self.ellipse,
-                    &self.ellipse_target,
-                    ManimBecomeOptions {
-                        match_center: true,
-                        ..ManimBecomeOptions::default()
-                    },
-                )
-                .map_err(|error| error.to_string())?;
+                scene
+                    .become_mobject(
+                        &self.fitted,
+                        &self.fitted_target,
+                        ManimBecomeOptions {
+                            match_height: true,
+                            match_width: true,
+                            match_center: true,
+                            stretch: false,
+                        },
+                    )
+                    .map_err(|error| error.to_string())?;
+                scene
+                    .become_mobject(
+                        &self.stretched,
+                        &self.stretched_target,
+                        ManimBecomeOptions {
+                            match_height: true,
+                            match_width: true,
+                            match_center: true,
+                            stretch: true,
+                        },
+                    )
+                    .map_err(|error| error.to_string())?;
+                scene
+                    .become_mobject(
+                        &self.ellipse,
+                        &self.ellipse_target,
+                        ManimBecomeOptions {
+                            match_center: true,
+                            ..ManimBecomeOptions::default()
+                        },
+                    )
+                    .map_err(|error| error.to_string())?;
 
                 for target in [
                     &self.fitted_target,
                     &self.stretched_target,
                     &self.ellipse_target,
                 ] {
-                    if live.contains(target).map_err(|error| error.to_string())? {
+                    if scene
+                        .contains_direct(target)
+                        .map_err(|error| error.to_string())?
+                    {
                         return Err("become admitted a detached target operand".into());
                     }
                 }
-                assert_layout(live, &self.fitted, -2.0, 0.0, 3.0, 6.0)?;
-                assert_layout(live, &self.stretched, 2.0, 0.0, 3.0, 1.0)?;
+                assert_layout(scene, &self.fitted, -2.0, 0.0, 3.0, 6.0)?;
+                assert_layout(scene, &self.stretched, 2.0, 0.0, 3.0, 1.0)?;
                 assert_layout(
-                    live,
+                    scene,
                     &self.ellipse,
                     0.0,
                     -2.5,
@@ -97,15 +104,17 @@ impl LiveContinuation for OrdinaryBecomeSemantics {
                 }
 
                 self.stage = 2;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             2 => {
-                assert_layout(live, &self.fitted, -2.0, 0.0, 3.0, 6.0)?;
-                assert_layout(live, &self.stretched, 2.0, 0.0, 3.0, 1.0)?;
+                assert_layout(scene, &self.fitted, -2.0, 0.0, 3.0, 6.0)?;
+                assert_layout(scene, &self.stretched, 2.0, 0.0, 3.0, 1.0)?;
                 assert_layout(
-                    live,
+                    scene,
                     &self.ellipse,
                     0.0,
                     -2.5,
@@ -121,14 +130,14 @@ impl LiveContinuation for OrdinaryBecomeSemantics {
 }
 
 fn assert_layout(
-    live: &LiveSession<'_>,
+    scene: &Scene,
     object: &Mobject,
     center_x: f64,
     center_y: f64,
     width: f64,
     height: f64,
 ) -> Result<(), String> {
-    let layout = live
+    let layout = scene
         .effective_layout(object)
         .map_err(|error| error.to_string())?;
     for (actual, expected, label) in [

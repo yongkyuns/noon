@@ -41,8 +41,7 @@ class PointAppendCoercionTests(unittest.TestCase):
                     before = np.asarray(incoming).copy()
                     with patch.dict(sys.modules, {"pyodide.ffi": ffi}), \
                          patch.object(editing, "_handle_for", return_value=handle), \
-                         patch.object(editing, "_live_mutation_context", return_value=None), \
-                         patch.object(editing, "_live_constructor_context", return_value=None), \
+                         patch.object(editing, "_path_authoring_context", return_value=None), \
                          patch("_manim_updaters.canonical_callback_phase_active", return_value=False):
                         if case["output"]["kind"] == "raised":
                             with self.assertRaises(getattr(builtins, case["output"]["type"])) as raised:

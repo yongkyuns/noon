@@ -21,8 +21,7 @@ class OrdinaryFadePlay(Scene):
         assert self.time == 2.0
         assert circle._scene is None
 
-        # This routes through Rust LiveSession.add with the original semantic
-        # handle and derived ObjectId; it does not allocate a replacement scene row.
+        # Scene.add reuses the original semantic handle and derived ObjectId.
         self.add(circle)
         assert circle.id == first_id
         assert circle._scene is self

@@ -19,15 +19,20 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         let reflected = scene.family(&[(&reflected_rectangle).into(), (&nested).into()])?;
         reflected.flip(SemanticVec3::new(0., 1., 0.), Pivot::Point(0., 0.))?;
         scene.add_many(&[(&rectangle).into(), (&line).into(), (&reflected).into()])?;
-        let mut session = scene.execution_session()?;
-        let mut live = scene.live(&mut session);
+        let mut session = scene.into_execution()?;
         let anchor = LayoutAnchor::from(&reflected);
-        live.rotate_layout(&anchor, std::f64::consts::PI / 6., Pivot::Point(2., 0.))?;
-        live.flip_layout(&anchor, SemanticVec3::new(1., 1., 0.), Pivot::Center)?;
-        let wait = live.wait_segment(0.2)?;
-        live.advance_segment_to(wait, wait.end_time())?;
-        live.complete_segment(wait)?;
-        Ok(scene.into_execution_with_session(session)?)
+        session.scene_mut().rotate_layout(
+            &anchor,
+            std::f64::consts::PI / 6.,
+            Pivot::Point(2., 0.),
+        )?;
+        session
+            .scene_mut()
+            .flip_layout(&anchor, SemanticVec3::new(1., 1., 0.), Pivot::Center)?;
+        let wait = session.live().wait_segment(0.2)?;
+        session.live().advance_segment_to(wait, wait.end_time())?;
+        session.live().complete_segment(wait)?;
+        Ok(session)
     };
     build().map_err(|e| e.to_string())
 }

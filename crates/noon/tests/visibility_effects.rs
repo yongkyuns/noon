@@ -1,8 +1,10 @@
 //! Visibility enrollment and lifecycle through the shared animation pipeline.
 //! Uses the ordinary Scene transaction, lowering and runtime publication path.
+use noon::integration::scene_execution;
+use noon::integration::scene_execution::ExecutionSession;
 use noon::{
     effects::{EffectUpdate, Glow, NoiseDissolve, Pixels},
-    ExecutionSession, Scene,
+    Scene,
 };
 use noon_core::{SemanticMutationTransaction, SemanticNodeId};
 
@@ -62,7 +64,7 @@ fn dissolve_kept_out_then_in_reuses_one_visibility_and_releases_neutral_endpoint
             source.node_id()
         };
         scene.add_many(&[target]).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         for cycle in 0..3 {
             let out = noon::AnimationCompositionRequest::Dissolve {
                 target,
@@ -70,8 +72,7 @@ fn dissolve_kept_out_then_in_reuses_one_visibility_and_releases_neutral_endpoint
                 style: DissolveStyle::new(EffectUpdate::default().seed(7).softness(0.2)).unwrap(),
                 options: linear().remover(false),
             };
-            let segment = scene
-                .live(&mut session)
+            let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
                 .declare_and_activate_composition(&out, noon::AnimationOptions::new())
                 .unwrap();
             let id = scene
@@ -86,7 +87,9 @@ fn dissolve_kept_out_then_in_reuses_one_visibility_and_releases_neutral_endpoint
                 assert_eq!(mask(&session, owner).progress(), alpha);
                 assert_eq!(mask(&session, owner).seed(), 7);
             }
-            scene.live(&mut session).complete_segment(segment).unwrap();
+            scene_execution::borrow_uninstalled(&scene, &mut session)
+                .complete_segment(segment)
+                .unwrap();
             assert_eq!(
                 scene
                     .integration_store()
@@ -102,8 +105,7 @@ fn dissolve_kept_out_then_in_reuses_one_visibility_and_releases_neutral_endpoint
                 style: DissolveStyle::default(),
                 options: linear(),
             };
-            let segment = scene
-                .live(&mut session)
+            let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
                 .declare_and_activate_composition(&input, noon::AnimationOptions::new())
                 .unwrap();
             assert_eq!(
@@ -122,7 +124,9 @@ fn dissolve_kept_out_then_in_reuses_one_visibility_and_releases_neutral_endpoint
             session
                 .advance_segment_to(segment, segment.end_time())
                 .unwrap();
-            scene.live(&mut session).complete_segment(segment).unwrap();
+            scene_execution::borrow_uninstalled(&scene, &mut session)
+                .complete_segment(segment)
+                .unwrap();
             assert_eq!(
                 scene
                     .integration_store()
@@ -153,7 +157,7 @@ fn dissolve_default_removes_scope_and_can_introduce_it_again() {
             source.node_id()
         };
         scene.add_many(&[target]).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         for direction in [Direction::Out, Direction::In] {
             let request = noon::AnimationCompositionRequest::Dissolve {
                 target,
@@ -161,8 +165,7 @@ fn dissolve_default_removes_scope_and_can_introduce_it_again() {
                 style: DissolveStyle::default(),
                 options: linear(),
             };
-            let segment = scene
-                .live(&mut session)
+            let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
                 .declare_and_activate_composition(&request, noon::AnimationOptions::new())
                 .unwrap();
             session
@@ -176,7 +179,9 @@ fn dissolve_default_removes_scope_and_can_introduce_it_again() {
                     0.0
                 }
             );
-            scene.live(&mut session).complete_segment(segment).unwrap();
+            scene_execution::borrow_uninstalled(&scene, &mut session)
+                .complete_segment(segment)
+                .unwrap();
             assert_eq!(
                 scene
                     .integration_store()
@@ -224,7 +229,7 @@ fn dissolve_sequence_captures_prior_progress_and_holds_each_seed_without_interpo
             .as_ref()
             .map_or(source.node_id(), |family| family.node_id());
         scene.add_many(&[target]).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let request = noon::AnimationCompositionRequest::Composition {
             kind: noon_core::SemanticAnimationCompositionKind::Sequence,
             children: vec![
@@ -245,8 +250,7 @@ fn dissolve_sequence_captures_prior_progress_and_holds_each_seed_without_interpo
             ],
             options: noon::AnimationOptions::new().rate_func(noon::RateFunction::Linear),
         };
-        let segment = scene
-            .live(&mut session)
+        let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
             .declare_and_activate_composition(&request, noon::AnimationOptions::new())
             .unwrap();
         assert_eq!(segment.end_time() - segment.start_time(), 2.0);
@@ -265,7 +269,9 @@ fn dissolve_sequence_captures_prior_progress_and_holds_each_seed_without_interpo
                     .unwrap()
             );
         }
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        scene_execution::borrow_uninstalled(&scene, &mut session)
+            .complete_segment(segment)
+            .unwrap();
         assert!(scene
             .integration_store()
             .borrow()
@@ -296,7 +302,7 @@ fn dissolve_composes_with_copied_motion_in_either_declaration_order() {
         let mut destination = source.target_editor().unwrap();
         destination.shift(2.0, 0.0).unwrap();
         scene.add(&source).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let motion = noon::AnimationCompositionRequest::TransformTo(
             noon::TransformToRequest::new(&source, &destination, linear()).method_target(),
         );
@@ -315,8 +321,7 @@ fn dissolve_composes_with_copied_motion_in_either_declaration_order() {
             },
             options: noon::AnimationOptions::new(),
         };
-        let segment = scene
-            .live(&mut session)
+        let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
             .declare_and_activate_composition(&request, noon::AnimationOptions::new())
             .unwrap();
         session.seek(0.5).unwrap();
@@ -334,7 +339,9 @@ fn dissolve_composes_with_copied_motion_in_either_declaration_order() {
         session
             .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        scene_execution::borrow_uninstalled(&scene, &mut session)
+            .complete_segment(segment)
+            .unwrap();
         assert_eq!(row(&session, source.node_id()).transform.translation.x, 2.0);
         assert_eq!(mask(&session, source.node_id()).progress(), 1.0);
     }
@@ -347,21 +354,22 @@ fn dissolve_play_lifecycle_overrides_are_preflighted_before_nested_membership_ch
     let source = scene.circle(0.4).unwrap();
     let family = scene.family(&[(&source).into()]).unwrap();
     scene.add_many(&[(&family).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let request = noon::AnimationCompositionRequest::Dissolve {
         target: (&source).into(),
         direction: Direction::Out,
         style: DissolveStyle::default(),
         options: linear(),
     };
-    let segment = scene
-        .live(&mut session)
+    let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
         .declare_and_activate_composition(&request, noon::AnimationOptions::new().remover(false))
         .unwrap();
     session
         .advance_segment_to(segment, segment.end_time())
         .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    scene_execution::borrow_uninstalled(&scene, &mut session)
+        .complete_segment(segment)
+        .unwrap();
     assert_eq!(mask(&session, source.node_id()).progress(), 1.0);
     let before = session.frame().clone();
     let context = session.publication_context();
@@ -371,8 +379,7 @@ fn dissolve_play_lifecycle_overrides_are_preflighted_before_nested_membership_ch
         style: DissolveStyle::default(),
         options: linear().remover(false),
     };
-    assert!(scene
-        .live(&mut session)
+    assert!(scene_execution::borrow_uninstalled(&scene, &mut session)
         .declare_and_activate_composition(&request, noon::AnimationOptions::new().remover(true))
         .is_err());
     assert_eq!(session.frame(), &before);
@@ -394,7 +401,7 @@ fn dissolve_and_pulse_enroll_distinct_channels_in_one_atomic_stack() {
     let mut scene = Scene::new();
     let source = scene.circle(0.4).unwrap();
     scene.add(&source).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let request = noon::AnimationCompositionRequest::Composition {
         kind: noon_core::SemanticAnimationCompositionKind::Parallel,
         children: vec![
@@ -412,8 +419,7 @@ fn dissolve_and_pulse_enroll_distinct_channels_in_one_atomic_stack() {
         ],
         options: noon::AnimationOptions::new(),
     };
-    let segment = scene
-        .live(&mut session)
+    let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
         .declare_and_activate_composition(&request, noon::AnimationOptions::new())
         .unwrap();
     session.seek(0.5).unwrap();
@@ -432,7 +438,9 @@ fn dissolve_and_pulse_enroll_distinct_channels_in_one_atomic_stack() {
     session
         .advance_segment_to(segment, segment.end_time())
         .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
+    scene_execution::borrow_uninstalled(&scene, &mut session)
+        .complete_segment(segment)
+        .unwrap();
     assert!(source.get_effect("glow").is_err());
     assert_eq!(
         row(&session, source.node_id())
@@ -452,7 +460,7 @@ fn returning_dissolve_completion_releases_the_actual_composed_endpoint() {
         let mut scene = Scene::new();
         let source = scene.circle(0.4).unwrap();
         scene.add(&source).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let request = noon::AnimationCompositionRequest::Composition {
             kind: noon_core::SemanticAnimationCompositionKind::Parallel,
             children: vec![noon::AnimationCompositionRequest::Dissolve {
@@ -471,8 +479,7 @@ fn returning_dissolve_completion_releases_the_actual_composed_endpoint() {
                 noon::RateFunction::ThereAndBack
             }),
         };
-        let segment = scene
-            .live(&mut session)
+        let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
             .declare_and_activate_composition(&request, noon::AnimationOptions::new())
             .unwrap();
         session.seek(0.5).unwrap();
@@ -486,7 +493,9 @@ fn returning_dissolve_completion_releases_the_actual_composed_endpoint() {
             mask(&session, source.node_id()).progress(),
             if returning_leaf { 0.0 } else { 1.0 }
         );
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        scene_execution::borrow_uninstalled(&scene, &mut session)
+            .complete_segment(segment)
+            .unwrap();
         assert_eq!(
             scene
                 .integration_store()
@@ -517,7 +526,7 @@ fn dissolve_rejects_capacity_conflict_and_unsupported_options_without_publicatio
             }
         }
         scene.add(&source).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         session.take_renderer_publication();
         let before = session.frame().clone();
         let context = session.publication_context();
@@ -543,8 +552,7 @@ fn dissolve_rejects_capacity_conflict_and_unsupported_options_without_publicatio
             leaf
         };
         assert!(
-            scene
-                .live(&mut session)
+            scene_execution::borrow_uninstalled(&scene, &mut session)
                 .declare_and_activate_composition(&request, noon::AnimationOptions::new())
                 .is_err(),
             "failure {failure}"
@@ -587,17 +595,18 @@ fn declared_dissolve_is_inert_replayable_and_enrolls_at_activation() {
         .unwrap()
         .parents()
         .is_empty());
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     for _ in 0..3 {
         for declaration in [&input, &output] {
-            let segment = scene
-                .live(&mut session)
+            let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
                 .play_animation(declaration)
                 .unwrap();
             session
                 .advance_segment_to(segment, segment.end_time())
                 .unwrap();
-            scene.live(&mut session).complete_segment(segment).unwrap();
+            scene_execution::borrow_uninstalled(&scene, &mut session)
+                .complete_segment(segment)
+                .unwrap();
             assert_eq!(scene.integration_store().borrow().len(), nodes);
         }
     }
@@ -648,7 +657,7 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
                 &mut tx,
             )
             .unwrap();
-        session.live().apply(tx).unwrap();
+        scene_execution::publish(session.scene_mut(), tx).unwrap();
         let visibility = session
             .scene()
             .integration_store()
@@ -718,7 +727,7 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
                 .borrow()
                 .stage_visibility_mask(owner, definition, &mut tx)
                 .unwrap();
-            session.live().apply(tx).unwrap();
+            scene_execution::publish(session.scene_mut(), tx).unwrap();
             assert_eq!(
                 session
                     .session_mut()
@@ -759,7 +768,7 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
         }
         let mut remove = SemanticMutationTransaction::new();
         remove.remove_node(visibility);
-        session.live().apply(remove).unwrap();
+        scene_execution::publish(session.scene_mut(), remove).unwrap();
         assert_eq!(
             row(session.session(), owner)
                 .effects
@@ -774,7 +783,7 @@ fn visibility_publishes_last_for_objects_and_composed_families_without_replacing
         let mut stale = SemanticMutationTransaction::new();
         stale.update_effect(authored.node_id(), EffectUpdate::default().intensity(2.0));
         stale.update_effect(visibility, EffectUpdate::default().progress(0.5));
-        assert!(session.live().apply(stale).is_err());
+        assert!(scene_execution::publish(session.scene_mut(), stale).is_err());
         assert_eq!(session.session().frame(), &before);
         assert_eq!(session.session().publication_context(), context);
         assert_eq!(session.scene().revision(), revision);
@@ -793,7 +802,7 @@ fn temporary_pulse_enrollment_preserves_existing_named_and_visibility_bindings()
             )
             .unwrap();
         scene.add(&source).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         if let Some(progress) = visibility_progress {
             let mut tx = SemanticMutationTransaction::new();
             scene
@@ -808,7 +817,13 @@ fn temporary_pulse_enrollment_preserves_existing_named_and_visibility_bindings()
                     &mut tx,
                 )
                 .unwrap();
-            scene.live(&mut session).apply(tx).unwrap();
+            scene_execution::publish_at_root(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                tx,
+            )
+            .unwrap();
         }
         let original = row(&session, source.node_id())
             .effects
@@ -816,8 +831,7 @@ fn temporary_pulse_enrollment_preserves_existing_named_and_visibility_bindings()
             .unwrap()
             .clone();
         let owner = session.execution_object_id(source.node_id()).unwrap();
-        let segment = scene
-            .live(&mut session)
+        let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
             .declare_and_activate_composition(
                 &noon::AnimationCompositionRequest::GlowPulse {
                     target: &source,
@@ -859,7 +873,9 @@ fn temporary_pulse_enrollment_preserves_existing_named_and_visibility_bindings()
             );
         }
         session.advance_segment_to(segment, 1.0).unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        scene_execution::borrow_uninstalled(&scene, &mut session)
+            .complete_segment(segment)
+            .unwrap();
         assert!(source.get_effect("glow").is_err());
         assert_eq!(
             row(&session, source.node_id()).effects.as_ref().unwrap(),
@@ -889,12 +905,11 @@ fn pulse_enrollment_capacity_and_wrong_canonical_kind_reject_atomically() {
                 .unwrap();
         }
         scene.add(&source).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let before = session.frame().clone();
         let context = session.publication_context();
         let revision = scene.revision();
-        assert!(scene
-            .live(&mut session)
+        assert!(scene_execution::borrow_uninstalled(&scene, &mut session)
             .declare_and_activate_composition(
                 &noon::AnimationCompositionRequest::GlowPulse {
                     target: &source,
@@ -918,6 +933,8 @@ fn pulse_enrollment_capacity_and_wrong_canonical_kind_reject_atomically() {
                 .as_blur()
                 .is_some());
         }
-        scene.live(&mut session).wait_segment(0.1).unwrap();
+        scene_execution::borrow_uninstalled(&scene, &mut session)
+            .wait_segment(0.1)
+            .unwrap();
     }
 }

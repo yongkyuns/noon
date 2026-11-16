@@ -31,7 +31,7 @@ const PANEL: Color = Color::from_hex(0x13232D);
 const BLUE: Color = Color::from_hex(0x58C4DD);
 const GOLD: Color = Color::from_hex(0xF2C66D);
 
-/// Complete finite lesson, suitable for `Scene::execution_session` and MP4 export.
+/// Complete finite lesson, suitable for `Scene::into_execution` and MP4 export.
 pub fn scene() -> BuildResult<Scene> {
     let mut scene = Scene::new();
     let [input, output] = illustration(&mut scene)?;

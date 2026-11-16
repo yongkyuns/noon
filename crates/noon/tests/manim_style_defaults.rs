@@ -10,7 +10,7 @@ fn shared_shapes_lower_manim_defaults_into_effective_styles() {
     ] {
         scene.add(&shape).unwrap();
     }
-    let session = scene.execution_session().unwrap();
+    let session = noon::integration::scene_execution::lower(&scene).unwrap();
     for (object, color) in
         session
             .frame()

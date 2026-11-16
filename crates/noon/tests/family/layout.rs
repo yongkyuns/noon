@@ -312,11 +312,11 @@ fn live_edge_placement_observes_effective_target_and_publishes_once() {
     scene.add(&target).unwrap();
     let source = noon::LayoutAnchor::from(&label);
     let target_anchor = noon::LayoutAnchor::from(&target);
-    let mut execution = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut execution);
-    live.set_value(&tracker, 2.0).unwrap();
-    let revision = scene.revision();
-    let result = live
+    let mut execution = scene.into_execution().unwrap();
+    execution.scene_mut().set_value(&tracker, 2.0).unwrap();
+    let revision = execution.scene().revision();
+    let result = execution
+        .scene_mut()
         .next_layout_to_edge_in_frame(
             &source,
             &target_anchor,
@@ -331,8 +331,11 @@ fn live_edge_placement_observes_effective_target_and_publishes_once() {
         )
         .unwrap();
     assert_eq!(result.impacts().len(), 1);
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
-    let layout = live.effective_layout(&label).unwrap();
+    assert_eq!(
+        execution.scene().revision(),
+        revision.checked_next().unwrap()
+    );
+    let layout = execution.scene().effective_layout(&label).unwrap();
     assert!(
         (layout.center.0 + layout.width * 0.5
             - (f64::from(noon_core::DEFAULT_FRAME_WIDTH) * 0.5 - 0.25))
@@ -340,5 +343,8 @@ fn live_edge_placement_observes_effective_target_and_publishes_once() {
             < 1e-6
     );
     assert_eq!(target.center().unwrap(), (0.0, 0.0));
-    assert_eq!(live.effective_layout(&target).unwrap().center, (7.0, 0.0));
+    assert_eq!(
+        execution.scene().effective_layout(&target).unwrap().center,
+        (7.0, 0.0)
+    );
 }

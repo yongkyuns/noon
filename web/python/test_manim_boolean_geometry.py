@@ -16,7 +16,7 @@ class BooleanGeometryTests(unittest.TestCase):
         self.patches = [
             patch.object(geometry._shared, "_geometry_options", self.host),
             patch.object(geometry._shared, "_handle_for", side_effect=lambda x: x),
-            patch.object(geometry._shared, "_live_constructor_context", return_value=None),
+            patch.object(geometry._shared, "_path_authoring_context", return_value=None),
             patch.object(geometry._shared, "_apply_shared_constructor_options"),
             patch.object(geometry._shared, "_attach_geometry_options"),
         ]
@@ -29,15 +29,16 @@ class BooleanGeometryTests(unittest.TestCase):
             obj = cls(*self.operands, fill_opacity=0.5)
             self.host.booleanGeometry.assert_called_with(cls.__name__, self.selection)
             self.mocks[3].assert_called_with(self.options, {"fill_opacity": 0.5})
-            self.mocks[4].assert_called_with(obj, self.options, cls.__name__)
+            self.mocks[4].assert_called_with(obj, self.options, cls.__name__, context=None)
         self.assertEqual(self.selection.free.call_count, 4)
 
     def test_live_context_captures_all_operands_in_one_call(self):
         context = Mock()
         context.beginBooleanGeometry.return_value = self.options
         self.mocks[2].return_value = context
-        geometry.Union(*self.operands)
+        obj = geometry.Union(*self.operands)
         context.beginBooleanGeometry.assert_called_once_with("Union", self.selection)
+        self.mocks[4].assert_called_once_with(obj, self.options, "Union", context=context)
         self.host.booleanGeometry.assert_not_called()
 
     def test_failed_shared_validation_publishes_nothing_and_frees_inputs(self):

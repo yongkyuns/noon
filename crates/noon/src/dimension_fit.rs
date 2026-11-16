@@ -316,8 +316,7 @@ impl LayoutAnchor {
     ///
     /// Reads authored bounds. A zero source extent keeps that dimension's scale;
     /// an empty source is a no-op. Shared target leaves observe the staged scale.
-    /// Use `LiveSession::replace_layout` after execution starts to consume the
-    /// coherent current target bounds and publish through the live session.
+    /// Use [`crate::Scene::replace_layout`] for a Scene that owns execution.
     pub fn replace_layout(
         &self,
         target: &LayoutAnchor,
@@ -343,7 +342,7 @@ impl LayoutAnchor {
         self.replace_layout_with_circle_buffer(target, dimension, stretch, Some(buffer_factor))
     }
 
-    fn replace_layout_with_circle_buffer(
+    pub(crate) fn replace_layout_with_circle_buffer(
         &self,
         target: &LayoutAnchor,
         dimension: LayoutDimension,

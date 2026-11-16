@@ -34,18 +34,27 @@ fn native_viewer_replays_completed_source_history_without_rerunning_source() {
     let mut scene = Scene::new();
     let point = scene.circle(0.25).unwrap();
     scene.add(&point).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    session.begin_replay_retention(Default::default()).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    session
+        .session_mut()
+        .begin_replay_retention(Default::default())
+        .unwrap();
     for step in 0..2 {
         if step == 1 {
-            scene.live(&mut session).shift(&point, 2.0, 0.0).unwrap();
+            session
+                .scene_mut()
+                .shift_3d(&point, noon::SemanticVec3::new(2.0, 0.0, 0.0))
+                .unwrap();
         }
-        let segment = scene.live(&mut session).wait_segment(1.0).unwrap();
-        session.advance_to(segment.end_time()).unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        let segment = session.live().wait_segment(1.0).unwrap();
+        session
+            .session_mut()
+            .advance_to(segment.end_time())
+            .unwrap();
+        session.live().complete_segment(segment).unwrap();
     }
-    session.seal_replay_for_viewer().unwrap();
-    let mut execution = scene.into_execution_with_session(session).unwrap();
+    session.session_mut().seal_replay_for_viewer().unwrap();
+    let mut execution = session;
     execution.seek(0.0).unwrap();
     let mut source = StaticExecutionSource::new(execution, RustHostCallbackTable::new());
     assert_eq!(source.finite_transport_end(), Some(2.0));
@@ -170,7 +179,7 @@ fn native_transport_rejects_a_completed_live_projection_even_after_seek_to_zero(
         .unwrap();
     session.session_mut().advance_to(1.0).unwrap();
     session.live().complete_segment(segment).unwrap();
-    session.live().remove(&marker).unwrap();
+    session.scene_mut().remove(&marker).unwrap();
     session.seek(0.0).unwrap();
     // The completed source removed its marker without retaining history; the
     // current finite plan cannot reconstruct the former time-zero membership.

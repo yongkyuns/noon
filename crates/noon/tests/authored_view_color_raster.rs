@@ -1,6 +1,7 @@
 //! Actual Rust authoring -> compiler -> Runtime publication -> linear raster ->
 //! Bloom -> SDR proof. This qualifies solid/gradient planar preparation only;
 //! emission, text/images, retained captures and product hosts have separate gates.
+use noon::integration::scene_execution;
 use noon::{Scene, SemanticStyle};
 use noon_core::{
     Color, GradientStop, LinearGradient, SemanticMutationTransaction, Vec2, VectorPath,
@@ -314,7 +315,7 @@ fn qualify_material(retained: bool, visible: bool, strength: f64, sample: Option
         for path in [false, true] {
             for reverse in [false, true] {
                 for clear in [[0.0; 4], [0.125, 0.0625, 0.03125, 1.0]] {
-                    let (scene, camera, mut material) = scene(path, paint, reverse);
+                    let (mut scene, camera, mut material) = scene(path, paint, reverse);
                     material
                         .set_emission(if sample.is_some() { 0.0 } else { emission })
                         .unwrap();
@@ -331,7 +332,7 @@ fn qualify_material(retained: bool, visible: bool, strength: f64, sample: Option
                             )
                             .unwrap()
                     });
-                    let mut session = scene.execution_session().unwrap();
+                    let mut session = scene_execution::lower(&scene).unwrap();
                     if emission > 0.0 && sample.is_none() {
                         let initial = session.take_renderer_publication();
                         let mut unsupported = RetainedFramePreparer::new();
@@ -348,9 +349,17 @@ fn qualify_material(retained: bool, visible: bool, strength: f64, sample: Option
                     }
                     let mut tx = SemanticMutationTransaction::new();
                     tx.set_view_color_profile(camera.node_id(), ViewColorProfile::LinearHdr);
-                    scene.live(&mut session).apply(tx).unwrap();
+                    scene_execution::publish_at_root(
+                        scene.integration_store(),
+                        scene.root(),
+                        &mut session,
+                        tx,
+                    )
+                    .unwrap();
                     if let Some(animation) = &animation {
-                        scene.live(&mut session).play_animation(animation).unwrap();
+                        scene_execution::borrow_uninstalled(&scene, &mut session)
+                            .play_animation(animation)
+                            .unwrap();
                         session.seek(sample.unwrap()).unwrap();
                     }
                     let publication = session.take_renderer_publication();
@@ -620,9 +629,8 @@ fn first_active_family_publication_and_cached_seek_keep_hdr_material() {
     label.set_translation(20.0, 0.0).unwrap();
     scene.add(&source).unwrap();
     let family = scene.family(&[(&label).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene_execution::lower(&scene).unwrap();
+    scene_execution::borrow_uninstalled(&scene, &mut session)
         .declare_and_activate_family_text_write(
             &family,
             false,

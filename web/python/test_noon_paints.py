@@ -13,7 +13,7 @@ import _manim_updaters as updaters
 
 
 class PaintFacadeTests(unittest.TestCase):
-    def test_hatching_uses_shared_values_and_ordinary_cold_live_target_fills(self):
+    def test_hatching_uses_shared_values_and_detached_and_scene_owned_fills(self):
         definition = object()
         js = types.ModuleType("js")
         js.noonHatchPaint = Mock(return_value=definition)
@@ -24,7 +24,7 @@ class PaintFacadeTests(unittest.TestCase):
         with patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}), \
              patch.object(handles, "_handle_for", return_value=handle), \
              patch.object(handles, "_is_shared_family", return_value=False), \
-             patch.object(handles, "_live_mutation_context", return_value=None):
+             patch.object(handles, "_path_authoring_context", return_value=None):
             paint = noon.HatchPaint(noon.Color(1, 0, 0, 0.5), spacing=0.4,
                                     width=0.08, angle=0.7, phase=(-0.173, 3.231), cross=True)
             js.noonHatchPaint.assert_called_once_with(
@@ -35,9 +35,9 @@ class PaintFacadeTests(unittest.TestCase):
             self.assertIs(copy.deepcopy(paint), paint)
             self.assertIs(value.set_fill(paint), value)
             handle.setFillHatch.assert_called_once_with(definition, None)
-            with patch.object(handles, "_live_mutation_context", return_value=context):
+            with patch.object(handles, "_path_authoring_context", return_value=context):
                 value.set_fill(paint, opacity=0.25)
-                context.liveSetFillHatch.assert_called_once_with(handle, definition, 0.25)
+                context.setFillHatch.assert_called_once_with(handle, definition, 0.25)
             updaters._canonical_vmobject_set_fill(value, paint, 0.5)
             self.assertEqual(handle.setFillHatch.call_args.args, (definition, 0.5))
             for options in ({"spacing": True}, {"width": False}, {"angle": True},
@@ -62,7 +62,7 @@ class PaintFacadeTests(unittest.TestCase):
         with patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}), \
              patch.object(handles, "_handle_for", return_value=handle), \
              patch.object(handles, "_is_shared_family", return_value=False), \
-             patch.object(handles, "_live_mutation_context", return_value=None):
+             patch.object(handles, "_path_authoring_context", return_value=None):
             paint = noon.NoisePaint(noon.Color(1, 0, 0, 0.5), noon.Color(0, 0, 1),
                                     seed=4294967295, phase=(-0.173, 0.231))
             js.noonNoisePaint.assert_called_once_with(4294967295.0, (8.0, 8.0), (-0.173, 0.231),
@@ -71,15 +71,15 @@ class PaintFacadeTests(unittest.TestCase):
             self.assertIs(copy.deepcopy(paint), paint)
             value.set_fill(paint)
             handle.setFillNoise.assert_called_once_with(definition, None)
-            with patch.object(handles, "_live_mutation_context", return_value=context):
+            with patch.object(handles, "_path_authoring_context", return_value=context):
                 value.set_fill(paint, opacity=0.25)
-                context.liveSetFillNoise.assert_called_once_with(handle, definition, 0.25)
+                context.setFillNoise.assert_called_once_with(handle, definition, 0.25)
             updaters._canonical_vmobject_set_fill(value, paint, 0.5)
             self.assertEqual(handle.setFillNoise.call_args.args, (definition, 0.5))
             with self.assertRaises(TypeError):
                 noon.NoisePaint(noon.Color(1, 0, 0), noon.Color(0, 0, 1), seed=True)
 
-    def test_radial_value_uses_the_shared_cold_live_and_target_fill_operation(self):
+    def test_radial_value_uses_the_shared_detached_and_scene_owned_fill_operation(self):
         definition = object()
         js = types.ModuleType("js")
         js.noonRadialGradient = Mock(return_value=definition)
@@ -90,7 +90,7 @@ class PaintFacadeTests(unittest.TestCase):
         with patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}), \
              patch.object(handles, "_handle_for", return_value=handle), \
              patch.object(handles, "_is_shared_family", return_value=False), \
-             patch.object(handles, "_live_mutation_context", return_value=None):
+             patch.object(handles, "_path_authoring_context", return_value=None):
             paint = noon.RadialGradient([(0, noon.Color(1, 0, 0)), (1, noon.Color(0, 0, 1))],
                                         center=(0.25, 0.75), radii=(0.5, 0.25))
             js.noonRadialGradient.assert_called_once_with((0.25, 0.75), (0.5, 0.25),
@@ -99,15 +99,15 @@ class PaintFacadeTests(unittest.TestCase):
             self.assertIs(copy.deepcopy(paint), paint)
             self.assertIs(value.set_fill(paint), value)
             handle.setFillRadialGradient.assert_called_once_with(definition, None)
-            with patch.object(handles, "_live_mutation_context", return_value=context):
+            with patch.object(handles, "_path_authoring_context", return_value=context):
                 value.set_fill(paint, opacity=0.25)
-                context.liveSetFillRadialGradient.assert_called_once_with(handle, definition, 0.25)
+                context.setFillRadialGradient.assert_called_once_with(handle, definition, 0.25)
             updaters._canonical_vmobject_set_fill(value, paint, 0.5)
             self.assertEqual(handle.setFillRadialGradient.call_args.args, (definition, 0.5))
             with self.assertRaises(TypeError):
                 noon.RadialGradient([(0, noon.Color(1, 0, 0))], radii=(True, 0.5))
 
-    def test_immutable_value_and_ordinary_cold_live_and_target_fill_routing(self):
+    def test_immutable_value_and_detached_and_scene_owned_fill_routing(self):
         definition = object()
         make = Mock(return_value=definition)
         js = types.ModuleType("js")
@@ -119,16 +119,16 @@ class PaintFacadeTests(unittest.TestCase):
         with patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}), \
              patch.object(handles, "_handle_for", return_value=handle), \
              patch.object(handles, "_is_shared_family", return_value=False), \
-             patch.object(handles, "_live_mutation_context", return_value=None):
+             patch.object(handles, "_path_authoring_context", return_value=None):
             paint = noon.LinearGradient([(0, noon.Color(1, 0, 0)), (1, noon.Color(0, 0, 1))])
             make.assert_called_once_with((0.0, 0.5), (1.0, 0.5), (0.0, 1, 0, 0, 1, 1.0, 0, 0, 1, 1))
             self.assertIs(copy.copy(paint), paint)
             self.assertIs(copy.deepcopy(paint), paint)
             self.assertIs(value.set_fill(paint), value)
             handle.setFillGradient.assert_called_once_with(definition, None)
-            with patch.object(handles, "_live_mutation_context", return_value=context):
+            with patch.object(handles, "_path_authoring_context", return_value=context):
                 self.assertIs(value.set_fill(paint, opacity=0.25), value)
-                context.liveSetFillGradient.assert_called_once_with(handle, definition, 0.25)
+                context.setFillGradient.assert_called_once_with(handle, definition, 0.25)
             # VMobject uses the same operation, including detached animate targets.
             updaters._canonical_vmobject_set_fill(value, paint, 0.5)
             self.assertEqual(handle.setFillGradient.call_args.args, (definition, 0.5))
@@ -143,7 +143,7 @@ class PaintFacadeTests(unittest.TestCase):
             with self.assertRaises(TypeError):
                 noon.LinearGradient([(True, noon.Color(1, 0, 0)), (1, noon.Color(0, 0, 1))])
 
-    def test_image_values_share_pixels_and_route_cold_live_and_uv_only_edits(self):
+    def test_image_values_share_pixels_and_route_detached_scene_owned_and_uv_only_edits(self):
         candidate = Mock()
         candidate.copy.return_value = cloned = Mock()
         factory = Mock()
@@ -159,7 +159,7 @@ class PaintFacadeTests(unittest.TestCase):
         with patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}), \
              patch.object(handles, "_handle_for", return_value=handle), \
              patch.object(handles, "_is_shared_family", return_value=False), \
-             patch.object(handles, "_live_mutation_context", return_value=None):
+             patch.object(handles, "_path_authoring_context", return_value=None):
             mapping = noon.ImageMapping(translation=(0.173, -0.231), scale=(-0.7, 1.2))
             paint = noon.ImagePaint([[[17, 73, 191, 128]]], mapping=mapping, sampling="linear")
             factory.rgba8.assert_called_once_with(1, 1, (17, 73, 191, 128))
@@ -174,11 +174,11 @@ class PaintFacadeTests(unittest.TestCase):
             handle.setFillImage.assert_called_once_with(candidate, 0.25)
             value.set_fill_image_mapping(mapping, opacity=0.75)
             handle.setFillImageMapping.assert_called_once_with(mapping_definition, 0.75)
-            with patch.object(handles, "_live_mutation_context", return_value=context):
+            with patch.object(handles, "_path_authoring_context", return_value=context):
                 value.set_fill(paint)
-                context.liveSetFillImage.assert_called_once_with(handle, candidate, None)
+                context.setFillImage.assert_called_once_with(handle, candidate, None)
                 value.set_fill_image_mapping(mapping)
-                context.liveSetFillImageMapping.assert_called_once_with(handle, mapping_definition, None)
+                context.setFillImageMapping.assert_called_once_with(handle, mapping_definition, None)
             updaters._canonical_vmobject_set_fill(value, paint, 0.5)
             self.assertEqual(handle.setFillImage.call_args.args, (candidate, 0.5))
             self.assertEqual(factory.rgba8.call_count, 1, "mapping edits must not transfer pixel bytes")

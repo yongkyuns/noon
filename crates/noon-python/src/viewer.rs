@@ -27,13 +27,24 @@ impl PreparedScene {
     #[cfg(feature = "capture")]
     fn capture_pixels(&mut self, time: f64, width: u32, height: u32) -> PyResult<&[u8]> {
         let duration = self.duration()?;
-        if !time.is_finite() || time < 0.0 || time > duration {
+        if !time.is_finite() || time < 0.0 {
             return Err(engine_error("snapshot time is outside the prepared scene"));
         }
         let execution = self
             .execution
             .as_mut()
             .ok_or_else(|| engine_error("native view is closed"))?;
+        let interactive = execution.session().has_translation_drag_targets();
+        if interactive {
+            let roundoff = 8.0 * f64::EPSILON * duration.max(1.0);
+            if (time - duration).abs() > roundoff {
+                return Err(engine_error(
+                    "translation drag snapshots require the authored endpoint time",
+                ));
+            }
+        } else if time > duration {
+            return Err(engine_error("snapshot time is outside the prepared scene"));
+        }
         if self.dimensions != Some((width, height)) {
             self.capture = Some(
                 noon_export::SessionCapture::new(
@@ -44,9 +55,11 @@ impl PreparedScene {
             );
             self.dimensions = Some((width, height));
         }
-        execution
-            .seek(time)
-            .map_err(|e| engine_error(e.to_string()))?;
+        if !interactive {
+            execution
+                .seek(time)
+                .map_err(|e| engine_error(e.to_string()))?;
+        }
         let frame = self
             .capture
             .as_mut()
@@ -79,6 +92,9 @@ impl PreparedScene {
             .as_ref()
             .ok_or_else(|| engine_error("native view is closed"))?
             .session();
+        if session.has_translation_drag_targets() {
+            return Ok(session.frame().time);
+        }
         Ok(session
             .replay_end_time()
             .or_else(|| session.finite_playback_end_time())
@@ -91,11 +107,16 @@ impl PreparedScene {
         if width == 0 || height == 0 {
             return Err(engine_error("window dimensions must be positive"));
         }
-        self.execution
+        let execution = self
+            .execution
             .as_mut()
-            .ok_or_else(|| engine_error("native view is closed"))?
-            .seek(0.0)
-            .map_err(|e| engine_error(e.to_string()))?;
+            .ok_or_else(|| engine_error("native view is closed"))?;
+        let playback_controls = !execution.session().has_translation_drag_targets();
+        if playback_controls {
+            execution
+                .seek(0.0)
+                .map_err(|e| engine_error(e.to_string()))?;
+        }
         let execution = self
             .execution
             .take()
@@ -110,7 +131,7 @@ impl PreparedScene {
                 title: title.into(),
                 width,
                 height,
-                playback_controls: true,
+                playback_controls,
                 inspection_zoom: true,
                 ..Default::default()
             },
@@ -202,6 +223,15 @@ impl PreparedScene {
         output.ffmpeg = ffmpeg.into();
         output.crf = crf;
 
+        if self
+            .execution
+            .as_ref()
+            .is_some_and(|execution| execution.session().has_translation_drag_targets())
+        {
+            return Err(engine_error(
+                "translation drag scenes cannot be exported as finite MP4",
+            ));
+        }
         let mut execution = self
             .execution
             .take()

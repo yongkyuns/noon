@@ -65,8 +65,7 @@ class SharedAuthoringSmoke(Scene):
         appended = Square(0.25)
         self.add(circle, label)
 
-        # Static style authoring completes before the live session. The live
-        # facade then owns property publication and effective-value queries.
+        # The same Scene publishes edits and reads the effective translation after bootstrap.
         circle.set_fill(BLUE, opacity=0.4)
         live = self.live_execution()
 
@@ -82,17 +81,17 @@ class SharedAuthoringSmoke(Scene):
         self._object_keys = LocalKeys(self._object_keys)
         self._authoring_checkpoint = reject_checkpoint
         next_id = self._next_object_id
-        live.add(earlier)
+        self.add(earlier)
         assert earlier.id == next_id
         assert earlier._scene is self
-        live.remove(earlier)
-        live.add(appended)
+        self.remove(earlier)
+        self.add(appended)
         assert appended.id == next_id + 1
-        live.remove(appended)
+        self.remove(appended)
 
-        live.set_translation(circle, 2.0, -1.0)
-        live.set_scale(circle, 1.5, 0.5)
-        center = live.effective_center(circle)
+        self.set_translation(circle, 2.0, -1.0)
+        self.set_scale(circle, 1.5, 0.5)
+        center = self.effective_translation(circle)
         assert abs(center.x - 2.0) < 1e-9
         assert abs(center.y + 1.0) < 1e-9
         assert circle.style["stroke_join"] == "miter"

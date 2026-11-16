@@ -1,7 +1,7 @@
 //! Observe only authored or proven settled-callback affine placement.
 use super::*;
 
-pub(super) fn transform(
+pub(crate) fn effective_placement_transform(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     object: &Mobject,

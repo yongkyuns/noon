@@ -29,7 +29,6 @@ impl LiveContinuation for GlassLens {
                     (-4.0, 0.0)
                 };
                 scene
-                    .live()
                     .shift_family(target.root(), dx, 0.0)
                     .map_err(message)?;
                 scene

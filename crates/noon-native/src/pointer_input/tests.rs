@@ -627,7 +627,7 @@ fn idle_callback_only_program_does_not_activate_pointer_ingress() {
 fn native_mapping_uses_the_shared_snapshot_projection_for_outside_coordinates() {
     let scene = noon::Scene::new();
     // Test the shared projection contract, not a second native formula.
-    let session = scene.execution_session().unwrap();
+    let session = noon::integration::scene_execution::lower(&scene).unwrap();
     let view =
         PointerFrameView::new(0, Vec2::new(800.0, 400.0), session.camera().unwrap()).unwrap();
     let frame = session.capture_pointer_frame(view).unwrap();

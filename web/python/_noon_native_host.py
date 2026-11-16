@@ -44,6 +44,9 @@ def _arena():
         _store.set(arena)
     return arena
 
+noonAudioSource = _native.AudioSource
+noonAudioClipOptions = _native.ClipOptions
+
 noonImageMapping = _native.ImageMapping
 noonImagePaintOptions = _native.ImagePaintOptions
 noonPlotSamplingPlan = _native.PlotSamplingPlan
@@ -73,10 +76,26 @@ def noonCreateAuthoringMeshHandle(candidate):
 def noonCreateAuthoringMeshFamilyHandle(candidate):
     return _arena().mesh_family(candidate)
 
+noonAuthoringGraphOptions = _native.GraphOptions
+noonAuthoringSampleSpaceOptions = _native.SampleSpaceOptions
+
+
+def noonCreateAuthoringSampleSpaceHandle(options):
+    return _native.create_detached_sample_space(_arena(), options)
+
+
 noonAuthoringCoordinateOptions = _native.CoordinateOptions
 
 def noonCreateAuthoringCoordinateHandle(options):
     return _arena().coordinates(options)
+
+noonAuthoringArrowOptions = _native.ArrowOptions
+noonLinearTransformationPathArc = _native.linear_transformation_path_arc
+
+
+def noonCreateAuthoringArrowHandle(options):
+    return _native.create_arrow(_arena(), options)
+
 
 noonAuthoringGeometryOptions = _native.GeometryOptions
 noonAuthoringVectorPath = _native.AuthoringVectorPath
@@ -101,6 +120,123 @@ if hasattr(_native, "FontFace"):
 
     def noonCreateAuthoringMarkupTextHandle(*args):
         return _arena().markup_text(*args)
+
+if hasattr(_native, "CodeOptions"):
+    noonCodeOptions = _native.CodeOptions
+    noonCodeFromFamily = _native.code_from_family
+    noonCodeStylesList = _native.code_styles_list
+    noonCodeLanguagesList = _native.code_languages_list
+
+    def noonCreateAuthoringCodeHandle(source, options, context):
+        return _native.create_code(_arena(), source, options, context)
+
+if hasattr(_native, "prepare_latex"):
+    async def noonPrepareLatex():
+        _native.prepare_latex(_arena())
+
+    def noonCreateAuthoringLatexStringsHandle(strings, math, size, red, green, blue, alpha,
+                                               opacity, isolates, context):
+        return _native.create_latex(_arena(), strings, math, size, (red, green, blue, alpha),
+                                    opacity, isolates, context)
+
+    def noonCreateAuthoringLatexHandle(source, *arguments):
+        return noonCreateAuthoringLatexStringsHandle([source], *arguments)
+
+    noonAuthoringBarChartOptions = _native.BarChartOptions
+
+    def noonCreateAuthoringBarChart(options, labels, context):
+        return _native.create_bar_chart(_arena(), options, labels, context)
+
+    def noonBarChartLabels(chart, size, buff, math, rgba, context):
+        return _native.bar_chart_labels(_arena(), chart, size, buff, math, rgba, context)
+
+    noonMatrixFromFamily = _native.matrix_from_family
+
+    def noonCreateAuthoringMatrixHandle(rows, v, h, bracket_h, bracket_v, stretch, context):
+        return _native.create_matrix(_arena(), rows, (v, h, bracket_h, bracket_v, stretch), context)
+
+    def noonCreateAuthoringIntegerMatrixHandle(rows, v, h, bracket_h, bracket_v, stretch, context):
+        return _native.create_numeric_matrix(
+            _arena(), rows, (v, h, bracket_h, bracket_v, stretch), False, context,
+        )
+
+    def noonCreateAuthoringDecimalMatrixHandle(rows, v, h, bracket_h, bracket_v, stretch, context):
+        return _native.create_numeric_matrix(
+            _arena(), rows, (v, h, bracket_h, bracket_v, stretch), True, context,
+        )
+
+    def noonCreateAuthoringMobjectMatrixHandle(rows, v, h, bracket_h, bracket_v, stretch, context):
+        return _native.create_mobject_matrix(
+            _arena(), rows, (v, h, bracket_h, bracket_v, stretch), context,
+        )
+
+    noonTableFromFamily = _native.table_from_family
+    noonTableCell = _native.table_cell
+
+    def noonIsAuthoringFamilyHandle(handle):
+        return isinstance(handle, _native.FamilyHandle)
+
+    def _table_options(values):
+        return (values[:4], values[4:8], values[8:12], values[12:])
+
+    def noonCreateAuthoringTableHandle(rows, *values):
+        return noonCreateAuthoringTableWithLabelsHandle(rows, None, None, [], *values)
+
+    def noonCreateAuthoringTableWithLabelsHandle(rows, row_labels, column_labels, corner, *values):
+        return _native.create_text_table(
+            _arena(), rows, row_labels, column_labels, next(iter(corner), None),
+            _table_options(values[:-1]), values[-1],
+        )
+
+    def noonCreateAuthoringMobjectTableHandle(rows, row_labels, column_labels, corner, *values):
+        return _native.create_mobject_table(
+            _arena(), rows, row_labels, column_labels, next(iter(corner), None),
+            _table_options(values[:-1]), values[-1],
+        )
+
+    def noonCreateAuthoringMathTableHandle(rows, *values):
+        return _native.create_math_table(_arena(), rows, _table_options(values[:-1]), values[-1])
+
+    def noonCreateAuthoringIntegerTableHandle(rows, *values):
+        return _native.create_numeric_table(_arena(), rows, None, _table_options(values[:-1]), values[-1])
+
+    def noonCreateAuthoringDecimalTableHandle(rows, places, sign, commas, ellipsis, unit, *values):
+        return _native.create_numeric_table(
+            _arena(), rows, (places, sign, commas, ellipsis, unit),
+            _table_options(values[:-1]), values[-1],
+        )
+
+    def noonGetHighlightedTableCell(context, selection, column, red, green, blue, alpha, opacity):
+        return _native.highlighted_cell(context, selection, column, (red, green, blue, alpha), opacity, False)
+
+    def noonHighlightTableCell(context, selection, column, red, green, blue, alpha, opacity):
+        return _native.highlighted_cell(context, selection, column, (red, green, blue, alpha), opacity, True)
+
+    def noonCreateAuthoringVariableHandle(label, value, places, sign, commas, ellipsis, unit, size, context):
+        return _native.create_variable(
+            _arena(), label, value, (places, sign, commas, ellipsis, unit), size, context,
+        )
+
+    def noonCreateAuthoringDecimalNumberHandle(*arguments):
+        return _native.create_decimal(_arena(), *arguments)
+
+    def noonNumericFromMobject(mobject):
+        return _native.decimal_from_mobject(_arena(), mobject)
+
+    def noonNumberLineDecimalNumberLabelFamily(*arguments):
+        return _native.line_decimal_labels(_arena(), *arguments)
+
+    def noonNumberPlaneDecimalCoordinateLabelFamilies(*arguments):
+        return _native.decimal_coordinates(_arena(), *arguments, True)
+
+    def noonAxesDecimalCoordinateLabelFamilies(*arguments):
+        return _native.decimal_coordinates(_arena(), *arguments, False)
+
+    def noonSceneDecimalCoordinateLabelFamilies(*arguments):
+        return _native.scene_decimal_coordinates(_arena(), *arguments)
+
+    def noonDecimalNumberLabelMembers(family):
+        return _native.decimal_label_members(_arena(), family)
 
 if hasattr(_native.Store, "typst"):
     def noonCreateAuthoringTypstHandle(*args):
@@ -190,6 +326,22 @@ def noonSemanticContinuationGeneration(context):
 
 def noonReadSemanticContinuationCallback(context, token, request):
     return _NativeCompletion(context.read_callback, token, request)
+
+
+def noonStageSemanticContinuationProvisionalGeometry(context, token, options):
+    return context.stage_callback_provisional_geometry(token, options)
+
+
+def noonStageSemanticContinuationProvisionalShift(context, token, mobject, x, y):
+    context.stage_callback_provisional_shift(token, mobject, x, y)
+
+
+def noonStageSemanticContinuationProvisionalFill(context, token, mobject, r, g, b, a, opacity):
+    context.stage_callback_provisional_fill(token, mobject, (r, g, b, a), opacity)
+
+
+def noonSemanticContinuationProvisionalCenter(context, token, mobject):
+    return context.callback_provisional_center(token, mobject)
 
 
 def noonCompleteSemanticContinuationCallback(context, token, batch):

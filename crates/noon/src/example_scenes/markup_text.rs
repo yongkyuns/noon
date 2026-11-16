@@ -13,16 +13,12 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     scene
         .add_many(&[(&title).into()])
         .map_err(|error| error.to_string())?;
-    let mut session = scene
-        .execution_session()
-        .map_err(|error| error.to_string())?;
-    let mut live = scene.live(&mut session);
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    let mut live = execution.live();
     let wait = live.wait_segment(0.2).map_err(|error| error.to_string())?;
     live.advance_segment_to(wait, wait.end_time())
         .map_err(|error| error.to_string())?;
     live.complete_segment(wait)
         .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }

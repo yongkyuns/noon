@@ -25,7 +25,13 @@ fn observed_prefix_handoff_rejects_another_stream_before_releasing_history() {
     let (_, other_stream) = source.create_prepared_prefix(segment).unwrap();
     let mut transaction = SemanticMutationTransaction::new();
     transaction.add_updater(target.node_id(), HostCallbackId::new(71), 1.0, None);
-    scene.live(&mut source).apply(transaction).unwrap();
+    crate::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut source,
+        transaction,
+    )
+    .unwrap();
     source.wait_segment(1.0).unwrap();
     let frame = source.frame().clone();
     assert_eq!(
@@ -61,7 +67,13 @@ fn opaque_continuation_reports_callbacks_only_when_the_schedule_exists() {
 
     let mut transaction = SemanticMutationTransaction::new();
     transaction.add_updater(target.node_id(), HostCallbackId::new(72), 1.0, None);
-    scene.live(&mut source).apply(transaction).unwrap();
+    crate::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut source,
+        transaction,
+    )
+    .unwrap();
     assert_eq!(
         source.continuation_execution_requirement(crate::ContinuationEffects::Opaque),
         Some(SourceExecutionRequirement::HostCallbacks)

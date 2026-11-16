@@ -15,10 +15,9 @@ impl LiveContinuation for FamilyState {
     type Error = String;
 
     fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
-        let live = &mut scene.live();
         let step = (|| -> Result<ContinuationStep, LiveSessionError> {
             let segment = match self.stage {
-                0 => live.declare_and_activate_family_transform_to(
+                0 => scene.live().declare_and_activate_family_transform_to(
                     &self.source,
                     &self.target,
                     AnimationOptions::new()
@@ -26,8 +25,8 @@ impl LiveContinuation for FamilyState {
                         .rate_func(RateFunction::Linear),
                 )?,
                 1 => {
-                    live.become_family(&self.source, &self.saved, Default::default())?;
-                    live.wait_segment(0.2)?
+                    scene.become_family(&self.source, &self.saved, Default::default())?;
+                    scene.live().wait_segment(0.2)?
                 }
                 _ => return Ok(ContinuationStep::Finished),
             };

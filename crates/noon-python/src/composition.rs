@@ -65,8 +65,16 @@ impl DissolveTarget {
         }
     }
 }
+#[derive(Clone, Copy)]
+enum FamilyTransformKind {
+    Transform,
+    MethodTarget,
+    MatchShape,
+    MatchSource,
+}
+
 #[derive(Clone)]
-pub(crate) enum Child {
+enum Child {
     Transform {
         source: Mobject,
         target: Mobject,
@@ -77,7 +85,7 @@ pub(crate) enum Child {
     FamilyTransform {
         source: noon::MobjectFamily,
         target: noon::MobjectFamily,
-        method: bool,
+        kind: FamilyTransformKind,
         options: AnimationOptions,
     },
     Create(Mobject, AnimationOptions),
@@ -99,6 +107,7 @@ pub(crate) enum Child {
     FamilyReveal(noon::MobjectFamily, bool, AnimationOptions),
     MoveAlongPath(Mobject, Mobject, AnimationOptions),
     ValueTracker(noon::ValueTracker, f64, AnimationOptions),
+    FamilyArrowGrow(noon::ManimArrow, AnimationOptions),
     FamilyFade {
         target: noon::MobjectFamily,
         direction: SemanticFadeDirection,
@@ -126,6 +135,11 @@ pub(crate) enum Child {
     FamilyDrawBorderThenFill {
         target: noon::MobjectFamily,
         outline: noon::DrawBorderThenFillOptions,
+        options: AnimationOptions,
+    },
+    FamilySubsetDisplay {
+        target: noon::MobjectFamily,
+        mode: noon::SubsetDisplayMode,
         options: AnimationOptions,
     },
     FamilyTextWrite {
@@ -176,23 +190,30 @@ impl Child {
             Self::FamilyTransform {
                 source,
                 target,
-                method,
+                kind,
                 options,
-            } => {
-                if *method {
-                    Request::FamilyMethodTargetTo {
-                        source,
-                        target_state: target,
-                        options: *options,
-                    }
-                } else {
-                    Request::FamilyTransformTo {
-                        source,
-                        target_state: target,
-                        options: *options,
-                    }
-                }
-            }
+            } => match kind {
+                FamilyTransformKind::Transform => Request::FamilyTransformTo {
+                    source,
+                    target_state: target,
+                    options: *options,
+                },
+                FamilyTransformKind::MethodTarget => Request::FamilyMethodTargetTo {
+                    source,
+                    target_state: target,
+                    options: *options,
+                },
+                FamilyTransformKind::MatchShape => Request::MatchingFamilyTransformTo {
+                    source,
+                    target_state: target,
+                    options: *options,
+                },
+                FamilyTransformKind::MatchSource => Request::MatchingSourceFamilyTransformTo {
+                    source,
+                    target_state: target,
+                    options: *options,
+                },
+            },
             Self::Create(target, options) => Request::Create {
                 target,
                 options: *options,
@@ -236,6 +257,10 @@ impl Child {
             Self::ValueTracker(tracker, target, options) => Request::ValueTracker {
                 tracker,
                 target: *target,
+                options: *options,
+            },
+            Self::FamilyArrowGrow(target, options) => Request::FamilyArrowGrow {
+                target,
                 options: *options,
             },
             Self::FamilyFade {
@@ -285,6 +310,15 @@ impl Child {
             } => Request::FamilyDrawBorderThenFill {
                 target,
                 outline: *outline,
+                options: *options,
+            },
+            Self::FamilySubsetDisplay {
+                target,
+                mode,
+                options,
+            } => Request::FamilySubsetDisplay {
+                target,
+                mode: *mode,
                 options: *options,
             },
             Self::FamilyTextWrite {
@@ -354,11 +388,41 @@ pub struct Composition {
     pub(crate) kind: Kind,
     pub(crate) options: AnimationOptions,
     pub(crate) play_options: AnimationOptions,
-    pub(crate) children: Vec<Child>,
+    children: Vec<Child>,
     // Wrapper provenance for newly entered objects; membership stays in the Rust request.
     pub(crate) bindings: Vec<Mobject>,
 }
 impl Composition {
+    fn push_family_transform(
+        &mut self,
+        source: &FamilyHandle,
+        target: &FamilyHandle,
+        kind: FamilyTransformKind,
+        options: AnimationOptions,
+    ) {
+        self.children.push(Child::FamilyTransform {
+            source: source.family.clone(),
+            target: target.family.clone(),
+            kind,
+            options,
+        });
+    }
+
+    fn family_transform_options(
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        arc: Option<f64>,
+    ) -> PyResult<AnimationOptions> {
+        Ok(AnimationOptions {
+            run_time: duration,
+            rate_func: easing.map(rate).transpose()?,
+            lag_ratio: lag,
+            path_arc: arc,
+            ..AnimationOptions::new()
+        })
+    }
+
     pub(crate) fn new(
         kind: &str,
         duration: Option<f64>,
@@ -962,6 +1026,46 @@ impl Composition {
         }
         Ok(())
     }
+    #[pyo3(name = "appendFamilySubsetDisplay")]
+    #[pyo3(signature=(target,mode,child_run_time,rate_function))]
+    fn append_family_subset_display(
+        &mut self,
+        target: &FamilyHandle,
+        mode: &str,
+        child_run_time: Option<f64>,
+        rate_function: Option<String>,
+    ) -> PyResult<()> {
+        let mode = match mode {
+            "increasing-floor" => noon::SubsetDisplayMode::IncreasingFloor,
+            "one-by-one-ceil" => noon::SubsetDisplayMode::OneByOneCeil,
+            _ => return Err(engine_error("unknown subset-display mode")),
+        };
+        self.children.push(Child::FamilySubsetDisplay {
+            target: target.family.clone(),
+            mode,
+            options: Self::optional_options(child_run_time, rate_function)?,
+        });
+        Ok(())
+    }
+
+    #[pyo3(name = "appendFamilySubsetDisplayEntering")]
+    fn append_family_subset_display_entering(
+        &mut self,
+        _id: &str,
+        member: &MobjectHandle,
+    ) -> PyResult<()> {
+        let Some(Child::FamilySubsetDisplay { target, .. }) = self.children.last() else {
+            return Err(engine_error(
+                "family entering member must follow FamilySubsetDisplay",
+            ));
+        };
+        noon::MobjectTarget::from(&member.handle)
+            .require_store(target.integration_store())
+            .map_err(engine_error)?;
+        self.bindings.push(member.handle.clone());
+        Ok(())
+    }
+
     #[pyo3(name = "appendFamilyFade")]
     #[pyo3(signature=(target,direction,child_run_time,rate_function,lag_ratio))]
     pub fn append_family_fade(
@@ -1026,6 +1130,42 @@ impl Composition {
         }
         Ok(())
     }
+    #[pyo3(name = "appendFamilyArrowGrow")]
+    fn append_family_arrow_grow(
+        &mut self,
+        target: &crate::arrow::ArrowHandle,
+        duration: f64,
+        easing: &str,
+        lag_ratio: f64,
+    ) -> PyResult<()> {
+        let options = Self::options(duration, easing)?
+            .lag_ratio(lag_ratio)
+            .introducer(true)
+            .remover(false)
+            .path_arc(0.0);
+        self.children
+            .push(Child::FamilyArrowGrow(target.0.clone(), options));
+        Ok(())
+    }
+
+    #[pyo3(name = "appendFamilyArrowGrowEntering")]
+    fn append_family_arrow_grow_entering(
+        &mut self,
+        _id: &str,
+        member: &MobjectHandle,
+    ) -> PyResult<()> {
+        let Some(Child::FamilyArrowGrow(arrow, _)) = self.children.last() else {
+            return Err(engine_error(
+                "family entering member must follow FamilyArrowGrow",
+            ));
+        };
+        noon::MobjectTarget::from(&member.handle)
+            .require_store(arrow.family().integration_store())
+            .map_err(engine_error)?;
+        self.bindings.push(member.handle.clone());
+        Ok(())
+    }
+
     #[pyo3(name = "appendFamilyFadeEntering")]
     fn append_family_fade_entering(&mut self, _id: &str, member: &MobjectHandle) -> PyResult<()> {
         let Some(Child::FamilyFade { target, .. }) = self.children.last() else {
@@ -1130,18 +1270,12 @@ impl Composition {
         lag: Option<f64>,
         arc: Option<f64>,
     ) -> PyResult<()> {
-        self.children.push(Child::FamilyTransform {
-            source: source.family.clone(),
-            target: target.family.clone(),
-            method: false,
-            options: AnimationOptions {
-                run_time: duration,
-                rate_func: easing.map(rate).transpose()?,
-                lag_ratio: lag,
-                path_arc: arc,
-                ..AnimationOptions::new()
-            },
-        });
+        self.push_family_transform(
+            source,
+            target,
+            FamilyTransformKind::Transform,
+            Self::family_transform_options(duration, easing, lag, arc)?,
+        );
         Ok(())
     }
     #[pyo3(name = "appendFamilyMethodTargetTo")]
@@ -1154,11 +1288,48 @@ impl Composition {
         lag: Option<f64>,
         arc: Option<f64>,
     ) -> PyResult<()> {
-        self.family_transform(source, target, duration, easing, lag, arc)?;
-        let Some(Child::FamilyTransform { method, .. }) = self.children.last_mut() else {
-            unreachable!("family target append always stages one family child");
-        };
-        *method = true;
+        self.push_family_transform(
+            source,
+            target,
+            FamilyTransformKind::MethodTarget,
+            Self::family_transform_options(duration, easing, lag, arc)?,
+        );
+        Ok(())
+    }
+    #[pyo3(name = "appendMatchingFamilyTransformTo")]
+    fn matching_family_transform(
+        &mut self,
+        source: &FamilyHandle,
+        target: &FamilyHandle,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        arc: Option<f64>,
+    ) -> PyResult<()> {
+        self.push_family_transform(
+            source,
+            target,
+            FamilyTransformKind::MatchShape,
+            Self::family_transform_options(duration, easing, lag, arc)?,
+        );
+        Ok(())
+    }
+    #[pyo3(name = "appendMatchingSourceFamilyTransformTo")]
+    fn matching_source_family_transform(
+        &mut self,
+        source: &FamilyHandle,
+        target: &FamilyHandle,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        arc: Option<f64>,
+    ) -> PyResult<()> {
+        self.push_family_transform(
+            source,
+            target,
+            FamilyTransformKind::MatchSource,
+            Self::family_transform_options(duration, easing, lag, arc)?,
+        );
         Ok(())
     }
     #[pyo3(name = "appendTransformTo")]

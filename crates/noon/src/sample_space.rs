@@ -46,7 +46,6 @@ pub struct SampleSpace {
 #[derive(Debug)]
 pub enum SampleSpaceError {
     Authoring(AuthoringError),
-    Live(crate::LiveSessionError),
     InvalidProbability,
     InvalidFamily,
 }
@@ -55,16 +54,10 @@ impl From<AuthoringError> for SampleSpaceError {
         Self::Authoring(value)
     }
 }
-impl From<crate::LiveSessionError> for SampleSpaceError {
-    fn from(value: crate::LiveSessionError) -> Self {
-        Self::Live(value)
-    }
-}
 impl std::fmt::Display for SampleSpaceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Authoring(e) => e.fmt(f),
-            Self::Live(e) => e.fmt(f),
             Self::InvalidProbability => {
                 f.write_str("probabilities must be finite, nonnegative, and sum to at most one")
             }
@@ -73,16 +66,6 @@ impl std::fmt::Display for SampleSpaceError {
     }
 }
 impl std::error::Error for SampleSpaceError {}
-
-impl From<SampleSpaceError> for crate::LiveSessionError {
-    fn from(value: SampleSpaceError) -> Self {
-        match value {
-            SampleSpaceError::Live(error) => error,
-            SampleSpaceError::Authoring(error) => error.into(),
-            error => Self::Mobject(error.to_string()),
-        }
-    }
-}
 
 impl SampleSpace {
     /// Construct the SampleSpace base rectangle and family in one semantic
@@ -119,20 +102,6 @@ impl SampleSpace {
             prepare_sample_space(&mut semantic_store, options)?
         };
         let result = scene.apply_semantic_transaction(transaction)?;
-        Self::from_creation_result(store, result, family, rectangle)
-    }
-
-    /// Construct and publish a SampleSpace through an existing live session.
-    pub fn new_live(
-        session: &mut crate::LiveSession<'_>,
-        options: &SampleSpaceOptions,
-    ) -> Result<Self, SampleSpaceError> {
-        let store = Rc::clone(session.integration_store());
-        // Rectangles are inline content: preparation allocates no retained
-        // resources, and the normal transaction owns all identity publication.
-        let (transaction, family, rectangle) =
-            prepare_sample_space(&mut store.borrow_mut(), options)?;
-        let result = session.apply(transaction)?;
         Self::from_creation_result(store, result, family, rectangle)
     }
 
@@ -253,11 +222,7 @@ impl SampleSpace {
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
     ) -> Result<MobjectFamily, SampleSpaceError> {
-        let store = Rc::clone(scene.integration_store());
-        let (transaction, family_token) =
-            self.prepare_division(&store, probabilities, colors, false, true)?;
-        let result = scene.apply_semantic_transaction(transaction)?;
-        self.commit_division(store, result, family_token)
+        self.divide_in_scene(scene, probabilities, colors, false, true)
     }
 
     pub fn divide_vertically(
@@ -266,11 +231,7 @@ impl SampleSpace {
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
     ) -> Result<MobjectFamily, SampleSpaceError> {
-        let store = Rc::clone(scene.integration_store());
-        let (transaction, family_token) =
-            self.prepare_division(&store, probabilities, colors, true, true)?;
-        let result = scene.apply_semantic_transaction(transaction)?;
-        self.commit_division(store, result, family_token)
+        self.divide_in_scene(scene, probabilities, colors, true, true)
     }
 
     /// Shared-store form for adapters whose store already owns the semantic
@@ -280,13 +241,7 @@ impl SampleSpace {
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
     ) -> Result<MobjectFamily, SampleSpaceError> {
-        let store = Rc::clone(self.family.integration_store());
-        let (transaction, family_token) =
-            self.prepare_division(&store, probabilities, colors, false, true)?;
-        let result = transaction
-            .apply(&mut store.borrow_mut())
-            .map_err(AuthoringError::from)?;
-        self.commit_division(store, result, family_token)
+        self.divide_in_store(probabilities, colors, false, true)
     }
 
     pub fn divide_vertically_detached(
@@ -294,83 +249,48 @@ impl SampleSpace {
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
     ) -> Result<MobjectFamily, SampleSpaceError> {
-        let store = Rc::clone(self.family.integration_store());
-        let (transaction, family_token) =
-            self.prepare_division(&store, probabilities, colors, true, true)?;
-        let result = transaction
-            .apply(&mut store.borrow_mut())
-            .map_err(AuthoringError::from)?;
-        self.commit_division(store, result, family_token)
+        self.divide_in_store(probabilities, colors, true, true)
     }
 
-    pub fn divide_horizontally_live(
-        &mut self,
-        session: &mut crate::LiveSession<'_>,
-        probabilities: impl IntoIterator<Item = f64>,
-        colors: &[Color],
-    ) -> Result<MobjectFamily, SampleSpaceError> {
-        self.divide_live(session, probabilities, colors, false, true)
-    }
-
-    pub fn divide_vertically_live(
-        &mut self,
-        session: &mut crate::LiveSession<'_>,
-        probabilities: impl IntoIterator<Item = f64>,
-        colors: &[Color],
-    ) -> Result<MobjectFamily, SampleSpaceError> {
-        self.divide_live(session, probabilities, colors, true, true)
-    }
-
-    pub fn get_horizontal_division_live(
+    /// Create detached horizontal parts using the Scene's current bounds.
+    pub fn get_horizontal_division_in_scene(
         &self,
-        session: &mut crate::LiveSession<'_>,
+        scene: &mut Scene,
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
     ) -> Result<MobjectFamily, SampleSpaceError> {
-        self.divide_live(session, probabilities, colors, false, false)
+        self.divide_in_scene(scene, probabilities, colors, false, false)
     }
 
-    pub fn get_vertical_division_live(
+    /// Create detached vertical parts using the Scene's current bounds.
+    pub fn get_vertical_division_in_scene(
         &self,
-        session: &mut crate::LiveSession<'_>,
+        scene: &mut Scene,
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
     ) -> Result<MobjectFamily, SampleSpaceError> {
-        self.divide_live(session, probabilities, colors, true, false)
+        self.divide_in_scene(scene, probabilities, colors, true, false)
     }
 
-    fn divide_live(
+    fn divide_in_scene(
         &self,
-        session: &mut crate::LiveSession<'_>,
+        scene: &mut Scene,
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
         vertical: bool,
         attach_to_space: bool,
     ) -> Result<MobjectFamily, SampleSpaceError> {
-        let store = Rc::clone(session.integration_store());
-        let bounds = self.effective_bounds(session)?;
-        let (transaction, family_token) = self.prepare_division_in_store(
-            &mut store.borrow_mut(),
+        let store = Rc::clone(scene.integration_store());
+        let (transaction, family_token) = self.prepare_division(
+            &store,
+            Some(scene),
             probabilities,
             colors,
             vertical,
             attach_to_space,
-            bounds,
         )?;
-        let result = session.apply(transaction)?;
+        let result = scene.apply_semantic_transaction(transaction)?;
         self.commit_division(store, result, family_token)
-    }
-
-    fn effective_bounds(
-        &self,
-        session: &crate::LiveSession<'_>,
-    ) -> Result<Bounds2D64, SampleSpaceError> {
-        if !Rc::ptr_eq(session.integration_store(), self.family.integration_store()) {
-            return Err(AuthoringError::ForeignStore.into());
-        }
-        session
-            .capture_boundary_bounds(&self.rectangle)?
-            .ok_or(SampleSpaceError::InvalidProbability)
     }
 
     /// Build horizontal parts as a detached family without adding them to this
@@ -380,7 +300,7 @@ impl SampleSpace {
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
     ) -> Result<MobjectFamily, SampleSpaceError> {
-        self.get_division(probabilities, colors, false)
+        self.divide_in_store(probabilities, colors, false, false)
     }
 
     /// Build vertical parts as a detached family without adding them to this
@@ -390,57 +310,39 @@ impl SampleSpace {
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
     ) -> Result<MobjectFamily, SampleSpaceError> {
-        self.get_division(probabilities, colors, true)
+        self.divide_in_store(probabilities, colors, true, false)
     }
 
-    fn get_division(
+    fn divide_in_store(
         &self,
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
         vertical: bool,
+        attach_to_space: bool,
     ) -> Result<MobjectFamily, SampleSpaceError> {
         let store = Rc::clone(self.family.integration_store());
-        let (transaction, family_token) =
-            self.prepare_division(&store, probabilities, colors, vertical, false)?;
+        let (transaction, family_token) = self.prepare_division(
+            &store,
+            None,
+            probabilities,
+            colors,
+            vertical,
+            attach_to_space,
+        )?;
         let result = transaction
             .apply(&mut store.borrow_mut())
             .map_err(AuthoringError::from)?;
-        let id = result
-            .resolve(family_token)
-            .ok_or(AuthoringError::UnresolvedCreatedNode(family_token))?;
-        MobjectFamily::from_node(store, id).map_err(Into::into)
+        self.commit_division(store, result, family_token)
     }
 
     fn prepare_division(
         &self,
         store: &Rc<RefCell<SemanticStore>>,
+        scene: Option<&Scene>,
         probabilities: impl IntoIterator<Item = f64>,
         colors: &[Color],
         vertical: bool,
         attach_to_space: bool,
-    ) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), SampleSpaceError> {
-        let bounds = self
-            .rectangle
-            .layout_bounds()?
-            .ok_or(SampleSpaceError::InvalidProbability)?;
-        self.prepare_division_at_bounds(
-            store,
-            probabilities,
-            colors,
-            vertical,
-            attach_to_space,
-            bounds,
-        )
-    }
-
-    fn prepare_division_at_bounds(
-        &self,
-        store: &Rc<RefCell<SemanticStore>>,
-        probabilities: impl IntoIterator<Item = f64>,
-        colors: &[Color],
-        vertical: bool,
-        attach_to_space: bool,
-        bounds: Bounds2D64,
     ) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), SampleSpaceError> {
         if !Rc::ptr_eq(store, self.family.integration_store())
             || !Rc::ptr_eq(store, self.rectangle.integration_store())
@@ -449,6 +351,23 @@ impl SampleSpace {
         }
         self.family.validate()?;
         self.rectangle.validate()?;
+
+        let bounds = if let Some(scene) = scene.filter(|scene| scene.running_execution().is_some())
+        {
+            scene.require_effective_capture()?;
+            let state = scene.capture_mobject_state(&self.rectangle)?;
+            crate::semantic_mobject::boundary_for_content(
+                &store.borrow(),
+                state.content,
+                state
+                    .transform
+                    .as_planar()
+                    .ok_or(AuthoringError::NonFiniteObjectState)?,
+            )?
+        } else {
+            self.rectangle.layout_bounds()?
+        }
+        .ok_or(SampleSpaceError::InvalidProbability)?;
 
         self.prepare_division_in_store(
             &mut store.borrow_mut(),

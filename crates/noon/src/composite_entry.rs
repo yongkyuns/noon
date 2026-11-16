@@ -136,9 +136,7 @@ impl CompositeEntry {
     }
 }
 
-/// The shared topology and overlap check, parameterized by the ownership-aware
-/// state capture boundary.  Table and matrix admission use their owning Scene
-/// or LiveSession here so Scene-owned execution observes effective placement.
+/// Check topology and overlap using state captured by the owning Scene.
 #[cfg(any(feature = "latex", test))]
 pub(crate) fn capture_entries_with(
     store: &Rc<RefCell<SemanticStore>>,

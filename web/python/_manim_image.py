@@ -11,7 +11,7 @@ from pathlib import Path
 import noon as _base
 from _noon_errors import engine_call
 from _manim_semantic_handles import (
-    _attach_shared_handle, _handle_for, _live_constructor_context, _live_mutation_context,
+    _attach_shared_handle, _handle_for, _path_authoring_context,
 )
 
 try:
@@ -149,13 +149,13 @@ class ImageMobject(_base.Mobject):
             engine_call(candidate.setZIndex, float(z_index))
             if height is not None:
                 engine_call(candidate.setHeight, float(height))
-            context = _live_constructor_context("image")
+            context = _path_authoring_context()
         except BaseException:
             candidate.free()
             raise
         # Both successful and rejected Rust constructors consume the candidate;
         # only a failure while configuring inert options requires explicit free.
-        handle = engine_call(_create_image, candidate) if context is None else engine_call(context.liveCreateImage, candidate)
+        handle = engine_call(_create_image, candidate) if context is None else engine_call(context.createImage, candidate)
         _attach_shared_handle(self, handle)
         if context is not None:
             self._canonical_live_target_context = context
@@ -189,11 +189,11 @@ class ImageMobject(_base.Mobject):
         handle = _handle_for(self)
         if handle is None:
             raise NotImplementedError("image sampling cannot change inside an active callback overlay")
-        context = _live_mutation_context(self)
+        context = _path_authoring_context(self)
         if context is None:
             engine_call(handle.setImageSampling, sampler)
         else:
-            engine_call(context.liveSetImageSampling, handle, sampler)
+            engine_call(context.setImageSampling, handle, sampler)
         return self
 
     def fade(self, darkness=0.5, family=True):

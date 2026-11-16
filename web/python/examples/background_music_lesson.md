@@ -15,7 +15,7 @@ device output without changing the authored gain or fades.
 The Python source is [background_music_lesson.py](background_music_lesson.py).
 Its direct Rust counterpart is
 [`noon::example_scenes::background_music_lesson::scene`](../../../crates/noon/src/example_scenes/background_music_lesson.rs).
-The Rust function returns an ordinary `Scene` for `Scene::execution_session`
+The Rust function returns an ordinary `Scene` for `Scene::into_execution`
 and native MP4 export. Native window audio output has not yet been qualified.
 
 Python uses an explicit finite `result = Scene()`. This complete scene is declared

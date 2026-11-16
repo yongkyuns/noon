@@ -152,10 +152,10 @@ try {
     };
     // The same real Rust operations run directly in JS and through Pyodide below.
     const livePropertyMethods = [
-      {method: "liveSetTranslation", args: [2, -1], property: "Translation", field: "translation", expected: {x: 2, y: -1}},
-      {method: "liveShift", args: [2, -1], property: "Translation", field: "translation", expected: {x: 2, y: -1}},
-      {method: "liveSetScale", args: [2, 0.5], property: "Scale", field: "scale", expected: {x: 2, y: 0.5}},
-      {method: "liveSetRotation", args: [0.5], property: "RotationZ", field: "rotation", expected: 0.5},
+      {method: "setTranslation", args: [2, -1], property: "Translation", field: "translation", expected: {x: 2, y: -1}},
+      {method: "shift", args: [2, -1], property: "Translation", field: "translation", expected: {x: 2, y: -1}},
+      {method: "setScale", args: [2, 0.5], property: "Scale", field: "scale", expected: {x: 2, y: 0.5}},
+      {method: "setRotation", args: [0.5], property: "RotationZ", field: "rotation", expected: 0.5},
     ];
     const livePropertyCases = livePropertyMethods.flatMap(spec => [
       ...spec.args.flatMap((_, axis) => ["nan", "positive_infinity", "negative_infinity"].map(kind => ({...spec, kind, axis}))),
@@ -292,8 +292,8 @@ try {
       };
     };
     const contentObservationCases = [
-      ...["foreign_target", "foreign_source", "stale_target", "stale_source", "stale_publication", "leased"].map(kind => ({method: "liveReplaceContent", kind})),
-      ...["foreign_target", "stale_target", "not_lowered", "stale_publication", "leased"].map(kind => ({method: "liveEffectiveMobject", kind})),
+      ...["foreign_target", "foreign_source", "stale_target", "stale_source", "stale_publication", "leased"].map(kind => ({method: "replaceContent", kind})),
+      ...["foreign_target", "stale_target", "not_lowered", "stale_publication", "leased"].map(kind => ({method: "queryEffectiveTranslation", kind})),
     ];
     const contentObservationFixture = ({method, kind}) => {
       const store = new wasm.WasmAuthoringStore(), otherStore = new wasm.WasmAuthoringStore();
@@ -334,9 +334,9 @@ try {
         : kind === "leased" ? ["unclassified"] : ["authoring.semantic", "semantic.unknown_node"];
       return {
         category,
-        reject: () => method === "liveReplaceContent"
-          ? context.liveReplaceContent(selectedTarget, selectedSource)
-          : context.liveEffectiveMobject(selectedTarget),
+        reject: () => method === "replaceContent"
+          ? context.replaceContent(selectedTarget, selectedSource)
+          : context.queryEffectiveTranslation(selectedTarget),
         assertDiagnostic: error => {
           const codes = [];
           for (let cause = error; cause; cause = cause.cause) {
@@ -358,8 +358,8 @@ try {
             context.prepareExecutionRun();
             context.beginLiveExecution(1);
           }
-          if (method === "liveReplaceContent") {
-            context.liveReplaceContent(target, source);
+          if (method === "replaceContent") {
+            context.replaceContent(target, source);
             const after = JSON.parse(target.snapshotJson()), prior = JSON.parse(before.target);
             check(Object.hasOwn(after, "geometry"), "snapshot geometry assertion must not be vacuous");
             equal(after.geometry, JSON.parse(before.source).geometry, "replacement lost source content");
@@ -371,13 +371,11 @@ try {
             if (kind === "not_lowered") {
               context.liveAdvanceSegmentTo(0.25);
               context.liveCompleteSegment();
-              context.liveAdd("1", source);
+              context.bindMobject("1", source);
             }
-            const observed = context.liveEffectiveMobject(kind === "not_lowered" ? source : target);
-            try {
-              const transform = JSON.parse((kind === "not_lowered" ? source : target).snapshotJson()).transform;
-              equal([observed.translationX, observed.translationY], [transform.translation.x, transform.translation.y], "query returned the wrong object");
-            } finally { observed.free(); }
+            const observed = context.queryEffectiveTranslation(kind === "not_lowered" ? source : target);
+            const transform = JSON.parse((kind === "not_lowered" ? source : target).snapshotJson()).transform;
+            equal(Array.from(observed), [transform.translation.x, transform.translation.y], "query returned the wrong object");
           }
           if (kind !== "stale_publication" && kind !== "not_lowered") {
             context.liveAdvanceSegmentTo(0.25);
@@ -646,7 +644,7 @@ json.dumps({"matrix": results, "liveProperties": property_results, "advancement"
   assert.equal(report.python.liveProperties.length, 29);
   assert.equal(report.python.advancement.length, 9);
   assert.equal(report.python.contentObservations.length, 11);
-  assert.equal(report.python.additionalTests, 17);
+  assert.equal(report.python.additionalTests, 18);
 
 
   assert.equal(report.python.callbackTests, 11);

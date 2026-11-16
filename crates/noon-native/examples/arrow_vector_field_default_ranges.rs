@@ -1,19 +1,20 @@
-use noon::{
-    manim_default_vector_field_ranges_2d, ManimArrowVectorField, MobjectTarget, Scene,
-    VectorFieldPoint, PURPLE,
-};
-use std::rc::Rc;
+use noon::{ArrowVectorFieldOptions, Scene, PURPLE};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
-    let field = ManimArrowVectorField::create_with_color(
-        Rc::clone(scene.integration_store()),
-        |_| VectorFieldPoint::new(0.25, 0.0),
-        manim_default_vector_field_ranges_2d(),
-        PURPLE,
+    let mut field = ArrowVectorFieldOptions::new(None, None, false)?;
+    field.set_field_color(
+        PURPLE.red.into(),
+        PURPLE.green.into(),
+        PURPLE.blue.into(),
+        1.0,
     )?;
+    for index in 0..field.sample_count() {
+        field.set_vector(index, 0.25, 0.0)?;
+    }
 
-    scene.add_many(&[MobjectTarget::Family(field.family())])?;
+    let field = scene.manim_arrow_vector_field(field)?;
+    scene.add_many(&[field.family().into()])?;
     noon_native::run(scene.into_execution()?)?;
     Ok(())
 }

@@ -51,7 +51,10 @@ impl Fixture {
     }
 
     fn next(&mut self, terminal: bool) -> PrefixBatch {
-        self.source.live().shift(&self.target, 1.0, 0.0).unwrap();
+        self.source
+            .scene_mut()
+            .shift_3d(&self.target, noon::SemanticVec3::new(1.0, 0.0, 0.0))
+            .unwrap();
         let segment = self.source.session_mut().wait_segment(1.0).unwrap();
         self.source
             .session_mut()
@@ -251,7 +254,7 @@ fn prepared_audio_uses_reader_resources_and_never_reports_frontier_as_duration()
     scene
         .audio(resource, noon_core::AudioClipOptions::default())
         .unwrap();
-    let mut source = scene.execution_session().unwrap();
+    let mut source = noon::integration::scene_execution::lower(&scene).unwrap();
     source
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();
@@ -790,7 +793,7 @@ fn prepared_worker_new_image_resources_arrive_only_when_history_is_selected() {
         .scene_mut()
         .image(noon::ImageMobjectOptions::rgba8(2, 2, [230, 40, 10, 255].repeat(4)).unwrap())
         .unwrap();
-    f.source.live().add(&image).unwrap();
+    f.source.scene_mut().add(&image).unwrap();
     let segment = f.source.session_mut().wait_segment(1.0).unwrap();
     f.source.session_mut().advance_to(2.0).unwrap();
     let batch = f
@@ -818,7 +821,7 @@ fn prepared_worker_new_image_resources_arrive_only_when_history_is_selected() {
         .scene_mut()
         .image(noon::ImageMobjectOptions::rgba8(2, 2, [10, 230, 40, 255].repeat(4)).unwrap())
         .unwrap();
-    f.source.live().add(&future).unwrap();
+    f.source.scene_mut().add(&future).unwrap();
     let segment = f.source.session_mut().wait_segment(1.0).unwrap();
     f.source.session_mut().advance_to(3.0).unwrap();
     let batch = f
@@ -1092,7 +1095,10 @@ fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
     let mut f = Fixture::new(87);
     let segment = {
         let target = f.source.scene_mut().target_editor(&f.target).unwrap();
-        f.source.live().set_translation(&target, 2.0, 0.0).unwrap();
+        f.source
+            .scene_mut()
+            .set_translation(&target, 2.0, 0.0)
+            .unwrap();
         let segment = f
             .source
             .live()

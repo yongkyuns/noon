@@ -25,7 +25,7 @@ class AddNMoreSubmobjectsTests(unittest.TestCase):
 
         with (
             patch.object(Group, "submobjects", new_callable=PropertyMock) as children,
-            patch.object(handles, "_live_constructor_context", return_value=None),
+            patch.object(handles, "_path_authoring_context", return_value=None),
             patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch,
             patch.object(handles, "_family_wrapper_key", side_effect=lambda item: str(id(item))),
             patch.object(handles, "engine_call", side_effect=lambda fn, *args, **kw: fn(*args, **kw)),
@@ -63,7 +63,7 @@ class AddNMoreSubmobjectsTests(unittest.TestCase):
 
         with (
             patch.object(VGroup, "submobjects", new_callable=PropertyMock) as children,
-            patch.object(handles, "_live_constructor_context", return_value=None),
+            patch.object(handles, "_path_authoring_context", return_value=None),
             patch.object(handles, "_family_membership_batch", return_value=batch) as make_batch,
             patch.object(handles, "_family_wrapper_key", side_effect=lambda item: str(id(item))),
             patch.object(handles, "engine_call", side_effect=lambda fn, *args, **kw: fn(*args, **kw)),

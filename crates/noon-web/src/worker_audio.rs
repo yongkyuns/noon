@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use noon::ExecutionSession;
+use noon::integration::scene_execution::ExecutionSession;
 #[cfg(feature = "prepared-prefix")]
 use noon::PrefixReader;
 use noon_core::{
@@ -487,7 +487,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let session = scene.execution_session().unwrap();
+        let session = noon::integration::scene_execution::lower(&scene).unwrap();
         let bytes = encode(&session, 19).unwrap();
         let resources = WorkerAudioResources::decode(&bytes).unwrap();
         assert_eq!(resources.session(), 19);

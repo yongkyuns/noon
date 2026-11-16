@@ -519,7 +519,7 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.calls: list[object] = []
 
-            def liveTargetEditor(self, handle: object) -> object:
+            def targetEditor(self, handle: object) -> object:
                 self.calls.append(handle)
                 return target_handle
 
@@ -570,7 +570,6 @@ class CanonicalCallbackPropertyRowTests(unittest.TestCase):
         circle._noon_updaters = [registration.callback]
         circle._noon_updater_registrations = [registration]
         circle._noon_updater_registration_history = [registration]
-        self.assertIsNone(semantic_handles._live_mutation_context(circle))
         copied = semantic_handles._copy_mobject(circle)
         self.assertIs(copied._semantic_handle, target_handle)
         self.assertFalse(hasattr(copied, "_noon_updaters"))

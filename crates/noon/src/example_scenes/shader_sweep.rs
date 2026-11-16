@@ -87,12 +87,12 @@ impl LiveContinuation for ShaderSweep {
             1 | 3 => {
                 if let Some(introduction) = self.deferred.take() {
                     if let Some(camera) = self.camera.take() {
-                        let mut transaction = noon_core::SemanticMutationTransaction::new();
-                        transaction.set_view_color_profile(
-                            camera.node_id(),
-                            noon_core::ViewColorProfile::Compatibility,
-                        );
-                        scene.live().apply(transaction).map_err(message)?;
+                        scene
+                            .set_view_color_profile(
+                                &camera,
+                                noon_core::ViewColorProfile::Compatibility,
+                            )
+                            .map_err(message)?;
                     }
                     let pending = match introduction {
                         Introduction::Membership => {
@@ -135,7 +135,6 @@ impl LiveContinuation for ShaderSweep {
                 let targets = [left?, right?];
                 for (i, target) in targets.iter().enumerate() {
                     scene
-                        .live()
                         .set_rotation(target, if outward { 0.35 } else { 0.0 })
                         .map_err(message)?;
                     scene
@@ -298,15 +297,15 @@ pub fn authored_time_session() -> Result<crate::SceneExecution, String> {
     scene
         .add_effect(&panel, ShaderEffect::new(program), "clock")
         .map_err(message)?;
-    let mut session = scene.execution_session().map_err(message)?;
-    scene
-        .live(&mut session)
+    let mut execution = scene.into_execution().map_err(message)?;
+    execution
+        .live()
         .declare_and_activate_composition(
             &AnimationCompositionRequest::Wait { duration: 2.0 },
             AnimationOptions::new(),
         )
         .map_err(message)?;
-    scene.into_execution_with_session(session).map_err(message)
+    Ok(execution)
 }
 
 #[cfg(all(test, feature = "prepared-prefix", feature = "wgsl-effects"))]

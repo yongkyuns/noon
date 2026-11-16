@@ -40,17 +40,11 @@ impl LiveContinuation for FamilyRootPoints {
                 2 => {
                     // Replay the same authored data and child presentation;
                     // clearing the roots did not undo their family transforms.
-                    scene
-                        .live()
-                        .become_mobject(&self.left, &self.left_seed, Default::default())?;
-                    scene.live().become_mobject(
-                        &self.right,
-                        &self.right_seed,
-                        Default::default(),
-                    )?;
+                    scene.become_mobject(&self.left, &self.left_seed, Default::default())?;
+                    scene.become_mobject(&self.right, &self.right_seed, Default::default())?;
                     self.left_points.clone_from(&self.left_source_points);
                     scene.set_family_points_3d(&self.group, &self.left_points)?;
-                    scene.live().stretch(
+                    scene.stretch(
                         &LayoutAnchor::from(&self.group),
                         2.0,
                         crate::LayoutDimension::Depth,
@@ -61,17 +55,16 @@ impl LiveContinuation for FamilyRootPoints {
                         point.z = point.z * 2.0 + 0.25;
                     }
                     let anchor = LayoutAnchor::from(&self.group);
-                    let extent = scene
-                        .live()
-                        .dimension_length(&anchor, crate::LayoutDimension::Depth)?;
-                    scene.live().rescale_to_fit_with_pivot(
+                    let extent =
+                        scene.effective_dimension_length(&anchor, crate::LayoutDimension::Depth)?;
+                    scene.rescale_to_fit_with_pivot(
                         &anchor,
                         2.0,
                         crate::LayoutDimension::Depth,
                         true,
                         ManimRotationPivot::Point3d(SemanticVec3::ZERO),
                     )?;
-                    scene.live().rescale_to_fit_with_pivot(
+                    scene.rescale_to_fit_with_pivot(
                         &anchor,
                         4.0,
                         crate::LayoutDimension::Depth,
@@ -80,9 +73,7 @@ impl LiveContinuation for FamilyRootPoints {
                     )?;
                     adjust_fitting_reference(&mut self.left_points, extent);
                     assert_eq!(
-                        scene
-                            .live()
-                            .dimension_length(&anchor, crate::LayoutDimension::Depth)?,
+                        scene.effective_dimension_length(&anchor, crate::LayoutDimension::Depth)?,
                         4.0
                     );
                     scene.append_family_points_f64(&self.vector, &self.right_points)?;
@@ -91,18 +82,14 @@ impl LiveContinuation for FamilyRootPoints {
                         &LayoutAnchor::from(&self.alignment_leaf),
                     )?;
                     let rotated = LayoutAnchor::from(&self.vector);
-                    scene.live().rotate_layout(
-                        &rotated,
-                        0.37,
-                        ManimRotationPivot::Point(2.0, 0.0),
-                    )?;
-                    scene.live().stretch(
+                    scene.rotate_layout(&rotated, 0.37, ManimRotationPivot::Point(2.0, 0.0))?;
+                    scene.stretch(
                         &rotated,
                         1.1234567890123,
                         crate::LayoutDimension::Width,
                         ManimRotationPivot::Point3d(SemanticVec3::new(2.0, 0.0, 0.0)),
                     )?;
-                    scene.live().scale_layout_3d(
+                    scene.scale_layout_3d(
                         &rotated,
                         SemanticVec3::new(0.9, 1.1, 1.25),
                         ManimRotationPivot::Point3d(SemanticVec3::new(2.0, 0.0, 0.5)),

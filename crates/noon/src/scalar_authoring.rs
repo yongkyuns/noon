@@ -8,9 +8,9 @@ use crate::AuthoringError;
 use std::{cell::RefCell, rc::Rc};
 
 use noon_core::{
-    RateFunction, SemanticMutationTransaction, SemanticNodeId, SemanticObjectProperty,
-    SemanticSignalExpr, SemanticSignalSource, SemanticSignalValue, SemanticStore, SemanticVec3,
-    TrackTiming,
+    RateFunction, ReactiveValue, SemanticMutationTransaction, SemanticNodeId,
+    SemanticObjectProperty, SemanticSignalExpr, SemanticSignalSource, SemanticSignalValue,
+    SemanticStore, SemanticVec3, TrackTiming,
 };
 
 use crate::{Mobject, Scene};
@@ -178,8 +178,8 @@ impl ValueTrackerPlay<'_> {
             self.target,
             TrackTiming::new(start, duration, self.rate_function),
         );
-        transaction
-            .apply(&mut self.scene.integration_store().borrow_mut())
+        self.scene
+            .apply_semantic_transaction(transaction)
             .map_err(|error| error.to_string())?;
         // The same conditions were checked above; this cannot fail after the
         // declaration commits, avoiding a divergent facade-owned cursor.
@@ -193,11 +193,12 @@ impl ValueTrackerPlay<'_> {
 impl Scene {
     /// Build the first supported tracker expression, `offset + tracker * direction`.
     pub fn position_from_tracker(
-        &self,
+        &mut self,
         tracker: &ValueTracker,
         direction: SemanticVec3,
         offset: SemanticVec3,
     ) -> Result<TrackerPosition, AuthoringError> {
+        self.require_signal_setup()?;
         tracker.require_store(self.integration_store())?;
         if !direction.is_finite() || !offset.is_finite() {
             return Err(AuthoringError::Signal(
@@ -228,43 +229,51 @@ impl Scene {
 
     /// Bind a tracker-derived position through the shared semantic subscription.
     pub fn bind_position(
-        &self,
+        &mut self,
         object: &Mobject,
         position: &TrackerPosition,
     ) -> Result<(), AuthoringError> {
         self.require_object(object)?;
         position.require_store(self.integration_store())?;
-        self.integration_store()
-            .borrow_mut()
-            .bind_semantic_signal(
-                position.node,
-                object.node_id(),
-                SemanticObjectProperty::Translation,
-            )
-            .map(|_| ())
-            .map_err(AuthoringError::from)
+        self.bind_signal(object, position.node, SemanticObjectProperty::Translation)
     }
 
-    /// Set a non-timeline-owned tracker through the shared mutation transaction.
-    pub fn set_value(&self, tracker: &ValueTracker, value: f64) -> Result<(), AuthoringError> {
+    /// Set a non-timeline-owned tracker at the current authored or running time.
+    pub fn set_value(&mut self, tracker: &ValueTracker, value: f64) -> Result<(), AuthoringError> {
         tracker.require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            return self.with_running_execution(|store, _, execution| {
+                execution
+                    .set_scalar_signal_value(&mut store.borrow_mut(), tracker.node_id(), value)
+                    .map(|_| ())
+                    .map_err(AuthoringError::from)
+            });
+        }
         let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_signal(tracker.node, value);
-        transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map(|_| ())
-            .map_err(AuthoringError::from)
+        transaction.set_signal(tracker.node_id(), value);
+        self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
-    /// Read the scalar track value at this Scene's shared authored cursor.
-    ///
-    /// The semantic store selects and eases its own declarations. This facade
-    /// does not retain a value, evaluate an expression, or interpolate in a
-    /// language wrapper.
+    /// Read the scalar tracker at the Scene's current state.
+    /// Running Scenes read the current execution value. Cold Scenes evaluate
+    /// the authored scalar track at the Scene's cursor.
     pub fn value_tracker_value(&self, tracker: &ValueTracker) -> Result<f64, AuthoringError> {
         tracker.require_store(self.integration_store())?;
-        self.integration_store()
-            .borrow()
+        let store = self.integration_store().borrow();
+        if let Some(execution) = self.running_execution() {
+            execution.require_published_store(&store)?;
+            return match execution.effective_signal_value(tracker.node) {
+                Some(ReactiveValue::Scalar(value)) => Ok(f64::from(*value)),
+                Some(_) => Err(noon_core::SemanticScalarSignalQueryError::NonScalarSignal(
+                    tracker.node,
+                )
+                .into()),
+                None => Err(AuthoringError::Unsupported(
+                    crate::UnsupportedAuthoringOperation::EffectiveTrackerUnavailable,
+                )),
+            };
+        }
+        store
             .semantic_input_scalar_value_at(tracker.node, self.time())
             .map_err(AuthoringError::from)
     }
@@ -401,7 +410,7 @@ mod tests {
 
     #[test]
     fn detached_tracker_play_scopes_and_enrolls_with_its_activation() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let detached = scene
             .integration_store()
             .borrow_mut()
@@ -409,30 +418,39 @@ mod tests {
             .unwrap();
         let tracker =
             ValueTracker::from_semantic_node(Rc::clone(scene.integration_store()), detached);
-        let mut session = scene.execution_session().unwrap();
-        assert!(session.effective_signal_value(detached).is_none());
-        let before = session.publication_context().scene_revision();
+        let session = scene.execution_session().unwrap();
+        scene.install_execution(session);
+        assert!(matches!(
+            scene.value_tracker_value(&tracker),
+            Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::EffectiveTrackerUnavailable
+            ))
+        ));
+        let before = scene
+            .owned_execution()
+            .publication_context()
+            .scene_revision();
         let segment = scene
-            .live(&mut session)
+            .owned_live()
             .declare_and_activate_value_tracker(&tracker, 5.0, 1.0, noon_core::RateFunction::Linear)
             .unwrap();
         assert_eq!(
-            session.publication_context().scene_revision(),
+            scene
+                .owned_execution()
+                .publication_context()
+                .scene_revision(),
             before.checked_next().unwrap()
         );
         assert!(scene
             .integration_store()
             .borrow()
             .is_semantic_signal_scoped(scene.root(), tracker.node_id()));
-        assert_eq!(
-            session.effective_signal_value(detached),
-            Some(&noon_core::ReactiveValue::Scalar(4.0))
-        );
+        assert_eq!(scene.value_tracker_value(&tracker).unwrap(), 4.0);
         scene
-            .live(&mut session)
+            .owned_live()
             .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        scene.owned_live().complete_segment(segment).unwrap();
     }
 
     #[test]
@@ -499,7 +517,7 @@ mod tests {
     #[test]
     fn tracker_handles_reject_foreign_scene_stores() {
         let mut scene = Scene::new();
-        let foreign = Scene::new();
+        let mut foreign = Scene::new();
         let tracker = scene.value_tracker(0.0).unwrap();
         assert!(foreign
             .position_from_tracker(

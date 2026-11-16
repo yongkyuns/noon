@@ -85,6 +85,18 @@ impl CoordinateOptions {
 
 #[pymethods]
 impl CoordinateOptions {
+    #[staticmethod]
+    fn riemann(
+        range: Vec<f64>,
+        dx: f64,
+        sample: u32,
+        width_scale_factor: f64,
+    ) -> PyResult<crate::riemann::RiemannOptions> {
+        noon::integration::RiemannInput::new(&range, dx, sample, width_scale_factor)
+            .map(|input| crate::riemann::RiemannOptions(Some(input)))
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "numberLabels")]
     #[cfg(feature = "native-text")]
     #[staticmethod]
@@ -894,34 +906,13 @@ impl AxesObservation {
         bounded_graph: &MobjectHandle,
         has_bounded_graph: bool,
     ) -> Result<GeometryOptions, PyErr> {
-        let graph = &graph.handle;
-        let bounded = has_bounded_graph.then_some(&bounded_graph.handle);
-        let graph_path = graph
-            .path_query()
-            .map_err(AuthoringFailure::from)
+        let range = noon::integration::plot_optional_range(&range, "area.range", "area")
             .map_err(engine_error)?;
-        let bounded_path = bounded
-            .map(|object| object.path_query())
-            .transpose()
-            .map_err(AuthoringFailure::from)
-            .map_err(engine_error)?;
-        let range = match range.as_slice() {
-            [] => None,
-            [start, end] if start.is_finite() && end.is_finite() => Some([*start, *end]),
-            _ => {
-                return Err(engine_error(AuthoringFailure::new(
-                    "invalid_input",
-                    "area.range",
-                    "area range requires two finite values",
-                )));
-            }
-        };
         noon::ManimGeometryOptions::axes_area(
             self.frame,
-            graph,
-            &graph_path,
+            &graph.handle,
             range,
-            bounded.zip(bounded_path.as_ref()),
+            has_bounded_graph.then_some(&bounded_graph.handle),
         )
         .map(GeometryOptions::from_options)
         .map_err(coordinate_failure)
@@ -1027,6 +1018,32 @@ pub(crate) fn label_failure(error: impl std::fmt::Display) -> PyErr {
         error.to_string(),
     ))
 }
+#[cfg(feature = "native-text")]
+pub(crate) fn label_numbers(values: &[f64], automatic: bool) -> PyResult<Option<&[f64]>> {
+    if automatic && !values.is_empty() {
+        return Err(label_failure(
+            "automatic labels cannot supply explicit values",
+        ));
+    }
+    Ok((!automatic).then_some(values))
+}
+
+#[cfg(feature = "native-text")]
+pub(crate) fn custom_label_values(
+    values: Vec<f64>,
+    texts: Vec<String>,
+) -> PyResult<Vec<(f64, String)>> {
+    if values.len() != texts.len() {
+        return Err(label_failure(
+            "custom label positions and texts must have equal lengths",
+        ));
+    }
+    if values.len() > noon::plot_presentation::MAX_PLOT_LABELS {
+        return Err(label_failure("number-label limit exceeded"));
+    }
+    Ok(values.into_iter().zip(texts).collect())
+}
+
 #[cfg(feature = "native-text")]
 #[pyclass(unsendable, module = "_noon_native")]
 pub struct NumberLabelOptions {

@@ -10,7 +10,8 @@
 
 use super::{ExecutionSession, ReplayError, ReplayLimits};
 use crate::{
-    AnimationOptions, ExecutionSegment, FadeEndpoint, FadeTranslation, Mobject, RateFunction, Scene,
+    family_authoring::FamilyTranslation, AnimationOptions, ExecutionSegment, FadeEndpoint,
+    FadeTranslation, Mobject, RateFunction, Scene,
 };
 use noon_core::{SemanticFadeDirection, SemanticVec3};
 use noon_runtime::{EvaluationError, FrameState};
@@ -57,6 +58,26 @@ fn recording(scene: &Scene, limits: ReplayLimits) -> ExecutionSession {
     let mut producer = scene.execution_session().unwrap();
     producer.begin_replay_retention(limits).unwrap();
     producer
+}
+
+// Exercise the same publication used by Scene without giving a read-only probe
+// an owning Scene or changing how the producer records and seeks its timeline.
+fn shift(
+    scene: &Scene,
+    session: &mut ExecutionSession,
+    shape: &Mobject,
+    x: f64,
+    y: f64,
+) -> Result<(), crate::AuthoringError> {
+    let store = scene.integration_store();
+    let transaction = {
+        let store = store.borrow();
+        session.require_published_store(&store)?;
+        FamilyTranslation::begin_3d(&store, shape.node_id(), SemanticVec3::new(x, y, 0.0))?
+            .transaction(&store)?
+    };
+    Scene::publish_running_transaction(store, scene.root(), session, transaction)?;
+    Ok(())
 }
 
 fn recorded_scene(limits: ReplayLimits) -> (Scene, Mobject, ExecutionSession) {
@@ -200,7 +221,7 @@ fn completed_prefix_reader_survives_future_morph_membership_and_producer_drop() 
         assert_eq!(snapshot(&producer), frontier);
     }
     producer.discard_replay_retention();
-    scene.live(&mut producer).shift(&shape, 9.0, 1.0).unwrap();
+    shift(&scene, &mut producer, &shape, 9.0, 1.0).unwrap();
     observe();
     drop(producer);
     drop(shape);
@@ -290,13 +311,10 @@ fn a_reader_cannot_commit_an_authored_edit_or_rewind_the_semantic_store() {
     let mut prefix = PrefixProbe::capture(&producer, None).unwrap();
     let before = prefix.sample(0.5).unwrap();
     producer.advance_to(2.0).unwrap();
-    scene.live(&mut producer).shift(&shape, 5.0, 0.0).unwrap();
+    shift(&scene, &mut producer, &shape, 5.0, 0.0).unwrap();
     let revision = scene.integration_store().borrow().scene_revision();
     let frontier = snapshot(&producer);
-    assert!(scene
-        .live(&mut prefix.reader)
-        .shift(&shape, 1.0, 0.0)
-        .is_err());
+    assert!(shift(&scene, &mut prefix.reader, &shape, 1.0, 0.0).is_err());
     assert_eq!(
         scene.integration_store().borrow().scene_revision(),
         revision
@@ -309,7 +327,7 @@ fn a_reader_cannot_commit_an_authored_edit_or_rewind_the_semantic_store() {
 fn closed_prefix_endpoint_is_revision_specific_not_an_append_watermark() {
     let (scene, shape, mut producer) = recorded_scene(ReplayLimits::default());
     producer.advance_to(0.5).unwrap();
-    scene.live(&mut producer).shift(&shape, 1.0, 0.0).unwrap();
+    shift(&scene, &mut producer, &shape, 1.0, 0.0).unwrap();
     producer.advance_to(1.0).unwrap();
     let mut prefix = PrefixProbe::capture(&producer, None).unwrap();
     let old_endpoint = prefix.sample(1.0).unwrap();
@@ -317,7 +335,7 @@ fn closed_prefix_endpoint_is_revision_specific_not_an_append_watermark() {
 
     // Source may issue another operation at the same completed endpoint. A
     // growing prefix needs half-open time or an intra-timestamp revision policy.
-    scene.live(&mut producer).shift(&shape, 4.0, 0.0).unwrap();
+    shift(&scene, &mut producer, &shape, 4.0, 0.0).unwrap();
     producer.advance_to(2.0).unwrap();
     producer.seal_replay().unwrap();
     producer.seek(1.0).unwrap();
@@ -338,12 +356,12 @@ fn later_retention_failure_does_not_destroy_an_already_captured_prefix() {
     let before = prefix.sample(0.5).unwrap();
     for step in 0..16 {
         producer.advance_to(2.0 + f64::from(step)).unwrap();
-        scene.live(&mut producer).shift(&shape, 1.0, 0.0).unwrap();
+        shift(&scene, &mut producer, &shape, 1.0, 0.0).unwrap();
     }
     assert_eq!(producer.seal_replay(), Err(ReplayError::RetentionLimit));
     assert_eq!(prefix.sample(0.5).unwrap(), before);
     producer.discard_replay_retention();
-    scene.live(&mut producer).shift(&shape, 1.0, 0.0).unwrap();
+    shift(&scene, &mut producer, &shape, 1.0, 0.0).unwrap();
     assert_eq!(prefix.sample(0.5).unwrap(), before);
 }
 

@@ -37,15 +37,17 @@ fn corner_replacement_preserves_identity_paint_and_copies_with_local_publication
             .len();
         let corners = [Vec2::new(-2., -1.), Vec2::new(0., 1.), Vec2::new(2., -1.)];
         let semantics = std::rc::Rc::clone(scene.integration_store());
-        let mut running = scene.into_execution().unwrap();
-        if live_mode {
+        let mut running = if live_mode {
+            let mut running = scene.into_execution().unwrap();
             running
                 .scene_mut()
                 .set_points_as_corners(&source, &corners)
                 .unwrap();
+            running
         } else {
-            source.set_points_as_corners(&corners).unwrap();
-        }
+            scene.set_points_as_corners(&source, &corners).unwrap();
+            scene.into_execution().unwrap()
+        };
         let after = source.state().unwrap();
         assert_ne!(running.scene().revision(), revision);
         assert_eq!(source.node_id(), identity);
@@ -58,23 +60,19 @@ fn corner_replacement_preserves_identity_paint_and_copies_with_local_publication
         assert_eq!(source.path_query().unwrap().start().unwrap(), (-2., -1.));
         assert_eq!(source.path_query().unwrap().end().unwrap(), (2., -1.));
         let revision = running.scene().revision();
-        if live_mode {
-            assert_eq!(
-                running
-                    .scene()
-                    .effective_path_query(&source)
-                    .unwrap()
-                    .end()
-                    .unwrap(),
-                (2., -1.)
-            );
+        assert_eq!(
             running
-                .scene_mut()
-                .set_points_as_corners(&source, &corners)
-                .unwrap();
-        } else {
-            source.set_points_as_corners(&corners).unwrap();
-        }
+                .scene()
+                .effective_path_query(&source)
+                .unwrap()
+                .end()
+                .unwrap(),
+            (2., -1.)
+        );
+        running
+            .scene_mut()
+            .set_points_as_corners(&source, &corners)
+            .unwrap();
         assert_eq!(
             running.scene().revision(),
             revision,

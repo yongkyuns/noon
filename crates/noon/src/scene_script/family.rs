@@ -2,8 +2,8 @@
 
 use super::{ScriptError, ScriptScene};
 use crate::{
-    EffectiveMobjectLayout, FamilyArrangeOptions, FamilyGridOptions, LayoutAnchor,
-    LiveLayoutTarget, ManimNextToArgs, Mobject, MobjectFamily, MobjectTarget,
+    EffectiveMobjectLayout, FamilyArrangeOptions, FamilyGridOptions, LayoutAnchor, LayoutTarget,
+    ManimNextToArgs, Mobject, MobjectFamily, MobjectTarget,
 };
 
 impl ScriptScene {
@@ -98,7 +98,7 @@ impl ScriptScene {
     pub fn move_family_to(
         &self,
         family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
+        target: LayoutTarget<'_>,
         edge: (f64, f64),
         mask: (f64, f64),
     ) -> Result<(), ScriptError> {
@@ -112,7 +112,7 @@ impl ScriptScene {
     pub fn align_family_to(
         &self,
         family: &MobjectFamily,
-        target: LiveLayoutTarget<'_>,
+        target: LayoutTarget<'_>,
         axis: (f64, f64),
     ) -> Result<(), ScriptError> {
         self.with_scene(|scene| {
@@ -125,7 +125,7 @@ impl ScriptScene {
     pub fn next_layout_to_aligned(
         &self,
         source: &LayoutAnchor,
-        target: LiveLayoutTarget<'_>,
+        target: LayoutTarget<'_>,
         aligner: &LayoutAnchor,
         args: ManimNextToArgs,
     ) -> Result<(), ScriptError> {

@@ -62,21 +62,24 @@ fn effective_boundary_profile_tracks_content_replacement_and_keeps_queries_read_
     scene.add_many(&[(&family).into()]).unwrap();
     let mut execution = scene.into_execution().unwrap();
     assert!(!execution
-        .live()
-        .requires_content_boundary((&family).into())
+        .scene()
+        .effective_requires_content_boundary((&family).into())
         .unwrap());
     // Replacing content preserves the target's style. Image admission must
     // reject a stroked geometry style before changing either authority.
     let publication = execution.session().publication_context();
     let revision = execution.scene().revision();
     let state = target.state().unwrap();
-    assert!(execution.live().replace_content(&target, &image).is_err());
+    assert!(execution
+        .scene_mut()
+        .replace_content(&target, &image)
+        .is_err());
     assert_eq!(execution.session().publication_context(), publication);
     assert_eq!(execution.scene().revision(), revision);
     assert_eq!(target.state().unwrap(), state);
     assert!(!execution
-        .live()
-        .requires_content_boundary((&family).into())
+        .scene()
+        .effective_requires_content_boundary((&family).into())
         .unwrap());
     {
         execution
@@ -94,21 +97,24 @@ fn effective_boundary_profile_tracks_content_replacement_and_keeps_queries_read_
         execution.scene_mut().disable_stroke(&target).unwrap();
     }
     for source in [&image, &geometry, &image] {
-        execution.live().replace_content(&target, source).unwrap();
+        execution
+            .scene_mut()
+            .replace_content(&target, source)
+            .unwrap();
         let expected = MobjectTarget::from(source)
             .requires_content_boundary()
             .unwrap();
         assert_eq!(
             execution
-                .live()
-                .requires_content_boundary((&family).into())
+                .scene()
+                .effective_requires_content_boundary((&family).into())
                 .unwrap(),
             expected
         );
         assert_eq!(
             execution
-                .live()
-                .requires_content_boundary(source.into())
+                .scene()
+                .effective_requires_content_boundary(source.into())
                 .unwrap(),
             expected
         );
@@ -116,14 +122,14 @@ fn effective_boundary_profile_tracks_content_replacement_and_keeps_queries_read_
     let before = execution.session().publication_context();
     let foreign = Scene::new().circle(0.5).unwrap();
     assert!(execution
-        .live()
-        .requires_content_boundary((&foreign).into())
+        .scene()
+        .effective_requires_content_boundary((&foreign).into())
         .is_err());
     assert_eq!(execution.session().publication_context(), before);
     target.set_z_index(4.0).unwrap();
     assert!(execution
-        .live()
-        .requires_content_boundary((&family).into())
+        .scene()
+        .effective_requires_content_boundary((&family).into())
         .is_err());
     assert_eq!(execution.session().publication_context(), before);
 }
@@ -143,23 +149,34 @@ fn generic_table_entries_use_retained_text_layout_before_and_after_live_placemen
     assert_eq!(target.get_num_points().unwrap(), 0);
     let authored = anchor.critical_point_3d(SemanticVec3::ZERO).unwrap();
     scene.add_many(&[table.family().into()]).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let before = execution.publication_context();
-    let mut live = scene.live(&mut execution);
-    assert!(live.requires_content_boundary(target).unwrap());
+    let mut execution = scene.into_execution().unwrap();
+    let before = execution.session().publication_context();
+    assert!(execution
+        .scene()
+        .effective_requires_content_boundary(target)
+        .unwrap());
     assert_eq!(
-        live.layout_critical_point_3d(&anchor, SemanticVec3::ZERO)
+        execution
+            .scene()
+            .effective_layout_critical_point_3d(&anchor, SemanticVec3::ZERO)
             .unwrap(),
         authored
     );
-    live.shift_family(table.family(), 1.5, -0.5).unwrap();
-    assert!(live.requires_content_boundary(target).unwrap());
-    let after = live
-        .layout_critical_point_3d(&anchor, SemanticVec3::ZERO)
+    execution
+        .scene_mut()
+        .shift_family(table.family(), 1.5, -0.5)
+        .unwrap();
+    assert!(execution
+        .scene()
+        .effective_requires_content_boundary(target)
+        .unwrap());
+    let after = execution
+        .scene()
+        .effective_layout_critical_point_3d(&anchor, SemanticVec3::ZERO)
         .unwrap();
     assert!((after.x - authored.x - 1.5).abs() < 1e-6);
     assert!((after.y - authored.y + 0.5).abs() < 1e-6);
-    assert_ne!(execution.publication_context(), before);
+    assert_ne!(execution.session().publication_context(), before);
 }
 
 #[cfg(feature = "native-text")]
@@ -170,11 +187,19 @@ fn boundary_profile_tracks_text_content_without_host_type_or_identity_changes() 
     let text = scene.text("a").unwrap();
     scene.add(&target).unwrap();
     let id = target.node_id();
-    let mut execution = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut execution);
-    assert!(!live.requires_content_boundary((&target).into()).unwrap());
-    live.replace_content(&target, &text).unwrap();
-    assert!(live.requires_content_boundary((&target).into()).unwrap());
+    let mut execution = scene.into_execution().unwrap();
+    assert!(!execution
+        .scene()
+        .effective_requires_content_boundary((&target).into())
+        .unwrap());
+    execution
+        .scene_mut()
+        .replace_content(&target, &text)
+        .unwrap();
+    assert!(execution
+        .scene()
+        .effective_requires_content_boundary((&target).into())
+        .unwrap());
     assert_eq!(target.node_id(), id);
     assert_eq!(target.get_num_points().unwrap(), 0);
 }

@@ -53,7 +53,10 @@ export async function qualifyPreviewShell(browser, base, output) {
           await page.waitForFunction(card=>card.dataset.embedView==='code' &&
             card.querySelector('iframe').getBoundingClientRect().height>=350,await card.elementHandle());
           await frame.locator('#python-scene-source').fill(`# retained draft ${index}`);
-          assert.equal(await frame.locator('.preview-pane').isVisible(),false);
+          assert.equal(await frame.locator('.preview-pane').evaluate(panel => panel.inert),true,
+            'Code makes the covered preview inert');
+          assert.equal(await frame.getByRole('tabpanel',{name:'View',exact:true}).count(),0,
+            'Code hides the preview from accessibility navigation');
           await assertDocumentWidth(page,`${label}-code-${index}`,output);
           await frame.getByRole('tab',{name:'View',exact:true}).click();
           await frame.getByRole('tab',{name:'Code',exact:true}).click();
