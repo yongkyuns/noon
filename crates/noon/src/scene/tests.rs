@@ -325,7 +325,6 @@ fn effective_path_and_content_require_the_scene_owned_publication() {
 
     for result in [
         scene.effective_path_query(&line).map(|_| ()),
-        scene.effective_all_points((&line).into()).map(|_| ()),
         scene.effective_content(&line).map(|_| ()),
     ] {
         assert!(matches!(
@@ -336,23 +335,22 @@ fn effective_path_and_content_require_the_scene_owned_publication() {
         ));
     }
 
+    let setup_points = scene.all_points((&line).into()).unwrap();
     let execution = scene.execution_session().unwrap();
     scene.install_execution(execution);
     let query = scene.effective_path_query(&line).unwrap();
     assert_eq!(query.start().unwrap(), (1.0, 2.0));
     assert_eq!(query.end().unwrap(), (4.0, 6.0));
     assert!(scene.effective_content(&line).unwrap().geometry().is_some());
-    assert_eq!(
-        scene.effective_all_points((&line).into()).unwrap(),
-        query.points().unwrap()
-    );
+    assert_eq!(setup_points, query.points().unwrap());
+    assert_eq!(scene.all_points((&line).into()).unwrap(), setup_points);
     let publication = scene.owned_execution().publication_context();
 
     let mut foreign_scene = Scene::new();
     let foreign = foreign_scene.line((0.0, 0.0), (1.0, 0.0)).unwrap();
     for result in [
         scene.effective_path_query(&foreign).map(|_| ()),
-        scene.effective_all_points((&foreign).into()).map(|_| ()),
+        scene.all_points((&foreign).into()).map(|_| ()),
         scene.effective_content(&foreign).map(|_| ()),
     ] {
         assert!(matches!(result, Err(crate::AuthoringError::ForeignStore)));
@@ -360,7 +358,7 @@ fn effective_path_and_content_require_the_scene_owned_publication() {
     line.shift(0.0, 1.0).unwrap();
     for result in [
         scene.effective_path_query(&line).map(|_| ()),
-        scene.effective_all_points((&line).into()).map(|_| ()),
+        scene.all_points((&line).into()).map(|_| ()),
         scene.effective_content(&line).map(|_| ()),
     ] {
         assert!(matches!(
@@ -440,6 +438,42 @@ fn scene_point_matching_rejects_active_render_override_before_mutating_source() 
 }
 
 #[test]
+fn authored_layout_center_can_include_cubic_handles_until_execution_starts() {
+    let mut scene = Scene::new();
+    let path = scene
+        .path(
+            VectorPath::from_manim_points_f64(vec![(0., 0.), (6., 2.), (8., 2.), (2., 0.)]),
+            Default::default(),
+        )
+        .unwrap();
+    scene.add(&path).unwrap();
+    let boundary = scene.layout(&path, AuthoredLayoutCenter::Boundary).unwrap();
+    let bounds = scene.layout(&path, AuthoredLayoutCenter::Bounds).unwrap();
+    assert_eq!(boundary.center, (1., 0.));
+    assert_eq!(bounds.center, (4., 1.));
+    assert_eq!(
+        (boundary.width, boundary.height),
+        (bounds.width, bounds.height)
+    );
+
+    let running = scene.into_execution().unwrap();
+    assert_eq!(
+        running
+            .scene()
+            .layout(&path, AuthoredLayoutCenter::Boundary)
+            .unwrap(),
+        boundary
+    );
+    assert_eq!(
+        running
+            .scene()
+            .layout(&path, AuthoredLayoutCenter::Bounds)
+            .unwrap(),
+        boundary
+    );
+}
+
+#[test]
 fn effective_family_layout_is_scene_owned_and_requires_running_execution() {
     let mut scene = Scene::new();
     let mut left = scene.square(2.0).unwrap();
@@ -453,6 +487,9 @@ fn effective_family_layout_is_scene_owned_and_requires_running_execution() {
         .add_many(&[MobjectTarget::Object(&left), MobjectTarget::Object(&right)])
         .unwrap();
 
+    let authored = scene.family_layout(&family).unwrap();
+    assert_eq!(authored.center, (0.0, 0.0));
+    assert_eq!((authored.width, authored.height), (6.0, 2.0));
     let error = scene.effective_family_layout(&family).unwrap_err();
     assert!(matches!(
         error,
@@ -464,6 +501,7 @@ fn effective_family_layout_is_scene_owned_and_requires_running_execution() {
     let execution = scene.execution_session().unwrap();
     scene.install_execution(execution);
     let layout = scene.effective_family_layout(&family).unwrap();
+    assert_eq!(scene.family_layout(&family).unwrap(), authored);
     assert_eq!(layout.center, (0.0, 0.0));
     assert_eq!((layout.width, layout.height), (6.0, 2.0));
     assert_eq!(

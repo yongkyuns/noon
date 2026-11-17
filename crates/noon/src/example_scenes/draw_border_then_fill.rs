@@ -3,8 +3,9 @@
 use std::rc::Rc;
 
 use crate::{
-    AnimationOptions, Color, ContinuationStep, DrawBorderThenFillOptions, LiveContinuation,
-    LiveProgram, Mobject, MobjectFamily, RateFunction, Scene,
+    AnimationCompositionRequest, AnimationOptions, Color, ContinuationStep,
+    DrawBorderThenFillOptions, LiveContinuation, LiveProgram, Mobject, MobjectFamily, RateFunction,
+    Scene,
 };
 
 pub struct DrawBorderThenFill {
@@ -20,15 +21,18 @@ impl LiveContinuation for DrawBorderThenFill {
         match self.stage {
             0 => {
                 let segment = live
-                    .declare_and_activate_family_draw_border_then_fill(
-                        &self.family,
-                        DrawBorderThenFillOptions::new(0.04, Some(Color::YELLOW))
-                            .with_phase_rate_function(RateFunction::Linear),
-                        AnimationOptions::new()
-                            .run_time(3.0)
-                            .rate_func(RateFunction::Linear)
-                            .lag_ratio(0.5)
-                            .introducer(true),
+                    .declare_and_activate_composition(
+                        &AnimationCompositionRequest::FamilyDrawBorderThenFill {
+                            target: &self.family,
+                            outline: DrawBorderThenFillOptions::new(0.04, Some(Color::YELLOW))
+                                .with_phase_rate_function(RateFunction::Linear),
+                            options: AnimationOptions::new()
+                                .run_time(3.0)
+                                .rate_func(RateFunction::Linear)
+                                .lag_ratio(0.5)
+                                .introducer(true),
+                        },
+                        AnimationOptions::new(),
                     )
                     .map_err(|error| error.to_string())?;
                 self.stage = 1;

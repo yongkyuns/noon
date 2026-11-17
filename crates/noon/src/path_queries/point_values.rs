@@ -232,17 +232,8 @@ impl MobjectTarget<'_> {
     }
 }
 
-/// Read full-coordinate family occurrences from one coherent publication.
-pub fn effective_all_points_3d(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    target: MobjectTarget<'_>,
-) -> Result<Vec<SemanticVec3>, AuthoringError> {
-    effective_point_array(store, execution, target).map(PointArrayObservation::into_points)
-}
-
 /// Full vector anchors from one coherent execution publication.
-pub fn effective_vector_boundary_points_3d(
+pub(super) fn effective_vector_boundary_points_3d(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     target: MobjectTarget<'_>,
@@ -256,38 +247,10 @@ pub fn effective_vector_boundary_points_3d(
     )
 }
 
-/// Full-coordinate counterpart of the explicit planar boundary observation.
-pub fn effective_path_boundary_points_3d(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    target: MobjectTarget<'_>,
-) -> Result<Vec<SemanticVec3>, AuthoringError> {
-    match target {
-        MobjectTarget::Object(_) => effective_vector_boundary_points_3d(store, execution, target),
-        MobjectTarget::Family(_) => effective_all_points_3d(store, execution, target),
-    }
-}
-
 #[cfg(test)]
 mod family_tests;
 
-/// Critical point of one coherent raw or vector-boundary observation.
-pub fn effective_critical_point_3d(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    target: MobjectTarget<'_>,
-    direction: SemanticVec3,
-    vector_boundary: bool,
-) -> Result<SemanticVec3, AuthoringError> {
-    let points = if vector_boundary {
-        effective_vector_boundary_points_3d(store, execution, target)?
-    } else {
-        effective_all_points_3d(store, execution, target)?
-    };
-    critical_point_for_xyz_points(&points, direction)
-}
-
-fn critical_point_for_xyz_points(
+pub(super) fn critical_point_for_xyz_points(
     points: &[SemanticVec3],
     direction: SemanticVec3,
 ) -> Result<SemanticVec3, AuthoringError> {
