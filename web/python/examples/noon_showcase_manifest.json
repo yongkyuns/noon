@@ -16,7 +16,7 @@
     },
     {
       "id": "showcase-group-animation", "title": "Move the whole diagram",
-      "lesson": "Animate a diagram and progress rail as independent groups, each with its own pivot, while a marker advances in the same play.",
+      "lesson": "Group the steps inside the diagram and animate them around a shared pivot while the progress rail and marker move independently.",
       "primary_feature": "group-animation", "category": "Visual design",
       "path": "python/examples/showcase_group_animation.py", "features": ["VGroup", "animate", "shared pivot", "set_color"],
       "duration": 6.5, "thumbnail_time": 6.5,

@@ -122,7 +122,11 @@ pub(super) fn root_options(
     else {
         return Ok(None);
     };
-    if !has_scope_effects(store, *source, *target_state)? {
+    if !matches!(
+        request,
+        SemanticCompositionRequest::FamilyMethodTargetTo { .. }
+    ) && !has_scope_effects(store, *source, *target_state)?
+    {
         return Ok(None);
     }
     let mut adjusted = request.clone();
