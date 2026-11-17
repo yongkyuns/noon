@@ -737,7 +737,7 @@ fn owned_program_preparation_rejects_stale_bindings_reuses_modules_and_retires_c
     session.session_mut().require_effect_resource_preparation();
     let context = session.session().publication_context();
     let pending = session
-        .live()
+        .scene_mut()
         .prepare_membership(noon::SceneMembershipRequest::Replace {
             old: (&object).into(),
             new: (&incoming).into(),

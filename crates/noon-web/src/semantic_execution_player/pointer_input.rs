@@ -8,7 +8,7 @@ use noon::integration::{
 use noon::SceneExecution;
 use noon_core::{NativePointerId, NativePointerInput, Vec2};
 
-/// Borrowed input adapter for one player-owned semantic store/session pair.
+/// Borrowed input adapter for the player's Scene execution.
 /// It owns no pointer policy, target set, or source state: all occurrences
 /// enter the existing session drag policy, whose empty target set preserves
 /// ordinary native pointer behavior.
@@ -107,9 +107,7 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, String> {
         self.source
-            .with_store_and_session(|store, session| {
-                session.submit_translation_drag_input(store, token, input)
-            })
+            .submit_translation_drag_input(token, input)
             .map(|receipt| {
                 if let Some(undo) = receipt.undo {
                     *self.translation_drag_undo = Some(undo);

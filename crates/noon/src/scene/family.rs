@@ -30,11 +30,30 @@ impl Scene {
         members: &[MobjectTarget<'_>],
         adding: bool,
     ) -> Result<Vec<bool>, AuthoringError> {
-        family.require_store(self.integration_store())?;
-        let (transaction, changed) =
-            crate::family_authoring::family_membership_transaction(family, members, adding)?;
+        let (transaction, changed) = self.prepare_family_edit(family, members, adding)?;
         self.apply_semantic_transaction(transaction)?;
         Ok(changed)
+    }
+
+    /// Stage direct member addition for renderer preparation. The change flags
+    /// describe the pending edit, which commits only after host acknowledgment.
+    pub fn prepare_family_addition<'root>(
+        &mut self,
+        family: impl Into<MobjectTarget<'root>>,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<(crate::StagedEffectPublication, Vec<bool>), AuthoringError> {
+        let (transaction, changed) = self.prepare_family_edit(family.into(), members, true)?;
+        Ok((self.stage_effect_publication(transaction)?, changed))
+    }
+
+    fn prepare_family_edit(
+        &self,
+        family: MobjectTarget<'_>,
+        members: &[MobjectTarget<'_>],
+        adding: bool,
+    ) -> Result<(noon_core::SemanticMutationTransaction, Vec<bool>), AuthoringError> {
+        family.require_store(self.integration_store())?;
+        crate::family_authoring::family_membership_transaction(family, members, adding)
     }
 
     /// Move the unique incoming direct members to the front of one family.
