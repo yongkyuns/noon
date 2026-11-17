@@ -1937,24 +1937,21 @@ mod tests {
 
     #[test]
     fn realtime_clock_reanchors_when_timed_work_starts_after_quiescence() {
-        use noon_core::{
-            AnimationOptions, RateFunction, SemanticObjectState, SemanticStore, SemanticVec3,
-            StoredGeometry,
-        };
-
-        let mut store = SemanticStore::new();
-        let object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.0,
-            }));
-        store.attach_to_scene(object).unwrap();
-        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
-        target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
-        let target = store.insert_semantic_object(target_state);
-        let animation = store
-            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let target = scene.target_editor(&circle).unwrap();
+        scene.set_translation(&target, 4.0, 0.0).unwrap();
+        let animation = scene
+            .declare_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
             .unwrap();
-        let session = test_scene_from_store(store).into_execution().unwrap();
+        let session = scene.into_execution().unwrap();
         let mut app = NativeApp::new(session, NativeViewportConfig::default());
 
         let original_wall = Instant::now();
@@ -1968,17 +1965,8 @@ mod tests {
         app.execution
             .static_execution_mut()
             .unwrap()
-            .with_store_and_session(|store, session| {
-                session
-                    .activate_animation(
-                        store,
-                        animation,
-                        AnimationOptions::new()
-                            .run_time(1.0)
-                            .rate_func(RateFunction::Linear),
-                    )
-                    .map(|_| ())
-            })
+            .live()
+            .play_animation(&animation)
             .unwrap();
         app.advance_realtime_timeline(restart_wall).unwrap();
         assert_eq!(app.session().frame().time, 0.0);

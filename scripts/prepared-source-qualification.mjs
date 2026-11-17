@@ -112,21 +112,50 @@ try {
           result.checks.push("bounded-ahead-while-paused", "no-preparation-or-frame-polling", "not-falsely-finished");
           if (scenario === "bounded") {
             const rect = await page.locator("#scene").boundingBox();
+            // Install the observer before the click. Copy the displayed pixels
+            // during the interaction so the screenshot round trip cannot miss it.
+            await page.evaluate(() => {
+              const canvas = document.querySelector("#scene");
+              const copy = document.createElement("canvas");
+              copy.width = canvas.width;
+              copy.height = canvas.height;
+              const context = copy.getContext("2d", { willReadFrequently: true });
+              context.globalCompositeOperation = "copy";
+              const previous = autoCanvas.highlightPresentationSnapshot().presented;
+              let activation = null;
+              const observe = () => {
+                const frame = autoCanvas.highlightPresentationSnapshot();
+                if (frame.interactions) {
+                  activation ??= frame;
+                  if (frame.presented !== null && frame.current === frame.presented &&
+                      frame.presented !== previous) {
+                    context.drawImage(canvas, 0, 0);
+                    const [red, , blue, alpha] = context.getImageData(
+                      Math.floor(copy.width / 2), Math.floor(copy.height / 2), 1, 1,
+                    ).data;
+                    // Indicate tints the opaque blue fixture circle at its center.
+                    if (red > 0 && blue > red && alpha === 255) {
+                      autoCanvas.highlightCapture = { activation, frame, png: copy.toDataURL("image/png") };
+                      return;
+                    }
+                  }
+                } else if (activation !== null) {
+                  autoCanvas.highlightCapture = { activation, frame, png: null };
+                  return;
+                }
+                requestAnimationFrame(observe);
+              };
+              requestAnimationFrame(observe);
+            });
             await page.mouse.click(rect.x + 320, rect.y + 180);
-            await page.waitForFunction(() => JSON.parse(autoCanvas.renderer.debugPreparedPlaybackJson()).interactions);
-            result.highlightPresentation = { afterActivation: await page.evaluate(() => autoCanvas.highlightPresentationSnapshot()) };
-            const activationReceipt = result.highlightPresentation.afterActivation;
-            assert.equal(activationReceipt.interactions, true);
-            const receipt = await page.waitForFunction(previousEpoch => {
-              const sample = autoCanvas.highlightPresentationSnapshot();
-              return !sample.interactions || (sample.presented !== null
-                && sample.current === sample.presented && sample.presented !== previousEpoch) ? sample : false;
-            }, activationReceipt.presented);
-            result.highlightPresentation.afterReceiptOrExpiry = await receipt.jsonValue();
-            await receipt.dispose();
-            assert.equal(result.highlightPresentation.afterReceiptOrExpiry.interactions, true,
-              "interaction expired before a newer matching presentation receipt");
-            assert.ok(!equalPixels(baseline, await capture("capped-highlight")));
+            const observation = await page.waitForFunction(() => autoCanvas.highlightCapture);
+            const { activation, frame, png } = await observation.jsonValue();
+            await observation.dispose();
+            result.highlightPresentation = { afterActivation: activation, afterReceiptOrExpiry: frame };
+            assert.ok(png, "interaction expired before a presented highlight was captured");
+            const highlight = Buffer.from(png.slice("data:image/png;base64,".length), "base64");
+            await writeFile(path.join(output, `${backend}-${scenario}-capped-highlight.png`), highlight);
+            assert.ok(!equalPixels(baseline, PNG.sync.read(highlight)));
             assert.equal((await state()).calls, capped.calls);
             await page.waitForFunction(() => !JSON.parse(autoCanvas.renderer.debugPreparedPlaybackJson()).interactions && autoCanvas.direct.stats().idle && autoCanvas.pump.stats().waiting);
             assert.ok(equalPixels(baseline, await capture("capped-restored")));

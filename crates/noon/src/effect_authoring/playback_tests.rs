@@ -67,6 +67,11 @@ fn supported_bootstrap_keeps_identity_and_clean_publications() {
 fn predeclared_motion_and_glow_complete_through_public_scene() {
     let (mut scene, source) = fixture(true);
     let old = definition(&source);
+    let effect = source.get_effect("glow").unwrap();
+    assert_eq!(
+        scene.effective_effect(&effect),
+        Err(crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable.into())
+    );
     let mut target = source.target_editor().unwrap();
     target.shift(2.0, 0.0).unwrap();
     target
@@ -83,13 +88,22 @@ fn predeclared_motion_and_glow_complete_through_public_scene() {
     let mut session = scene.into_execution().unwrap();
     let segment = session.live().play_animation(&animation).unwrap();
     session.live().advance_segment_to(segment, 0.5).unwrap();
-    let middle = only_effect(row(session.session(), &source).effects.as_ref().unwrap()).definition;
+    let middle = session.scene().effective_effect(&effect).unwrap();
     assert_eq!(
         middle.as_glow().unwrap().intensity(),
         old.intensity() + (1.4 - old.intensity()) * 0.5
     );
     assert_eq!(middle.radius(), Some(Pixels(4.875).into()));
-    assert_eq!(row(session.session(), &source).transform.translation.x, 1.0);
+    assert_eq!(
+        session
+            .scene()
+            .effective(&source)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        1.0
+    );
     assert_eq!(
         definition(&source),
         old,
@@ -101,7 +115,7 @@ fn predeclared_motion_and_glow_complete_through_public_scene() {
     assert_eq!(definition(&source).color(), Color::BLUE);
     assert_eq!(definition(&source).radius(), Pixels(6.5).into());
     assert_eq!(
-        only_effect(row(session.session(), &source).effects.as_ref().unwrap()).definition,
+        session.scene().effective_effect(&effect).unwrap(),
         (definition(&source)).into()
     );
     session
@@ -109,8 +123,10 @@ fn predeclared_motion_and_glow_complete_through_public_scene() {
         .set_glow(&source, EffectUpdate::default().intensity(0.2))
         .unwrap();
     assert_eq!(
-        only_effect(row(session.session(), &source).effects.as_ref().unwrap())
-            .definition
+        session
+            .scene()
+            .effective_effect(&effect)
+            .unwrap()
             .as_glow()
             .unwrap()
             .intensity(),
@@ -170,6 +186,17 @@ fn live_add_remove_and_stale_handle_preserve_source_and_spatial_state() {
     session.session_mut().take_renderer_publication();
     session.scene_mut().set_glow(&source, initial()).unwrap();
     let original = source.get_effect("glow").unwrap();
+    let (foreign_scene, foreign_source) = fixture(true);
+    assert_eq!(
+        foreign_scene.effective_effect(&original),
+        Err(AuthoringError::ForeignStore)
+    );
+    assert_eq!(
+        session
+            .scene()
+            .effective_effect(&foreign_source.get_effect("glow").unwrap()),
+        Err(AuthoringError::ForeignStore)
+    );
     assert_eq!(
         only_effect(row(session.session(), &source).effects.as_ref().unwrap()).attachment,
         original.node_id()
@@ -180,6 +207,10 @@ fn live_add_remove_and_stale_handle_preserve_source_and_spatial_state() {
     assert_ne!(
         source.get_effect("glow").unwrap().node_id(),
         original.node_id()
+    );
+    assert_eq!(
+        session.scene().effective_effect(&original),
+        Err(noon_core::SemanticStoreError::UnknownNode(original.node_id()).into())
     );
     let before = session.session().publication_context();
     assert!(session

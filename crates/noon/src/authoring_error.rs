@@ -29,6 +29,8 @@ pub enum UnsupportedAuthoringOperation {
     EffectivePathRenderOverride,
     /// Effective observations require Scene-owned execution to be running.
     EffectiveStateUnavailable,
+    /// Staging renderer resources requires an installed execution component.
+    EffectPreparationRequiresExecution,
     /// The tracker has no value in the current execution projection.
     EffectiveTrackerUnavailable,
     /// Native-reactive declarations and subscriptions are lowered at bootstrap.
@@ -103,6 +105,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::ManimStyleInterpolation => "Manim style interpolation requires matching solid-paint channels and compatible sheen directions",
             Self::EffectivePathRenderOverride => "path queries require current retained content without active render overrides",
             Self::EffectiveStateUnavailable => "effective state requires a running Scene",
+            Self::EffectPreparationRequiresExecution => "effect preparation requires a running Scene",
             Self::EffectiveTrackerUnavailable => "ValueTracker is not lowered into this execution session",
             Self::SignalAuthoringRequiresSetup => "signal declarations and bindings must be authored before execution",
             Self::CameraRequiresSetup => "camera initialization must precede execution",

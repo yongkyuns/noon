@@ -105,6 +105,7 @@ async function snapshot(page) {
       playing: controls?.dataset.playing ?? null,
       controllable: controls?.dataset.controllable ?? null,
       scrubberDisabled: scrubber?.disabled ?? true,
+      toggleDisabled: controls?.querySelector(".playback-toggle")?.disabled ?? true,
       busy: controls?.dataset.busy ?? null,
       scrubberValue: Number(scrubber?.value ?? NaN),
       scrubberMax: Number(scrubber?.max ?? NaN),
@@ -122,6 +123,7 @@ async function snapshot(page) {
       authoringCount: window.__noonRerunStress?.authoringCount ?? 0,
       sourceOwnedTransitions: window.__noonRerunStress?.sourceOwnedTransitions?.length ?? 0,
       durationKnown: controls?.dataset.durationKnown,
+      preparing: controls?.dataset.preparing,
       buffering: controls?.dataset.buffering,
       elapsedSeconds: Number(controls?.dataset.elapsedSeconds),
       seekEnd: Number(scrubber?.max),
@@ -319,7 +321,13 @@ function assertHeldControls(held) {
   if (liveComparison) assert.equal(held.scrubberDisabled, true);
   else {
     assert.equal(held.buffering, "false");
-    if (held.durationKnown === "true") {
+    if (held.preparing === "true") {
+      // The authoring hook can run before the renderer finishes preparation.
+      assert.equal(held.durationKnown, "false");
+      assert.equal(held.scrubberDisabled, true);
+      assert.equal(held.toggleDisabled, false);
+      assert.equal(held.seekStatus, "Preparing animation…");
+    } else if (held.durationKnown === "true") {
       assert.equal(held.scrubberDisabled, false);
       assert.ok(held.elapsedSeconds >= 0 && held.elapsedSeconds <= held.scrubberMax);
     } else {
