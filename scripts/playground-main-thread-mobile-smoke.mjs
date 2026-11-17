@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
-import { isSquareToCircleNaturalWrap, isSquareToCircleTransformFrame } from "./playground-mobile-frame-contract.mjs";
+import { isSquareToCircleNaturalWrap, isSquareToCircleTransformFrame,
+  SQUARE_TO_CIRCLE_TRANSFORM_START } from "./playground-mobile-frame-contract.mjs";
 import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 
 const { webkit, devices } = playwright;
@@ -157,7 +158,7 @@ try {
     releasePendingStartup = null;
     let metrics;
     const samples = [];
-    let liveIntermediate = null;
+    let firstPresentedFrame = null;
     let naturalFirstWrap = null;
     let previousTime = null;
     let madeForwardProgress = false;
@@ -178,6 +179,7 @@ try {
           time: result.metrics.time,
           backend: result.metrics.backend,
           objectCount: result.metrics.objectCount,
+          presentedFrames: result.metrics.presentedFrames,
           sourceRunExampleId: sourceRun?.exampleId ?? null,
           sourceRunGeneration: sourceRun?.runGeneration ?? null,
           sourceRunCompletedAtMs: sourceRun?.sourceRunCompletedAtMs ?? null,
@@ -190,14 +192,13 @@ try {
         assert.deepEqual({ exampleId: sample.sourceRunExampleId, runGeneration: sample.sourceRunGeneration },
           sourceRunIdentity, "first natural traversal changed Python run identity");
       }
-      if (isSquareToCircleTransformFrame(sample)) {
-        liveIntermediate ??= sample;
-      }
+      if (sample?.presentedFrames > 0) firstPresentedFrame ??= sample;
       if (sample && previousTime !== null && sample.time > previousTime) madeForwardProgress = true;
       if (sample && previousTime !== null && sample.time < previousTime) {
         assert.ok(isSquareToCircleNaturalWrap(previousTime, sample.time, madeForwardProgress),
           `first observed Rust time decrease was not the authored endpoint wrap: ${previousTime} -> ${sample.time}`);
         naturalFirstWrap = { beforeTime: previousTime, afterTime: sample.time,
+          presentedFrames: sample.presentedFrames,
           sourceRunExampleId: sample.sourceRunExampleId, sourceRunGeneration: sample.sourceRunGeneration,
           sourceRunCompletedAtMs: sample.sourceRunCompletedAtMs, backend: sample.backend };
         break;
@@ -215,7 +216,11 @@ try {
     assert.deepEqual({ exampleId: naturalFirstWrap.sourceRunExampleId,
       runGeneration: naturalFirstWrap.sourceRunGeneration }, sourceRunIdentity,
     "natural wrap does not belong to the first selected source run");
-    assert.ok(liveIntermediate, "natural first traversal did not report an intermediate Transform frame");
+    assert.ok(firstPresentedFrame?.time <= SQUARE_TO_CIRCLE_TRANSFORM_START &&
+      firstPresentedFrame.objectCount === 1,
+      "mobile source did not present during Create on its first traversal");
+    assert.ok(naturalFirstWrap.presentedFrames > firstPresentedFrame.presentedFrames,
+      "mobile source did not present new frames during its first traversal");
     if (variant.disableJspi) {
       assert.equal(
         await page.evaluate(() => window.__noonNoJspiWorkerWrapped),
@@ -242,11 +247,8 @@ try {
     assert.ok(Math.abs(metrics.metrics.time - 3) < 1e-6, "source did not complete at its authored time");
     assert.equal(changedPixels(final, background), 0, "mobile final FadeOut frame retained visible geometry");
 
-    // A real-time source must catch up after slow frames. On a busy mobile
-    // runner, polling can observe t=1 and then t=2 without catching t=1.5.
-    // Verify the actual intermediate transformation at exact authored times
-    // through the production playback controls, rather than weakening the
-    // shape/pixel assertion or depending on host scheduling luck.
+    // Real-time playback can catch up across the whole Transform interval.
+    // Check the actual intermediate pixels at an exact authored time.
     const frames = new Map();
     let observation = null;
     for (const [time, label] of [[1, "square"], [1.5, "intermediate"], [2, "circle"], [2.5, "fadeout"]]) {
@@ -331,7 +333,8 @@ try {
     const diagnostics = {
       variant,
       intermediate: observation,
-      liveIntermediate,
+      liveIntermediate: samples.find(isSquareToCircleTransformFrame) ?? null,
+      firstPresentedFrame,
       naturalFirstWrap,
       terminalCheckpoint: { kind: "paused-seek", time: terminalCheckpoint.metrics.time,
         objectCount: terminalCheckpoint.metrics.objectCount },
