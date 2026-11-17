@@ -73,6 +73,12 @@ export class PythonAuthoringClient {
     return this.#readyPromise;
   }
 
+  async sendRuntimeModule(port) {
+    const requestId = this.#beginRequest();
+    this.#worker.postMessage(envelope("runtime_module", { requestId, port }), [port]);
+    return this.#resultFor(requestId);
+  }
+
   async run(
     source,
     context = {},
@@ -310,6 +316,11 @@ export class PythonAuthoringClient {
       validateEnvelope(message);
       if (message.type === "ready") {
         if (!this.#ready && !this.#terminated) void this.#acceptReady(message);
+        return;
+      }
+
+      if (message.type === "runtime_module_sent") {
+        this.#settle(message.requestId, ({ resolve }) => resolve());
         return;
       }
 

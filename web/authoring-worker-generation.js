@@ -49,7 +49,7 @@ export class AuthoringWorkerGeneration {
     return true;
   }
 
-  async clientForRun(token, { requirePristine = true } = {}) {
+  async clientForRun(token, { requirePristine = true, onClient = null } = {}) {
     if (typeof requirePristine !== "boolean") {
       throw new TypeError("requirePristine must be a boolean");
     }
@@ -63,12 +63,14 @@ export class AuthoringWorkerGeneration {
     if (this.#activeClient !== null &&
         this.#activeClient.terminated !== true &&
         (!requirePristine || trustOf(this.#activeClient) === "pristine")) {
+      onClient?.(this.#activeClient);
       return this.#activeClient;
     }
 
     const candidate = this.#ensureCandidate();
     candidate.waiters += 1;
     try {
+      onClient?.(candidate.client);
       await Promise.race([candidate.readyPromise, candidate.cancelledPromise]);
     } catch (error) {
       if (this.#candidate !== candidate || this.#disposed || !this.#isCurrentRun(token)) return null;

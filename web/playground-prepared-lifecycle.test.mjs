@@ -164,7 +164,11 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
     };
     const authoringWorkers = {
       activeClient: authoring,
-      async clientForRun() { if (env.authoringGate) await env.authoringGate.promise; return authoring; },
+      async clientForRun(_token, { onClient }) {
+        onClient(authoring);
+        if (env.authoringGate) await env.authoringGate.promise;
+        return authoring;
+      },
       prepareReplacement(client) { calls.push(["prewarm-authoring", client]); return true; },
       retire(client) { return client === authoring; },
       dispose() {},

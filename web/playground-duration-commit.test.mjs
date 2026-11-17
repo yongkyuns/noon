@@ -5,7 +5,7 @@ import test from "node:test";
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
 
 const controlsStart = main.indexOf("function updatePlaybackControls(");
-const controlsEnd = main.indexOf("function ensureRuntimePreparation()", controlsStart);
+const controlsEnd = main.indexOf("function ensureRuntimePreparation(", controlsStart);
 assert.ok(controlsStart >= 0 && controlsEnd > controlsStart, "playback-control boundary must exist");
 const controlsBody = main.slice(controlsStart, controlsEnd);
 assert.match(controlsBody, /new PlaygroundPlaybackControls\([\s\S]*?\{ durationSeconds, onError: showPlaybackError \},/);

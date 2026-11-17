@@ -66,7 +66,7 @@ for (const loadGalleryManifest of [
 }
 
 const createRuntimeStart = main.indexOf("function createRuntimeClient()");
-const preparationStart = main.indexOf("function ensureRuntimePreparation()", createRuntimeStart);
+const preparationStart = main.indexOf("function ensureRuntimePreparation(", createRuntimeStart);
 const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady({", preparationStart);
 const executionReadyStart = main.indexOf("async function ensureExecutionReady()", runtimeReadyStart);
 assert.ok(
@@ -86,7 +86,7 @@ assert.match(
 );
 assert.match(
   preparationBody,
-  /const ready = candidate\.prepare\(\);/,
+  /candidate\.prepare\(\{ connectRuntimeModule: port => authoringClient\.sendRuntimeModule\(port\) \}\)/,
   "first authored Run must prepare the mode-free render owner before engine selection",
 );
 assert.doesNotMatch(
@@ -106,7 +106,7 @@ assert.doesNotMatch(
 );
 assert.match(
   runtimeReadyBody,
-  /const prepared = preparation \?\? ensureRuntimePreparation\(\);/,
+  /const prepared = preparation \?\? ensureRuntimePreparation\(client\);/,
   "authored startup must consume the candidate prepared in parallel with Python",
 );
 assert.match(
@@ -157,7 +157,7 @@ const selectExampleStart = main.indexOf("async function selectExample(", runScen
 assert.ok(runSceneStart >= 0 && selectExampleStart > runSceneStart, "runScene boundary must exist");
 const runSceneBody = main.slice(runSceneStart, selectExampleStart);
 const preparationCall = runSceneBody.indexOf(
-  "const preparation = player === null ? ensureRuntimePreparation() : null;",
+  "if (player === null) preparation = ensureRuntimePreparation(candidate);",
 );
 const authoringCall = runSceneBody.indexOf("authored = await client.run(source,");
 const ensureRuntimeCall = runSceneBody.indexOf("result = await ensureRuntimeReady({");
@@ -184,7 +184,7 @@ assert.ok(
 );
 assert.match(
   preparationBody,
-  /const startedAtMs = performance\.now\(\);\s*const ready = candidate\.prepare\(\);\s*const preparation = \{ candidate, ready, startedAtMs, readyAtMs: null \};/,
+  /const startedAtMs = performance\.now\(\);\s*const ready = candidate\.prepare\(\{ connectRuntimeModule: [^\n]+\}\);\s*const preparation = \{ candidate, authoringClient, ready, startedAtMs, readyAtMs: null \};/,
   "render-preparation timestamps must bracket the actual candidate.prepare() call",
 );
 assert.match(
@@ -318,7 +318,7 @@ assert.ok(firstBarrier > initializeStart, "startup resources must share one hand
 const initializeBody = worker.slice(initializeStart, firstBarrier);
 for (const [pattern, label] of [
   [
-    /const noonWebReady = measureStartupTask\([\s\S]*?"noonWebInitMs"[\s\S]*?\(\) => initNoonWeb\(\)\);/,
+    /const noonWebReady = measureStartupTask\([\s\S]*?"noonWebInitMs"[\s\S]*?\(\) => runtimeBuildPromise\);/,
     "Noon WASM startup",
   ],
   [

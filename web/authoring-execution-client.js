@@ -80,13 +80,14 @@ export class AuthoringExecutionClient {
     {
       transportMode = undefined,
       sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
+      connectRuntimeModule = undefined,
     } = {},
   ) {
     if (this.#player !== null || this.#preparedPlayer !== null || this.#transition !== null) {
       throw new Error("AuthoringExecutionClient is already started or preparing");
     }
     this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
-    const options = { sharedSlotCapacity: this.#sharedSlotCapacity };
+    const options = { sharedSlotCapacity: this.#sharedSlotCapacity, connectRuntimeModule };
     if (transportMode !== undefined) {
       options.transportMode = transportMode;
     }

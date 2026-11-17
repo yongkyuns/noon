@@ -67,7 +67,7 @@ assert.match(
   "playground must be able to adopt a replacement DOM canvas after prepared-owner rollback",
 );
 const createRuntimeStart = main.indexOf("function createRuntimeClient()");
-const preparationStart = main.indexOf("function ensureRuntimePreparation()", createRuntimeStart);
+const preparationStart = main.indexOf("function ensureRuntimePreparation(", createRuntimeStart);
 const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady(", preparationStart);
 assert.ok(
   createRuntimeStart >= 0 && preparationStart > createRuntimeStart && runtimeReadyStart > preparationStart,

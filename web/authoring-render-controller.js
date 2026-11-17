@@ -18,6 +18,21 @@ const RENDER_PROTOCOL_VERSION = 1;
 const MODE_RETAINED = "retained";
 const BOOTSTRAP_QUEUE_LIMIT = 1;
 
+function receiveRuntimeModule(port) {
+  if (!(port instanceof MessagePort)) throw new Error("renderer runtime module delivery requires a MessagePort");
+  return new Promise((resolve, reject) => {
+    port.onmessage = ({ data }) => {
+      port.close();
+      if (data === null || data instanceof WebAssembly.Module) resolve(data ?? undefined);
+      else reject(new Error("renderer received an invalid WebAssembly module"));
+    };
+    port.onmessageerror = () => {
+      port.close();
+      resolve(undefined);
+    };
+  });
+}
+
 let wasmInitializationPromise = null;
 
 function initializeWasmModule(wasmModule) {
@@ -225,7 +240,9 @@ export function createAuthoringRenderController(host) {
     width = normalizedDimension(message.width ?? canvas.width);
     height = normalizedDimension(message.height ?? canvas.height);
     transportMode = message.transportMode;
-    await initializeWasmModule(message.wasmModule);
+    const wasmModule = message.wasmModulePort === undefined
+      ? message.wasmModule : await receiveRuntimeModule(message.wasmModulePort);
+    await initializeWasmModule(wasmModule);
     if (stopped) return false;
     canvas.addEventListener("webglcontextrestored", wakeAfterWebGlContextRestored);
     canvas.addEventListener("webglcontextlost", suspendForWebGlContextLoss);

@@ -648,14 +648,20 @@ function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds
   }
 }
 
-function ensureRuntimePreparation() {
+function ensureRuntimePreparation(authoringClient) {
   if (player !== null) return null;
+  if (runtimePreparation?.readyAtMs === null && runtimePreparation.authoringClient !== authoringClient) {
+    const stale = runtimePreparation.candidate;
+    runtimePreparation = null;
+    stale.terminate();
+    adoptRuntimeCanvas(stale);
+  }
   if (runtimePreparation !== null) return runtimePreparation;
 
   const candidate = createRuntimeClient();
   const startedAtMs = performance.now();
-  const ready = candidate.prepare();
-  const preparation = { candidate, ready, startedAtMs, readyAtMs: null };
+  const ready = candidate.prepare({ connectRuntimeModule: port => authoringClient.sendRuntimeModule(port) });
+  const preparation = { candidate, authoringClient, ready, startedAtMs, readyAtMs: null };
   runtimePreparation = preparation;
   status.dataset.runtimeStartup = "preparing-on-run";
   status.dataset.executionTopology = "preparing-render-owner";
@@ -690,7 +696,7 @@ async function ensureRuntimeReady({
   if (player !== null) return null;
 
   const task = (async () => {
-    const prepared = preparation ?? ensureRuntimePreparation();
+    const prepared = preparation ?? ensureRuntimePreparation(client);
     if (prepared === null) {
       throw new Error("execution runtime preparation is unavailable");
     }
@@ -1190,8 +1196,11 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
       }
       setRuntimeStatus("Building Python scene…", "running");
       setRunPatchStatus(runToken, `Building ${example.title} in the Python worker…`, "running");
-      const preparation = player === null ? ensureRuntimePreparation() : null;
+      let preparation = null;
       const client = await authoringWorkers.clientForRun(runToken, {
+        onClient(candidate) {
+          if (player === null) preparation = ensureRuntimePreparation(candidate);
+        },
         // Explicit qualification arms may request the original observed path.
         // The product default always starts proof in a pristine interpreter.
         requirePristine: preparedPlayback,
@@ -1899,7 +1908,8 @@ try {
       playbackControls = null;
       const activeAuthoringClient = authoringWorkers.activeClient;
       if (activeAuthoringClient !== null) authoringWorkers.retire(activeAuthoringClient);
-      if (!event.persisted) authoringWorkers.dispose();
+      if (event.persisted) authoringWorkers.retireCandidate();
+      else authoringWorkers.dispose();
       const preparation = runtimePreparation;
       runtimePreparation = null;
       if (preparation !== null) {
