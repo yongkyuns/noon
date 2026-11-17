@@ -89,8 +89,15 @@ fn group_animation_preserves_alias_identity_and_unrelated_state() {
 }
 
 #[test]
-fn group_and_independent_object_share_timing_admission_and_completion() {
+fn independent_groups_and_object_share_timing_admission_and_completion() {
     let (mut scene, family, left, right) = group_scene();
+    let upper = scene.square(1.0).unwrap();
+    let lower = scene.square(1.0).unwrap();
+    scene.shift(&upper, Vec2::new(4.0, 2.0)).unwrap();
+    scene.shift(&lower, Vec2::new(4.0, -2.0)).unwrap();
+    let peer = scene.family(&[(&upper).into(), (&lower).into()]).unwrap();
+    scene.add_many(&[(&peer).into()]).unwrap();
+    let retained_peer = peer.animate().shift(UP);
     let marker = scene.circle(0.25).unwrap(); // Admitted with the complete play.
     let alias = scene.family(&[(&left).into()]).unwrap();
     let mut session = scene.into_execution().unwrap();
@@ -107,6 +114,10 @@ fn group_and_independent_object_share_timing_admission_and_completion() {
                 .shift(UP)
                 .set_color(Color::ORANGE)
                 .with_options(linear().run_time(4.0).lag_ratio(1.0)),
+            peer.animate()
+                .scale(0.5)
+                .set_color(Color::BLUE)
+                .with_options(linear().run_time(4.0)),
         )
             .into_animation_request(),
         linear().run_time(2.0),
@@ -115,6 +126,12 @@ fn group_and_independent_object_share_timing_admission_and_completion() {
     assert!(session.scene_mut().contains_direct(&marker).unwrap());
     assert_eq!(segment.end_time() - segment.start_time(), 2.0);
     session.live().advance_segment_to(segment, 0.5).unwrap();
+    for (object, y) in [(&upper, 1.75), (&lower, -1.75)] {
+        let state = session.scene().effective(object).unwrap();
+        assert_eq!(state.transform.translation.x, 4.0);
+        assert_eq!(state.transform.translation.y, y);
+        assert_eq!(state.transform.scale, Vec2::new(0.875, 0.875));
+    }
     assert_eq!(
         session
             .scene()
@@ -148,6 +165,8 @@ fn group_and_independent_object_share_timing_admission_and_completion() {
     finish(&mut session.live(), segment);
     assert_eq!(marker.state().unwrap().transform.translation.x, 2.0);
     assert_eq!(right.state().unwrap().transform.translation.y, 1.0);
+    assert_eq!(upper.state().unwrap().transform.translation.y, 1.0);
+    assert_eq!(peer.own_style().unwrap().family_color(), Some(Color::BLUE));
     assert_eq!(
         family.own_style().unwrap().family_color(),
         Some(Color::ORANGE)
@@ -155,13 +174,20 @@ fn group_and_independent_object_share_timing_admission_and_completion() {
 
     let segment = activate(
         &mut session.live(),
-        (family.animate().shift(UP), FadeOut::new(&marker)).into_animation_request(),
+        (
+            family.animate().shift(UP),
+            retained_peer,
+            FadeOut::new(&marker),
+        )
+            .into_animation_request(),
         linear(),
     )
     .unwrap();
     finish(&mut session.live(), segment);
     assert!(!session.scene_mut().contains_direct(&marker).unwrap());
     assert_eq!(right.state().unwrap().transform.translation.y, 2.0);
+    assert_eq!(upper.state().unwrap().transform.translation.y, 2.0);
+    assert_eq!(lower.state().unwrap().transform.translation.y, 0.0);
     assert_eq!(
         alias.member_at(0).unwrap().unwrap().node_id(),
         left.node_id()
@@ -176,13 +202,18 @@ fn group_and_independent_object_share_timing_admission_and_completion() {
 fn group_late_child_and_member_driver_failures_publish_nothing() {
     let (mut scene, family, left, right) = group_scene();
     let marker = scene.circle(0.25).unwrap();
+    let overlapping = scene.family(&[(&left).into()]).unwrap();
+    let empty = scene.family(&[]).unwrap();
+    scene
+        .add_many(&[(&overlapping).into(), (&empty).into()])
+        .unwrap();
     let mut session = scene.into_execution().unwrap();
     session.session_mut().take_frame_changes();
     let context = session.session().publication_context();
     let frame = session.session().frame().clone();
     let nodes = session.scene().integration_store().borrow().len();
     let states = (left.state().unwrap(), right.state().unwrap());
-    let invalids: [AnimationRequest; 6] = [
+    let invalids: [AnimationRequest; 8] = [
         marker
             .animate()
             .with_options(AnimationOptions::new().run_time(-1.0))
@@ -192,6 +223,8 @@ fn group_late_child_and_member_driver_failures_publish_nothing() {
         Create::new(&left).into(),
         family.animate().shift(RIGHT).into(),
         family.animate().scale(f64::NAN).into(),
+        overlapping.animate().set_color(Color::BLUE).into(),
+        empty.animate().shift(UP).into(),
     ];
     for invalid in invalids {
         for reverse in [false, true] {

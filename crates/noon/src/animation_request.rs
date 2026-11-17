@@ -178,9 +178,9 @@ tuple_request!(A a, B b, C c, D d, E e, F f, G g, H h);
 /// [`Self::rotate`] uses point correspondence for vector content; it is not the
 /// procedural angular path of an explicit Rotate animation. Families use the
 /// existing family transform interpolation and a shared geometry-center pivot.
-/// A family must already be added to the scene; a play may contain one family
-/// target alongside independent object animations. Animating a member separately
-/// in the same play is rejected atomically. Nested/content-owning groups,
+/// Families must already be added to the scene; a play may contain independent
+/// family targets alongside object animations. Animating a shared member or the
+/// same family twice in one play is rejected atomically. Nested/content-owning groups,
 /// effects, and table/graph metadata are unsupported.
 #[derive(Clone, Debug)]
 #[must_use = "animation requests do nothing until passed to scene.play"]
