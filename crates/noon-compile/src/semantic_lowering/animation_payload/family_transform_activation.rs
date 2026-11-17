@@ -156,8 +156,8 @@ impl std::error::Error for PreparedFamilyTransformActivationError {
 ///
 /// Family endpoints used by the current live-session API are existing semantic
 /// source families. Transaction-local targets retain their tokens through lowering;
-/// local copies and nested groups must match the complete source tree. Only existing
-/// flat families can generate padding and require structural completion.
+/// local copies must match the complete source tree. Existing endpoints use flat
+/// correspondence, where padding can require structural completion.
 /// Repeated source padding occurrences deliberately reuse the same captured effective
 /// source value; independent visual evolution is introduced only by the later
 /// identity-free derived-display materializer.
@@ -194,11 +194,15 @@ where
             ));
         }
         let endpoints: Vec<_> = match family.target_state.existing() {
-            Some(target)
-                if [source_family, target]
+            Some(target) => {
+                if ![source_family, target]
                     .into_iter()
-                    .all(|id| is_flat(prepared.store(), id)) =>
-            {
+                    .all(|id| is_flat(prepared.store(), id))
+                {
+                    return Err(topology_error(
+                        "existing structural endpoints must be flat families".into(),
+                    ));
+                }
                 derive_family_transform_correspondence(prepared.store(), source_family, target)
                     .map_err(
                         |error| PreparedFamilyTransformActivationError::Correspondence {
@@ -218,7 +222,7 @@ where
                     })
                     .collect()
             }
-            _ => fixed_family_leaf_pairs(
+            None => fixed_family_leaf_pairs(
                 prepared,
                 source_family,
                 family.target_state,

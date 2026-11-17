@@ -2465,10 +2465,7 @@ impl ExecutionSession {
 
                 // Manim ordinary Transform excludes non-rendered group roots.
                 // Method targets finish with become-style metadata handoff instead.
-                if matches!(
-                    request,
-                    SemanticCompositionRequest::FamilyMethodTargetTo { .. }
-                ) {
+                if method_target {
                     let colors = match crate::state_replacement::paired_family_colors(
                         store,
                         *source,
@@ -2526,15 +2523,7 @@ impl ExecutionSession {
                 // The canonical family channel owns padding appearance, including restoration
                 // after an earlier unequal-family contraction. Curved equal-family transforms
                 // keep the per-leaf path below because each leaf owns the authored path arc.
-                // Ordinary nested method targets use the same member clock as owned copies.
-                let fixed_nested_method = || {
-                    method_target
-                        && self.reachability.is_reachable(*source)
-                        && [*source, *target_state].into_iter().all(|id| {
-                            crate::animation_request::is_ordinary_vector_family(store, id)
-                        })
-                };
-                if !family_effects && !curved && (flat || fixed_nested_method()) {
+                if !family_effects && !curved && flat {
                     let source_count = store
                         .semantic_family_members_checked(*source)
                         .map_err(|error| {
@@ -2566,7 +2555,7 @@ impl ExecutionSession {
                     ));
                 }
                 match store.ordered_family_leaf_pairs(*source, *target_state) {
-                    Ok(pairs) => {
+                    Ok(mut pairs) => {
                         let mut leaf_options =
                             AnimationOptions::new().rate_func(RateFunction::Linear);
                         if let Some(path_arc) = options.path_arc {
@@ -2575,6 +2564,35 @@ impl ExecutionSession {
                         let mut composition_options = *options;
                         if family_effect_target::has_scope_effects(store, *source, *target_state)? {
                             composition_options.run_time = Some(1.0);
+                        }
+                        if !flat
+                            && method_target
+                            && !family_effects
+                            && options.lag_ratio.is_some_and(|lag| lag != 0.0)
+                            && [*source, *target_state].into_iter().all(|id| {
+                                crate::animation_request::is_ordinary_vector_family(store, id)
+                            })
+                        {
+                            // The composition resolves the stagger before each member's
+                            // easing, in Manim's last-occurrence point-bearing order.
+                            let targets: HashMap<_, _> = pairs.into_iter().collect();
+                            pairs = store
+                                .ordered_last_occurrence_authoring_nodes(*source)
+                                .map_err(|error| {
+                                    ExecutionSessionAnimationError::InvalidComposition(
+                                        error.to_string(),
+                                    )
+                                })?
+                                .into_iter()
+                                .filter_map(|id| targets.get(&id).map(|&target| (id, target)))
+                                .collect();
+                            let defaults = noon_core::AnimationDefaults::MANIM;
+                            leaf_options.rate_func =
+                                Some(options.rate_func.unwrap_or(defaults.rate_func));
+                            composition_options.rate_func = Some(RateFunction::Linear);
+                            composition_options
+                                .run_time
+                                .get_or_insert(defaults.run_time);
                         }
                         // `path_arc` is Transform payload meaning, not composition
                         // timing. Each aligned leaf owns the same deterministic arc.

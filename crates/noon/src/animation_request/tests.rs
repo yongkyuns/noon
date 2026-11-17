@@ -293,9 +293,9 @@ fn nested_group_targets_match_manim_pivot_and_aliased_member_timing() {
                 &AnimationCompositionRequest::FamilyMethodTargetTo {
                     source: &family,
                     target_state: target.root(),
-                    options: timing,
+                    options: linear().lag_ratio(0.25),
                 },
-                AnimationOptions::new(),
+                timing,
             )
         } else {
             activate(
