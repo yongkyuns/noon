@@ -2274,10 +2274,18 @@ impl ExecutionSession {
                 let copied = target.stage(store, *source, declaration).map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                 })?;
-                family_colors.insert(*source, target.color);
-                family_styles.insert(*source, target.style.clone());
+                for (&id, style) in &target.styles {
+                    let color = style.family_color().unwrap_or_else(|| {
+                        store
+                            .node(id)
+                            .and_then(noon_core::SemanticNode::family_fallback_color)
+                            .expect("captured family fallback")
+                    });
+                    family_colors.insert(id, color);
+                    family_styles.insert(id, style.clone());
+                }
                 // Keep correspondence, member lag, padding appearance and completion
-                // in the canonical flat-family channel, including local endpoints.
+                // in the canonical family channel, including local endpoints.
                 Ok(declaration.create_family_transform_animation(*source, copied, *options))
             }
             SemanticCompositionRequest::MoveAlongPath {
@@ -2448,7 +2456,8 @@ impl ExecutionSession {
                 };
                 let path_arc = options.path_arc.unwrap_or(0.0);
                 let curved = path_arc.abs() >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD;
-                if curved && (!is_flat_family(*source) || !is_flat_family(*target_state)) {
+                let flat = is_flat_family(*source) && is_flat_family(*target_state);
+                if curved && !flat {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
                         "curved family Transform requires matching flat family topology".into(),
                     ));
@@ -2466,7 +2475,7 @@ impl ExecutionSession {
                         *target_state,
                     ) {
                         Ok(colors) => colors,
-                        Err(error) if is_flat_family(*source) && is_flat_family(*target_state) => {
+                        Err(error) if flat => {
                             let color = store
                                 .node(*target_state)
                                 .and_then(noon_core::SemanticNode::family_color)
@@ -2491,7 +2500,7 @@ impl ExecutionSession {
                         *target_state,
                     ) {
                         Ok(styles) => styles,
-                        Err(error) if is_flat_family(*source) && is_flat_family(*target_state) => {
+                        Err(error) if flat => {
                             let style = store
                                 .node(*target_state)
                                 .and_then(noon_core::SemanticNode::family_style)
@@ -2517,11 +2526,14 @@ impl ExecutionSession {
                 // The canonical family channel owns padding appearance, including restoration
                 // after an earlier unequal-family contraction. Curved equal-family transforms
                 // keep the per-leaf path below because each leaf owns the authored path arc.
-                if !family_effects
-                    && !curved
-                    && is_flat_family(*source)
-                    && is_flat_family(*target_state)
-                {
+                // Ordinary nested method targets use the same member clock as owned copies.
+                let fixed_nested_method = !flat
+                    && method_target
+                    && self.reachability.is_reachable(*source)
+                    && [*source, *target_state]
+                        .into_iter()
+                        .all(|id| crate::animation_request::is_ordinary_vector_family(store, id));
+                if !family_effects && !curved && (flat || fixed_nested_method) {
                     let source_count = store
                         .semantic_family_members_checked(*source)
                         .map_err(|error| {
@@ -2616,7 +2628,7 @@ impl ExecutionSession {
                                 ),
                             ));
                         }
-                        if !is_flat_family(*source) || !is_flat_family(*target_state) {
+                        if !flat {
                             return Err(ExecutionSessionAnimationError::InvalidComposition(
                                 error.to_string(),
                             ));
@@ -4920,11 +4932,11 @@ impl ExecutionSession {
                 let target_state = resolve_committed_node(transform.target_state, &result);
                 let source_count = store
                     .semantic_family_members_checked(source)
-                    .expect("prepared flat family Transform source remains a family")
+                    .expect("prepared family Transform source remains a family")
                     .len();
                 let target_count = store
                     .semantic_family_members_checked(target_state)
-                    .expect("prepared flat family Transform target remains a family")
+                    .expect("prepared family Transform target remains a family")
                     .len();
                 (source_count != target_count).then_some(UnequalFamilyTransformCompletion {
                     source,

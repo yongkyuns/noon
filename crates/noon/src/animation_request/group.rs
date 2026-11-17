@@ -1,4 +1,4 @@
-//! Candidate-only flat family endpoints; semantic identity stays in admission.
+//! Candidate-only family endpoints; semantic identity stays in admission.
 use super::*;
 use crate::{family_affine::FamilyAffine, AuthoringError, ManimRotationPivot, StyleUpdate};
 use noon_core::{
@@ -10,8 +10,7 @@ use std::{collections::BTreeMap, rc::Rc};
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FamilyMethodTarget {
     states: BTreeMap<SemanticNodeId, SemanticObjectState>,
-    pub(crate) style: SemanticStyle,
-    pub(crate) color: Color,
+    pub(crate) styles: BTreeMap<SemanticNodeId, SemanticStyle>,
 }
 
 impl FamilyMethodTarget {
@@ -22,31 +21,27 @@ impl FamilyMethodTarget {
     ) -> Result<Self, LiveSessionError> {
         live.require_family(family)?;
         let store = live.integration_store().borrow();
-        let root = store.node(family.node_id()).expect("validated family");
         let unsupported = || {
             LiveSessionError::Mobject(
-            "owned family animate requires a flat vector family without content-owning roots, effects, composite opacity, or table/graph metadata".into(),
-        )
+                "owned family animate requires ordinary vector groups without content-owning roots, effects, composite opacity, or table/graph metadata".into(),
+            )
         };
-        if root.semantic_object_state().is_some()
-            || !root.effect_ids().is_empty()
-            || root
-                .family_style()
-                .is_some_and(|style| style.object_opacity != 1.0)
-            || store.has_family_appearance_target(family.node_id())
-            || root.graph_declaration().is_some()
-            || store
-                .semantic_table_layout(family.node_id())
-                .map_err(AuthoringError::from)?
-                .is_some()
-        {
-            return Err(unsupported());
-        }
         let mut states = BTreeMap::new();
-        for id in root.members_iter() {
+        let mut styles = BTreeMap::new();
+        for id in store
+            .ordered_authoring_nodes(family.node_id())
+            .map_err(AuthoringError::from)?
+        {
             let node = store.node(id).expect("validated member");
+            if matches!(node.kind(), SemanticNodeKind::Family(_)) {
+                let Some(style) = ordinary_group_style(&store, id) else {
+                    return Err(unsupported());
+                };
+                styles.insert(id, style.clone());
+                continue;
+            }
             if !matches!(node.kind(), SemanticNodeKind::AuthoringObject)
-                || node.members_iter().next().is_some()
+                || node.member_count() != 0
                 || !node.effect_ids().is_empty()
             {
                 return Err(unsupported());
@@ -56,15 +51,11 @@ impl FamilyMethodTarget {
                 return Err(unsupported());
             }
             let state = live.capture_mobject_state(&object)?;
-            if state.role() != SemanticObjectRole::Ordinary
-                || state.spatial_properties().is_some()
-                || state.transform.as_planar().is_none()
-            {
+            if !is_planar_leaf(&state) {
                 return Err(unsupported());
             }
             states.insert(id, state);
         }
-        let mut style = root.family_style().expect("family style").clone();
         for method in methods {
             let mut bounds = None;
             if matches!(method, Method::Scale(_) | Method::Rotate(_)) {
@@ -84,13 +75,15 @@ impl FamilyMethodTarget {
             }
             let center = crate::family_layout::bounds_critical_point(bounds, 0.0, 0.0);
             if let Method::SetColor(color) = method {
-                edit_color(
-                    &mut style,
-                    color.red.into(),
-                    color.green.into(),
-                    color.blue.into(),
-                    color.alpha.into(),
-                )?;
+                for style in styles.values_mut() {
+                    edit_color(
+                        style,
+                        color.red.into(),
+                        color.green.into(),
+                        color.blue.into(),
+                        color.alpha.into(),
+                    )?;
+                }
             }
             let fill = if let Method::SetFill(color) = method {
                 let update = StyleUpdate {
@@ -98,7 +91,9 @@ impl FamilyMethodTarget {
                     fill_opacity: Some(f64::from(color.alpha)),
                     ..StyleUpdate::default()
                 };
-                update.apply(&mut style)?;
+                for style in styles.values_mut() {
+                    update.apply(style)?;
+                }
                 Some(update)
             } else {
                 None
@@ -145,14 +140,7 @@ impl FamilyMethodTarget {
                 }
             }
         }
-        let color = style
-            .family_color()
-            .unwrap_or_else(|| root.family_fallback_color().expect("family fallback"));
-        Ok(Self {
-            states,
-            style,
-            color,
-        })
+        Ok(Self { states, styles })
     }
 
     pub(crate) fn stage(
@@ -173,12 +161,58 @@ impl FamilyMethodTarget {
                     .cloned()
                     .ok_or(AuthoringError::MissingCopySource(id))
             },
-            |_, _, style| {
-                *style = self.style.clone();
+            |_, id, style| {
+                *style = self
+                    .styles
+                    .get(&id)
+                    .cloned()
+                    .ok_or(AuthoringError::MissingCopySource(id))?;
                 Ok(())
             },
             |_, _, _, _| Ok(()), // Admission rejects all attachment-bearing targets.
         )?;
         Ok(copied[&source])
     }
+}
+
+fn ordinary_group_style(store: &SemanticStore, id: SemanticNodeId) -> Option<&SemanticStyle> {
+    let node = store.node(id)?;
+    let style = node.family_style()?;
+    (node.semantic_object_state().is_none()
+        && node.effect_ids().is_empty()
+        && style.object_opacity == 1.0
+        && !store.has_family_appearance_target(id)
+        && node.graph_declaration().is_none()
+        && store
+            .semantic_table_layout(id)
+            .is_ok_and(|layout| layout.is_none()))
+    .then_some(style)
+}
+
+fn is_planar_leaf(state: &SemanticObjectState) -> bool {
+    state.role() == SemanticObjectRole::Ordinary
+        && state.spatial_properties().is_none()
+        && state.transform.as_planar().is_some()
+}
+
+pub(crate) fn is_ordinary_vector_family(store: &SemanticStore, root: SemanticNodeId) -> bool {
+    store.ordered_authoring_nodes(root).is_ok_and(|nodes| {
+        nodes.into_iter().all(|id| {
+            let node = store.node(id).expect("validated authoring node");
+            if matches!(node.kind(), SemanticNodeKind::Family(_)) {
+                ordinary_group_style(store, id).is_some()
+            } else {
+                node.member_count() == 0
+                    && node.effect_ids().is_empty()
+                    && node.semantic_object_state().is_some_and(|state| {
+                        is_planar_leaf(state)
+                            && crate::path_queries::authored_content_requires_boundary(
+                                store,
+                                state.content,
+                            )
+                            .is_ok_and(|required| !required)
+                    })
+            }
+        })
+    })
 }

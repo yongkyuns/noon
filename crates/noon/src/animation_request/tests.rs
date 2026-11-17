@@ -253,20 +253,116 @@ fn group_late_child_and_member_driver_failures_publish_nothing() {
 }
 
 #[test]
-fn unsupported_nested_group_is_checked_at_admission() {
-    let (mut scene, family, left, _) = group_scene();
-    let request = family.animate().shift(UP);
-    let nested = scene.family(&[(&left).into()]).unwrap();
-    scene
-        .add_family_members(&family, &[(&nested).into()])
+fn nested_group_targets_match_manim_pivot_and_aliased_member_timing() {
+    for existing_target in [false, true] {
+        let mut scene = Scene::new();
+        let left = scene.square(1.0).unwrap();
+        let right = scene.square(1.0).unwrap();
+        scene.shift(&left, -2.0 * RIGHT).unwrap();
+        scene.shift(&right, 2.0 * RIGHT).unwrap();
+        let step = scene.family(&[(&right).into(), (&left).into()]).unwrap();
+        let family = scene.family(&[(&left).into(), (&step).into()]).unwrap();
+        scene.add_many(&[(&family).into()]).unwrap();
+        let timing = linear().rate_func(RateFunction::Smooth).lag_ratio(0.5);
+        let request = family.animate().shift(UP).scale(0.5).set_color(Color::BLUE);
+        let target = if existing_target {
+            let copy = family.copy_family().unwrap();
+            for (object, x) in [(&left, -1.0), (&right, 1.0)] {
+                let mut leaf = copy.mobject(object).unwrap();
+                leaf.set_translation(x, 1.0).unwrap();
+                leaf.set_scale(0.5, 0.5).unwrap();
+            }
+            let color = Color::BLUE;
+            scene
+                .set_family_color(
+                    copy.root(),
+                    color.red.into(),
+                    color.green.into(),
+                    color.blue.into(),
+                    color.alpha.into(),
+                )
+                .unwrap();
+            Some(copy)
+        } else {
+            None
+        };
+        let mut program = scene.into_execution().unwrap();
+        let mut live = program.live();
+        let segment = if let Some(target) = &target {
+            live.declare_and_activate_composition(
+                &AnimationCompositionRequest::FamilyMethodTargetTo {
+                    source: &family,
+                    target_state: target.root(),
+                    options: timing,
+                },
+                AnimationOptions::new(),
+            )
+        } else {
+            activate(
+                &mut live,
+                request.with_options(timing).into(),
+                AnimationOptions::new(),
+            )
+        }
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let nodes = scene.integration_store().borrow().len();
-    let context = session.publication_context();
-    let error = activate(&mut scene.live(&mut session), request.into(), linear()).unwrap_err();
-    assert!(error.to_string().contains("flat vector family"), "{error}");
-    assert_eq!(scene.integration_store().borrow().len(), nodes);
-    assert_eq!(session.publication_context(), context);
+        live.advance_segment_to(segment, 0.5).unwrap();
+        // ManimCE v0.21, smooth and lag_ratio=0.5. The aliased left leaf
+        // occupies its last membership position, after the right leaf.
+        for (leaf, x, y) in [
+            (&left, -1.929896283, 0.070103717),
+            (&right, 1.070103717, 0.929896283),
+        ] {
+            let state = live.effective(leaf).unwrap();
+            assert!((f64::from(state.transform.translation.x) - x).abs() < 1e-6);
+            assert!((f64::from(state.transform.translation.y) - y).abs() < 1e-6);
+        }
+        assert_ne!(step.own_style().unwrap().family_color(), Some(Color::BLUE));
+        finish(&mut live, segment);
+        assert_eq!(left.state().unwrap().transform.translation.x, -1.0);
+        assert_eq!(right.state().unwrap().transform.translation.x, 1.0);
+        assert_eq!(step.own_style().unwrap().family_color(), Some(Color::BLUE));
+        assert_eq!(
+            step.member_at(1).unwrap().unwrap().node_id(),
+            left.node_id()
+        );
+    }
+}
+
+#[test]
+fn nested_group_conflicts_and_unsupported_child_style_publish_nothing() {
+    let (mut scene, family, left, _) = group_scene();
+    let step = scene.family(&[(&left).into()]).unwrap();
+    scene
+        .remove_family_members(&family, &[(&left).into()])
+        .unwrap();
+    scene
+        .add_family_members(&family, &[(&step).into()])
+        .unwrap();
+    let mut session = scene.into_execution().unwrap();
+    let request =
+        (family.animate().shift(UP), step.animate().shift(RIGHT)).into_animation_request();
+    for unsupported in [false, true] {
+        if unsupported {
+            session
+                .scene_mut()
+                .set_family_object_opacity(&step, 0.5)
+                .unwrap();
+        }
+        session.session_mut().take_frame_changes();
+        let context = session.session().publication_context();
+        let frame = session.session().frame().clone();
+        let nodes = session.scene().integration_store().borrow().len();
+        let animation = if unsupported {
+            family.animate().shift(UP).into()
+        } else {
+            request.clone()
+        };
+        assert!(activate(&mut session.live(), animation, linear()).is_err());
+        assert_eq!(session.scene().integration_store().borrow().len(), nodes);
+        assert_eq!(session.session().publication_context(), context);
+        assert_eq!(session.session().frame(), &frame);
+        assert!(session.session_mut().take_frame_changes().is_empty());
+    }
 }
 
 #[test]

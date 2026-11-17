@@ -13,7 +13,7 @@ use crate::{
 };
 
 mod group;
-pub(crate) use group::FamilyMethodTarget;
+pub(crate) use group::{is_ordinary_vector_family, FamilyMethodTarget};
 use noon_core::{
     AnimationOptions, Color, SemanticAnimationCompositionKind, SemanticFadeDirection,
     SemanticFadeEndpoint, SemanticOrientation, SemanticTransformInterpolation, Vec2,
@@ -167,7 +167,7 @@ tuple_request!(A a, B b, C c, D d, E e, F f);
 tuple_request!(A a, B b, C c, D d, E e, F f, G g);
 tuple_request!(A a, B b, C c, D d, E e, F f, G g, H h);
 
-/// Chained edits describing one target for a planar object or flat vector family.
+/// Chained edits describing one target for a planar object or ordinary vector family.
 ///
 /// The source is captured from coherent effective state when play admits this
 /// request. Retaining a builder across earlier plays therefore applies its edits
@@ -180,8 +180,9 @@ tuple_request!(A a, B b, C c, D d, E e, F f, G g, H h);
 /// existing family transform interpolation and a shared geometry-center pivot.
 /// Families must already be added to the scene; a play may contain independent
 /// family targets alongside object animations. Animating a shared member or the
-/// same family twice in one play is rejected atomically. Nested/content-owning groups,
-/// effects, and table/graph metadata are unsupported.
+/// same family twice in one play is rejected atomically. Ordinary nested vector
+/// groups are supported with fixed membership. Content-owning groups, effects,
+/// and table/graph metadata are unsupported.
 #[derive(Clone, Debug)]
 #[must_use = "animation requests do nothing until passed to scene.play"]
 pub struct Animate {
@@ -215,7 +216,7 @@ impl Mobject {
 }
 
 impl MobjectFamily {
-    /// Describe animated edits of a flat vector family, captured at play admission.
+    /// Describe animated edits of an ordinary vector family, captured at play admission.
     /// Members retain their semantic identity and share scale/rotation pivots.
     pub fn animate(&self) -> Animate {
         Animate {
