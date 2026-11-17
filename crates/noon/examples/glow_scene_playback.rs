@@ -121,19 +121,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         session.live().advance_segment_to(composition, 1.75)?;
         (composition, path_glow, formula_glow)
     };
-    let midpoint = session
-        .session()
-        .frame()
-        .objects
-        .iter()
-        .find_map(|object| {
-            object
-                .effects
-                .as_ref()
-                .and_then(|stack| stack.get(path_glow.node_id()))
-        })
-        .expect("effective path glow at the midpoint");
-    assert!((midpoint.definition.as_glow().unwrap().intensity() - 1.5).abs() < 1e-9);
+    let midpoint = session.scene().effective_effect(&path_glow)?;
+    assert!((midpoint.as_glow().unwrap().intensity() - 1.5).abs() < 1e-9);
     session.live().advance_segment_to(composition, 2.5)?;
     session.live().complete_segment(composition)?;
     let final_glow = (path_glow.authored_definition()?).as_glow().unwrap();

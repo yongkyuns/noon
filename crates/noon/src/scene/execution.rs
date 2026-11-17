@@ -8,6 +8,7 @@ use crate::execution_session::ExecutionSession;
 use crate::{
     integration::{NativePointerInputPublication, NativePointerInputToken},
     ExecutionSessionInputError, ExecutionSessionPublicationError, LiveSession,
+    TranslationDragError, TranslationDragReceipt,
 };
 use noon_core::{NativePointerInput, SemanticNodeId, SemanticStore};
 use std::{cell::RefCell, rc::Rc};
@@ -262,9 +263,7 @@ impl SceneExecution {
         self.scene.owned_live()
     }
 
-    /// Borrow the canonical semantic and execution pair for one integration call.
-    /// The semantic borrow cannot escape the closure or cross an async boundary.
-    pub fn with_store_and_session<R>(
+    pub(crate) fn with_store_and_session<R>(
         &mut self,
         apply: impl FnOnce(&mut SemanticStore, &mut ExecutionSession) -> R,
     ) -> R {
@@ -280,6 +279,18 @@ impl SceneExecution {
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
         self.with_store_and_session(|store, session| {
             session.submit_native_pointer_input(store, token, input)
+        })
+    }
+
+    /// Publish normalized pointer input through the configured translation-drag policy.
+    /// A committed drag can return a receipt for undo on the same Scene.
+    pub fn submit_translation_drag_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<TranslationDragReceipt, TranslationDragError> {
+        self.with_store_and_session(|store, session| {
+            session.submit_translation_drag_input(store, token, input)
         })
     }
 
