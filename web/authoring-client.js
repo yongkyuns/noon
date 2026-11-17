@@ -1,4 +1,4 @@
-import { validateRuntimeBuildIdentity } from "./runtime-build-verifier.js";
+import { loadEmbeddedRuntimeBuild, validateRuntimeBuildIdentity } from "./runtime-build-verifier.js";
 import { parseAuthoringDiagnostic } from "./authoring-diagnostic.js";
 
 export const AUTHORING_CHANNEL = "noon.authoring";
@@ -23,7 +23,9 @@ export class PythonAuthoringClient {
   #executionDiagnostics = null;
   #executionPreparationTimingDiagnostics = null;
 
-  constructor(worker = createAuthoringWorker()) {
+  constructor(worker = undefined) {
+    const sharedBuild = worker === undefined ? loadEmbeddedRuntimeBuild() : null;
+    worker ??= createAuthoringWorker(sharedBuild !== null);
     this.#worker = worker;
     this.#readyPromise = new Promise((resolve, reject) => {
       this.#resolveReady = resolve;
@@ -38,6 +40,17 @@ export class PythonAuthoringClient {
       ].filter(Boolean);
       this.#fail(new Error(details.join("\n") || "Python authoring worker crashed"));
     });
+    if (sharedBuild !== null) {
+      void sharedBuild.then(build => {
+        if (this.#terminated) return;
+        try {
+          worker.postMessage(envelope("embedded_runtime", { build }));
+        } catch (error) {
+          if (error.name !== "DataCloneError") throw error;
+          worker.postMessage(envelope("embedded_runtime", { build: null }));
+        }
+      }).catch(error => this.#fail(error));
+    }
   }
 
   get terminated() {
@@ -654,8 +667,10 @@ export function validateSceneDuration(duration) {
   return duration;
 }
 
-function createAuthoringWorker() {
-  return new Worker(new URL("./python-worker.js", import.meta.url), {
+function createAuthoringWorker(sharedRuntime) {
+  const url = new URL("./python-worker.js", import.meta.url);
+  if (sharedRuntime) url.searchParams.set("runtime", "embedded");
+  return new Worker(url, {
     name: "noon-python-authoring",
     type: "module",
   });

@@ -14,7 +14,7 @@ const sourceWorker = await readFile(new URL("./python-worker.source.js", import.
 
 // The verified module can be handed to the renderer after Noon initializes,
 // while Pyodide and its compatibility bundle are still preparing.
-const runtimeStartup = new Function("loadCompiledRuntimeBuild", "initNoonWeb", `${generatedWorker.slice(
+const runtimeStartup = new Function("loadCompiledRuntimeBuild", "initNoonWeb", "embeddedRuntime", "validateRuntimeBuildIdentity", `${generatedWorker.slice(
   generatedWorker.indexOf("const runtimeBuildPromise ="),
   generatedWorker.indexOf("const pyodidePromise ="),
 )}; return runtimeBuildPromise;`);
@@ -23,15 +23,17 @@ test("worker startup instantiates and exposes the same verified module", async (
   const wasmModule = new WebAssembly.Module(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
   const build = Object.freeze({ identity: { buildId: "verified-build" }, wasmModule });
   const initialized = Promise.withResolvers();
+  const started = Promise.withResolvers();
   let calls = 0;
   let settled = false;
   const ready = runtimeStartup(async () => build, options => {
     calls += 1;
     assert.equal(options.module_or_path, wasmModule);
+    started.resolve();
     return initialized.promise;
-  });
+  }, null);
   void ready.then(() => { settled = true; });
-  await Promise.resolve();
+  await started.promise;
   assert.equal(calls, 1);
   assert.equal(settled, false, "readiness must wait for actual WASM initialization");
   initialized.resolve();
@@ -48,11 +50,28 @@ for (const stage of ["verification", "initialization"]) {
         return { identity: {}, wasmModule: {} };
       },
       async () => { initializationCalls += 1; throw failure; },
+      null,
     );
     await assert.rejects(ready, error => error === failure);
     assert.equal(initializationCalls, stage === "verification" ? 0 : 1);
   });
 }
+
+test("embedded authoring instantiates the site's module without loading WASM again", async () => {
+  const wasmModule = new WebAssembly.Module(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
+  const identity = { buildId: "verified-build" };
+  const embeddedRuntime = { promise: Promise.resolve({ identity, wasmModule }) };
+  const ready = await runtimeStartup(
+    () => assert.fail("a shared build should skip local compilation"),
+    options => assert.equal(options.module_or_path, wasmModule),
+    embeddedRuntime,
+    async build => {
+      assert.equal(build, identity);
+      return build;
+    },
+  );
+  assert.deepEqual(ready, { identity, wasmModule });
+});
 
 const bundleMatch = generatedWorker.match(
   /\.\/python\/(compat-bundle\.([0-9a-f]{64})\.json)/,
@@ -126,7 +145,7 @@ assert.match(
 );
 assert.match(
   generatedWorker,
-  /import \{ loadCompiledRuntimeBuild \} from "\.\/runtime-build-verifier\.js";/,
+  /import \{ loadCompiledRuntimeBuild, validateRuntimeBuildIdentity \} from "\.\/runtime-build-verifier\.js";/,
   "deployed Python worker must use the checked-in runtime byte verifier",
 );
 assert.match(

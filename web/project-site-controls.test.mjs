@@ -47,30 +47,39 @@ test('all scenes mount eagerly without an activation click on homepage and docs'
   }
 });
 
-test('touch previews mount only the selected scene and retire the previous live frame', () => {
+test('touch previews keep two live scenes and release only the one the user closes', () => {
   const f = fixture(4, '/noon/index.html', true);
   const dispose = f.install();
   const play = index => f.cards[index].parts['[data-demo-retry]'];
+  const close = index => f.cards[index].children.find(node => node.className === 'demo-close');
   assert.equal(f.frames().length, 0);
-  assert.equal(f.timers.size, 0);
   assert.ok(f.cards.every(card => card.dataset.liveState === 'idle'));
 
   click(play(0));
   const [first] = f.frames();
   message(f, first, 'ready', 'code');
+  first.contentWindow.draft = 'edited Python';
   click(play(1));
-  const [second] = f.frames();
-  assert.equal(f.frames().length, 1);
-  assert.equal(first.removed, true);
-  assert.equal(f.cards[0].dataset.embedView, 'view');
-  assert.equal(play(0).textContent, 'Play scene');
-  assert.equal(f.timers.size, 1);
+  const [, second] = f.frames();
+  assert.deepEqual(f.frames(), [first, second]);
+  assert.equal(f.cards[0].dataset.embedView, 'code');
+  assert.equal(first.contentWindow.draft, 'edited Python');
 
-  second.dispatchEvent(new Event('error'));
-  assert.equal(f.frames().length, 0);
-  assert.equal(play(1).textContent, 'Retry');
-  click(play(1));
-  assert.equal(f.frames().length, 1);
+  click(play(2));
+  assert.deepEqual(f.frames(), [first, second]);
+  assert.equal(f.cards[2].parts['[data-demo-status]'].hidden, false);
+  click(close(1));
+  assert.deepEqual(f.frames(), [first]);
+  assert.equal(second.removed, true);
+  assert.equal(play(1).focused, true);
+  assert.equal(f.cards[2].parts['[data-demo-status]'].hidden, true);
+
+  click(play(2));
+  f.frames()[1].dispatchEvent(new Event('error'));
+  assert.deepEqual(f.frames(), [first]);
+  assert.equal(play(2).textContent, 'Retry');
+  click(play(2));
+  assert.equal(f.frames().length, 2);
   dispose();
   assert.equal(f.frames().length, 0);
   assert.equal(f.timers.size, 0);

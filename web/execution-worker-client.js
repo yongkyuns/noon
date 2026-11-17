@@ -7,7 +7,7 @@ import {
 import { replaceExecutionCanvas } from "./execution-canvas.js";
 import { MainThreadRenderWorker } from "./main-thread-render-worker.js";
 import { WorkerAudioDevice } from "./worker-audio-device.js";
-import { loadEmbeddedRuntimeModule } from "./runtime-build-verifier.js";
+import { loadEmbeddedRuntimeBuild } from "./runtime-build-verifier.js";
 import {
   RENDER_HOST_MAIN_THREAD,
   RENDER_HOST_WORKER,
@@ -166,10 +166,10 @@ export class ExecutionWorkerClient {
       let canvasTransferred = false;
       let moduleChannel = null;
       try {
-        const sharedModule = loadEmbeddedRuntimeModule();
-        const wasmModule = sharedModule === null ? null : await sharedModule;
-        if (sharedModule !== null) this.#assertLifecycleCurrent(generation);
-        if (sharedModule === null && this.#renderHost === RENDER_HOST_WORKER && connectRuntimeModule) {
+        const sharedBuild = this.#renderHost === RENDER_HOST_MAIN_THREAD ? loadEmbeddedRuntimeBuild() : null;
+        const wasmModule = sharedBuild === null ? null : (await sharedBuild).wasmModule;
+        if (sharedBuild !== null) this.#assertLifecycleCurrent(generation);
+        if (this.#renderHost === RENDER_HOST_WORKER && connectRuntimeModule) {
           moduleChannel = new MessageChannel();
         }
         const offscreen = this.#canvas.transferControlToOffscreen();

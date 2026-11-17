@@ -39,8 +39,9 @@ not a replacement for `docs/architecture.md`.
 
 The homepage and documentation mount the selected scenes on load when the
 primary pointer is a mouse or trackpad. For touch input, the cards start with
-gallery thumbnails. **Play scene** mounts one live embed and retires the previous
-one, releasing its workers and discarding its draft.
+gallery thumbnails. **Play scene** starts a live embed. Touch devices can keep
+two scenes open at once. **Close** releases that scene's workers and draft while
+the other scene continues.
 Each scene has a compact **View / Code** switch. The code and canvas panels stay
 mounted; switching views does not reset the draft or execute the source again.
 
@@ -59,7 +60,8 @@ shortcuts through the existing playback controls, without displaying their full
 toolbar. The controls follow the website theme; source editing retains the
 canonical gallery syntax theme. Authored scene colors are not restyled.
 
-Every live scene has its own context. Desktop scenes can run concurrently.
+The site shares one verified WebAssembly compilation across its live demos.
+Each demo owns its interpreter, scene and renderer. Desktop scenes can run concurrently.
 Navigation retires the contexts and
 the canonical gallery workers. Back/forward cache retains the editor DOM and
 resumes through the ordinary Run action. Merely changing browser tabs does not
