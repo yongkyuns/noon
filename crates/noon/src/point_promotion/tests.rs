@@ -222,8 +222,9 @@ fn live_promotion_keeps_effective_xyz_and_child_identity_in_one_publication() {
             SemanticVec3::new(2., -1., 0.5),
         )
         .unwrap();
-    let expected = source
-        .effective_own_path_query(session.session())
+    let expected = session
+        .scene()
+        .family_own_path_query(&source)
         .unwrap()
         .points_3d()
         .unwrap();
@@ -238,15 +239,17 @@ fn live_promotion_keeps_effective_xyz_and_child_identity_in_one_publication() {
     assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
     assert_ne!(session.session().publication_context(), before);
     assert_eq!(
-        source
-            .effective_own_path_query(session.session())
+        session
+            .scene()
+            .family_own_path_query(&source)
             .unwrap()
             .point_count(),
         0
     );
     assert_eq!(
-        promoted
-            .effective_own_path_query(session.session())
+        session
+            .scene()
+            .family_own_path_query(&promoted)
             .unwrap()
             .points_3d()
             .unwrap(),

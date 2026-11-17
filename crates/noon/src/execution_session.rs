@@ -1045,20 +1045,8 @@ impl ExecutionSession {
         Ok(session)
     }
 
-    /// Instantiate one scene with an explicitly selected, exact authored animation graph.
-    ///
-    /// The compiler validates the graph and its targets before publishing any execution
-    /// identity. Detached animation declarations outside this root remain unscheduled.
-    pub fn from_semantic_root_with_animation_root(
-        store: &SemanticStore,
-        root: SemanticNodeId,
-        animation_root: SemanticNodeId,
-    ) -> Result<Self, SemanticExecutionLoweringError> {
-        Self::from_semantic_root_with_animation_root_at(store, root, animation_root, 0.0)
-    }
-
     /// Instantiate an initial animation graph at an explicit activation origin.
-    pub fn from_semantic_root_with_animation_root_at(
+    pub(crate) fn from_semantic_root_with_animation_root_at(
         store: &SemanticStore,
         root: SemanticNodeId,
         animation_root: SemanticNodeId,
@@ -1730,7 +1718,7 @@ impl ExecutionSession {
     /// Seek with the canonical scene available for exact input-attachment cleanup.
     /// All deterministic seek admission precedes retirement; a rejected request
     /// keeps both the invocation and its semantic attachment unchanged.
-    pub fn seek_with_store(
+    pub(crate) fn seek_with_store(
         &mut self,
         store: &mut SemanticStore,
         time: f64,
@@ -1766,22 +1754,6 @@ impl ExecutionSession {
         self.evaluate_signal_timeline(time, ExecutionEvaluationMode::Advance)
     }
 
-    /// Activate one semantic animation root at the session's current deterministic time.
-    ///
-    /// This compatibility surface preserves the existing frame-returning API. Continuation
-    /// consumers should use [`Self::activate_animation_segment`] so the logical segment comes
-    /// from the same compiler-resolved scheduling/publication pass rather than re-resolving
-    /// duration in an authoring facade.
-    pub fn activate_animation(
-        &mut self,
-        store: &mut SemanticStore,
-        root: SemanticNodeId,
-        play_options: AnimationOptions,
-    ) -> Result<&FrameState, ExecutionSessionAnimationError> {
-        self.activate_animation_segment(store, root, play_options)?;
-        Ok(self.runtime.frame())
-    }
-
     /// Activate one semantic animation and return its canonical logical continuation segment.
     ///
     /// The authoritative semantic store remains caller-owned. Scheduling reads the current
@@ -1792,7 +1764,8 @@ impl ExecutionSession {
     /// through the same semantic/execution publication as live declarations. The
     /// supplied declaration retains its identity; a failed activation publishes no
     /// partial attachment, timeline, or continuation boundary.
-    pub fn activate_animation_segment(
+    #[cfg(test)]
+    pub(crate) fn activate_animation_segment(
         &mut self,
         store: &mut SemanticStore,
         root: SemanticNodeId,
@@ -5980,7 +5953,7 @@ mod tests {
         );
 
         session
-            .activate_animation(&mut store, animation, linear_second())
+            .activate_animation_segment(&mut store, animation, linear_second())
             .unwrap();
         session.seek(0.5).unwrap();
         assert_eq!(

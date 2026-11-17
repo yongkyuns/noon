@@ -246,7 +246,7 @@ pub fn session(backend: &mut impl LatexBackend) -> Result<crate::SceneExecution,
     for entry in plain.get_entries().map_err(|error| error.to_string())? {
         assert!(execution
             .scene()
-            .effective_requires_content_boundary(entry.as_target())
+            .requires_content_boundary(entry.as_target())
             .map_err(|error| error.to_string())?);
     }
     Ok(execution)

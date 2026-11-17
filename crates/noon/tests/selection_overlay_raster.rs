@@ -278,8 +278,8 @@ fn paused_scene_drag_changes_target_pixels_then_release_or_cancel_resolves_once(
         pointer: 0,
     };
     session.configure_native_pointer_input(pointer, 0).unwrap();
-    session
-        .set_translation_drag_targets([target.node_id()])
+    scene_execution::borrow_uninstalled(&scene, &mut session)
+        .set_translation_drag_targets([&target])
         .unwrap();
     let mut raster = pollster::block_on(Raster::new());
     let original = raster.capture(&session.take_renderer_publication());

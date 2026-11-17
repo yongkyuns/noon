@@ -163,7 +163,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
             crate::LayoutDimension::Width,
             crate::ManimRotationPivot::Center,
         )?;
-        let start = rectangle.path_query()?.start()?;
+        let start = scene.path_query(&rectangle)?.start()?;
         let end = target.path_query()?.start()?;
         let animation = scene.declare_transform_to(
             &rectangle,
@@ -175,11 +175,9 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         let mut running = scene.into_execution()?;
         let segment = running.live().play_animation(&animation)?;
         running.live().advance_segment_to(segment, 0.5)?;
-        let captured = running.scene().effective_path_query(&rectangle)?;
+        let captured = running.scene().path_query(&rectangle)?;
         assert_eq!(
-            running
-                .scene()
-                .effective_all_points((&vector_family).into())?,
+            running.scene().all_points((&vector_family).into())?,
             captured
                 .points()?
                 .into_iter()
@@ -196,7 +194,7 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         assert_eq!(
             running
                 .scene()
-                .effective_vector_boundary_points((&vector_family).into())?,
+                .vector_boundary_points((&vector_family).into())?,
             expected_boundary
         );
         let midpoint = captured.start()?;
