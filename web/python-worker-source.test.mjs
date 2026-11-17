@@ -433,6 +433,7 @@ test("semantic continuation control bypasses the blocked interpreter request que
   const drained = new Function("self", "blocked", "handleRequest", "handleContinuationControl", `
     let fatalAuthoringFailure = false;
     let requestQueue = blocked;
+    const embeddedRuntime = null;
     const AUTHORING_CHANNEL = "noon.authoring";
     ${source.slice(source.indexOf("function isRecord(value)"))}
     ${source.slice(source.indexOf("function isContinuationControl"), source.indexOf("async function handleContinuationControl"))}
@@ -770,6 +771,7 @@ for (const trigger of ["interpreter rejection", "WASM trap"]) {
     };
     const drained = new Function("self", "postError", "handleRequest", "isContinuationControl",
       `let fatalAuthoringFailure = false; let requestQueue = Promise.resolve();
+       const embeddedRuntime = null;
        ${handlerSource}; return () => requestQueue;`)(
       scope, (requestId, error) => errors.push({ requestId, error }),
       () => { requests += 1; }, () => false,
