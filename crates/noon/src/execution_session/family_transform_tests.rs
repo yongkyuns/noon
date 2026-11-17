@@ -56,6 +56,89 @@ fn family(store: &mut SemanticStore, members: &[SemanticNodeId]) -> SemanticNode
 }
 
 #[test]
+fn multiple_existing_family_targets_require_fixed_topology_before_publication() {
+    for target_count in [1, 2, 3] {
+        for reverse in [false, true] {
+            let mut store = SemanticStore::new();
+            let left = object(&mut store, -2.0);
+            let right = object(&mut store, 2.0);
+            let source = family(&mut store, &[left, right]);
+            let targets = (0..target_count)
+                .map(|i| object(&mut store, 4.0 + f64::from(i)))
+                .collect::<Vec<_>>();
+            let target = family(&mut store, &targets);
+            let peer_leaf = object(&mut store, -4.0);
+            let peer = family(&mut store, &[peer_leaf]);
+            let peer_target_leaf = object(&mut store, -6.0);
+            let peer_target = family(&mut store, &[peer_target_leaf]);
+            let root = family(&mut store, &[source, peer]);
+            let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+            session.take_frame_changes();
+            let context = session.publication_context();
+            let frame = session.frame().clone();
+            let nodes = store.len();
+            let options = AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear);
+            let mut children = vec![
+                SemanticCompositionRequest::FamilyMethodTargetTo {
+                    source,
+                    target_state: target,
+                    options,
+                },
+                SemanticCompositionRequest::FamilyMethodTargetTo {
+                    source: peer,
+                    target_state: peer_target,
+                    options,
+                },
+            ];
+            if reverse {
+                children.reverse();
+            }
+            let result = session.declare_and_activate_composition(
+                &mut store,
+                root,
+                &SemanticCompositionRequest::Composition {
+                    kind: SemanticAnimationCompositionKind::Parallel,
+                    options,
+                    children,
+                },
+                AnimationOptions::new(),
+            );
+            if target_count != 2 {
+                assert!(result.is_err());
+                assert_eq!(store.len(), nodes);
+                assert_eq!(session.publication_context(), context);
+                assert_eq!(session.frame(), &frame);
+                assert!(session.take_frame_changes().is_empty());
+            } else {
+                let segment = result.unwrap();
+                session.advance_segment_to(segment, 1.0).unwrap();
+                session.complete_segment(&mut store, segment).unwrap();
+                assert_eq!(
+                    store
+                        .semantic_object_state_checked(left)
+                        .unwrap()
+                        .transform
+                        .translation
+                        .x,
+                    4.0
+                );
+                assert_eq!(
+                    store
+                        .semantic_object_state_checked(peer_leaf)
+                        .unwrap()
+                        .transform
+                        .translation
+                        .x,
+                    -6.0
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn existing_family_targets_compose_only_with_fixed_topology_and_disjoint_objects() {
     for (target_count, overlap) in [(1, false), (2, false), (3, false), (2, true)] {
         let mut store = SemanticStore::new();

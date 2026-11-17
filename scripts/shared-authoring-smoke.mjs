@@ -3719,4 +3719,15 @@ class LateFailure(Scene):
     prepareContext: disableAuthoringJspi,
   });
   await import("./object-membership-qualification.mjs");
+  await qualifyPairedAuthoring({
+    cases: [1.375, 3.125, 4.875, 6.5].map(sampleTime => ({
+      id: `group-animation-${sampleTime}`, file: "showcase_group_animation.py",
+      factory: "createDirectGroupAnimationSmokeRenderer", objectCount: 16,
+      duration: 6.5, sampleTime, playback: "live",
+      boundaries: [0.75, 2, 2.5, 3.75, 4.25, 5.5],
+      stopAtSourceCompletion: sampleTime === 6.5,
+    })),
+    artifactDirectory: "browser-smoke-artifacts/group-animation",
+    prepareContext: disableAuthoringJspi,
+  });
 }

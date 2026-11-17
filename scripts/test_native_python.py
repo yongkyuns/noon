@@ -17,7 +17,7 @@ class NativePythonTests(unittest.TestCase):
         self.assertIn(Path(_noon_native.__file__).suffix, {".so", ".pyd"})
         for name in ("ordinary_affine_play", "ordinary_composition_play",
                      "ordinary_text_write", "ordinary_fade_play", "shared_text", "raster_image",
-                     "showcase_code_blocks",
+                     "showcase_code_blocks", "showcase_group_animation",
                      "glow_pulse", "ordered_effects", "composed_effects", "effect_restore",
                      "noise_dissolve",
                      "linear_gradient", "radial_gradient", "noise_paint", "hatch_paint",
