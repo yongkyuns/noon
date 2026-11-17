@@ -19,13 +19,19 @@ export function loadEmbeddedRuntimeModule() {
     return null;
   }
   if (!host) return null;
-  host[sharedModuleKey] ??= loadRuntimeBuild()
-    .then(({ wasmBytes }) => WebAssembly.compile(wasmBytes))
+  host[sharedModuleKey] ??= loadCompiledRuntimeBuild()
+    .then(({ wasmModule }) => wasmModule)
     .catch(error => {
       delete host[sharedModuleKey];
       throw error;
     });
   return host[sharedModuleKey];
+}
+
+export async function loadCompiledRuntimeBuild() {
+  const { identity, wasmBytes } = await loadRuntimeBuild();
+  const wasmModule = await WebAssembly.compile(wasmBytes);
+  return Object.freeze({ identity, wasmModule });
 }
 
 export async function loadRuntimeBuild() {
@@ -34,18 +40,13 @@ export async function loadRuntimeBuild() {
     throw new Error(`Unable to load Noon runtime build identity: HTTP ${response.status}`);
   }
   const identity = await validateRuntimeBuildIdentity(await response.json());
-  const [workerBytes, wasmBytes, glueBytes, verifierBytes] = await Promise.all([
+  // All four assets must match before either worker can use the compiled module.
+  const [, wasmBytes] = await Promise.all([
     fetchVerifiedRuntimeBytes(identity.files.worker),
     fetchVerifiedRuntimeBytes(identity.files.wasm),
     fetchVerifiedRuntimeBytes(identity.files.glue),
     fetchVerifiedRuntimeBytes(identity.files.verifier),
   ]);
-  // The worker/glue/verifier fetches prove the served module graph matches the
-  // recorded build under the controlled runner. The verified WASM bytes are
-  // additionally passed directly to wasm-bindgen by python-worker.js.
-  void workerBytes;
-  void glueBytes;
-  void verifierBytes;
   return Object.freeze({ identity, wasmBytes });
 }
 

@@ -127,6 +127,7 @@ export class ExecutionWorkerClient {
     {
       transportMode = selectExecutionTransportMode(),
       sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
+      connectRuntimeModule = undefined,
     } = {},
   ) {
     if (
@@ -163,15 +164,19 @@ export class ExecutionWorkerClient {
       const transferredCanvas = this.#canvas;
 
       let canvasTransferred = false;
+      let moduleChannel = null;
       try {
         const sharedModule = loadEmbeddedRuntimeModule();
         const wasmModule = sharedModule === null ? null : await sharedModule;
         if (sharedModule !== null) this.#assertLifecycleCurrent(generation);
+        if (sharedModule === null && this.#renderHost === RENDER_HOST_WORKER && connectRuntimeModule) {
+          moduleChannel = new MessageChannel();
+        }
         const offscreen = this.#canvas.transferControlToOffscreen();
         canvasTransferred = true;
         this.#renderWorker = this.#createRenderWorker();
         this.#attachCurrentWorkerEvents(this.#renderWorker, RENDER_CHANNEL, "render");
-        this.#renderPrepared = this.#request(
+        const renderPrepared = this.#request(
           this.#renderWorker,
           "render",
           renderEnvelope,
@@ -182,9 +187,14 @@ export class ExecutionWorkerClient {
             width,
             height,
             ...(wasmModule === null ? {} : { wasmModule }),
+            ...(moduleChannel === null ? {} : { wasmModulePort: moduleChannel.port2 }),
           },
-          [offscreen],
+          moduleChannel === null ? [offscreen] : [offscreen, moduleChannel.port2],
         );
+        this.#renderPrepared = moduleChannel === null ? renderPrepared : Promise.all([
+          renderPrepared,
+          connectRuntimeModule(moduleChannel.port1),
+        ]).then(([render]) => render);
         if (this.#preparedStartReservation === reservation) {
           this.#preparedStartReservation = null;
         }
@@ -199,6 +209,9 @@ export class ExecutionWorkerClient {
           );
         }
         throw error;
+      } finally {
+        moduleChannel?.port1.close();
+        moduleChannel?.port2.close();
       }
     } finally {
       if (this.#preparedStartReservation === reservation) {
@@ -235,7 +248,11 @@ export class ExecutionWorkerClient {
       throw new Error("external sample pacing requires a source-owned semantic continuation");
     }
     if (this.#renderWorker === null) {
-      await this.prepare({ transportMode, sharedSlotCapacity });
+      await this.prepare({
+        transportMode,
+        sharedSlotCapacity,
+        connectRuntimeModule: authoringClient.sendRuntimeModule?.bind(authoringClient),
+      });
     }
     if (transportMode !== this.#transportMode) {
       throw new Error("prepared render transport mode does not match semantic execution startup");

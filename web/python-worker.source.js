@@ -47,6 +47,7 @@ import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { createPreparedInterpreterDriver } from "./prepared-interpreter-driver.js";
 import { createWorkerTaskYield } from "./worker-task-yield.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
+import { loadCompiledRuntimeBuild } from "./runtime-build-verifier.js";
 import { withAuthoringDiagnostics, diagnosedHostCode, authoringDiagnosticPayload } from "./authoring-diagnostic-runtime.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
@@ -61,6 +62,10 @@ const authoringMilestones = {
   authoringWorkerReadyAtMs: null,
 };
 
+const runtimeBuildPromise = loadCompiledRuntimeBuild().then(async (build) => {
+  await initNoonWeb({ module_or_path: build.wasmModule });
+  return build;
+});
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
 const semanticContexts = new Map();
@@ -75,10 +80,10 @@ let latexPreparation = null;
 let authoringLibrariesPristine = true;
 let fatalAuthoringFailure = false;
 
-pyodidePromise
-  .then(() => {
+Promise.all([pyodidePromise, runtimeBuildPromise])
+  .then(([, { identity }]) => {
     authoringMilestones.authoringWorkerReadyAtMs = performance.now();
-    post("ready", { libraryTrust: "pristine" });
+    post("ready", { buildIdentity: identity, libraryTrust: "pristine" });
   })
   .catch(failAuthoringWorker);
 
@@ -104,6 +109,11 @@ self.noonReportEngineTrap = (error) => {
 
 self.addEventListener("message", (event) => {
   if (fatalAuthoringFailure) return;
+  // A renderer may need the module during an active source continuation.
+  if (event.data?.type === "runtime_module") {
+    void handleRequest(event.data);
+    return;
+  }
   if (isContinuationControl(event.data)) {
     void handleContinuationControl(event.data);
     return;
@@ -116,7 +126,7 @@ self.addEventListener("message", (event) => {
 async function initializePyodide() {
   const initializeStartedAt = performance.now();
   const resourceDurations = {};
-  const noonWebReady = measureStartupTask(resourceDurations, "noonWebInitMs", () => initNoonWeb());
+  const noonWebReady = measureStartupTask(resourceDurations, "noonWebInitMs", () => runtimeBuildPromise);
   const pyodideReady = measureStartupTask(resourceDurations, "pyodideInitMs", () => loadPyodide());
   const compatibilityBundleReady = measureStartupTask(
     resourceDurations,
@@ -1469,6 +1479,21 @@ async function handleRequest(request) {
   try {
     validateRequest(request);
     requestId = request.requestId;
+    if (request.type === "runtime_module") {
+      try {
+        const { wasmModule } = await runtimeBuildPromise;
+        try {
+          request.port.postMessage(wasmModule);
+        } catch (error) {
+          if (error.name !== "DataCloneError") throw error;
+          request.port.postMessage(null);
+        }
+      } finally {
+        request.port.close();
+      }
+      post("runtime_module_sent", { requestId });
+      return;
+    }
     const pyodide = await pyodidePromise;
     if (request.type === "run") {
       const run = {
@@ -2141,6 +2166,10 @@ function validateRequest(request) {
   }
   if (!Number.isSafeInteger(request.requestId) || request.requestId < 0) {
     throw new Error("Python authoring request has an invalid request ID");
+  }
+  if (request.type === "runtime_module") {
+    if (!(request.port instanceof MessagePort)) throw new Error("runtime module delivery requires a MessagePort");
+    return;
   }
   if (request.type === "run") {
     if (typeof request.source !== "string" || request.source.trim() === "") {

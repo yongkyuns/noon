@@ -10,7 +10,7 @@ assert.match(
 );
 
 const createRuntimeStart = main.indexOf("function createRuntimeClient()");
-const preparationStart = main.indexOf("function ensureRuntimePreparation()", createRuntimeStart);
+const preparationStart = main.indexOf("function ensureRuntimePreparation(", createRuntimeStart);
 const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady({", preparationStart);
 const executionReadyStart = main.indexOf("async function ensureExecutionReady()", runtimeReadyStart);
 assert.ok(
@@ -42,7 +42,7 @@ assert.match(
 );
 assert.match(
   preparationBody,
-  /const ready = candidate\.prepare\(\);/,
+  /candidate\.prepare\(\{ connectRuntimeModule: port => authoringClient\.sendRuntimeModule\(port\) \}\)/,
   "first Run must prepare the mode-free render owner",
 );
 assert.doesNotMatch(
@@ -58,7 +58,7 @@ assert.match(
 
 assert.match(
   runtimeReadyBody,
-  /const prepared = preparation \?\? ensureRuntimePreparation\(\);/,
+  /const prepared = preparation \?\? ensureRuntimePreparation\(client\);/,
   "authored startup must consume the candidate prepared in parallel with Python",
 );
 assert.match(
@@ -93,7 +93,7 @@ const selectExampleStart = main.indexOf("async function selectExample(", runScen
 assert.ok(runSceneStart >= 0 && selectExampleStart > runSceneStart, "runScene boundary must exist");
 const runSceneBody = main.slice(runSceneStart, selectExampleStart);
 const preparationCall = runSceneBody.indexOf(
-  "const preparation = player === null ? ensureRuntimePreparation() : null;",
+  "if (player === null) preparation = ensureRuntimePreparation(candidate);",
 );
 const authoringCall = runSceneBody.indexOf("authored = await client.run(source,");
 const runtimeCall = runSceneBody.indexOf("result = await ensureRuntimeReady({");

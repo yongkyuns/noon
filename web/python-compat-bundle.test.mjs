@@ -12,32 +12,30 @@ await import("../scripts/build-python-worker.mjs");
 const generatedWorker = await readFile(new URL("./python-worker.js", import.meta.url), "utf8");
 const sourceWorker = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
 
-// Exercise the generated startup boundary, including its resolved value. Keeping
-// the loader's whole result here also keeps the large verified input reachable.
-const runtimeStartup = new Function("loadRuntimeBuild", "initNoonWeb", `${generatedWorker.slice(
+// The verified module can be handed to the renderer after Noon initializes,
+// while Pyodide and its compatibility bundle are still preparing.
+const runtimeStartup = new Function("loadCompiledRuntimeBuild", "initNoonWeb", `${generatedWorker.slice(
   generatedWorker.indexOf("const runtimeBuildPromise ="),
   generatedWorker.indexOf("const pyodidePromise ="),
 )}; return runtimeBuildPromise;`);
 
-test("verified startup consumes the exact input once and retains only identity", async () => {
-  const wasmBytes = new Uint8Array([0, 97, 115, 109]);
-  const identity = Object.freeze({ buildId: "verified-build" });
+test("worker startup instantiates and exposes the same verified module", async () => {
+  const wasmModule = new WebAssembly.Module(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
+  const build = Object.freeze({ identity: { buildId: "verified-build" }, wasmModule });
   const initialized = Promise.withResolvers();
   let calls = 0;
   let settled = false;
-  const ready = runtimeStartup(async () => ({ identity, wasmBytes }), options => {
+  const ready = runtimeStartup(async () => build, options => {
     calls += 1;
-    assert.equal(options.module_or_path, wasmBytes);
+    assert.equal(options.module_or_path, wasmModule);
     return initialized.promise;
   });
   void ready.then(() => { settled = true; });
   await Promise.resolve();
   assert.equal(calls, 1);
   assert.equal(settled, false, "readiness must wait for actual WASM initialization");
-  initialized.resolve({ memory: "module exports must not replace build identity" });
-  assert.equal(await ready, identity);
-  assert.equal(calls, 1);
-  assert.equal(Object.hasOwn(await ready, "wasmBytes"), false);
+  initialized.resolve();
+  assert.equal(await ready, build);
 });
 
 for (const stage of ["verification", "initialization"]) {
@@ -47,7 +45,7 @@ for (const stage of ["verification", "initialization"]) {
     const ready = runtimeStartup(
       async () => {
         if (stage === "verification") throw failure;
-        return { identity: {}, wasmBytes: new Uint8Array() };
+        return { identity: {}, wasmModule: {} };
       },
       async () => { initializationCalls += 1; throw failure; },
     );
@@ -128,13 +126,13 @@ assert.match(
 );
 assert.match(
   generatedWorker,
-  /import \{ loadRuntimeBuild \} from "\.\/runtime-build-verifier\.js";/,
+  /import \{ loadCompiledRuntimeBuild \} from "\.\/runtime-build-verifier\.js";/,
   "deployed Python worker must use the checked-in runtime byte verifier",
 );
 assert.match(
   generatedWorker,
-  /initNoonWeb\(\{ module_or_path: runtimeBuild\.wasmBytes \}\)/,
-  "deployed Python worker must initialize wasm-bindgen from verified WASM bytes",
+  /initNoonWeb\(\{ module_or_path: build\.wasmModule \}\)/,
+  "deployed Python worker must initialize wasm-bindgen from the verified compiled module",
 );
 assert.doesNotMatch(
   generatedWorker,
