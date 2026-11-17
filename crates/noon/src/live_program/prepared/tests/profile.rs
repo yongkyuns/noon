@@ -129,12 +129,11 @@ impl LiveContinuation for StageAttachment {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let step = self.calls.get();
         self.calls.set(step + 1);
         Ok(match step {
-            0 => ContinuationStep::Await(live.wait_segment(1.0)?),
-            1 => ContinuationStep::Publish(live.prepare_effect_attachments([(
+            0 => ContinuationStep::Await(scene.live().wait_segment(1.0)?),
+            1 => ContinuationStep::Publish(scene.prepare_effect_attachments([(
                 &self.target,
                 crate::effects::Glow::default().into(),
                 "held",
