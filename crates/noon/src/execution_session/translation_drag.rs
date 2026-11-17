@@ -107,7 +107,13 @@ pub struct TranslationDragUndo {
 }
 impl TranslationDragUndo {
     /// Whether this receipt still names the unchanged authored drag result.
-    pub fn is_current(&self, session: &ExecutionSession, store: &SemanticStore) -> bool {
+    pub fn is_current(&self, scene: &crate::Scene) -> bool {
+        scene
+            .running_execution()
+            .is_some_and(|session| self.matches(session, &scene.integration_store().borrow()))
+    }
+
+    fn matches(&self, session: &ExecutionSession, store: &SemanticStore) -> bool {
         store.identity() == self.store
             && session.runtime_identity() == self.runtime
             && store.scene_revision() == self.scene_revision
@@ -116,12 +122,19 @@ impl TranslationDragUndo {
                 .is_ok_and(|state| state.transform.translation == self.after)
     }
 
-    pub fn undo(
+    /// Restore the previous translation on the running Scene that issued the receipt.
+    pub fn undo(self, scene: &mut crate::Scene) -> Result<(), TranslationDragError> {
+        let (store, _, session) = crate::scene::host_execution::parts_mut(scene)
+            .ok_or(TranslationDragError::StaleUndo)?;
+        self.undo_in_session(session, &mut store.borrow_mut())
+    }
+
+    pub(super) fn undo_in_session(
         self,
         session: &mut ExecutionSession,
         store: &mut SemanticStore,
     ) -> Result<(), TranslationDragError> {
-        if !self.is_current(session, store) {
+        if !self.matches(session, store) {
             return Err(TranslationDragError::StaleUndo);
         }
         session.apply_drag_authored_translation(store, self.node, self.before)
