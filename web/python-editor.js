@@ -40,9 +40,11 @@ async function enhancePythonEditors() {
     return;
   }
 
+  const wrapByDefault = document.documentElement.dataset.noonEmbed === "true";
   const tools = new Map(textareas.map((textarea) => [
     textarea,
-    installPythonEditorTools(textarea, async (source) => (await getRuffWorkspace()).format(source)),
+    installPythonEditorTools(textarea, async (source) => (await getRuffWorkspace()).format(source),
+      { wrapByDefault }),
   ]));
 
   const { EditorView, basicSetup, python, linter, lintGutter, oneDark } =
@@ -96,6 +98,7 @@ async function enhancePythonEditors() {
         python(),
         oneDark,
         editorTheme,
+        EditorView.contentAttributes.of({ "aria-label": textarea.getAttribute("aria-label") ?? "Python source" }),
         lintGutter(),
         linter(runRuff, { delay: 300 }),
         EditorView.updateListener.of((update) => {

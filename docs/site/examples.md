@@ -1,8 +1,8 @@
 # Examples
 
-On a phone or tablet, tap **Play scene** to run an example. Starting another
-example closes the current one and discards its edits. With a mouse or trackpad,
-the scenes start when the page loads.
+On a phone or tablet, tap **Play scene** to run an example. You can keep two
+examples open together. Tap **Close** to close a scene and discard its edits.
+With a mouse or trackpad, the scenes start when the page loads.
 
 Switch between **View** and **Code** within a live scene. Edits run after a typing
 pause. **Code** shows syntax errors and runs the scene again when you fix them.

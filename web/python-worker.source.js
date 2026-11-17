@@ -47,7 +47,7 @@ import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { createPreparedInterpreterDriver } from "./prepared-interpreter-driver.js";
 import { createWorkerTaskYield } from "./worker-task-yield.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
-import { loadCompiledRuntimeBuild } from "./runtime-build-verifier.js";
+import { loadCompiledRuntimeBuild, validateRuntimeBuildIdentity } from "./runtime-build-verifier.js";
 import { withAuthoringDiagnostics, diagnosedHostCode, authoringDiagnosticPayload } from "./authoring-diagnostic-runtime.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
@@ -62,10 +62,19 @@ const authoringMilestones = {
   authoringWorkerReadyAtMs: null,
 };
 
-const runtimeBuildPromise = loadCompiledRuntimeBuild().then(async (build) => {
-  await initNoonWeb({ module_or_path: build.wasmModule });
-  return build;
-});
+const embeddedRuntime = new URL(self.location.href).searchParams.get("runtime") === "embedded"
+  ? Promise.withResolvers() : null;
+const runtimeBuildPromise = (embeddedRuntime?.promise ?? Promise.resolve(null))
+  .then(async (build) => {
+    if (build === null) return loadCompiledRuntimeBuild();
+    if (!(build.wasmModule instanceof WebAssembly.Module)) {
+      throw new Error("Embedded Noon runtime is missing its compiled WebAssembly module");
+    }
+    return { identity: await validateRuntimeBuildIdentity(build.identity), wasmModule: build.wasmModule };
+  }).then(async (build) => {
+    await initNoonWeb({ module_or_path: build.wasmModule });
+    return build;
+  });
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
 const semanticContexts = new Map();
@@ -109,6 +118,11 @@ self.noonReportEngineTrap = (error) => {
 
 self.addEventListener("message", (event) => {
   if (fatalAuthoringFailure) return;
+  if (embeddedRuntime !== null && event.data?.type === "embedded_runtime" &&
+      event.data.channel === AUTHORING_CHANNEL && event.data.protocolVersion === AUTHORING_PROTOCOL_VERSION) {
+    embeddedRuntime.resolve(event.data.build);
+    return;
+  }
   // A renderer may need the module during an active source continuation.
   if (event.data?.type === "runtime_module") {
     void handleRequest(event.data);
@@ -122,6 +136,10 @@ self.addEventListener("message", (event) => {
     if (!fatalAuthoringFailure) return handleRequest(event.data);
   });
 });
+
+if (embeddedRuntime !== null) {
+  self.addEventListener("messageerror", () => embeddedRuntime.resolve(null), { once: true });
+}
 
 async function initializePyodide() {
   const initializeStartedAt = performance.now();

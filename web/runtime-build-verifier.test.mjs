@@ -4,7 +4,8 @@ import test from "node:test";
 import { runtimeBuildIdentity as validIdentity } from "./test-support/runtime-build.mjs";
 
 import {
-  loadEmbeddedRuntimeModule,
+  installEmbeddedRuntimeBuild,
+  loadEmbeddedRuntimeBuild,
   loadRuntimeBuild,
   validateRuntimeBuildIdentity,
 } from "./runtime-build-verifier.js";
@@ -103,18 +104,25 @@ test("embeds share compilation per parent document and retry a failed load", asy
   const responses = { identity: identityForBytes(bytes), ...bytes, wasm: Uint8Array.of(0) };
   await withFetch(t, responses);
   const parentDocument = {};
+  const release = installEmbeddedRuntimeBuild(parentDocument);
   t.after(() => { delete globalThis.document; delete globalThis.parent; });
   globalThis.document = { documentElement: { dataset: { noonEmbed: "true" } } };
   globalThis.parent = { document: parentDocument };
 
-  const first = loadEmbeddedRuntimeModule();
-  assert.equal(loadEmbeddedRuntimeModule(), first);
+  const first = loadEmbeddedRuntimeBuild();
+  assert.equal(loadEmbeddedRuntimeBuild(), first);
   await assert.rejects(first, /hash does not match build identity/);
 
   responses.wasm = bytes.wasm;
-  const retry = loadEmbeddedRuntimeModule();
-  assert.equal(loadEmbeddedRuntimeModule(), retry);
-  assert.ok((await retry) instanceof WebAssembly.Module);
+  const retry = loadEmbeddedRuntimeBuild();
+  assert.equal(loadEmbeddedRuntimeBuild(), retry);
+  const build = await retry;
+  assert.ok(build.wasmModule instanceof WebAssembly.Module);
+  assert.deepEqual(build.identity, responses.identity);
+  release();
+  const restored = loadEmbeddedRuntimeBuild();
+  assert.notEqual(restored, retry);
+  assert.ok((await restored).wasmModule instanceof WebAssembly.Module);
   globalThis.parent = { get document() { throw new DOMException("Cross-origin", "SecurityError"); } };
-  assert.equal(loadEmbeddedRuntimeModule(), null);
+  assert.equal(loadEmbeddedRuntimeBuild(), null);
 });
