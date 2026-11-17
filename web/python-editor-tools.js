@@ -25,7 +25,7 @@ export async function formatEditorSource(textarea, format) {
   return "Formatted with Ruff";
 }
 
-export function installPythonEditorTools(textarea, format) {
+export function installPythonEditorTools(textarea, format, { wrapByDefault = false } = {}) {
   const toolbar = document.createElement("div");
   toolbar.className = "python-editor-tools";
   toolbar.setAttribute("aria-label", "Python editor tools");
@@ -56,7 +56,7 @@ export function installPythonEditorTools(textarea, format) {
   toolbar.append(output);
   textarea.before(toolbar);
 
-  let wrapped = false;
+  let wrapped = wrapByDefault;
   let editorHost = null;
   function updateWrap() {
     textarea.wrap = wrapped ? "soft" : "off";

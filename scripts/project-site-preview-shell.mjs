@@ -42,17 +42,23 @@ export async function qualifyPreviewShell(browser, base, output) {
           const frame = await element.contentFrame();
           const bounds = await frame.locator('#scene').boundingBox();
           const iframe = await card.locator('iframe').boundingBox();
+          const followingOffset = () => card.evaluate(node => node.nextElementSibling
+            ? node.nextElementSibling.getBoundingClientRect().top - node.getBoundingClientRect().top : null);
+          const offset = await followingOffset();
           assert.ok(bounds && iframe && bounds.height >= 80,`visible canvas at ${width}`);
           assert.ok(bounds.x >= iframe.x && bounds.x+bounds.width <= iframe.x+iframe.width+1,'canvas fits horizontally');
           assert.ok(bounds.y >= iframe.y && bounds.y+bounds.height <= iframe.y+iframe.height+1,'canvas fits without nested scrolling');
           assert.equal(await frame.locator('.editor-pane').isVisible(),false);
           assert.equal(await frame.locator('button:visible').count(),2,'only View/Code in the normal view');
           await frame.getByRole('tab',{name:'Code',exact:true}).click();
-          // The child publishes tab state with postMessage. Wait for the parent
-          // to apply it instead of racing that message with the height assertion.
-          await page.waitForFunction(card=>card.dataset.embedView==='code' &&
-            card.querySelector('iframe').getBoundingClientRect().height>=350,await card.elementHandle());
-          await frame.locator('#python-scene-source').fill(`# retained draft ${index}`);
+          await page.waitForFunction(card=>card.dataset.embedView==='code',await card.elementHandle());
+          const codeFrame = await card.locator('iframe').boundingBox();
+          assert.deepEqual([codeFrame.width, codeFrame.height], [iframe.width, iframe.height],
+            'Code keeps the scene frame dimensions');
+          assert.equal(await followingOffset(), offset, 'Code does not move the adjacent content');
+          const editor = frame.locator('#python-scene-source');
+          assert.ok((await editor.boundingBox()).height>=170,'editor has room inside the frame');
+          await editor.fill(`# retained draft ${index}`);
           assert.equal(await frame.locator('.preview-pane').evaluate(panel => panel.inert),true,
             'Code makes the covered preview inert');
           assert.equal(await frame.getByRole('tabpanel',{name:'View',exact:true}).count(),0,
@@ -66,6 +72,13 @@ export async function qualifyPreviewShell(browser, base, output) {
           await frame.getByRole('tab',{name:'Code',exact:true}).press('ArrowLeft');
           assert.equal(await frame.getByRole('tab',{name:'View',exact:true}).getAttribute('aria-selected'),'true');
           await page.waitForFunction(card=>card.dataset.embedView==='view',await card.elementHandle());
+          const restoredFrame = await card.locator('iframe').boundingBox();
+          const restoredCanvas = await frame.locator('#scene').boundingBox();
+          assert.deepEqual([restoredFrame.width, restoredFrame.height], [iframe.width, iframe.height],
+            'View restores without resizing the frame');
+          assert.equal(await followingOffset(), offset, 'View does not move the adjacent content');
+          assert.deepEqual([restoredCanvas.width, restoredCanvas.height], [bounds.width, bounds.height],
+            'tab switches preserve the canvas dimensions');
         }
         assert.equal(await page.locator('iframe').count(),4,'examples do not evict one another');
         await assertDocumentWidth(page,`${label}-restored`,output);

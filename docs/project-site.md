@@ -42,8 +42,9 @@ primary pointer is a mouse or trackpad. For touch input, the cards start with
 gallery thumbnails. **Play scene** starts a live embed. Touch devices can keep
 two scenes open at once. **Close** releases that scene's workers and draft while
 the other scene continues.
-Each scene has a compact **View / Code** switch. The code and canvas panels stay
-mounted; switching views does not reset the draft or execute the source again.
+Each scene has a compact **View / Code** switch. Both views use the same card
+dimensions. The editor wraps long lines and scrolls within the card. Switching
+views preserves the draft and playback.
 
 `embed.html` is generated from the canonical playground shell. It retains
 `main.js` and `python-editor-bootstrap.js`, including the gallery's initial live
