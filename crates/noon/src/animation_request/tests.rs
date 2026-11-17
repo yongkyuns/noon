@@ -335,13 +335,31 @@ fn nested_group_conflicts_and_unsupported_child_style_publish_nothing() {
     scene
         .remove_family_members(&family, &[(&left).into()])
         .unwrap();
+    let shared_empty = scene.family(&[]).unwrap();
     scene
-        .add_family_members(&family, &[(&step).into()])
+        .add_family_members(&family, &[(&step).into(), (&shared_empty).into()])
         .unwrap();
+    let marker = scene.circle(0.25).unwrap();
+    let peer = scene
+        .family(&[(&marker).into(), (&shared_empty).into()])
+        .unwrap();
+    scene.add_many(&[(&peer).into()]).unwrap();
     let mut session = scene.into_execution().unwrap();
-    let request =
-        (family.animate().shift(UP), step.animate().shift(RIGHT)).into_animation_request();
-    for unsupported in [false, true] {
+    for (animation, unsupported) in [
+        (
+            (family.animate().shift(UP), step.animate().shift(RIGHT)).into_animation_request(),
+            false,
+        ),
+        (
+            (
+                family.animate().set_color(Color::BLUE),
+                peer.animate().set_color(Color::ORANGE),
+            )
+                .into_animation_request(),
+            false,
+        ),
+        (family.animate().shift(UP).into_animation_request(), true),
+    ] {
         if unsupported {
             session
                 .scene_mut()
@@ -352,11 +370,6 @@ fn nested_group_conflicts_and_unsupported_child_style_publish_nothing() {
         let context = session.session().publication_context();
         let frame = session.session().frame().clone();
         let nodes = session.scene().integration_store().borrow().len();
-        let animation = if unsupported {
-            family.animate().shift(UP).into()
-        } else {
-            request.clone()
-        };
         assert!(activate(&mut session.live(), animation, linear()).is_err());
         assert_eq!(session.scene().integration_store().borrow().len(), nodes);
         assert_eq!(session.session().publication_context(), context);

@@ -172,6 +172,8 @@ where
 {
     let mut captures = HashMap::<ObjectId, EffectiveAnimationProperties>::new();
     let mut occurrences = Vec::new();
+    let multiple_families = schedule.family_transforms().len() > 1;
+    let mut source_groups = HashSet::new();
 
     for family in schedule.family_transforms() {
         if family.mode != SemanticFamilyTransformMode::Structural {
@@ -181,6 +183,16 @@ where
             });
         }
         let source_family = existing_endpoint(family.animation, family.source)?;
+        let mut register_group = |id| !multiple_families || source_groups.insert(id);
+        let topology_error = |reason| PreparedFamilyTransformActivationError::FixedTopology {
+            animation: family.animation,
+            reason,
+        };
+        if !register_group(source_family) {
+            return Err(topology_error(
+                "family Transforms share a source group".into(),
+            ));
+        }
         let endpoints: Vec<_> = match family.target_state.existing() {
             Some(target)
                 if [source_family, target]
@@ -206,16 +218,16 @@ where
                     })
                     .collect()
             }
-            _ => fixed_family_leaf_pairs(prepared, source_family, family.target_state)
-                .map_err(
-                    |reason| PreparedFamilyTransformActivationError::FixedTopology {
-                        animation: family.animation,
-                        reason,
-                    },
-                )?
-                .into_iter()
-                .map(|(source, target)| (source, target, false, false))
-                .collect(),
+            _ => fixed_family_leaf_pairs(
+                prepared,
+                source_family,
+                family.target_state,
+                register_group,
+            )
+            .map_err(topology_error)?
+            .into_iter()
+            .map(|(source, target)| (source, target, false, false))
+            .collect(),
         };
         let member_schedule = (family.options.lag_ratio != 0.0)
             .then(|| {
@@ -300,10 +312,11 @@ fn is_flat(store: &SemanticStore, family: SemanticNodeId) -> bool {
 /// As with Manim's point-bearing family order, aliases keep their last occurrence.
 fn fixed_family_leaf_pairs(
     prepared: &PreparedSemanticMutationTransaction<'_>,
-    source: SemanticNodeId,
+    root: SemanticNodeId,
     target: SemanticTransactionNodeRef,
+    mut register_group: impl FnMut(SemanticNodeId) -> bool,
 ) -> Result<Vec<(SemanticNodeId, SemanticTransactionNodeRef)>, String> {
-    let mut pending = vec![(source, target)];
+    let mut pending = vec![(root, target)];
     let mut sources = HashMap::new();
     let mut targets = HashSet::new();
     let mut leaves = Vec::new();
@@ -325,6 +338,9 @@ fn fixed_family_leaf_pairs(
             return Err("member counts differ".into());
         }
         if source_is_family {
+            if source != root && !register_group(source) {
+                return Err("family Transforms share a source group".into());
+            }
             if prepared.object_state(source).is_ok() || prepared.object_state(target).is_ok() {
                 return Err("content-owning groups are unsupported".into());
             }

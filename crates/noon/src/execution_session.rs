@@ -2527,13 +2527,14 @@ impl ExecutionSession {
                 // after an earlier unequal-family contraction. Curved equal-family transforms
                 // keep the per-leaf path below because each leaf owns the authored path arc.
                 // Ordinary nested method targets use the same member clock as owned copies.
-                let fixed_nested_method = !flat
-                    && method_target
-                    && self.reachability.is_reachable(*source)
-                    && [*source, *target_state]
-                        .into_iter()
-                        .all(|id| crate::animation_request::is_ordinary_vector_family(store, id));
-                if !family_effects && !curved && (flat || fixed_nested_method) {
+                let fixed_nested_method = || {
+                    method_target
+                        && self.reachability.is_reachable(*source)
+                        && [*source, *target_state].into_iter().all(|id| {
+                            crate::animation_request::is_ordinary_vector_family(store, id)
+                        })
+                };
+                if !family_effects && !curved && (flat || fixed_nested_method()) {
                     let source_count = store
                         .semantic_family_members_checked(*source)
                         .map_err(|error| {
