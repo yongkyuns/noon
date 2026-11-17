@@ -79,7 +79,7 @@ impl ExecutionSession {
     /// Retire input-owned state before a platform replaces this source owner.
     /// This does not advance authored time or cancel authored animations. A
     /// recovery handoff that retains this same execution must not call it.
-    pub fn retire_interactions_for_source_replacement(
+    pub(crate) fn retire_interactions_for_source_replacement(
         &mut self,
         store: &mut SemanticStore,
     ) -> Result<(), ExecutionSessionInputError> {

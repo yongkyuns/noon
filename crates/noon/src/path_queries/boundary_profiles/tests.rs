@@ -63,7 +63,7 @@ fn effective_boundary_profile_tracks_content_replacement_and_keeps_queries_read_
     let mut execution = scene.into_execution().unwrap();
     assert!(!execution
         .scene()
-        .effective_requires_content_boundary((&family).into())
+        .requires_content_boundary((&family).into())
         .unwrap());
     // Replacing content preserves the target's style. Image admission must
     // reject a stroked geometry style before changing either authority.
@@ -79,7 +79,7 @@ fn effective_boundary_profile_tracks_content_replacement_and_keeps_queries_read_
     assert_eq!(target.state().unwrap(), state);
     assert!(!execution
         .scene()
-        .effective_requires_content_boundary((&family).into())
+        .requires_content_boundary((&family).into())
         .unwrap());
     {
         execution
@@ -107,14 +107,14 @@ fn effective_boundary_profile_tracks_content_replacement_and_keeps_queries_read_
         assert_eq!(
             execution
                 .scene()
-                .effective_requires_content_boundary((&family).into())
+                .requires_content_boundary((&family).into())
                 .unwrap(),
             expected
         );
         assert_eq!(
             execution
                 .scene()
-                .effective_requires_content_boundary(source.into())
+                .requires_content_boundary(source.into())
                 .unwrap(),
             expected
         );
@@ -123,13 +123,13 @@ fn effective_boundary_profile_tracks_content_replacement_and_keeps_queries_read_
     let foreign = Scene::new().circle(0.5).unwrap();
     assert!(execution
         .scene()
-        .effective_requires_content_boundary((&foreign).into())
+        .requires_content_boundary((&foreign).into())
         .is_err());
     assert_eq!(execution.session().publication_context(), before);
     target.set_z_index(4.0).unwrap();
     assert!(execution
         .scene()
-        .effective_requires_content_boundary((&family).into())
+        .requires_content_boundary((&family).into())
         .is_err());
     assert_eq!(execution.session().publication_context(), before);
 }
@@ -151,10 +151,7 @@ fn generic_table_entries_use_retained_text_layout_before_and_after_live_placemen
     scene.add_many(&[table.family().into()]).unwrap();
     let mut execution = scene.into_execution().unwrap();
     let before = execution.session().publication_context();
-    assert!(execution
-        .scene()
-        .effective_requires_content_boundary(target)
-        .unwrap());
+    assert!(execution.scene().requires_content_boundary(target).unwrap());
     assert_eq!(
         execution
             .scene()
@@ -166,10 +163,7 @@ fn generic_table_entries_use_retained_text_layout_before_and_after_live_placemen
         .scene_mut()
         .shift_family(table.family(), 1.5, -0.5)
         .unwrap();
-    assert!(execution
-        .scene()
-        .effective_requires_content_boundary(target)
-        .unwrap());
+    assert!(execution.scene().requires_content_boundary(target).unwrap());
     let after = execution
         .scene()
         .effective_layout_critical_point_3d(&anchor, SemanticVec3::ZERO)
@@ -190,7 +184,7 @@ fn boundary_profile_tracks_text_content_without_host_type_or_identity_changes() 
     let mut execution = scene.into_execution().unwrap();
     assert!(!execution
         .scene()
-        .effective_requires_content_boundary((&target).into())
+        .requires_content_boundary((&target).into())
         .unwrap());
     execution
         .scene_mut()
@@ -198,7 +192,7 @@ fn boundary_profile_tracks_text_content_without_host_type_or_identity_changes() 
         .unwrap();
     assert!(execution
         .scene()
-        .effective_requires_content_boundary((&target).into())
+        .requires_content_boundary((&target).into())
         .unwrap());
     assert_eq!(target.node_id(), id);
     assert_eq!(target.get_num_points().unwrap(), 0);
