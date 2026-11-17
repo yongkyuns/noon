@@ -63,8 +63,8 @@
 //! observes authored bounds during setup and effective bounds during execution.
 //! [`ScriptScene::effective_layout`] and [`ScriptScene::effective_family_layout`]
 //! explicitly query the current publication. Fluent animation requests support
-//! individual planar objects and one flat vector family alongside independent
-//! objects. Animating that family's members separately in the same play is
+//! individual planar objects and independent flat vector families in one play.
+//! Animating shared members through separate requests in the same play is
 //! rejected atomically. Nested or content-owning groups and effect-bearing
 //! families are outside this method-target profile; see [`Animate`].
 //!
