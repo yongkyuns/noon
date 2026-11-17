@@ -4422,11 +4422,10 @@ impl ExecutionSession {
                             "unequal-family Transform and scalar leaves cannot share a mixed family activation".into(),
                         ));
                     }
-                    let mut members = HashMap::new();
+                    let mut members = HashSet::new();
                     for occurrence in activation.occurrences() {
-                        if members
-                            .insert(occurrence.source_execution_object_id, occurrence.animation)
-                            .is_some_and(|animation| animation != occurrence.animation)
+                        if !members.insert(occurrence.source_execution_object_id)
+                            && multiple_families
                         {
                             return Err(ExecutionSessionAnimationError::InvalidComposition(
                                 "family Transforms cannot animate shared members in one activation"
@@ -4437,7 +4436,7 @@ impl ExecutionSession {
                     if schedule
                         .leaves()
                         .iter()
-                        .any(|leaf| members.contains_key(&leaf.execution_object_id))
+                        .any(|leaf| members.contains(&leaf.execution_object_id))
                     {
                         return Err(ExecutionSessionAnimationError::InvalidComposition(
                             "family Transform cannot compose with an animation of its members"
