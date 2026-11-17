@@ -2048,45 +2048,32 @@ mod tests {
     fn native_callback_completion_preserves_the_active_epoch() {
         use noon::RustHostCallbackTable;
         use noon_core::HostCallbackId;
-        use noon_core::{
-            AnimationOptions, RateFunction, SemanticMutationTransaction, SemanticObjectState,
-            SemanticStore, SemanticVec3, StoredGeometry,
-        };
+        use noon_core::{AnimationOptions, RateFunction};
 
         const CALLBACK: HostCallbackId = HostCallbackId::new(1);
 
-        let mut store = SemanticStore::new();
-        let object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.0,
-            }));
-        store.attach_to_scene(object).unwrap();
-        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
-        target_state.transform.translation = SemanticVec3::new(2.0, 0.0, 0.0);
-        let target = store.insert_semantic_object(target_state);
-        let animation = store
-            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
-            .unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(object, CALLBACK, 0.0, None);
-        transaction.apply(&mut store).unwrap();
-
-        let mut callbacks = RustHostCallbackTable::new();
-        callbacks
-            .insert(CALLBACK, |_context| Ok::<_, std::io::Error>(()))
-            .unwrap();
-        let scene = test_scene_from_store(store);
-        let mut session = scene_execution::lower(&scene).unwrap();
-        session
-            .activate_animation(
-                &mut scene.integration_store().borrow_mut(),
-                animation,
+        let mut scene = noon::Scene::new();
+        let object = scene.circle(1.0).unwrap();
+        scene.add(&object).unwrap();
+        let target = scene.target_editor(&object).unwrap();
+        scene.set_translation(&target, 2.0, 0.0).unwrap();
+        let animation = scene
+            .declare_transform_to(
+                &object,
+                &target,
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let session = scene_execution::consume_with_session(scene, session).unwrap();
+        scene_execution::add_updater(&mut scene, &object, CALLBACK, 0.0, None).unwrap();
+
+        let mut callbacks = RustHostCallbackTable::new();
+        callbacks
+            .insert(CALLBACK, |_context| Ok::<_, std::io::Error>(()))
+            .unwrap();
+        let mut session = scene.into_execution().unwrap();
+        session.live().play_animation(&animation).unwrap();
         let mut app =
             NativeApp::new_with_callbacks(session, callbacks, NativeViewportConfig::default());
 

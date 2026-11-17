@@ -228,6 +228,109 @@ impl Scene {
         self.set_fill_paint(object, SemanticPaint::Noise(paint.into()), opacity)
     }
 
+    // Keep the authored/effective choice at the Scene boundary. Detached
+    // wrappers can still inspect their own authored state through Mobject.
+    fn observe_object<'a, T>(
+        &self,
+        object: &'a Mobject,
+        authored: impl FnOnce(&'a Mobject) -> Result<T, AuthoringError>,
+        effective: impl FnOnce(&Scene, &'a Mobject) -> Result<T, AuthoringError>,
+    ) -> Result<T, AuthoringError> {
+        self.require_object(object)?;
+        if self.running_execution().is_some() {
+            effective(self, object)
+        } else {
+            authored(object)
+        }
+    }
+
+    /// Read the current solid fill color.
+    pub fn fill_color(&self, object: &Mobject) -> Result<Option<Color>, AuthoringError> {
+        self.observe_object(object, Mobject::fill_color, Self::effective_fill_color)
+    }
+
+    /// Read the current solid stroke color.
+    pub fn stroke_color(&self, object: &Mobject) -> Result<Option<Color>, AuthoringError> {
+        self.observe_object(object, Mobject::stroke_color, Self::effective_stroke_color)
+    }
+
+    /// Read the current stroke width in scene units.
+    pub fn stroke_width(&self, object: &Mobject) -> Result<f64, AuthoringError> {
+        self.observe_object(object, Mobject::stroke_width, Self::effective_stroke_width)
+    }
+
+    /// Read the current background stroke color.
+    pub fn background_stroke_color(
+        &self,
+        object: &Mobject,
+    ) -> Result<Option<Color>, AuthoringError> {
+        self.observe_object(
+            object,
+            Mobject::background_stroke_color,
+            Self::effective_background_stroke_color,
+        )
+    }
+
+    /// Read the current background stroke width in scene units.
+    pub fn background_stroke_width(&self, object: &Mobject) -> Result<f64, AuthoringError> {
+        self.observe_object(
+            object,
+            Mobject::background_stroke_width,
+            Self::effective_background_stroke_width,
+        )
+    }
+
+    /// Read the current background stroke opacity.
+    pub fn background_stroke_opacity(&self, object: &Mobject) -> Result<f64, AuthoringError> {
+        self.observe_object(
+            object,
+            Mobject::background_stroke_opacity,
+            Self::effective_background_stroke_opacity,
+        )
+    }
+
+    /// Read the current stroke cap.
+    pub fn stroke_cap(&self, object: &Mobject) -> Result<noon_core::StrokeCap, AuthoringError> {
+        self.observe_object(object, Mobject::stroke_cap, Self::effective_stroke_cap)
+    }
+
+    /// Read the current visible fill RGB, falling back to stroke RGB.
+    pub fn manim_color(&self, object: &Mobject) -> Result<Color, AuthoringError> {
+        self.observe_object(object, Mobject::manim_color, Self::effective_manim_color)
+    }
+
+    /// Read the current fill alpha before the object-composite multiplier.
+    /// For a running resource paint this is the published layer scalar.
+    pub fn fill_opacity(&self, object: &Mobject) -> Result<f64, AuthoringError> {
+        self.observe_object(object, Mobject::fill_opacity, |scene, object| {
+            scene
+                .effective(object)
+                .map(|current| current.fill_opacity())
+        })
+    }
+
+    /// Read the current stroke alpha before the object-composite multiplier.
+    /// For a running resource paint this is the published layer scalar.
+    pub fn stroke_opacity(&self, object: &Mobject) -> Result<f64, AuthoringError> {
+        self.observe_object(object, Mobject::stroke_opacity, |scene, object| {
+            scene
+                .effective(object)
+                .map(|current| current.stroke_opacity())
+        })
+    }
+
+    /// Read the current endpoints of an analytic Line in world coordinates.
+    pub fn line_endpoints(
+        &self,
+        object: &Mobject,
+    ) -> Result<crate::ManimLineEndpoints, AuthoringError> {
+        self.observe_object(
+            object,
+            Mobject::manim_line_endpoints,
+            Self::effective_line_endpoints,
+        )
+    }
+
     pub fn effective_fill_color(&self, mobject: &Mobject) -> Result<Option<Color>, AuthoringError> {
         let effective = self.effective(mobject)?;
         if effective.fill_paint.is_some()
@@ -312,12 +415,7 @@ impl Scene {
 
     /// Match the donor's authored or effective color while retaining recipient opacity.
     pub fn match_color(&mut self, object: &Mobject, donor: &Mobject) -> Result<(), AuthoringError> {
-        let color = if self.running_execution().is_some() {
-            self.effective_manim_color(donor)?
-        } else {
-            self.require_object(donor)?;
-            donor.manim_color()?
-        };
+        let color = self.manim_color(donor)?;
         self.set_color_rgba(
             object,
             color.red.into(),
