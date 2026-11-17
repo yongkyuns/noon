@@ -741,22 +741,9 @@ fn captured_drag_does_not_remap_after_an_unrelated_camera_timeline_changes() {
                 .rate_func(noon_core::RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene_execution::lower(&scene).unwrap();
-    session
-        .activate_animation_segment(
-            &mut scene.integration_store().borrow_mut(),
-            animation.node_id(),
-            noon_core::AnimationOptions::new(),
-        )
-        .unwrap();
-    let mut p = SemanticExecutionPlayer::from_live_session(
-        session,
-        std::rc::Rc::clone(scene.integration_store()),
-        scene.root(),
-        1.0,
-        7,
-    )
-    .unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    execution.live().play_animation(&animation).unwrap();
+    let mut p = SemanticExecutionPlayer::from_scene_execution(execution, 1.0, 7).unwrap();
     p.set_translation_drag_targets(std::slice::from_ref(&circle))
         .unwrap();
     p.pause();

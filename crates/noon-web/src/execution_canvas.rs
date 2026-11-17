@@ -16,7 +16,7 @@ mod wasm {
         self, BrowserPointerBinding, BrowserPointerInput, BrowserPointerKind, BrowserPointerTarget,
     };
     use crate::direct_pointer_presentation::DirectPointerPresentation;
-    use noon::integration::scene_execution::ExecutionSession;
+    use noon::integration::scene_execution::{self, ExecutionSession};
     use noon::integration::{
         ForwardSample, ForwardSampleStatus, NativePointerInputPublication, NativePointerInputToken,
         PointerSelectionPresentation, RendererPublication,
@@ -2650,11 +2650,7 @@ mod wasm {
                         "opaque host callback sessions require monotonic realtime advancement",
                     ));
                 }
-                if time < execution.session().frame().time {
-                    execution.seek(time).map_err(js_error)?;
-                } else {
-                    execution.session_mut().evaluate(time).map_err(js_error)?;
-                }
+                scene_execution::evaluate(execution.scene_mut(), time).map_err(js_error)?;
                 let session = execution.session();
                 let camera = session.inspection_camera().map_err(js_error)?;
                 (session.wake_state().frame_pending(), camera)

@@ -254,7 +254,8 @@ fn same_target_opacity_animation_continues_during_translation_drag() {
         .insert_semantic_parallel_animation(&[opacity_animation], AnimationOptions::new())
         .unwrap();
     let mut session =
-        ExecutionSession::from_semantic_root_with_animation_root(&store, root, animation).unwrap();
+        ExecutionSession::from_semantic_root_with_animation_root_at(&store, root, animation, 0.0)
+            .unwrap();
     session.configure_native_pointer_input(POINTER, 1).unwrap();
     session.set_translation_drag_targets([target]).unwrap();
     session.take_frame_changes();

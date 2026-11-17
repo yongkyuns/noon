@@ -18,7 +18,7 @@ use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::browser_pointer_input::BrowserPointerBinding;
 use crate::retained_family_execution_encoder::NoChangePresentation;
-use noon::integration::scene_execution::ExecutionSession;
+use noon::integration::scene_execution::{self, ExecutionSession};
 #[cfg(test)]
 use noon::integration::MAX_CALLBACK_MEMBERSHIP_STAGES;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -1316,14 +1316,10 @@ impl SemanticExecutionPlayer {
         let mut clock = self.clock.clone();
         clock.seek(time).map_err(AuthoringFailure::from)?;
         clock.pause();
-        if time < self.source.session().frame().time {
-            self.seek_session(time).map_err(AuthoringFailure::from)?;
-        } else {
-            self.source
-                .session_mut()
-                .advance_to(time)
-                .map_err(AuthoringFailure::from)?;
-        }
+        scene_execution::evaluate(self.source.scene_mut(), time).map_err(|error| match error {
+            scene_execution::SceneEvaluationError::Advance(error) => AuthoringFailure::from(error),
+            error => AuthoringFailure::from(error.to_string()),
+        })?;
         self.clock = clock;
         Ok(())
     }
@@ -3148,14 +3144,8 @@ impl SemanticExecutionPlayer {
         let mut clock = self.clock.clone();
         let time = clock.scene_time(timestamp_ms).map_err(|e| e.to_string())?;
         let time = self.finite_audio_end.map_or(time, |end| time.min(end));
-        if time < self.source.session().frame().time {
-            self.seek_session(time)?;
-        } else {
-            self.source
-                .session_mut()
-                .evaluate(time)
-                .map_err(|e| e.to_string())?;
-        }
+        scene_execution::evaluate(self.source.scene_mut(), time)
+            .map_err(|error| error.to_string())?;
         if self.finite_audio_end == Some(time) {
             clock.seek(time).map_err(|error| error.to_string())?;
             clock.pause();

@@ -943,15 +943,13 @@ impl CanonicalAuthoringScene {
         !self.player_ownership.is_unstarted()
     }
 
-    /// Route bound observations through the single owner of current execution.
-    /// Detached handles are queried directly by their language wrapper.
+    /// Check that this bound object can be observed in the current owner.
+    /// Detached objects are handled by their language wrapper.
     #[cfg(any(target_arch = "wasm32", test))]
-    fn mobject_observation<T, E: Into<AuthoringFailure>>(
+    fn mobject_observation_scene(
         &self,
         handle: &noon::Mobject,
-        authored: impl FnOnce(&noon::Mobject) -> Result<T, E>,
-        effective: impl FnOnce(&noon::Scene, &noon::Mobject) -> Result<T, AuthoringFailure>,
-    ) -> Result<T, AuthoringFailure> {
+    ) -> Result<Option<&noon::Scene>, AuthoringFailure> {
         let scene = self.effective_observation_scene()?;
         if !std::rc::Rc::ptr_eq(self.scene.integration_store(), handle.integration_store()) {
             return Err(AuthoringFailure::from(noon::AuthoringError::ForeignStore)
@@ -961,28 +959,19 @@ impl CanonicalAuthoringScene {
         if !self.identities.contains_key(&handle.node_id()) {
             return Err("mobject is not bound to this canonical Scene".into());
         }
-        if let Some(scene) = scene {
-            return effective(scene, handle);
-        }
-        authored(handle).map_err(Into::into)
+        Ok(scene)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_layout(
         &self,
         handle: &noon::Mobject,
-    ) -> Result<(f64, f64, f64, f64), AuthoringFailure> {
-        self.mobject_observation(handle, authored_mobject_layout, |scene, handle| {
-            let observed = scene
-                .effective_layout(handle)
-                .map_err(running_scene_error)?;
-            Ok((
-                observed.center.0,
-                observed.center.1,
-                observed.width,
-                observed.height,
-            ))
-        })
+    ) -> Result<noon::MobjectLayout, AuthoringFailure> {
+        self.observe_mobject_query(
+            self.mobject_observation_scene(handle)?,
+            handle,
+            |scene, handle| scene.layout(handle, noon::AuthoredLayoutCenter::Bounds),
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -991,29 +980,48 @@ impl CanonicalAuthoringScene {
         handle: &noon::Mobject,
         dimension: noon::LayoutDimension,
     ) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::LayoutAnchor::from(handle).dimension_length(dimension),
-            |scene, handle| {
-                layout_dimension_length(scene, &noon::LayoutAnchor::from(handle), dimension, true)
-            },
+        let running = self.mobject_observation_scene(handle)?;
+        layout_dimension_length(
+            running.unwrap_or(&self.scene),
+            &noon::LayoutAnchor::from(handle),
+            dimension,
+            running.is_some(),
         )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn family_layout(
+        &self,
+        family: &noon::MobjectFamily,
+    ) -> Result<noon::MobjectLayout, AuthoringFailure> {
+        // Family layout has always required a locally retained publication.
+        if self.player_ownership.is_transferred() {
+            return Err("live execution session is running in the semantic engine".into());
+        }
+        let player = self
+            .player_ownership
+            .local()
+            .ok_or("begin live execution before reading or mutating it")?;
+        player
+            .scene()
+            .family_layout(family)
+            .map_err(running_placement_error)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_point_count(&self, handle: &noon::Mobject) -> Result<usize, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::get_num_points, |scene, handle| {
-            scene.own_point_count(handle.into()).map_err(Into::into)
-        })
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .own_point_count(handle.into())
+            .map_err(Into::into)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn family_point_count(&self, family: &noon::MobjectFamily) -> Result<usize, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.get_num_points(),
-            |scene, target| scene.own_point_count(target).map_err(Into::into),
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .own_point_count(family.into())
+            .map_err(Into::into)
     }
 
     /// Observe one family's own root through the current execution owner.
@@ -1022,15 +1030,10 @@ impl CanonicalAuthoringScene {
         &self,
         family: &noon::MobjectFamily,
     ) -> Result<noon::PathQuery, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |_| family.own_path_query(),
-            |scene, _| {
-                scene
-                    .effective_family_own_path_query(family)
-                    .map_err(Into::into)
-            },
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .family_own_path_query(family)
+            .map_err(Into::into)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1038,9 +1041,10 @@ impl CanonicalAuthoringScene {
         &self,
         handle: &noon::Mobject,
     ) -> Result<noon::PathQuery, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::path_query, |scene, handle| {
-            scene.effective_path_query(handle).map_err(Into::into)
-        })
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .path_query(handle)
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1048,15 +1052,10 @@ impl CanonicalAuthoringScene {
         &self,
         handle: &noon::Mobject,
     ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).all_points(),
-            |scene, handle| {
-                scene
-                    .effective_all_points(handle.into())
-                    .map_err(Into::into)
-            },
-        )
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .all_points(handle.into())
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1064,15 +1063,9 @@ impl CanonicalAuthoringScene {
         &self,
         handle: &noon::Mobject,
     ) -> Result<bool, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).requires_content_boundary(),
-            |scene, handle| {
-                scene
-                    .effective_requires_content_boundary(handle.into())
-                    .map_err(|error| AuthoringFailure::from(noon::LiveSessionError::from(error)))
-            },
-        )
+        let running = self.mobject_observation_scene(handle)?;
+        let target = handle.into();
+        self.observe_point_query(running, target, noon::Scene::requires_content_boundary)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1080,31 +1073,38 @@ impl CanonicalAuthoringScene {
         &self,
         handle: &noon::Mobject,
     ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).all_points_3d(),
-            |scene, handle| {
-                scene
-                    .effective_all_points_3d(handle.into())
-                    .map_err(Into::into)
-            },
-        )
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .all_points_3d(handle.into())
+            .map_err(Into::into)
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_point_array(
         &self,
         handle: &noon::Mobject,
     ) -> Result<noon::PointArrayObservation, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).point_array(),
-            |scene, handle| {
-                scene
-                    .effective_point_array(handle.into())
-                    .map_err(running_placement_error)
-            },
+        self.observe_point_query(
+            self.mobject_observation_scene(handle)?,
+            handle.into(),
+            noon::Scene::point_array,
         )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn observe_point_query<'a, T>(
+        &self,
+        running: Option<&noon::Scene>,
+        target: noon::MobjectTarget<'a>,
+        observe: impl FnOnce(&noon::Scene, noon::MobjectTarget<'a>) -> Result<T, noon::AuthoringError>,
+    ) -> Result<T, AuthoringFailure> {
+        observe(running.unwrap_or(&self.scene), target).map_err(|error| {
+            if running.is_some() {
+                running_placement_error(error)
+            } else {
+                error.into()
+            }
+        })
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1112,15 +1112,10 @@ impl CanonicalAuthoringScene {
         &self,
         handle: &noon::Mobject,
     ) -> Result<noon::PointReductionTree, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).point_reduction_tree(),
-            |scene, handle| {
-                scene
-                    .effective_point_reduction_tree(handle.into())
-                    .map_err(Into::into)
-            },
-        )
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .point_reduction_tree(handle.into())
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1130,22 +1125,10 @@ impl CanonicalAuthoringScene {
         direction: noon_core::SemanticVec3,
         vector_boundary: bool,
     ) -> Result<noon_core::SemanticVec3, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| {
-                let target = noon::MobjectTarget::from(handle);
-                if vector_boundary {
-                    target.vector_critical_point_3d(direction)
-                } else {
-                    target.critical_point_3d(direction)
-                }
-            },
-            |scene, handle| {
-                scene
-                    .effective_critical_point_3d(handle.into(), direction, vector_boundary)
-                    .map_err(Into::into)
-            },
-        )
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .critical_point_3d(handle.into(), direction, vector_boundary)
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1153,15 +1136,10 @@ impl CanonicalAuthoringScene {
         &self,
         handle: &noon::Mobject,
     ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).path_boundary_points_3d(),
-            |scene, handle| {
-                scene
-                    .effective_path_boundary_points_3d(handle.into())
-                    .map_err(Into::into)
-            },
-        )
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .path_boundary_points_3d(handle.into())
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1169,15 +1147,10 @@ impl CanonicalAuthoringScene {
         &self,
         handle: &noon::Mobject,
     ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).path_boundary_points(),
-            |scene, handle| {
-                scene
-                    .effective_path_boundary_points(handle.into())
-                    .map_err(Into::into)
-            },
-        )
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .path_boundary_points(handle.into())
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1187,15 +1160,10 @@ impl CanonicalAuthoringScene {
         dim: usize,
         key: f64,
     ) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).extremum_along_dim(dim, key),
-            |scene, handle| {
-                scene
-                    .effective_extremum_along_dim(handle.into(), dim, key)
-                    .map_err(Into::into)
-            },
-        )
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .extremum_along_dim(handle.into(), dim, key)
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1205,15 +1173,10 @@ impl CanonicalAuthoringScene {
         dim: usize,
         key: f64,
     ) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).path_boundary_extremum_along_dim(dim, key),
-            |scene, handle| {
-                scene
-                    .effective_path_boundary_extremum_along_dim(handle.into(), dim, key)
-                    .map_err(Into::into)
-            },
-        )
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .path_boundary_extremum_along_dim(handle.into(), dim, key)
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1222,15 +1185,10 @@ impl CanonicalAuthoringScene {
         handle: &noon::Mobject,
         dim: usize,
     ) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).length_over_dim(dim),
-            |scene, handle| {
-                scene
-                    .effective_length_over_dim(handle.into(), dim)
-                    .map_err(Into::into)
-            },
-        )
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .length_over_dim(handle.into(), dim)
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1238,15 +1196,10 @@ impl CanonicalAuthoringScene {
         &self,
         handle: &noon::Mobject,
     ) -> Result<(f64, f64), AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).center_of_mass(),
-            |scene, handle| {
-                scene
-                    .effective_center_of_mass(handle.into())
-                    .map_err(Into::into)
-            },
-        )
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .center_of_mass(handle.into())
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1256,15 +1209,10 @@ impl CanonicalAuthoringScene {
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(f64, f64), AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| noon::MobjectTarget::from(handle).boundary_point(direction_x, direction_y),
-            |scene, handle| {
-                scene
-                    .effective_boundary_point(handle.into(), direction_x, direction_y)
-                    .map_err(Into::into)
-            },
-        )
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .boundary_point(handle.into(), direction_x, direction_y)
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1274,17 +1222,10 @@ impl CanonicalAuthoringScene {
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(f64, f64), AuthoringFailure> {
-        self.mobject_observation(
-            handle,
-            |handle| {
-                noon::MobjectTarget::from(handle).path_boundary_point(direction_x, direction_y)
-            },
-            |scene, handle| {
-                scene
-                    .effective_path_boundary_point(handle.into(), direction_x, direction_y)
-                    .map_err(Into::into)
-            },
-        )
+        self.mobject_observation_scene(handle)?
+            .unwrap_or(&self.scene)
+            .path_boundary_point(handle.into(), direction_x, direction_y)
+            .map_err(Into::into)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1292,11 +1233,10 @@ impl CanonicalAuthoringScene {
         &self,
         family: &noon::MobjectFamily,
     ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.all_points(),
-            |scene, target| scene.effective_all_points(target).map_err(Into::into),
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .all_points(family.into())
+            .map_err(Into::into)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1304,27 +1244,21 @@ impl CanonicalAuthoringScene {
         &self,
         family: &noon::MobjectFamily,
     ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.all_points_3d(),
-            |scene, target| scene.effective_all_points_3d(target).map_err(Into::into),
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .all_points_3d(family.into())
+            .map_err(Into::into)
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", test))]
     fn family_point_array(
         &self,
         family: &noon::MobjectFamily,
     ) -> Result<noon::PointArrayObservation, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.point_array(),
-            |scene, target| {
-                scene
-                    .effective_point_array(target)
-                    .map_err(running_placement_error)
-            },
-        )
+        let running = self.effective_observation_scene()?;
+        let target = noon::MobjectTarget::from(family);
+        target.require_store(self.scene.integration_store())?;
+        self.observe_point_query(running, target, noon::Scene::point_array)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1332,33 +1266,10 @@ impl CanonicalAuthoringScene {
         &self,
         family: &noon::MobjectFamily,
     ) -> Result<bool, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.requires_content_boundary(),
-            |scene, target| {
-                scene
-                    .effective_requires_content_boundary(target)
-                    .map_err(|error| AuthoringFailure::from(noon::LiveSessionError::from(error)))
-            },
-        )
-    }
-
-    #[cfg(any(target_arch = "wasm32", test))]
-    fn family_observation<T>(
-        &self,
-        family: &noon::MobjectFamily,
-        authored: impl FnOnce(noon::MobjectTarget<'_>) -> Result<T, noon::AuthoringError>,
-        effective: impl FnOnce(&noon::Scene, noon::MobjectTarget<'_>) -> Result<T, AuthoringFailure>,
-    ) -> Result<T, AuthoringFailure> {
-        let scene = self.effective_observation_scene()?;
+        let running = self.effective_observation_scene()?;
         let target = noon::MobjectTarget::from(family);
-        target
-            .require_store(self.scene.integration_store())
-            .map_err(AuthoringFailure::from)?;
-        if let Some(scene) = scene {
-            return effective(scene, target);
-        }
-        authored(target).map_err(AuthoringFailure::from)
+        target.require_store(self.scene.integration_store())?;
+        self.observe_point_query(running, target, noon::Scene::requires_content_boundary)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1366,15 +1277,10 @@ impl CanonicalAuthoringScene {
         &self,
         family: &noon::MobjectFamily,
     ) -> Result<noon::PointReductionTree, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.point_reduction_tree(),
-            |scene, target| {
-                scene
-                    .effective_point_reduction_tree(target)
-                    .map_err(Into::into)
-            },
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .point_reduction_tree(family.into())
+            .map_err(Into::into)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1384,21 +1290,10 @@ impl CanonicalAuthoringScene {
         direction: noon_core::SemanticVec3,
         vector_boundary: bool,
     ) -> Result<noon_core::SemanticVec3, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| {
-                if vector_boundary {
-                    target.vector_critical_point_3d(direction)
-                } else {
-                    target.critical_point_3d(direction)
-                }
-            },
-            |scene, target| {
-                scene
-                    .effective_critical_point_3d(target, direction, vector_boundary)
-                    .map_err(Into::into)
-            },
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .critical_point_3d(family.into(), direction, vector_boundary)
+            .map_err(Into::into)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1406,15 +1301,10 @@ impl CanonicalAuthoringScene {
         &self,
         family: &noon::MobjectFamily,
     ) -> Result<Vec<noon_core::SemanticVec3>, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.vector_boundary_points_3d(),
-            |scene, target| {
-                scene
-                    .effective_vector_boundary_points_3d(target)
-                    .map_err(Into::into)
-            },
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .vector_boundary_points_3d(family.into())
+            .map_err(Into::into)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1422,15 +1312,10 @@ impl CanonicalAuthoringScene {
         &self,
         family: &noon::MobjectFamily,
     ) -> Result<Vec<(f64, f64)>, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.vector_boundary_points(),
-            |scene, target| {
-                scene
-                    .effective_vector_boundary_points(target)
-                    .map_err(Into::into)
-            },
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .vector_boundary_points(family.into())
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1453,15 +1338,10 @@ impl CanonicalAuthoringScene {
         dim: usize,
         key: f64,
     ) -> Result<f64, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.extremum_along_dim(dim, key),
-            |scene, target| {
-                scene
-                    .effective_extremum_along_dim(target, dim, key)
-                    .map_err(Into::into)
-            },
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .extremum_along_dim(family.into(), dim, key)
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1470,15 +1350,10 @@ impl CanonicalAuthoringScene {
         family: &noon::MobjectFamily,
         dim: usize,
     ) -> Result<f64, AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.length_over_dim(dim),
-            |scene, target| {
-                scene
-                    .effective_length_over_dim(target, dim)
-                    .map_err(Into::into)
-            },
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .length_over_dim(family.into(), dim)
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1486,11 +1361,10 @@ impl CanonicalAuthoringScene {
         &self,
         family: &noon::MobjectFamily,
     ) -> Result<(f64, f64), AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.center_of_mass(),
-            |scene, target| scene.effective_center_of_mass(target).map_err(Into::into),
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .center_of_mass(family.into())
+            .map_err(Into::into)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1500,15 +1374,21 @@ impl CanonicalAuthoringScene {
         direction_x: f64,
         direction_y: f64,
     ) -> Result<(f64, f64), AuthoringFailure> {
-        self.family_observation(
-            family,
-            |target| target.boundary_point(direction_x, direction_y),
-            |scene, target| {
-                scene
-                    .effective_boundary_point(target, direction_x, direction_y)
-                    .map_err(Into::into)
-            },
-        )
+        self.effective_observation_scene()?
+            .unwrap_or(&self.scene)
+            .boundary_point(family.into(), direction_x, direction_y)
+            .map_err(Into::into)
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn observe_mobject_query<'a, T>(
+        &self,
+        running: Option<&noon::Scene>,
+        object: &'a noon::Mobject,
+        observe: impl FnOnce(&noon::Scene, &'a noon::Mobject) -> Result<T, noon::AuthoringError>,
+    ) -> Result<T, AuthoringFailure> {
+        observe(running.unwrap_or(&self.scene), object)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, running.is_some()))
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1516,14 +1396,10 @@ impl CanonicalAuthoringScene {
         &self,
         handle: &noon::Mobject,
     ) -> Result<noon::ManimLineEndpoints, AuthoringFailure> {
-        self.mobject_observation(
+        self.observe_mobject_query(
+            self.mobject_observation_scene(handle)?,
             handle,
-            noon::Mobject::manim_line_endpoints,
-            |scene, handle| {
-                scene
-                    .effective_line_endpoints(handle)
-                    .map_err(running_scene_error)
-            },
+            noon::Scene::line_endpoints,
         )
     }
 
@@ -1532,44 +1408,40 @@ impl CanonicalAuthoringScene {
         &self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.mobject_observation(target, noon::Mobject::fill_color, |scene, target| {
-            scene
-                .effective_fill_color(target)
-                .map_err(running_scene_error)
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(target)?,
+            target,
+            noon::Scene::fill_color,
+        )
     }
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_stroke_color(
         &self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.mobject_observation(target, noon::Mobject::stroke_color, |scene, target| {
-            scene
-                .effective_stroke_color(target)
-                .map_err(running_scene_error)
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(target)?,
+            target,
+            noon::Scene::stroke_color,
+        )
     }
     #[cfg(target_arch = "wasm32")]
     fn mobject_stroke_width(&self, target: &noon::Mobject) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(target, noon::Mobject::stroke_width, |scene, target| {
-            scene
-                .effective_stroke_width(target)
-                .map_err(running_scene_error)
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(target)?,
+            target,
+            noon::Scene::stroke_width,
+        )
     }
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_background_stroke_color(
         &self,
         target: &noon::Mobject,
     ) -> Result<Option<noon_core::Color>, AuthoringFailure> {
-        self.mobject_observation(
+        self.observe_mobject_query(
+            self.mobject_observation_scene(target)?,
             target,
-            noon::Mobject::background_stroke_color,
-            |scene, target| {
-                scene
-                    .effective_background_stroke_color(target)
-                    .map_err(running_scene_error)
-            },
+            noon::Scene::background_stroke_color,
         )
     }
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1577,14 +1449,10 @@ impl CanonicalAuthoringScene {
         &self,
         target: &noon::Mobject,
     ) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(
+        self.observe_mobject_query(
+            self.mobject_observation_scene(target)?,
             target,
-            noon::Mobject::background_stroke_width,
-            |scene, target| {
-                scene
-                    .effective_background_stroke_width(target)
-                    .map_err(running_scene_error)
-            },
+            noon::Scene::background_stroke_width,
         )
     }
     #[cfg(any(target_arch = "wasm32", test))]
@@ -1592,14 +1460,10 @@ impl CanonicalAuthoringScene {
         &self,
         handle: &noon::Mobject,
     ) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(
+        self.observe_mobject_query(
+            self.mobject_observation_scene(handle)?,
             handle,
-            noon::Mobject::background_stroke_opacity,
-            |scene, handle| {
-                scene
-                    .effective_background_stroke_opacity(handle)
-                    .map_err(running_scene_error)
-            },
+            noon::Scene::background_stroke_opacity,
         )
     }
     #[cfg(target_arch = "wasm32")]
@@ -1607,43 +1471,37 @@ impl CanonicalAuthoringScene {
         &self,
         target: &noon::Mobject,
     ) -> Result<noon_core::StrokeCap, AuthoringFailure> {
-        self.mobject_observation(target, noon::Mobject::stroke_cap, |scene, target| {
-            scene
-                .effective_stroke_cap(target)
-                .map_err(running_scene_error)
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(target)?,
+            target,
+            noon::Scene::stroke_cap,
+        )
     }
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_color(&self, handle: &noon::Mobject) -> Result<noon_core::Color, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::manim_color, |scene, target| {
-            scene
-                .effective_manim_color(target)
-                .map_err(running_scene_error)
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(handle)?,
+            handle,
+            noon::Scene::manim_color,
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_fill_opacity(&self, handle: &noon::Mobject) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::fill_opacity, |scene, handle| {
-            // Reject resource paints before reading their lowered scalar projection.
-            handle.fill_opacity().map_err(AuthoringFailure::from)?;
-            Ok(scene
-                .effective(handle)
-                .map_err(running_scene_error)?
-                .fill_opacity())
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(handle)?,
+            handle,
+            noon::Scene::fill_opacity,
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn mobject_stroke_opacity(&self, handle: &noon::Mobject) -> Result<f64, AuthoringFailure> {
-        self.mobject_observation(handle, noon::Mobject::stroke_opacity, |scene, handle| {
-            // Reject resource paints before reading their lowered scalar projection.
-            handle.stroke_opacity().map_err(AuthoringFailure::from)?;
-            Ok(scene
-                .effective(handle)
-                .map_err(running_scene_error)?
-                .stroke_opacity())
-        })
+        self.observe_mobject_query(
+            self.mobject_observation_scene(handle)?,
+            handle,
+            noon::Scene::stroke_opacity,
+        )
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3796,12 +3654,10 @@ impl CanonicalAuthoringScene {
     #[cfg(any(target_arch = "wasm32", test))]
     fn root_membership_keys(&self) -> Result<Vec<String>, AuthoringFailure> {
         self.scene
-            .integration_store()
-            .borrow()
-            .semantic_family_members_checked(self.scene.root())
+            .root_member_ids()
             .map(|members| {
                 members
-                    .iter()
+                    .into_iter()
                     .map(|node| format!("{}:{}", node.slot(), node.generation()))
                     .collect()
             })
@@ -3810,17 +3666,15 @@ impl CanonicalAuthoringScene {
 
     #[cfg(any(target_arch = "wasm32", test))]
     fn root_foreground_keys(&self) -> Result<Vec<String>, AuthoringFailure> {
-        let store = self.scene.integration_store().borrow();
-        let root = store.node(self.scene.root()).ok_or_else(|| {
+        let foreground = self.scene.foreground_member_ids().map_err(|_| {
             AuthoringFailure::new(
                 "state",
                 "scene.root_missing",
                 "semantic scene root is no longer live",
             )
         })?;
-        Ok(root
-            .foreground_members()
-            .iter()
+        Ok(foreground
+            .into_iter()
             .map(|node| format!("{}:{}", node.slot(), node.generation()))
             .collect())
     }
@@ -4011,22 +3865,6 @@ fn layout_dimension_length(
                 running_placement_error(error)
             }
         })
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-fn authored_mobject_layout(
-    handle: &noon::Mobject,
-) -> Result<(f64, f64, f64, f64), noon::AuthoringError> {
-    let Some(bounds) = handle.layout_bounds()? else {
-        let (center_x, center_y) = handle.center()?;
-        return Ok((center_x, center_y, 0.0, 0.0));
-    };
-    Ok((
-        (bounds.min_x + bounds.max_x) * 0.5,
-        (bounds.min_y + bounds.max_y) * 0.5,
-        bounds.width(),
-        bounds.height(),
-    ))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -4621,6 +4459,17 @@ mod wasm {
     pub struct WasmTrackerPositionHandle {
         position: noon::TrackerPosition,
         store: std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    }
+
+    impl From<noon::MobjectLayout> for WasmMobjectLayoutObservation {
+        fn from(layout: noon::MobjectLayout) -> Self {
+            Self {
+                center_x: layout.center.0,
+                center_y: layout.center.1,
+                width: layout.width,
+                height: layout.height,
+            }
+        }
     }
 
     #[wasm_bindgen]
@@ -7750,16 +7599,10 @@ mod wasm {
             &mut self,
             handle: &crate::WasmAuthoringMobjectHandle,
         ) -> Result<WasmMobjectLayoutObservation, JsValue> {
-            let (center_x, center_y, width, height) = self
-                .inner
+            self.inner
                 .mobject_layout(handle.semantic_mobject())
-                .map_err(typed_js_error)?;
-            Ok(WasmMobjectLayoutObservation {
-                center_x,
-                center_y,
-                width,
-                height,
-            })
+                .map(Into::into)
+                .map_err(typed_js_error)
         }
 
         /// Observe only the owned root without capturing descendant membership.
@@ -7774,27 +7617,16 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        /// Read a family through the same live session that owns its effective leaves.
+        /// Observe a family's layout from the locally retained publication.
         #[wasm_bindgen(js_name = queryFamilyLayout)]
         pub fn query_family_layout(
             &mut self,
             handle: &crate::WasmAuthoringFamilyHandle,
         ) -> Result<WasmMobjectLayoutObservation, JsValue> {
-            let family = handle.semantic_family()?;
-            let layout = self
-                .inner
-                .active_live_player()
-                .map_err(typed_js_error)?
-                .scene()
-                .effective_family_layout(&family)
-                .map_err(running_placement_error)
-                .map_err(typed_js_error)?;
-            Ok(WasmMobjectLayoutObservation {
-                center_x: layout.center.0,
-                center_y: layout.center.1,
-                width: layout.width,
-                height: layout.height,
-            })
+            self.inner
+                .family_layout(&handle.semantic_family()?)
+                .map(Into::into)
+                .map_err(typed_js_error)
         }
 
         #[wasm_bindgen(js_name = queryFamilyAllPoints)]
@@ -12253,6 +12085,7 @@ mod tests {
         );
         assert_eq!(context.root_foreground_keys().unwrap().len(), 2);
 
+        context.ordinary_wait(0.25).unwrap();
         context
             .edit_membership(SceneMembershipBatch {
                 kind: SceneMembershipBatchKind::RemoveForeground,
@@ -12992,7 +12825,9 @@ mod tests {
         assert!(context.family_point_count(&foreign).is_err());
         assert_eq!(context.family_point_count(&empty).unwrap(), 0);
         assert_eq!(context.family_point_count(&owned).unwrap(), 4);
+        let array = context.family_point_array(&owned).unwrap();
         context.live_player(1.0).unwrap();
+        assert_eq!(context.family_point_array(&owned).unwrap(), array);
         assert_eq!(context.family_point_count(&empty).unwrap(), 0);
         assert_eq!(context.family_point_count(&owned).unwrap(), 4);
         assert!(context
@@ -13014,7 +12849,9 @@ mod tests {
         assert!(context.family_point_count(&owned).is_err());
         assert!(context.family_own_path_query(&empty).is_err());
         assert!(context.family_own_path_query(&owned).is_err());
+        assert!(context.family_point_array(&owned).is_err());
         context.return_execution_player(transferred).unwrap();
+        assert_eq!(context.family_point_array(&owned).unwrap(), array);
         assert_eq!(context.family_point_count(&owned).unwrap(), 4);
         assert_eq!(
             context
@@ -15657,6 +15494,11 @@ mod tests {
         let circle = context.scene.circle(1.0).unwrap();
         let mut target = circle.target_editor().unwrap();
         target.set_translation(4.0, -2.0).unwrap();
+        let family = context.scene.family(&[(&circle).into()]).unwrap();
+        assert_eq!(
+            context.family_layout(&family).unwrap_err().message,
+            "begin live execution before reading or mutating it"
+        );
         context.bind_mobject(ObjectId::new(0), &circle).unwrap();
         let animation = context
             .declare_live_transform_to(
@@ -15670,7 +15512,11 @@ mod tests {
 
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
-            (0.0, 0.0, 2.0, 2.0)
+            noon::MobjectLayout {
+                center: (0.0, 0.0),
+                width: 2.0,
+                height: 2.0
+            }
         );
         {
             let player = context.live_player(2.0).unwrap();
@@ -15679,10 +15525,22 @@ mod tests {
         }
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
-            (2.0, -1.0, 2.0, 2.0)
+            noon::MobjectLayout {
+                center: (2.0, -1.0),
+                width: 2.0,
+                height: 2.0
+            }
+        );
+        assert_eq!(
+            context.family_layout(&family).unwrap(),
+            context.mobject_layout(&circle).unwrap()
         );
 
         let player = context.take_execution_player(2.0, 17).unwrap();
+        assert_eq!(
+            context.family_layout(&family).unwrap_err().message,
+            "live execution session is running in the semantic engine"
+        );
         {
             let error = context.mobject_layout(&circle).unwrap_err();
             assert_eq!(
@@ -15695,9 +15553,14 @@ mod tests {
             );
         }
         context.return_execution_player(player).unwrap();
+        assert_eq!(context.family_layout(&family).unwrap().center, (2.0, -1.0));
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
-            (2.0, -1.0, 2.0, 2.0)
+            noon::MobjectLayout {
+                center: (2.0, -1.0),
+                width: 2.0,
+                height: 2.0
+            }
         );
     }
 
@@ -15723,6 +15586,9 @@ mod tests {
         assert!(context.mobject_stroke_opacity(&line).is_err());
         context.bind_mobject(ObjectId::new(0), &line).unwrap();
         assert_eq!(context.mobject_point_count(&line).unwrap(), 4);
+        let authored_array = context.mobject_point_array(&line).unwrap();
+        let authored_path = context.mobject_path_query(&line).unwrap();
+        assert_eq!(authored_path.start().unwrap(), (-1.0, 0.0));
         let mut target = line.target_editor().unwrap();
         target.set_translation(4.0, -2.0).unwrap();
         target.set_stroke_color(1.0, 0.0, 0.0, 1.0).unwrap();
@@ -15755,6 +15621,10 @@ mod tests {
         let path = context.mobject_path_query(&line).unwrap();
         assert_eq!(path.start().unwrap(), observed.start);
         assert_eq!(path.end().unwrap(), observed.end);
+        let array = context.mobject_point_array(&line).unwrap();
+        assert_eq!(array.points(), path.points_3d().unwrap());
+        assert_eq!(array.shape(), authored_array.shape());
+        assert_ne!(array.points(), authored_array.points());
         assert_eq!(
             context.mobject_point_count(&line).unwrap(),
             path.point_count()
@@ -16002,7 +15872,11 @@ mod tests {
         // or treating the dormant returned runtime as active live authority.
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
-            (3.0, -1.0, 4.0, 1.0)
+            noon::MobjectLayout {
+                center: (3.0, -1.0),
+                width: 4.0,
+                height: 1.0
+            }
         );
         assert!(context.player_ownership.local().is_some());
 
@@ -16315,7 +16189,11 @@ mod tests {
         assert_eq!(context.live_execution_ownership(), "returned");
         assert_eq!(
             context.mobject_layout(&circle).unwrap(),
-            (2.0, -1.0, f64::from(0.8_f32), f64::from(0.8_f32))
+            noon::MobjectLayout {
+                center: (2.0, -1.0),
+                width: f64::from(0.8_f32),
+                height: f64::from(0.8_f32)
+            }
         );
 
         let next_target = context.target_editor(&circle).unwrap();

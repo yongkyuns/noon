@@ -321,11 +321,7 @@ mod tests {
             }
             assert_eq!(current.len().unwrap(), 2);
             assert_eq!(family.member_count().unwrap(), 1);
-            if running {
-                family
-                    .effective_own_path_query(scene.owned_execution())
-                    .unwrap();
-            }
+            scene.family_own_path_query(&family).unwrap();
         }
     }
 

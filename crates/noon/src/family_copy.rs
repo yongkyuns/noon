@@ -592,26 +592,16 @@ impl Scene {
         from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
     ) -> Result<SemanticCopy<R>, AuthoringError> {
         source.require_store(self.integration_store())?;
-        if let Some((store, root, execution)) = crate::scene::host_execution::parts_mut(self) {
-            return publish_running_copy(store, root, execution, source, references, from_node);
-        }
-        authored_copy(source, references, from_node)
+        let Some(execution) = self.running_execution() else {
+            return authored_copy(source, references, from_node);
+        };
+        let store = self.integration_store();
+        crate::effective_capture::require_target_capture(execution, &store.borrow())?;
+        let (transaction, pending) =
+            prepare_running_copy(store, execution, source, references, |_, _| {})?;
+        let result = self.apply_semantic_transaction(transaction)?;
+        pending.resolve(&result, from_node)
     }
-}
-
-fn publish_running_copy<R>(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    source: MobjectTarget<'_>,
-    references: &[MobjectTarget<'_>],
-    from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
-) -> Result<SemanticCopy<R>, AuthoringError> {
-    crate::effective_capture::require_target_capture(execution, &store.borrow())?;
-    let (transaction, pending) =
-        prepare_running_copy(store, execution, source, references, |_, _| {})?;
-    let result = Scene::publish_running_transaction(store, root, execution, transaction)?;
-    pending.resolve(&result, from_node)
 }
 
 pub(crate) fn prepare_running_copy(
