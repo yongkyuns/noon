@@ -245,7 +245,6 @@ impl Scene {
             return self.with_running_execution(|store, _, execution| {
                 execution
                     .set_scalar_signal_value(&mut store.borrow_mut(), tracker.node_id(), value)
-                    .map(|_| ())
                     .map_err(AuthoringError::from)
             });
         }
