@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             2.0
         );
     }
-    assert!(session.session().frame().objects[0].text().is_some());
+    assert!(session.scene().effective_content(&target)?.text().is_some());
     assert_eq!(
         session.session().execution_slot_for_frame_index(1),
         Some(unaffected_slot)
@@ -33,7 +33,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     session
         .scene_mut()
         .replace_content(&target, &replacement_geometry)?;
-    assert!(session.session().frame().objects[0].geometry().is_some());
+    assert!(session
+        .scene()
+        .effective_content(&target)?
+        .geometry()
+        .is_some());
     assert_eq!(
         session.session().execution_slot_for_frame_index(1),
         Some(unaffected_slot)
