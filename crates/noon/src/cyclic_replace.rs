@@ -102,9 +102,10 @@ impl Scene {
         references: &[MobjectTarget<'_>],
     ) -> Result<FamilyCopy, AuthoringError> {
         MobjectTarget::from(family).require_store(self.integration_store())?;
-        let Some((store, root, execution)) = crate::scene::host_execution::parts_mut(self) else {
+        let Some(execution) = self.running_execution() else {
             return family.cyclic_replace_target_with_references(references);
         };
+        let store = self.integration_store();
         crate::effective_capture::require_target_capture(execution, &store.borrow())?;
         let members = members(family)?;
         let mut positions = members
@@ -133,7 +134,7 @@ impl Scene {
             },
         )?;
         stage_cyclic_positions(&mut transaction, &pending, &positions);
-        let result = Scene::publish_running_transaction(store, root, execution, transaction)?;
+        let result = self.apply_semantic_transaction(transaction)?;
         pending.resolve(&result, MobjectFamily::from_node)
     }
 }

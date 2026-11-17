@@ -31,15 +31,26 @@ impl crate::Scene {
         })
     }
 
+    /// Capture the family's own path, excluding descendants. A running
+    /// Scene validates the current publication, even for a detached root.
+    pub fn family_own_path_query(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<PathQuery, AuthoringError> {
+        crate::MobjectTarget::from(family).require_store(self.integration_store())?;
+        match self.running_execution() {
+            Some(execution) => family.effective_own_path_query(execution),
+            None => family.own_path_query(),
+        }
+    }
+
     /// Read the root's own effective path, excluding all descendants.
     pub fn effective_family_own_path_query(
         &self,
         family: &MobjectFamily,
     ) -> Result<PathQuery, AuthoringError> {
         crate::MobjectTarget::from(family).require_store(self.integration_store())?;
-        let execution = self.running_execution().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
-        ))?;
+        let execution = self.execution_for_observation()?;
         family.effective_own_path_query(execution)
     }
 }
@@ -78,7 +89,7 @@ impl MobjectFamily {
 
     /// Read only the root's own current path through a coherent execution.
     /// Empty roots validate the same store/publication contract as owned roots.
-    pub(crate) fn effective_own_path_query(
+    fn effective_own_path_query(
         &self,
         execution: &crate::ExecutionSession,
     ) -> Result<PathQuery, AuthoringError> {
@@ -427,23 +438,34 @@ mod effective_query_tests {
         detached.set_points_f64(&points).unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
         assert_eq!(scene.own_point_count((&family).into()).unwrap(), 0);
-        let execution = scene.execution_session().unwrap();
-        assert!(family
-            .effective_own_path_query(&execution)
+        assert!(scene
+            .family_own_path_query(&family)
             .unwrap()
             .points()
             .unwrap()
             .is_empty());
-        let foreign = Scene::new().execution_session().unwrap();
-        assert!(family.effective_own_path_query(&foreign).is_err());
+        let foreign = Scene::new();
+        assert!(matches!(
+            foreign.family_own_path_query(&family),
+            Err(crate::AuthoringError::ForeignStore)
+        ));
+        let execution = scene.execution_session().unwrap();
         scene.install_execution(execution);
         assert_eq!(scene.own_point_count((&family).into()).unwrap(), 0);
         assert_eq!(scene.own_point_count((&detached).into()).unwrap(), 4);
+        assert_eq!(
+            scene
+                .family_own_path_query(&detached)
+                .unwrap()
+                .points()
+                .unwrap(),
+            points
+        );
         scene.set_family_points_f64(&family, &points).unwrap();
         assert_eq!(scene.own_point_count((&family).into()).unwrap(), 4);
         assert_eq!(
-            family
-                .effective_own_path_query(scene.owned_execution())
+            scene
+                .family_own_path_query(&family)
                 .unwrap()
                 .points()
                 .unwrap(),
@@ -452,9 +474,8 @@ mod effective_query_tests {
         family.clear_points().unwrap();
         assert!(scene.own_point_count((&family).into()).is_err());
         assert!(scene.own_point_count((&detached).into()).is_err());
-        assert!(family
-            .effective_own_path_query(scene.owned_execution())
-            .is_err());
+        assert!(scene.family_own_path_query(&family).is_err());
+        assert!(scene.family_own_path_query(&detached).is_err());
     }
 
     #[test]

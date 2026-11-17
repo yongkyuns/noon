@@ -35,7 +35,8 @@ use crate::execution_session::{
 };
 use crate::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentState, ExecutionSession,
-    ExecutionSessionInputError, LiveSession, RustHostCallbackError, RustHostCallbackTable, Scene,
+    ExecutionSessionInputError, LiveSession, LiveSessionError, RustHostCallbackError,
+    RustHostCallbackTable, Scene,
 };
 use noon_runtime::{FrameState, RendererPublication};
 
@@ -415,22 +416,16 @@ impl<C: LiveContinuation> LiveProgram<C> {
         targets: impl IntoIterator<Item = &'target crate::Mobject>,
     ) -> Result<(), LiveProgramError<C::Error>> {
         self.ensure_host_input_available("configure translation drag targets")?;
-        let mut nodes = Vec::new();
-        for target in targets {
-            if !Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-                return Err(LiveProgramError::TranslationDrag(
-                    TranslationDragError::ForeignStore,
-                ));
-            }
-            target.validate().map_err(|error| {
-                LiveProgramError::TranslationDrag(TranslationDragError::Semantic(error.to_string()))
-            })?;
-            nodes.push(target.node_id());
-        }
         self.scene
-            .owned_execution_mut()
-            .set_translation_drag_targets(nodes)
-            .map_err(LiveProgramError::TranslationDrag)?;
+            .owned_live()
+            .set_translation_drag_targets(targets)
+            .map_err(|error| {
+                LiveProgramError::TranslationDrag(match error {
+                    LiveSessionError::ForeignMobjectStore => TranslationDragError::ForeignStore,
+                    LiveSessionError::TranslationDrag(error) => error,
+                    error => TranslationDragError::Semantic(error.to_string()),
+                })
+            })?;
         self.refresh_pending_publication();
         Ok(())
     }

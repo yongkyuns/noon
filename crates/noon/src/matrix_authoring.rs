@@ -434,10 +434,18 @@ mod tests {
         {
             let mut store = scene.integration_store().borrow_mut();
             direct
-                .activate_animation(&mut store, animation.node_id(), AnimationOptions::new())
+                .activate_animation_segment(
+                    &mut store,
+                    animation.node_id(),
+                    AnimationOptions::new(),
+                )
                 .unwrap();
             forward
-                .activate_animation(&mut store, animation.node_id(), AnimationOptions::new())
+                .activate_animation_segment(
+                    &mut store,
+                    animation.node_id(),
+                    AnimationOptions::new(),
+                )
                 .unwrap();
         }
         direct.seek(1.0).unwrap();

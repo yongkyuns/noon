@@ -948,26 +948,21 @@ fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
     let scene = execution.scene();
     let family_target = MobjectTarget::from(&family);
     let object_target = MobjectTarget::from(&object);
-    let points = scene.effective_all_points(family_target).unwrap();
+    let points = scene.all_points(family_target).unwrap();
     let effective_path = scene.effective_path_query(&object).unwrap();
     assert_eq!(points, effective_path.points().unwrap());
     assert_eq!(
-        scene.effective_path_boundary_points(object_target).unwrap(),
+        scene.path_boundary_points(object_target).unwrap(),
         effective_path.anchors().unwrap()
     );
-    assert_eq!(
-        scene.effective_path_boundary_points(family_target).unwrap(),
-        points
-    );
+    assert_eq!(scene.path_boundary_points(family_target).unwrap(), points);
     assert_eq!(
         scene
-            .effective_path_boundary_extremum_along_dim(object_target, 1, 1.)
+            .path_boundary_extremum_along_dim(object_target, 1, 1.)
             .unwrap(),
         1.5
     );
-    let boundary = scene
-        .effective_path_boundary_point(object_target, 0., 1.)
-        .unwrap();
+    let boundary = scene.path_boundary_point(object_target, 0., 1.).unwrap();
     assert_eq!(boundary.1, 1.5);
     assert_ne!(points, family_target.all_points().unwrap());
     let expected_center = (
@@ -975,38 +970,17 @@ fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
         points.iter().map(|point| point.1).sum::<f64>() / points.len() as f64,
     );
     assert_eq!(
-        scene.effective_center_of_mass(family_target).unwrap(),
+        scene.center_of_mass(family_target).unwrap(),
         expected_center
     );
-    let effective_top = scene
-        .effective_boundary_point(family_target, 0., 1.)
-        .unwrap();
+    let effective_top = scene.boundary_point(family_target, 0., 1.).unwrap();
     assert_eq!(effective_top.1, 1.5);
-    assert_eq!(
-        scene.effective_length_over_dim(family_target, 0).unwrap(),
-        2.
-    );
-    assert_eq!(
-        scene.effective_length_over_dim(family_target, 1).unwrap(),
-        1.
-    );
-    assert_eq!(
-        scene.effective_length_over_dim(family_target, 2).unwrap(),
-        0.
-    );
+    assert_eq!(scene.length_over_dim(family_target, 0).unwrap(), 2.);
+    assert_eq!(scene.length_over_dim(family_target, 1).unwrap(), 1.);
+    assert_eq!(scene.length_over_dim(family_target, 2).unwrap(), 0.);
     assert_eq!(family_target.extremum_along_dim(1, 1.).unwrap(), 0.5);
-    assert_eq!(
-        scene
-            .effective_extremum_along_dim(family_target, 1, 1.)
-            .unwrap(),
-        1.5
-    );
-    assert_eq!(
-        scene
-            .effective_extremum_along_dim(family_target, 2, 1.)
-            .unwrap(),
-        0.
-    );
+    assert_eq!(scene.extremum_along_dim(family_target, 1, 1.).unwrap(), 1.5);
+    assert_eq!(scene.extremum_along_dim(family_target, 2, 1.).unwrap(), 0.);
 }
 
 #[test]
@@ -1024,6 +998,7 @@ fn effective_reveal_queries_keep_curve_boundaries_transforms_and_snapshots() {
         .unwrap();
     object.set_scale(2., 1.).unwrap();
     object.shift(1., 3.).unwrap();
+    near(scene.path_query(&object).unwrap().end().unwrap(), (21., 5.));
     let mut running = scene.into_execution().unwrap();
     let snapshot;
     {
@@ -1036,11 +1011,11 @@ fn effective_reveal_queries_keep_curve_boundaries_transforms_and_snapshots() {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let initial = running.scene().effective_path_query(&object).unwrap();
+        let initial = running.scene().path_query(&object).unwrap();
         near(initial.start().unwrap(), (1., 3.));
         near(initial.end().unwrap(), (1., 3.));
         running.live().advance_segment_to(segment, 1.5).unwrap();
-        snapshot = running.scene().effective_path_query(&object).unwrap();
+        snapshot = running.scene().path_query(&object).unwrap();
         assert_eq!(snapshot.curve_count(), 2);
         assert_eq!(snapshot.subpaths().len(), 2);
         near(snapshot.end().unwrap(), (21., 4.));
@@ -1048,19 +1023,14 @@ fn effective_reveal_queries_keep_curve_boundaries_transforms_and_snapshots() {
         running.live().advance_segment_to(segment, 2.).unwrap();
         running.live().complete_segment(segment).unwrap();
         near(
-            running
-                .scene()
-                .effective_path_query(&object)
-                .unwrap()
-                .end()
-                .unwrap(),
+            running.scene().path_query(&object).unwrap().end().unwrap(),
             (21., 5.),
         );
         near(snapshot.end().unwrap(), (21., 4.));
     }
     let committed_revision = running.scene().revision();
     running.seek(1.5).unwrap();
-    let replay = running.scene().effective_path_query(&object).unwrap();
+    let replay = running.scene().path_query(&object).unwrap();
     assert_eq!(replay.anchors_and_handles(), snapshot.anchors_and_handles());
     assert_eq!(running.scene().revision(), committed_revision);
     near(object.path_query().unwrap().end().unwrap(), (21., 5.));

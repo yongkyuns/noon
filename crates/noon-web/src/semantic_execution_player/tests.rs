@@ -367,15 +367,19 @@ fn worker_profile_gate_preserves_existing_click_indicate_admission() {
 }
 
 fn translation_drag_player() -> (SemanticExecutionPlayer, noon_core::SemanticNodeId) {
-    let mut store = SemanticStore::new();
-    let root = store.insert_family();
-    let target = store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-        radius: 1.0,
-    }));
-    store.add_semantic_family_member(root, target).unwrap();
-    let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
-    session.set_translation_drag_targets([target]).unwrap();
-    session
+    let mut scene = noon::Scene::new();
+    let mut circle = noon::ManimGeometryOptions::circle(1.0).unwrap();
+    circle.set_fill(1.0, 1.0, 1.0, 1.0).unwrap();
+    circle.disable_stroke();
+    let target = scene.geometry(circle).unwrap();
+    scene.add(&target).unwrap();
+    let mut source = scene.into_execution().unwrap();
+    source
+        .live()
+        .set_translation_drag_targets([&target])
+        .unwrap();
+    source
+        .session_mut()
         .configure_native_pointer_input(
             NativePointerId {
                 source: 17,
@@ -384,10 +388,9 @@ fn translation_drag_player() -> (SemanticExecutionPlayer, noon_core::SemanticNod
             1,
         )
         .unwrap();
-    let semantics = std::rc::Rc::new(std::cell::RefCell::new(store));
     (
-        SemanticExecutionPlayer::from_live_session(session, semantics, root, 1.0, 64).unwrap(),
-        target,
+        SemanticExecutionPlayer::from_scene_execution(source, 1.0, 64).unwrap(),
+        target.node_id(),
     )
 }
 
@@ -2084,30 +2087,17 @@ fn animated_player() -> SemanticExecutionPlayer {
     let mut target = circle.target_editor().unwrap();
     target.shift(4.0, 0.0).unwrap();
     let animation = scene
-        .integration_store()
-        .borrow_mut()
-        .insert_semantic_transform_animation(
-            circle.node_id(),
-            target.node_id(),
-            AnimationOptions::new(),
-        )
-        .unwrap();
-    let mut session = scene_execution::lower(&scene).unwrap();
-    session
-        .activate_animation(
-            &mut scene.integration_store().borrow_mut(),
-            animation,
+        .declare_transform_to(
+            &circle,
+            &target,
             AnimationOptions::new()
                 .run_time(1.0)
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    SemanticExecutionPlayer::from_scene_execution(
-        scene_execution::consume_with_session(scene, session).unwrap(),
-        2.0,
-        42,
-    )
-    .unwrap()
+    let mut execution = scene.into_execution().unwrap();
+    execution.live().play_animation(&animation).unwrap();
+    SemanticExecutionPlayer::from_scene_execution(execution, 2.0, 42).unwrap()
 }
 
 #[test]

@@ -715,10 +715,11 @@ fn hundred_thousand_object_animation_and_pointer_view_stay_local_across_ticks() 
     );
     let committed = transaction.apply(&mut store).unwrap();
     store.attach_to_scene(scene_root).unwrap();
-    let mut session = ExecutionSession::from_semantic_root_with_animation_root(
+    let mut session = ExecutionSession::from_semantic_root_with_animation_root_at(
         &store,
         scene_root,
         committed.resolve(animation).unwrap(),
+        0.0,
     )
     .unwrap();
     session.configure_native_pointer_input(POINTER, 1).unwrap();

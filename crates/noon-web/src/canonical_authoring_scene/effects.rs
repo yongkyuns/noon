@@ -442,7 +442,7 @@ mod tests {
             .scene_mut()
             .set_translation(&dot, 2.0, 0.0)
             .unwrap();
-        assert_eq!(context.mobject_layout(&dot).unwrap().0, 2.0);
+        assert_eq!(context.mobject_layout(&dot).unwrap().center.0, 2.0);
     }
 }
 

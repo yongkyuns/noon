@@ -1334,18 +1334,13 @@ impl Scene {
         self.apply_semantic_transaction(transaction)
     }
 
-    /// Match a donor's effective RGB in one coherent family publication.
+    /// Match a donor's current RGB in one coherent family publication.
     pub fn match_family_color(
         &mut self,
         family: &MobjectFamily,
         donor: &Mobject,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError> {
-        self.require_object(donor)?;
-        let color = if self.running_execution().is_some() {
-            self.effective_manim_color(donor)?
-        } else {
-            donor.manim_color()?
-        };
+        let color = self.manim_color(donor)?;
         self.set_family_color(
             family,
             color.red.into(),
