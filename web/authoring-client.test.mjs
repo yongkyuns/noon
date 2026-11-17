@@ -73,18 +73,23 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-test("renderer can request direct module delivery before Python is ready", async (t) => {
+test("module delivery waits for the authoring worker to accept requests", async (t) => {
   const worker = new FakeWorker(), client = new PythonAuthoringClient(worker);
   const { port1, port2 } = new MessageChannel();
   t.after(() => { port1.close(); port2.close(); });
   const delivery = client.sendRuntimeModule(port1);
+  await Promise.resolve();
+  assert.deepEqual(worker.messages, []);
+
+  worker.emit("message", workerMessage("ready", { libraryTrust: "pristine" }));
+  await client.ready();
   assert.deepEqual(worker.messages[0], workerMessage("runtime_module", { requestId: 0, port: port1 }));
   worker.emit("message", workerMessage("runtime_module_sent", { requestId: 0 }));
   await delivery;
   assert.equal(client.diagnostics.pendingRequests, 0);
 
-  void client.ready().catch(() => {});
   const pending = client.sendRuntimeModule(port1);
+  await Promise.resolve();
   client.terminate();
   await assert.rejects(pending, /terminated/);
 });
