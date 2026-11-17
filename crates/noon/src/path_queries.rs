@@ -3,6 +3,7 @@ mod boundary_profiles;
 mod point_arrays;
 mod point_counts;
 mod point_values;
+pub(crate) use boundary_profiles::authored_content_requires_boundary;
 pub use boundary_profiles::effective_requires_content_boundary;
 pub use point_arrays::PointArrayObservation;
 pub(crate) use point_counts::effective_mobject_point_count;

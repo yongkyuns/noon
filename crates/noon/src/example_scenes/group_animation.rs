@@ -1,33 +1,47 @@
-//! A diagram and progress rail animate as independent groups in one play.
+//! A nested diagram and progress rail animate as independent groups in one play.
 //! Paired with `showcase_group_animation.py`, also available in the demo gallery.
 use crate::{AnimationOptions, Color, LiveProgram, Scene, SceneScript, ScriptError, Vec2};
 
 pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
     Scene::script(|scene| async move {
-        let mut parts = Vec::new();
-        for x in [-1.8, 1.8] {
+        let lines = |segments: &[([f32; 2], [f32; 2])]| -> Result<Vec<_>, ScriptError> {
+            segments
+                .iter()
+                .map(|&([x1, y1], [x2, y2])| {
+                    let line = scene.line(Vec2::new(x1, y1), Vec2::new(x2, y2))?;
+                    scene.set_color(&line, Color::BLUE)?;
+                    Ok(line)
+                })
+                .collect()
+        };
+        let step = |x: f32, label: &[([f32; 2], [f32; 2])]| {
             let card = scene.rectangle(2.0, 1.2)?;
             scene.shift(&card, Vec2::new(x, 0.0))?;
             scene.set_color(&card, Color::BLUE)?;
             scene.set_fill_opacity(&card, 0.0)?;
-            parts.push(card);
-        }
-        // Flat ordinary lines: connector, arrow head, and the step labels 1 / 2.
-        for (start, end) in [
-            ((-0.6, 0.0), (0.6, 0.0)),
-            ((0.35, 0.2), (0.6, 0.0)),
-            ((0.35, -0.2), (0.6, 0.0)),
-            ((-1.8, -0.25), (-1.8, 0.25)),
-            ((1.6, 0.25), (2.0, 0.25)),
-            ((2.0, 0.25), (2.0, 0.0)),
-            ((2.0, 0.0), (1.6, -0.25)),
-            ((1.6, -0.25), (2.0, -0.25)),
-        ] {
-            let line = scene.line(Vec2::new(start.0, start.1), Vec2::new(end.0, end.1))?;
-            scene.set_color(&line, Color::BLUE)?;
-            parts.push(line);
-        }
-        let diagram = scene.family(&parts)?;
+            scene.family(
+                std::iter::once(card)
+                    .chain(lines(label)?)
+                    .collect::<Vec<_>>()
+                    .iter(),
+            )
+        };
+        let first = step(-1.8, &[([-1.8, -0.25], [-1.8, 0.25])])?;
+        let second = step(
+            1.8,
+            &[
+                ([1.6, 0.25], [2.0, 0.25]),
+                ([2.0, 0.25], [2.0, 0.0]),
+                ([2.0, 0.0], [1.6, -0.25]),
+                ([1.6, -0.25], [2.0, -0.25]),
+            ],
+        )?;
+        let connector = scene.family(&lines(&[
+            ([-0.6, 0.0], [0.6, 0.0]),
+            ([0.35, 0.2], [0.6, 0.0]),
+            ([0.35, -0.2], [0.6, 0.0]),
+        ])?)?;
+        let diagram = scene.family([&first, &connector, &second])?;
         scene.add(&diagram)?;
         let mut rail_parts = Vec::new();
         rail_parts.push(scene.line(Vec2::new(-2.4, -1.4), Vec2::new(2.4, -1.4))?);
@@ -50,7 +64,11 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
         scene
             .play_with(
                 (
-                    diagram.animate().shift(Vec2::new(0.0, 0.5)).scale(0.8),
+                    diagram
+                        .animate()
+                        .shift(Vec2::new(0.0, 0.5))
+                        .scale(0.8)
+                        .with_options(AnimationOptions::new().lag_ratio(0.08)),
                     rail.animate().scale(0.8),
                     marker.animate().shift(Vec2::new(1.76, 0.0)),
                 ),
