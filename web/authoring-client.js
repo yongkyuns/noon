@@ -74,6 +74,8 @@ export class PythonAuthoringClient {
   }
 
   async sendRuntimeModule(port) {
+    // A module worker can yield during startup before its message handler exists.
+    await this.ready();
     const requestId = this.#beginRequest();
     this.#worker.postMessage(envelope("runtime_module", { requestId, port }), [port]);
     return this.#resultFor(requestId);
