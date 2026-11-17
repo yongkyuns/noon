@@ -202,7 +202,7 @@ impl SceneInstance {
     }
 
     /// A scalar extension is proven by the compiler-derived, runtime-pinned schedule append.
-    pub fn prepare_scalar_timeline_plan_change(
+    fn prepare_scalar_timeline_plan_change(
         &self,
         expected: PublicationContext,
         scene_revision: SceneRevision,
