@@ -281,39 +281,41 @@ try {
           }));
           // No Run, open-preview or Play gesture: every scene must start itself.
           mark('automatic-start');
-          await Promise.all(frames.map(({frame})=>ready(frame)));
-          assert.ok(workers.size>=selection.length,'all live contexts created runtime workers');
           assert.equal(await page.locator('video, .demo-poster, [data-demo-open]').count(),0);
           const playback = await Promise.all(frames.map(async ({frame}) => {
-            const initialGeneration = await frame.evaluate(()=>window.__noonExampleGallery.generationDiagnostics.runGeneration);
-            assert.equal(initialGeneration,1,'exactly one canonical automatic initial Run');
             // A frame may have played thousands of real frames while Firefox
             // missed the injected observer's mutation/poll callbacks. Qualify
             // genuine autoplay directly: no Run/Play gesture, same generation,
             // active playback and both actual frame/time counters advancing.
+            // Observe before waiting for the completed source: an observed
+            // first pass can finish and pause before a prepared scene is ready.
             await frame.waitForFunction(() => {
-              const frames = Number(document.querySelector('#status')?.dataset.presentedFrames);
+              const status = document.querySelector('#status');
+              const frames = Number(status?.dataset.presentedFrames);
               const time = Number.parseFloat(document.querySelector('#metric-time')?.value);
-              return frames > 0 && Number.isFinite(time);
-            }, null, {timeout:30000});
+              return status?.dataset.playbackPlaying === 'true' && frames > 0 && Number.isFinite(time);
+            });
             const autoplayBefore = await frame.evaluate(() => ({
               generation: window.__noonExampleGallery.generationDiagnostics.runGeneration,
               frames: Number(document.querySelector('#status').dataset.presentedFrames),
               time: Number.parseFloat(document.querySelector('#metric-time').value),
             }));
+            assert.equal(autoplayBefore.generation,1,'exactly one canonical automatic initial Run');
             await frame.waitForFunction(observedUnpromptedProgress, autoplayBefore, {timeout:30000});
             const autoplayAfter = await frame.evaluate(() => ({
               frames: Number(document.querySelector('#status').dataset.presentedFrames),
               time: Number.parseFloat(document.querySelector('#metric-time').value),
             }));
-            return {initialGeneration,autoplayBefore,autoplayAfter};
+            return {initialGeneration:autoplayBefore.generation,autoplayBefore,autoplayAfter};
           }));
-          // After proving concurrent autoplay, pause the other embeds while
-          // each scene is checked for canvas pixels and editor behavior.
-          mark('pause-after-autoplay');
-          await Promise.all(frames.map(({frame})=>pause(frame)));
+          assert.ok(workers.size>=selection.length,'all live contexts created runtime workers');
+          // WebKit can throttle offscreen renders. After proving autoplay,
+          // bring each scene into view before waiting for its replay controls.
           for (const [index,{id,element,frame}] of frames.entries()) {
             await page.setViewportSize({width:index%2 ? 390 : 1280,height:1000});
+            mark('visible-scene-ready',id);
+            await element.scrollIntoViewIfNeeded();
+            await ready(frame);
             const prefix = `${name}-${surface}-${id}`;
             mark('authored-frames',id);
             const {initialGeneration,autoplayBefore,autoplayAfter}=playback[index];

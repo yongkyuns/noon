@@ -12,6 +12,18 @@ QUALIFIED_BROWSER_MODULES = {"noon", "math", "colorsys", "struct", "zlib", "arra
 
 
 class ShowcaseSourceContract(unittest.TestCase):
+    def test_featured_lessons_compile_portable_constructs(self):
+        from _manim_source_execution import compile_authoring_source
+
+        examples = {entry["id"]: entry["path"] for entry in MANIFEST["entries"]}
+        featured = json.loads((WEB / "site/examples.json").read_text())
+        for entry in featured:
+            with self.subTest(example=entry["id"]):
+                source = (WEB / examples[entry["id"]]).read_text()
+                _, portable = compile_authoring_source(source)
+                self.assertTrue(any(code.co_name == "construct" for code in portable),
+                                "the featured source must run without relying on JSPI")
+
     def test_sources_are_self_contained_animated_lessons(self):
         for entry in MANIFEST["entries"]:
             with self.subTest(example=entry["id"]):
@@ -32,14 +44,17 @@ class ShowcaseSourceContract(unittest.TestCase):
                 if entry["id"] == "showcase-background-music":
                     self._assert_finite_audio_lesson(entry, tree)
                     continue
-                scenes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+                scene_types = {"Scene", "MovingCameraScene", "ThreeDScene", "LinearTransformationScene"}
+                scenes = [node for node in tree.body if isinstance(node, ast.ClassDef)
+                          and any(isinstance(base, ast.Name) and base.id in scene_types for base in node.bases)]
                 self.assertEqual(len(scenes), 1)
                 is_surface = entry["id"] == "showcase-spatial-scene"
                 is_axes = entry["id"] == "showcase-three-d-axes"
+                is_spatial = is_surface or is_axes or entry["id"] == "showcase-channel-flow"
                 is_linear = entry["id"] == "showcase-linear-algebra"
                 is_camera = entry["id"] == "showcase-camera-follows-path"
                 scene_bases = {base.id for base in scenes[0].bases if isinstance(base, ast.Name)}
-                expected_base = "ThreeDScene" if is_surface or is_axes else "LinearTransformationScene" if is_linear else "MovingCameraScene" if is_camera else "Scene"
+                expected_base = "ThreeDScene" if is_spatial else "LinearTransformationScene" if is_linear else "MovingCameraScene" if is_camera else "Scene"
                 allowed_bases = {expected_base, "MovingCameraScene"} if expected_base == "Scene" else {expected_base}
                 self.assertTrue(allowed_bases & scene_bases)
                 calls = [node for node in ast.walk(scenes[0]) if isinstance(node, ast.Call)]
@@ -59,7 +74,7 @@ class ShowcaseSourceContract(unittest.TestCase):
                     self.assertEqual(len(delegates), 1, "CUDA helper must call Scene.play")
                     progression = {"play_for"}
                 else:
-                    progression = {"play", "move_camera"} if is_surface or is_axes else {"apply_matrix"} if is_linear else {"play"}
+                    progression = {"play", "move_camera"} if is_spatial else {"apply_matrix"} if is_linear else {"play"}
                 plays = [node for node in calls if isinstance(node.func, ast.Attribute)
                          and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
                          and node.func.attr in progression]
@@ -76,6 +91,9 @@ class ShowcaseSourceContract(unittest.TestCase):
                                         and node.func.id == "ThreeDAxes" for node in calls))
                     self.assertTrue(any(isinstance(node.func, ast.Attribute)
                                         and node.func.attr == "c2p" for node in calls))
+                elif is_spatial:
+                    self.assertTrue(any(isinstance(node.func, ast.Name)
+                                        and node.func.id == "WorldTransformTo" for node in calls))
                 elif is_linear:
                     self.assertTrue(any(isinstance(node.func, ast.Attribute)
                                         and node.func.attr == "add_vector" for node in calls))

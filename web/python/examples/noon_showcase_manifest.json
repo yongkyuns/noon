@@ -622,6 +622,126 @@
         {"time": 8, "label": "Resolve the cover"}
       ],
       "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-cache-locality",
+      "title": "Why loop order changes cache misses",
+      "lesson": "Watch four neighboring values load together, then see why walking the same matrix by rows or columns changes how often a one-slot cache needs to fetch.",
+      "primary_feature": "cache-locality",
+      "category": "Algorithms and systems",
+      "path": "python/examples/showcase_cache_locality.py",
+      "features": ["GrowArrow", "Write", "Integer", "cache simulation", "simultaneous animation", "sections", "retained replay"],
+      "duration": 38.6,
+      "thumbnail_time": 35.5,
+      "thumbnail": "thumbnails/showcase/showcase-cache-locality.png",
+      "thumbnail_alt": "Two traversal panels show the same matrix and one-slot cache, with four row-first misses and sixteen column-first misses.",
+      "still_intervals": [[1.2, 2.7], [4.9, 6.3], [8.3, 9.8], [11.2, 12.7], [14.7, 16.3], [17.8, 19.8], [34.8, 38.6]],
+      "beats": [
+        {"time": 1.6, "label": "Draw the two traversal directions"},
+        {"time": 5.6, "label": "Each row becomes a line of adjacent memory addresses"},
+        {"time": 7.8, "label": "A miss copies the whole line into the cache"},
+        {"time": 11.6, "label": "Address 1 is already in the cache"},
+        {"time": 15.2, "label": "Address 4 needs another line"},
+        {"time": 22.2, "label": "Rows reuse the line while columns replace it"},
+        {"time": 35.5, "label": "Compare the total lines fetched"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-doubling-curve",
+      "title": "Why a doubling curve becomes a straight line",
+      "lesson": "Follow the same growth ratio through a moving camera, then see the same values warp from a linear axis onto a log axis.",
+      "primary_feature": "log-scale-camera-warp",
+      "category": "Data and coordinates",
+      "path": "python/examples/showcase_doubling_curve.py",
+      "features": ["MovingCameraScene", "MoveAlongPath", "Create", "Write", "Transform", "sections"],
+      "duration": 28.9,
+      "thumbnail_time": 26,
+      "thumbnail": "thumbnails/showcase/showcase-doubling-curve.png",
+      "thumbnail_alt": "Four equal vertical steps mark successive doublings on the straight log-scale plot.",
+      "still_intervals": [[1.7, 3.9], [6, 6.5], [7.6, 8.1], [9.2, 9.7], [11.3, 13.3], [14.6, 16.4], [19.9, 21.9], [25.2, 28.9]],
+      "beats": [
+        {"time": 2.2, "label": "Start on a linear scale"},
+        {"time": 7.8, "label": "Draw the step and label the same multiplier"},
+        {"time": 15.3, "label": "Predict a scale with evenly spaced ratios"},
+        {"time": 18.1, "label": "Preserve the data while the scale changes"},
+        {"time": 23.7, "label": "Draw equal vertical steps in order"},
+        {"time": 26, "label": "Equal steps form a straight line"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-channel-flow",
+      "title": "Why water speeds up through a narrow channel",
+      "lesson": "Follow a stretching dye pulse and measure how much water crosses two sections of a steady, constant-depth channel.",
+      "primary_feature": "spatial-flow-continuity",
+      "category": "Three dimensions",
+      "path": "python/examples/showcase_channel_flow.py",
+      "features": ["ThreeDScene", "Mesh3D", "WorldTransformTo", "finite camera movement", "fixed-frame label fades", "sections"],
+      "duration": 24.3,
+      "thumbnail_time": 20.4,
+      "thumbnail": "thumbnails/showcase/showcase-channel-flow.png",
+      "thumbnail_alt": "Orange and mint prisms show the equal volumes of water swept out in one second in the wide and narrow channel.",
+      "still_intervals": [[3.5, 4.4], [7.8, 9.6], [11.4, 13.4], [16.4, 18.8], [19.9, 24.3]],
+      "beats": [
+        {"time": 0.8, "label": "Start with one pulse in the inlet"},
+        {"time": 4.1, "label": "The same pulse stretches in the throat"},
+        {"time": 7.5, "label": "Draw the second cross-section"},
+        {"time": 8.8, "label": "Compare the widths from above"},
+        {"time": 14.1, "label": "Sweep out one second of water on both sides"},
+        {"time": 20.4, "label": "Equal volumes travel different distances"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-neon-glow",
+      "title": "Why a neon sign glows beyond its edges",
+      "lesson": "Isolate the sharp neon stroke, blur a copy into a light layer, and see what happens when nearby halos overlap.",
+      "primary_feature": "layered-neon-light",
+      "category": "Visual effects",
+      "path": "python/examples/showcase_neon_glow.py",
+      "features": ["Create", "Write", "Transform", "Blur", "GPU glow", "effect parameter animation", "sections"],
+      "duration": 26.4,
+      "thumbnail_time": 13.8,
+      "thumbnail": "thumbnails/showcase/showcase-neon-glow.png",
+      "thumbnail_alt": "Three illuminated panels show a sharp pink stroke, its diffuse light layer, and the two layers combined.",
+      "still_intervals": [[2.1, 4], [6.4, 8], [9.8, 11.4], [13.1, 15.4], [19.6, 21.2], [22.8, 26.4]],
+      "beats": [
+        {"time": 2.9, "label": "Look at the area outside the sign"},
+        {"time": 5.9, "label": "Carry one stroke from the sign into the demonstration"},
+        {"time": 7.5, "label": "Isolate the sharp tube"},
+        {"time": 9.2, "label": "Blur a copy to make a light layer"},
+        {"time": 13.8, "label": "The sharp core sits over the halo"},
+        {"time": 18.4, "label": "Bring the two tubes closer together"},
+        {"time": 20.1, "label": "Two halos overlap"},
+        {"time": 23.4, "label": "Trace the illuminated sign"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-riemann-sums",
+      "title": "Rectangles become an integral",
+      "lesson": "Use rectangles to measure a curved area, split each strip in two, and watch the left-edge sum approach the definite integral.",
+      "primary_feature": "riemann-sum-refinement",
+      "category": "Calculus",
+      "path": "python/examples/showcase_riemann_sums.py",
+      "features": ["Axes", "MathTex", "retained path transforms", "retained decimal readout", "get_area", "sections"],
+      "duration": 18.3,
+      "thumbnail_time": 5.3,
+      "thumbnail": "thumbnails/showcase/showcase-riemann-sums.png",
+      "thumbnail_alt": "Eight blue-to-green rectangles under a yellow curve, with LaTeX labels for the strip width, live sum, and limiting area.",
+      "still_intervals": [[5.2, 5.35], [7.15, 7.3], [9.1, 9.25], [10.65, 10.8], [12.2, 12.35], [13.75, 14.3], [16.3, 18.3]],
+      "beats": [
+        {"time": 0.7, "label": "Trace the curve"},
+        {"time": 2.8, "label": "Grow four strips and write their sum"},
+        {"time": 4.4, "label": "The width changes as the rectangles split"},
+        {"time": 5.3, "label": "Eight rectangles with the new sum"},
+        {"time": 8.2, "label": "Keep the left half and resample the right half"},
+        {"time": 12.7, "label": "Follow the live sum as thin strips fill the area"},
+        {"time": 15.3, "label": "Match the terms from the sum to the integral"},
+        {"time": 17.3, "label": "The integral gives the limiting area"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
     }
   ]
 }

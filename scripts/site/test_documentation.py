@@ -135,6 +135,14 @@ class Shape:
         (self.root/'docs/architecture.md').unlink()
         with self.assertRaises(FileNotFoundError): builder.build(rust)
 
+    def test_first_scene_can_stay_in_getting_started_after_leaving_the_showcase(self):
+        builder, _ = self.builder()
+        builder.selected.clear()
+        self.assertIn('data-demo="showcase-first-scene"',
+                      builder.demo('showcase-first-scene', page='getting-started'))
+        with self.assertRaisesRegex(ValueError, 'Unselected'):
+            builder.demo('showcase-first-scene', page='examples')
+
     def test_unselected_example_rejected(self):
         builder, _ = self.builder()
         with self.assertRaisesRegex(ValueError, 'Unselected'): builder.demo('showcase-triangle-light')

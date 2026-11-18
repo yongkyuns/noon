@@ -4670,11 +4670,13 @@ RESOURCE_BARRIER_METHODS = frozenset({
     "add_world_mobjects", "add_fixed_in_frame_mobjects", "add_fixed_orientation_mobjects",
 })
 
+PORTABLE_REACTIVE_METHODS = frozenset({"value_tracker", "bind_position", "bind_opacity"})
 PORTABLE_VECTOR_METHODS = frozenset({"add_vector", "apply_matrix"})
 CONSTRUCT_SCENE_BARRIERS = frozenset({"play", "wait", "move_camera"}) | PORTABLE_VECTOR_METHODS
 PORTABLE_SPATIAL_METHODS = frozenset({
     "move_camera", "set_camera_orientation", "point_light",
     "add_world_mobjects", "add_fixed_in_frame_mobjects", "add_fixed_orientation_mobjects",
+    "set_world_transform",
 })
 
 
@@ -4764,7 +4766,7 @@ _SCENE_CALLS = frozenset({
     "add_foreground_mobject", "add_foreground_mobjects",
     "activate_zooming", "get_zoomed_display_pop_out_animation",
     "bring_to_front", "bring_to_back", "replace", "next_section",
-}) | PORTABLE_SPATIAL_METHODS | PORTABLE_VECTOR_METHODS
+}) | PORTABLE_REACTIVE_METHODS | PORTABLE_SPATIAL_METHODS | PORTABLE_VECTOR_METHODS
 
 
 class _CooperativeSourceCheckpoints(ast.NodeTransformer):

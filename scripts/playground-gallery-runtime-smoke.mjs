@@ -559,6 +559,11 @@ try {
                 assert.equal(controls.preparing, 'false');
                 assert.equal(controls.end, started.durationSeconds, 'first playback must show the full timeline');
               }
+              if (expectedProfile.dispositionKind === 'observed-replay') {
+                const duration = result.authoredDuration;
+                const time = await seekPausedGallery(page, duration, duration / 2);
+                await waitForPublishedGalleryFrame(page, time, duration);
+              }
               result.profileGate.status = 'matched';
               delete result.profileGate.reason;
             }
