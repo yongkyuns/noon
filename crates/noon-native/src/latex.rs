@@ -327,6 +327,46 @@ mod tests {
     }
 
     #[test]
+    fn native_latex_group_keeps_the_term_and_resource_after_entering() {
+        use noon::{LiveProgramStatus, RustHostCallbackTable, YELLOW};
+
+        let Some(mut backend) = system_backend_from_environment() else {
+            return;
+        };
+        let mut program = noon::example_scenes::latex_text::group_program(&mut backend).unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        let mut admitted_term = None;
+        for end in [0.5, 1.25, 1.5, 2.0] {
+            assert!(matches!(
+                program.resume().unwrap(),
+                LiveProgramStatus::Awaiting(_)
+            ));
+            if let LiveProgramStatus::PublicationPending(expected) =
+                program.drive_to(&mut callbacks, end).unwrap()
+            {
+                let publication = program.take_renderer_publication().context();
+                assert_eq!(expected, publication);
+                program.admit_publication(publication).unwrap();
+            }
+            let objects = &program.session().frame().objects;
+            if end == 0.5 {
+                assert_eq!(objects.len(), 1);
+                continue;
+            }
+            assert_eq!(objects.len(), 7);
+            let term = &objects[2];
+            let identity = admitted_term.get_or_insert_with(|| (term.id, term.content.clone()));
+            assert_eq!(identity.0, term.id);
+            assert_eq!(identity.1, term.content);
+            assert!((term.transform.translation.y - 0.25).abs() < 1e-5);
+            if end == 2.0 {
+                assert_eq!(term.style.fill, Some(YELLOW));
+                assert_eq!(objects[3].style.fill, Some(noon::WHITE));
+            }
+        }
+    }
+
+    #[test]
     fn native_system_latex_compiles_and_normalizes_real_dvi_when_assets_are_supplied() {
         let Some(mut backend) = system_backend_from_environment() else {
             eprintln!(

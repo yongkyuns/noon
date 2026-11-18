@@ -508,7 +508,8 @@ class BraceEdits(Scene):
         finally:
             close_scene(scene)
 
-        for name, time in (("showcase_latex_create", 0.5), ("showcase_linear_algebra", 2.5)):
+        for name, time in (("showcase_latex_create", 0.5), ("showcase_linear_algebra", 2.5),
+                           ("showcase_equation_card", 0.875)):
             with self.subTest(example=name):
                 path = ROOT / "web/python/examples" / (name + ".py")
                 scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))

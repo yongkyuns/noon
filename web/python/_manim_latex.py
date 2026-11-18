@@ -62,8 +62,14 @@ class MathTexPart(_CompiledTexLeaf):
     def tex_string(self) -> str:
         return _source_slice(self.source, self._part)
 
+    def _copy_for_animate_target(self) -> MathTexPart:
+        target = super()._copy_for_animate_target()
+        target._owner = None
+        return target
+
     def set_color(self, color: _base.Color, family: bool = True) -> MathTexPart:
-        del family
+        if self._owner is None:
+            return super().set_color(color, family)
         self._owner._set_part_view_colors(((self, _as_color(color)),))
         return self
 

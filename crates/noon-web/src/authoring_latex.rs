@@ -235,6 +235,17 @@ pub async fn create_latex_text_renderer(
 }
 
 #[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
+#[wasm_bindgen(js_name = createLatexGroupRenderer)]
+pub async fn create_latex_group_renderer(
+    canvas: web_sys::OffscreenCanvas,
+    compiler: &mut WasmLatexCompiler,
+) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::latex_text::group_program(compiler)
+        .map_err(|error| js_error(error.to_string()))?;
+    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(all(feature = "renderer", feature = "renderer-smoke"))]
 #[wasm_bindgen(js_name = createNumericDecimalRenderer)]
 pub async fn create_numeric_decimal_renderer(
     canvas: web_sys::OffscreenCanvas,
