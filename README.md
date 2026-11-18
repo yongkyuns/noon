@@ -18,13 +18,13 @@ These GIFs are excerpts rendered by Noon. Click one to open its editable Python
 source and run the complete scene in the browser. They show the output, not a
 performance benchmark.
 
-| Your first scene | Interference is addition |
+| Why loop order changes cache misses | Why a doubling curve becomes a straight line |
 | --- | --- |
-| [![A blue circle and pink square being created, moved, and rotated](https://yongkyuns.github.io/noon/site/media/showcase-first-scene.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-first-scene) | [![Two circular wave fields and their sum as the relative phase changes](https://yongkyuns.github.io/noon/site/media/showcase-wave-interference.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-wave-interference) |
-| Create objects, arrange them, and animate their properties. | Add two wave fields and see how a half-cycle phase shift changes the result. |
-| **Why loop order changes cache misses** | **Make it move** |
-| [![Two loops traverse the same matrix and count misses in a one-line cache](https://yongkyuns.github.io/noon/site/media/showcase-cache-locality.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-cache-locality) | [![An editorial layout with animated gradients, grain, and a frosted caption](https://yongkyuns.github.io/noon/site/media/showcase-editorial-cover.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-editorial-cover) |
-| Coordinate a larger composition of shapes and labels. | Combine typography, procedural surfaces, and visual effects. |
+| [![Four adjacent values move from memory into a cache slot](https://yongkyuns.github.io/noon/site/media/showcase-cache-locality.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-cache-locality) | [![A curved plot straightens as the vertical scale changes](https://yongkyuns.github.io/noon/site/media/showcase-doubling-curve.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-doubling-curve) |
+| Trace array reads and cache-line replacement. | Follow a plotted point and change the vertical scale. |
+| **Why water speeds up through a narrow channel** | **Why a neon sign glows beyond its edges** |
+| [![Two colored volumes extend downstream in a 3D channel](https://yongkyuns.github.io/noon/site/media/showcase-channel-flow.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-channel-flow) | [![Three panels separate a sharp stroke, its soft halo, and the combined result](https://yongkyuns.github.io/noon/site/media/showcase-neon-glow.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-neon-glow) |
+| Use a 3D camera to compare equal volumes through different sections. | Build and combine the sharp and soft layers of neon light. |
 
 The [gallery](https://yongkyuns.github.io/noon/playground.html?catalog=showcase)
 also includes plots, text and equations, code blocks, 3D examples, audio, and

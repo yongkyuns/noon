@@ -36,10 +36,11 @@ class ShowcaseSourceContract(unittest.TestCase):
                 self.assertEqual(len(scenes), 1)
                 is_surface = entry["id"] == "showcase-spatial-scene"
                 is_axes = entry["id"] == "showcase-three-d-axes"
+                is_spatial = is_surface or is_axes or entry["id"] == "showcase-channel-flow"
                 is_linear = entry["id"] == "showcase-linear-algebra"
                 is_camera = entry["id"] == "showcase-camera-follows-path"
                 scene_bases = {base.id for base in scenes[0].bases if isinstance(base, ast.Name)}
-                expected_base = "ThreeDScene" if is_surface or is_axes else "LinearTransformationScene" if is_linear else "MovingCameraScene" if is_camera else "Scene"
+                expected_base = "ThreeDScene" if is_spatial else "LinearTransformationScene" if is_linear else "MovingCameraScene" if is_camera else "Scene"
                 allowed_bases = {expected_base, "MovingCameraScene"} if expected_base == "Scene" else {expected_base}
                 self.assertTrue(allowed_bases & scene_bases)
                 calls = [node for node in ast.walk(scenes[0]) if isinstance(node, ast.Call)]
@@ -59,7 +60,7 @@ class ShowcaseSourceContract(unittest.TestCase):
                     self.assertEqual(len(delegates), 1, "CUDA helper must call Scene.play")
                     progression = {"play_for"}
                 else:
-                    progression = {"play", "move_camera"} if is_surface or is_axes else {"apply_matrix"} if is_linear else {"play"}
+                    progression = {"play", "move_camera"} if is_spatial else {"apply_matrix"} if is_linear else {"play"}
                 plays = [node for node in calls if isinstance(node.func, ast.Attribute)
                          and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
                          and node.func.attr in progression]

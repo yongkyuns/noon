@@ -1,6 +1,6 @@
 [
-  {"id":"showcase-first-scene","start":0,"end":8},
-  {"id":"showcase-wave-interference","start":1,"end":9},
   {"id":"showcase-cache-locality","start":2.5,"end":14.6},
-  {"id":"showcase-editorial-cover","start":0,"end":9}
+  {"id":"showcase-doubling-curve","start":11.4,"end":22},
+  {"id":"showcase-channel-flow","start":6,"end":17.8},
+  {"id":"showcase-neon-glow","start":4.2,"end":16.7}
 ]

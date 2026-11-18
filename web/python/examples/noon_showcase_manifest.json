@@ -635,6 +635,73 @@
         {"time": 31, "label": "Compare the total lines fetched"}
       ],
       "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-doubling-curve",
+      "title": "Why a doubling curve becomes a straight line",
+      "lesson": "Follow the same growth ratio through a moving camera, then see the same values warp from a linear axis onto a log axis.",
+      "primary_feature": "log-scale-camera-warp",
+      "category": "Data and coordinates",
+      "path": "python/examples/showcase_doubling_curve.py",
+      "features": ["MovingCameraScene", "MoveAlongPath", "Restore", "Transform", "sections"],
+      "duration": 23.2,
+      "thumbnail_time": 21,
+      "thumbnail": "thumbnails/showcase/showcase-doubling-curve.png",
+      "thumbnail_alt": "Four equal vertical steps mark successive doublings on the straight log-scale plot.",
+      "still_intervals": [[1.2, 3.4], [5.35, 5.7], [6.65, 7], [7.95, 8.3], [9.4, 11.4], [12, 13.8], [16.2, 18.2], [19.5, 23.2]],
+      "beats": [
+        {"time": 2.2, "label": "Start on a linear scale"},
+        {"time": 7.8, "label": "Follow repeated multiplications"},
+        {"time": 12.8, "label": "Predict a scale with evenly spaced ratios"},
+        {"time": 15.2, "label": "Preserve the data while the scale changes"},
+        {"time": 21, "label": "Equal steps form a straight line"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-channel-flow",
+      "title": "Why water speeds up through a narrow channel",
+      "lesson": "Follow a stretching dye pulse and measure how much water crosses two sections of a steady, constant-depth channel.",
+      "primary_feature": "spatial-flow-continuity",
+      "category": "Three dimensions",
+      "path": "python/examples/showcase_channel_flow.py",
+      "features": ["ThreeDScene", "Mesh3D", "WorldTransformTo", "finite camera movement", "fixed-frame labels", "sections"],
+      "duration": 21.4,
+      "thumbnail_time": 19,
+      "thumbnail": "thumbnails/showcase/showcase-channel-flow.png",
+      "thumbnail_alt": "Orange and mint prisms show the equal volumes of water swept out in one second in the wide and narrow channel.",
+      "still_intervals": [[3.5, 4.4], [6, 8], [9.4, 11.4], [13.4, 15.8], [17, 21.4]],
+      "beats": [
+        {"time": 0.4, "label": "Start with one pulse in the inlet"},
+        {"time": 4, "label": "The same pulse stretches in the throat"},
+        {"time": 6.9, "label": "Look down on the two cross-sections"},
+        {"time": 12.2, "label": "Sweep out one second of water on both sides"},
+        {"time": 19, "label": "Equal volumes move farther in the narrow channel"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-neon-glow",
+      "title": "Why a neon sign glows beyond its edges",
+      "lesson": "Isolate the sharp neon stroke, blur a copy into a light layer, and see what happens when nearby halos overlap.",
+      "primary_feature": "layered-neon-light",
+      "category": "Visual effects",
+      "path": "python/examples/showcase_neon_glow.py",
+      "features": ["stroked vector paths", "Blur", "GPU glow", "effect parameter animation", "sections"],
+      "duration": 22.2,
+      "thumbnail_time": 10.8,
+      "thumbnail": "thumbnails/showcase/showcase-neon-glow.png",
+      "thumbnail_alt": "Three illuminated panels show a sharp pink stroke, its diffuse light layer, and the two layers combined.",
+      "still_intervals": [[1.1, 3], [4.2, 5.8], [7, 8.6], [10, 12.3], [15.7, 17.3], [18.6, 22.2]],
+      "beats": [
+        {"time": 2.2, "label": "Look at the area outside the sign"},
+        {"time": 4.8, "label": "Isolate the sharp tube"},
+        {"time": 7.5, "label": "A blurred copy becomes the light layer"},
+        {"time": 10.8, "label": "The sharp core sits over the halo"},
+        {"time": 15.8, "label": "Two halos overlap"},
+        {"time": 19.5, "label": "Return to the illuminated sign"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
     }
   ]
 }
