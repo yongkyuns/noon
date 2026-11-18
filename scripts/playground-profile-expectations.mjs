@@ -43,11 +43,11 @@ const rows = [
   ['showcase-glass-lens','showcase_glass_lens.py','33103a1db643b62d5c14384046a5ea5f4e33e75052048b2c783c85a70ca10d52','incremental','ordinary',[], 'looped'],
   ['showcase-wave-interference','showcase_wave_interference.py','90222ca44bc6c821bdae34453bca323b532090aca125637c0fabea455f4fa128','incremental','ordinary',['sections'], 'looped'],
   ['showcase-editorial-cover','showcase_editorial_cover.py','88addadbd590a95992ec1a37ccbd9b28e0aec31e0c97ff34e9b140f0e2ea2f12','incremental','ordinary',['sections'], 'looped'],
-  ['showcase-cache-locality','showcase_cache_locality.py','b6a48d981b6b1e4ac8313a1a23a17382d147627b055af4ab6462981d9fa0a95a','incremental','ordinary',['sections'], 'looped'],
-  ['showcase-doubling-curve','showcase_doubling_curve.py','a5de438e8df1782cbc45478770d51cc2de9a268f99b823234da96adc17238bf0','incremental','ordinary',['sections'], 'looped'],
-  ['showcase-channel-flow','showcase_channel_flow.py','5b1b8f43e7635784f9ae059a7e625673ac18e8333ae74217030073fba522088f','incremental','ordinary',['sections'], 'looped'],
+  ['showcase-cache-locality','showcase_cache_locality.py','b6a48d981b6b1e4ac8313a1a23a17382d147627b055af4ab6462981d9fa0a95a','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-doubling-curve','showcase_doubling_curve.py','a5de438e8df1782cbc45478770d51cc2de9a268f99b823234da96adc17238bf0','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-channel-flow','showcase_channel_flow.py','5b1b8f43e7635784f9ae059a7e625673ac18e8333ae74217030073fba522088f','observed','observed-replay',['sections'], 'observed-complete'],
   ['showcase-neon-glow','showcase_neon_glow.py','8afc4e03ec664f0faeaa71735f3ed13bf9da7da95a814dd225350f2319f0701c','incremental','ordinary',['sections'], 'looped'],
-  ['showcase-riemann-sums','showcase_riemann_sums.py','86e840050d93afd2035d97c24810db67665185c3cbf1773f48865a2a677ee7d3','incremental','ordinary',['sections'], 'looped'],
+  ['showcase-riemann-sums','showcase_riemann_sums.py','86e840050d93afd2035d97c24810db67665185c3cbf1773f48865a2a677ee7d3','observed','observed-replay',['sections'], 'observed-complete'],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
@@ -61,23 +61,26 @@ export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
     dispositionKind,
     completionPolicy: dispositionKind === 'ordinary' ? 'gallery-loop'
       : dispositionKind === 'immutable' ? 'finite-audio'
-        : dispositionKind === 'callback' ? 'observed-nonreplayable' : 'native-input-handoff',
+        : dispositionKind === 'observed-replay' ? 'observed-then-replay'
+          : dispositionKind === 'callback' ? 'observed-nonreplayable' : 'native-input-handoff',
     requiredDomains: Object.freeze(requiredDomains),
     seekRangePolicy: dispositionKind === 'callback' ? 'unavailable'
-      : dispositionKind === 'immutable' ? 'closed-inclusive'
-        : dispositionKind === 'input-handoff' ? 'open-exclusive-to-unavailable'
-          : 'open-exclusive-to-closed-inclusive',
+      : dispositionKind === 'observed-replay' ? 'closed-on-completion'
+        : dispositionKind === 'immutable' ? 'closed-inclusive'
+          : dispositionKind === 'input-handoff' ? 'open-exclusive-to-unavailable'
+            : 'open-exclusive-to-closed-inclusive',
     audioPolicy: requiredDomains.includes('audio') ? 'authored-audio' : 'none',
     inputPolicy: id === 'showcase-translation-drag' ? 'native-input-handoff'
       : id === 'showcase-pointer-selection' ? 'selection-inspection' : 'none',
     capabilities: Object.freeze({
-      attachedCommands: dispositionKind === 'callback' ? initialObservedCommands
+      attachedCommands: profile === 'observed' ? initialObservedCommands
         : dispositionKind === 'immutable' ? audioCommands
           : requiredDomains.includes('sections') ? sectionCommands : ordinaryCommands,
-      dispositionCommands: dispositionKind === 'ordinary'
+      dispositionCommands: dispositionKind === 'ordinary' || dispositionKind === 'observed-replay'
         ? requiredDomains.includes('sections') ? sectionCommands : ordinaryCommands
         : dispositionKind === 'immutable' ? audioCommands : [],
-      replayAtDisposition: dispositionKind === 'ordinary' || dispositionKind === 'immutable',
+      replayAtDisposition: dispositionKind === 'ordinary' || dispositionKind === 'immutable' ||
+        dispositionKind === 'observed-replay',
       audio: requiredDomains.includes('audio'),
       sections: requiredDomains.includes('sections'),
     }),
@@ -184,6 +187,12 @@ export function validateShowcaseDiagnostics(expected, diagnostics) {
   const changes = events.filter(event => event.stage === 'attached' || event.stage === 'profile-change')
     .map(event => event.profile);
   assert.deepEqual(changes, expected.transitions, `${expected.id}: unexpected profile transition`);
+  if (expected.dispositionKind === 'observed-replay') {
+    assert.equal(attached[0].reason?.code, 'host_effects',
+      `${expected.id}: expected an observed first pass`);
+    assert.equal(attached[0].capabilities?.replay, false,
+      `${expected.id}: replay must become available after the observed first pass`);
+  }
   if (expected.dispositionKind === 'callback') {
     const reason = events.find(event => ['attached', 'source-requirement'].includes(event.stage) &&
       event.reason?.code === 'host_callbacks');
