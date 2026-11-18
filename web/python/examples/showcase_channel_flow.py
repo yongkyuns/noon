@@ -63,6 +63,8 @@ class ChannelFlow(ThreeDScene):
         return WorldTransformTo(guide, translation=center, scale=final_scale)
 
     def section_frame(self, x, width, color):
+        # Keep this guide just upstream so it stays clear of the swept volume.
+        x -= 0.04
         a, b = -width / 2, width / 2
         return [
             self.draw_guide((x, a, DEPTH), (x, b, DEPTH), 1, color),

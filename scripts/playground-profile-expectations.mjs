@@ -45,7 +45,7 @@ const rows = [
   ['showcase-editorial-cover','showcase_editorial_cover.py','88addadbd590a95992ec1a37ccbd9b28e0aec31e0c97ff34e9b140f0e2ea2f12','incremental','ordinary',['sections'], 'looped'],
   ['showcase-cache-locality','showcase_cache_locality.py','ded7f652358993655f78bf73c9993faa174199c7579e1d60c11f36158ebc18aa','observed','observed-replay',['sections'], 'observed-complete'],
   ['showcase-doubling-curve','showcase_doubling_curve.py','a5de438e8df1782cbc45478770d51cc2de9a268f99b823234da96adc17238bf0','observed','observed-replay',['sections'], 'observed-complete'],
-  ['showcase-channel-flow','showcase_channel_flow.py','5b1b8f43e7635784f9ae059a7e625673ac18e8333ae74217030073fba522088f','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-channel-flow','showcase_channel_flow.py','bbd3f3734b0e9870b27ddc1b638911938ad5aabc46d6a93295c6500084cbeb73','observed','observed-replay',['sections'], 'observed-complete'],
   ['showcase-neon-glow','showcase_neon_glow.py','8afc4e03ec664f0faeaa71735f3ed13bf9da7da95a814dd225350f2319f0701c','incremental','ordinary',['sections'], 'looped'],
   ['showcase-riemann-sums','showcase_riemann_sums.py','d617e1dc55fabda053a9511af1d2bd84d3b4a439e6ba5ab720b2c1ea5b382176','observed','observed-replay',['sections'], 'observed-complete'],
 ];
