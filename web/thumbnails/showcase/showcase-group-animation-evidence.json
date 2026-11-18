@@ -1,15 +1,15 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "3396ec984257ecdbede592cf1ec4c74953998736",
+  "captureRevision": "04e98e1cb4f622e5212ee2056a257f73f7ee56f6",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "3396ec984257ecdbede592cf1ec4c74953998736",
+    "sourceRevision": "04e98e1cb4f622e5212ee2056a257f73f7ee56f6",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "4569e4c539cfdba043a211a4ec4fed7b5859705f6513caaa3bad27ad66860667"
+        "sha256": "59f95203feccc9291a78001221445ba492e6a55c85c01258f1f8b4ad9e704ad4"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
@@ -24,13 +24,13 @@
         "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
       }
     },
-    "buildId": "3108986b903a03d046499d236d0334a2a021112e80a5853fdebc2c125b4eaed5"
+    "buildId": "d5b0473be26e14cce83775e4ee4653d3b90108b7f0a02b733a39a7a60fe27299"
   },
   "posters": [
     {
       "id": "showcase-group-animation",
-      "captureBuildId": "3108986b903a03d046499d236d0334a2a021112e80a5853fdebc2c125b4eaed5",
-      "sourceSha256": "17589533be4ed97c36b8b151d6b85f1729462fd2a23f3e0e10443aa5f106940c",
+      "captureBuildId": "d5b0473be26e14cce83775e4ee4653d3b90108b7f0a02b733a39a7a60fe27299",
+      "sourceSha256": "8a4f275107a44f9834b5b08924f4c95fec0244c23bffdf329ab42c1e2addcb26",
       "thumbnailTime": 6.5,
       "image": {
         "width": 960,
