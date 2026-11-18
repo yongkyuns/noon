@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "53b8bf0ce3a01aa893fecde8e90c31c4ce482f49",
+  "captureRevision": "f317f95d4067188a9c3516fefaf7379fd36614ff",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "53b8bf0ce3a01aa893fecde8e90c31c4ce482f49",
+    "sourceRevision": "f317f95d4067188a9c3516fefaf7379fd36614ff",
     "files": {
       "worker": {
         "path": "./python-worker.js",
@@ -24,13 +24,13 @@
         "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
       }
     },
-    "buildId": "0790f807f40a32dc15a1b120c7ac7c0ca2e72460706d47384cf3e49c7ce4bdce"
+    "buildId": "c5509f91a91fe1666e5dbcf31d7ee2bad01facf6748adc79fd11f9ac1b7a0b4c"
   },
   "posters": [
     {
       "id": "showcase-riemann-sums",
-      "captureBuildId": "0790f807f40a32dc15a1b120c7ac7c0ca2e72460706d47384cf3e49c7ce4bdce",
-      "sourceSha256": "5661c82d264c9acbfc7d58699e845e3588a3f06a25da9718f01e38703a1ffb2b",
+      "captureBuildId": "c5509f91a91fe1666e5dbcf31d7ee2bad01facf6748adc79fd11f9ac1b7a0b4c",
+      "sourceSha256": "86e840050d93afd2035d97c24810db67665185c3cbf1773f48865a2a677ee7d3",
       "thumbnailTime": 5.3,
       "image": {
         "width": 960,
