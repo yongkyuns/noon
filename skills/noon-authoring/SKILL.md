@@ -1,9 +1,9 @@
 ---
 name: noon-authoring
-description: Author and review Noon animation scenes using capability-qualified ManimCE-style Python or the shared Rust API. Use when a user asks to create, explain, repair, or verify a Noon animation, or when scene source imports noon. Not a generic ManimGL skill or a contract for modifying Noon internals.
+description: Author and review Noon animation scenes using capability-qualified ManimCE-style Python or the shared Rust API. Use when a user asks to create, explain, repair, or verify a Noon animation, lecture, or tutorial, or when scene source imports noon. Not a generic ManimGL skill or a contract for modifying Noon internals.
 compatibility: Requires a trusted Noon repository checkout, Python 3.12+, and Node 22+ for local capability/MCP tooling. Isolated preview additionally requires Docker, a built current browser package, and the repository-pinned preview runtime; capability discovery alone does not render or install dependencies.
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 # Noon authoring
@@ -37,8 +37,12 @@ about an installed binary, the current GPU, or a live session. See
 
 ## Author and inspect
 
-1. State the important visual states and transitions: what appears, what moves,
-   what transforms, and what disappears. Include labels, layout, and holds.
+For a lecture, tutorial, or explanatory demo, use [lecture design](references/lecture-design.md)
+to choose the audience's question, storyboard the answer, and check whether a
+viewer can explain the cause from the rendered sequence.
+
+1. List the important visual states and transitions. Include what appears,
+   moves, transforms, and disappears, along with labels, layout, and holds.
 2. Choose a relevant [existing example](references/examples.md), query its current
    classification, and read its actual source. Retain its provenance when reusing it.
    Prefer a narrow proven pattern to an unsupported general recipe.

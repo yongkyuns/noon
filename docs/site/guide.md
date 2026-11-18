@@ -51,9 +51,9 @@ object or group. The supported effect profile and compositing order matter.
 Start with a qualified example rather than applying a browser-only API to a
 native Python scene without checking its host support.
 
-[Interference is addition](examples.html#interference-is-addition) uses analytic
+[Interference is addition](../../playground.html?catalog=showcase&example=showcase-wave-interference) uses analytic
 wave fields and a shared shader material; it is not a numerical wave simulation.
-[Make it move](examples.html#make-it-move) combines type, animated color, grain and
+[Make it move](../../playground.html?catalog=showcase&example=showcase-editorial-cover) combines type, animated color, grain and
 backdrop effects. Full details remain in
 [paints, effects and shader materials](reference.html#paints-effects-and-shader-materials).
 

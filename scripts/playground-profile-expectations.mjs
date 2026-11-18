@@ -10,7 +10,7 @@ const audioCommands = Object.freeze([...replayCommands, "sections"]);
 const initialObservedCommands = Object.freeze(["play", "pause"]);
 const rows = [
   ['showcase-first-scene','showcase_first_scene.py','1a6ba47220c25148f6c24d1fc82733e728690c7548ab1183e8f9905d0396f7e8','incremental','ordinary',[], 'looped'],
-  ['showcase-group-animation','showcase_group_animation.py','17589533be4ed97c36b8b151d6b85f1729462fd2a23f3e0e10443aa5f106940c','incremental','ordinary',[], 'looped'],
+  ['showcase-group-animation','showcase_group_animation.py','8a4f275107a44f9834b5b08924f4c95fec0244c23bffdf329ab42c1e2addcb26','incremental','ordinary',[], 'looped'],
   ['showcase-dynamic-scene','showcase_dynamic_scene.py','bcc689a8cb5d71eefc2afdf69b187260ebf0df5029cc67cca08db43d01541dca','incremental','ordinary',[], 'looped'],
   ['showcase-background-music','background_music_lesson.py','b5bcced4ffb30c44b4bf476e16ae1416a6fad072d2f0df88edd98346a4711a40','immutable','immutable',['audio','sections'], 'finite-complete'],
   ['showcase-entrances-exits','showcase_entrances_exits.py','55818966017c4643b8abb1fab036164f28fc9c019b2ce3b415e28679c1911f73','incremental','ordinary',[], 'looped'],
@@ -44,6 +44,11 @@ const rows = [
   ['showcase-glass-lens','showcase_glass_lens.py','33103a1db643b62d5c14384046a5ea5f4e33e75052048b2c783c85a70ca10d52','incremental','ordinary',[], 'looped'],
   ['showcase-wave-interference','showcase_wave_interference.py','90222ca44bc6c821bdae34453bca323b532090aca125637c0fabea455f4fa128','incremental','ordinary',['sections'], 'looped'],
   ['showcase-editorial-cover','showcase_editorial_cover.py','88addadbd590a95992ec1a37ccbd9b28e0aec31e0c97ff34e9b140f0e2ea2f12','incremental','ordinary',['sections'], 'looped'],
+  ['showcase-cache-locality','showcase_cache_locality.py','ded7f652358993655f78bf73c9993faa174199c7579e1d60c11f36158ebc18aa','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-doubling-curve','showcase_doubling_curve.py','a5de438e8df1782cbc45478770d51cc2de9a268f99b823234da96adc17238bf0','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-channel-flow','showcase_channel_flow.py','bbd3f3734b0e9870b27ddc1b638911938ad5aabc46d6a93295c6500084cbeb73','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-neon-glow','showcase_neon_glow.py','8afc4e03ec664f0faeaa71735f3ed13bf9da7da95a814dd225350f2319f0701c','incremental','ordinary',['sections'], 'looped'],
+  ['showcase-riemann-sums','showcase_riemann_sums.py','d617e1dc55fabda053a9511af1d2bd84d3b4a439e6ba5ab720b2c1ea5b382176','observed','observed-replay',['sections'], 'observed-complete'],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
@@ -57,23 +62,26 @@ export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
     dispositionKind,
     completionPolicy: dispositionKind === 'ordinary' ? 'gallery-loop'
       : dispositionKind === 'immutable' ? 'finite-audio'
-        : dispositionKind === 'callback' ? 'observed-nonreplayable' : 'native-input-handoff',
+        : dispositionKind === 'observed-replay' ? 'observed-then-replay'
+          : dispositionKind === 'callback' ? 'observed-nonreplayable' : 'native-input-handoff',
     requiredDomains: Object.freeze(requiredDomains),
     seekRangePolicy: dispositionKind === 'callback' ? 'unavailable'
-      : dispositionKind === 'immutable' ? 'closed-inclusive'
-        : dispositionKind === 'input-handoff' ? 'open-exclusive-to-unavailable'
-          : 'open-exclusive-to-closed-inclusive',
+      : dispositionKind === 'observed-replay' ? 'closed-on-completion'
+        : dispositionKind === 'immutable' ? 'closed-inclusive'
+          : dispositionKind === 'input-handoff' ? 'open-exclusive-to-unavailable'
+            : 'open-exclusive-to-closed-inclusive',
     audioPolicy: requiredDomains.includes('audio') ? 'authored-audio' : 'none',
     inputPolicy: id === 'showcase-translation-drag' ? 'native-input-handoff'
       : id === 'showcase-pointer-selection' ? 'selection-inspection' : 'none',
     capabilities: Object.freeze({
-      attachedCommands: dispositionKind === 'callback' ? initialObservedCommands
+      attachedCommands: profile === 'observed' ? initialObservedCommands
         : dispositionKind === 'immutable' ? audioCommands
           : requiredDomains.includes('sections') ? sectionCommands : ordinaryCommands,
-      dispositionCommands: dispositionKind === 'ordinary'
+      dispositionCommands: dispositionKind === 'ordinary' || dispositionKind === 'observed-replay'
         ? requiredDomains.includes('sections') ? sectionCommands : ordinaryCommands
         : dispositionKind === 'immutable' ? audioCommands : [],
-      replayAtDisposition: dispositionKind === 'ordinary' || dispositionKind === 'immutable',
+      replayAtDisposition: dispositionKind === 'ordinary' || dispositionKind === 'immutable' ||
+        dispositionKind === 'observed-replay',
       audio: requiredDomains.includes('audio'),
       sections: requiredDomains.includes('sections'),
     }),
@@ -180,6 +188,12 @@ export function validateShowcaseDiagnostics(expected, diagnostics) {
   const changes = events.filter(event => event.stage === 'attached' || event.stage === 'profile-change')
     .map(event => event.profile);
   assert.deepEqual(changes, expected.transitions, `${expected.id}: unexpected profile transition`);
+  if (expected.dispositionKind === 'observed-replay') {
+    assert.equal(attached[0].reason?.code, 'host_effects',
+      `${expected.id}: expected an observed first pass`);
+    assert.equal(attached[0].capabilities?.replay, false,
+      `${expected.id}: replay must become available after the observed first pass`);
+  }
   if (expected.dispositionKind === 'callback') {
     const reason = events.find(event => ['attached', 'source-requirement'].includes(event.stage) &&
       event.reason?.code === 'host_callbacks');

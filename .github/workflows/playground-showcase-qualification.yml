@@ -102,7 +102,7 @@ jobs:
     name: Actual showcase frames (${{ matrix.backend }})
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 65
     strategy:
       fail-fast: false
       matrix:

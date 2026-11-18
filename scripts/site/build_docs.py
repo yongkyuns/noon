@@ -192,8 +192,9 @@ class Builder:
         fence = '`' * max(3, 1 + max((len(m[0]) for m in re.finditer(r'`+', text)), default=0))
         return f'\n{fence}{language}\n{text.rstrip()}\n{fence}\n'
 
-    def demo(self, identifier):
-        if identifier not in self.selected or identifier == 'showcase-triangle-light':
+    def demo(self, identifier, *, page=None):
+        onboarding = page == 'getting-started' and identifier == 'showcase-first-scene'
+        if (identifier not in self.selected and not onboarding) or identifier == 'showcase-triangle-light':
             raise ValueError(f'Unselected documentation demo: {identifier}')
         entry = self.examples[identifier]
         frame = f'../../embed.html?catalog=showcase&amp;example={identifier}'
@@ -229,7 +230,7 @@ class Builder:
         destination = self.out / (entry['slug'] + '.html')
         content, headings = self.markdown(text, source, destination)
         for identifier in demos:
-            content = content.replace(f'<p>NOONDEMO{identifier}END</p>', self.demo(identifier))
+            content = content.replace(f'<p>NOONDEMO{identifier}END</p>', self.demo(identifier, page=entry['slug']))
         content = content.replace('<p>NOONPYTHONINDEXEND</p>', self.api_index())
         for kind in paths:
             content = content.replace(f'<p>NOONPATHS{kind}END</p>', learning_cards(kind))

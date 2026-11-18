@@ -117,7 +117,7 @@ no-JavaScript reading, tab accessibility, useful editing space and retry. It use
 explicit runtime placeholders and must not be reported as rendering evidence.
 
 The separate three-engine runtime gate loads the actual homepage and Examples
-page with all four live contexts at once. It requires automatic initial execution
+page with all featured live contexts at once. It requires automatic initial execution
 without Run/Play gestures, actual pixel changes, keyboard playback, View/Code
 preservation, hot edits through the visible CodeMirror editor, error recovery,
 and observed worker retirement on navigation. It records rendered frames and
