@@ -8,7 +8,15 @@ async function loadAudioModule() {
     await module.default();
     return module;
   });
-  return audioModule;
+  const pending = audioModule;
+  try {
+    return await pending;
+  } catch (error) {
+    // Preserve this failure for its callers, but let a later explicit install
+    // retry WASM initialization. Never clear a newer attempt or retry Play.
+    if (audioModule === pending) audioModule = undefined;
+    throw error;
+  }
 }
 
 export class WorkerAudioDevice {
