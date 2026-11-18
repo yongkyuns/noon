@@ -3,7 +3,8 @@ use super::*;
 use crate::{family_affine::FamilyAffine, AuthoringError, ManimRotationPivot, StyleUpdate};
 use noon_core::{
     SemanticLocalNodeToken, SemanticMutationTransaction, SemanticNodeId, SemanticNodeKind,
-    SemanticObjectRole, SemanticObjectState, SemanticStore, SemanticStyle,
+    SemanticObjectContent, SemanticObjectRole, SemanticObjectState, SemanticStore, SemanticStyle,
+    TextSourceKind,
 };
 use std::{collections::BTreeMap, rc::Rc};
 
@@ -23,7 +24,7 @@ impl FamilyMethodTarget {
         let store = live.integration_store().borrow();
         let unsupported = || {
             LiveSessionError::Mobject(
-                "owned family animate requires ordinary vector groups without content-owning roots, effects, composite opacity, or table/graph metadata".into(),
+                "owned family animate requires groups of planar vector shapes or plain text without content-owning roots, effects, composite opacity, or table/graph metadata".into(),
             )
         };
         let mut states = BTreeMap::new();
@@ -47,11 +48,8 @@ impl FamilyMethodTarget {
                 return Err(unsupported());
             }
             let object = Mobject::from_node(Rc::clone(live.integration_store()), id)?;
-            if live.requires_content_boundary((&object).into())? {
-                return Err(unsupported());
-            }
             let state = live.capture_mobject_state(&object)?;
-            if !is_planar_leaf(&state) {
+            if !is_method_leaf(&store, &state) {
                 return Err(unsupported());
             }
             states.insert(id, state);
@@ -189,13 +187,21 @@ fn ordinary_group_style(store: &SemanticStore, id: SemanticNodeId) -> Option<&Se
     .then_some(style)
 }
 
-fn is_planar_leaf(state: &SemanticObjectState) -> bool {
+fn is_method_leaf(store: &SemanticStore, state: &SemanticObjectState) -> bool {
     state.role() == SemanticObjectRole::Ordinary
         && state.spatial_properties().is_none()
         && state.transform.as_planar().is_some()
+        && match state.content {
+            SemanticObjectContent::Text(text) => store
+                .text_resources()
+                .get(text)
+                .is_some_and(|resource| resource.kind == TextSourceKind::Plain),
+            _ => crate::path_queries::authored_content_requires_boundary(store, state.content)
+                .is_ok_and(|required| !required),
+        }
 }
 
-pub(crate) fn is_ordinary_vector_family(store: &SemanticStore, root: SemanticNodeId) -> bool {
+pub(crate) fn is_ordinary_method_family(store: &SemanticStore, root: SemanticNodeId) -> bool {
     store.ordered_authoring_nodes(root).is_ok_and(|nodes| {
         nodes.into_iter().all(|id| {
             let node = store.node(id).expect("validated authoring node");
@@ -204,14 +210,9 @@ pub(crate) fn is_ordinary_vector_family(store: &SemanticStore, root: SemanticNod
             } else {
                 node.member_count() == 0
                     && node.effect_ids().is_empty()
-                    && node.semantic_object_state().is_some_and(|state| {
-                        is_planar_leaf(state)
-                            && crate::path_queries::authored_content_requires_boundary(
-                                store,
-                                state.content,
-                            )
-                            .is_ok_and(|required| !required)
-                    })
+                    && node
+                        .semantic_object_state()
+                        .is_some_and(|state| is_method_leaf(store, state))
             }
         })
     })

@@ -47,6 +47,7 @@ pub mod glow_churn;
 pub mod glow_profile;
 pub mod glow_pulse;
 pub mod graph_queries;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod group_animation;
 pub mod hatch_paint;
 pub mod image_fill;
