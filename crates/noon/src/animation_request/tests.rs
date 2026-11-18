@@ -89,6 +89,85 @@ fn group_animation_preserves_alias_identity_and_unrelated_state() {
 }
 
 #[test]
+fn detached_nested_group_admits_its_root_and_animates_each_alias_once() {
+    let mut scene = Scene::new();
+    let left = scene.square(1.0).unwrap();
+    let right = scene.square(0.5).unwrap();
+    scene.shift(&right, RIGHT).unwrap();
+    let first = scene.family(&[(&left).into()]).unwrap();
+    let second = scene.family(&[(&right).into(), (&left).into()]).unwrap();
+    let diagram = scene.family(&[(&first).into(), (&second).into()]).unwrap();
+    let marker = scene.circle(0.25).unwrap();
+    scene.add(&marker).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    session.session_mut().take_frame_changes();
+    let context = session.session().publication_context();
+    let frame = session.session().frame().clone();
+    let nodes = session.scene().integration_store().borrow().len();
+
+    for request in [
+        (diagram.animate().shift(UP), left.animate().shift(RIGHT)).into_animation_request(),
+        (left.animate().shift(RIGHT), diagram.animate().shift(UP)).into_animation_request(),
+    ] {
+        assert!(activate(&mut session.live(), request, linear()).is_err());
+        assert_eq!(session.session().publication_context(), context);
+        assert_eq!(*session.session().frame(), frame);
+        assert_eq!(session.scene().integration_store().borrow().len(), nodes);
+        assert_eq!(
+            session.scene().root_member_ids().unwrap(),
+            [marker.node_id()]
+        );
+    }
+
+    let segment = activate(
+        &mut session.live(),
+        (
+            diagram
+                .animate()
+                .shift(UP)
+                .with_options(linear().lag_ratio(1.0)),
+            marker.animate().shift(RIGHT).with_options(linear()),
+        )
+            .into_animation_request(),
+        AnimationOptions::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        session.scene().root_member_ids().unwrap(),
+        [marker.node_id(), diagram.node_id()]
+    );
+    assert_eq!(session.session().frame().objects.len(), 3);
+    session.live().advance_segment_to(segment, 0.25).unwrap();
+    assert_eq!(
+        session
+            .scene()
+            .effective(&right)
+            .unwrap()
+            .transform
+            .translation
+            .y,
+        0.5
+    );
+    assert_eq!(
+        session
+            .scene()
+            .effective(&left)
+            .unwrap()
+            .transform
+            .translation
+            .y,
+        0.0
+    );
+    finish(&mut session.live(), segment);
+    assert_eq!(left.state().unwrap().transform.translation.y, 1.0);
+    assert_eq!(right.state().unwrap().transform.translation.y, 1.0);
+    assert_eq!(
+        second.member_at(1).unwrap().unwrap().node_id(),
+        left.node_id()
+    );
+}
+
+#[test]
 fn independent_groups_and_object_share_timing_admission_and_completion() {
     let (mut scene, family, left, right) = group_scene();
     let upper = scene.square(1.0).unwrap();
