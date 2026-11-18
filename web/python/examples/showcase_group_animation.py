@@ -1,4 +1,4 @@
-"""Introduce a nested diagram on its first play while the progress rail animates.
+"""Introduce a nested diagram with real text labels on its first play.
 
 The paired Rust example uses the same families and shared animation compiler.
 """
@@ -13,15 +13,11 @@ class GroupAnimation(Scene):
 
         def step(x, label):
             card = Rectangle(width=2, height=1.2, color=BLUE).shift(x * RIGHT)
-            return VGroup(card, *lines(label))
+            number = Text(label, color=BLUE, font_size=36).shift(x * RIGHT)
+            return VGroup(card, number)
 
-        first = step(-1.8, [((-1.8, -0.25), (-1.8, 0.25))])
-        second = step(1.8, [
-            ((1.6, 0.25), (2.0, 0.25)),
-            ((2.0, 0.25), (2.0, 0.0)),
-            ((2.0, 0.0), (1.6, -0.25)),
-            ((1.6, -0.25), (2.0, -0.25)),
-        ])
+        first = step(-1.8, "1")
+        second = step(1.8, "2")
         connector = VGroup(*lines([
             ((-0.6, 0), (0.6, 0)),
             ((0.35, 0.2), (0.6, 0)),

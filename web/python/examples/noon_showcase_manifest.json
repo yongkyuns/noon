@@ -16,9 +16,9 @@
     },
     {
       "id": "showcase-group-animation", "title": "Move the whole diagram",
-      "lesson": "Bring a grouped diagram into the scene on its first animation, then move its steps around a shared pivot while the progress rail advances independently.",
+      "lesson": "Bring a labeled diagram into the scene on its first animation, then move the cards and text together around a shared pivot while the progress rail advances independently.",
       "primary_feature": "group-animation", "category": "Visual design",
-      "path": "python/examples/showcase_group_animation.py", "features": ["VGroup", "animate", "shared pivot", "set_color"],
+      "path": "python/examples/showcase_group_animation.py", "features": ["VGroup", "Text", "animate", "shared pivot", "set_color"],
       "duration": 6.5, "thumbnail_time": 6.5,
       "thumbnail": "thumbnails/showcase/showcase-group-animation.png",
       "thumbnail_alt": "Two orange outlined steps labeled 1 and 2, joined by an arrow, above a blue progress rail and marker",

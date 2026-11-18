@@ -185,6 +185,7 @@ fn main() -> Result<(), String> {
         example_scenes::family_arrangement::program().map_err(|error| error.to_string())?,
         &[0.0, 0.25, 0.5, 0.75, 1.0],
     )?;
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
     emit(
         "showcase_group_animation",
         example_scenes::group_animation::program().map_err(|error| error.to_string())?,
