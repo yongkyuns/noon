@@ -1,36 +1,36 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "d2d1e02a7136bffb9d806234d6e90949c8fc53be",
+  "captureRevision": "9d006fb624a73975188c5267e7d4c70cb556eb15",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "d2d1e02a7136bffb9d806234d6e90949c8fc53be",
+    "sourceRevision": "9d006fb624a73975188c5267e7d4c70cb556eb15",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "1433416cc9a7a53545a4b64f7c289ad3bacfc4b13935a88d9a2c538258acecb0"
+        "sha256": "a79d8ad6ccf595a01f23288226025738c2e6dc3bcbe0cfc482fb503e473a2375"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "ef9b0b1117f76c9d0e05f7aa3d0bd73017fbf2b0731520f19b6a43a2ff869971"
+        "sha256": "7c8fb33e8c1bd38f924c1e428bec303b1fe6a158758dcc7615bf9995f083ff06"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "2df6f05ab9baf0d89cb8be12f89922f7ab7c32841e33cc5eee07eac9172cf026"
+        "sha256": "0310b244c14b020e7125e2325c926c4c66e740539c60c7b550bb62aca29f761a"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
-        "sha256": "85bd5c6c48203a2b6be7f7fe2c0c619563855a21aa3a01c6161f3a681ec8a9cf"
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
       }
     },
-    "buildId": "78809ecbd5ae93ab0bdb344253d5270d6bf6f93452148b8dc2a1013c983be0d8"
+    "buildId": "937fcccc3fa860e3923a7120f54f3360358f53848148291716239d6b6db9ee34"
   },
   "posters": [
     {
       "id": "showcase-group-animation",
-      "captureBuildId": "78809ecbd5ae93ab0bdb344253d5270d6bf6f93452148b8dc2a1013c983be0d8",
-      "sourceSha256": "ef6e601276731a6611f673c5f522a195c33699d85b3ed1b0c4c6872972258e3e",
+      "captureBuildId": "937fcccc3fa860e3923a7120f54f3360358f53848148291716239d6b6db9ee34",
+      "sourceSha256": "b6ea544aa796aa746d13ccd2d72c21cef2b0df8edecb548e7af87f6c5d31e932",
       "thumbnailTime": 6.5,
       "image": {
         "width": 960,
