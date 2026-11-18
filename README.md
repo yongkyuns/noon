@@ -26,6 +26,10 @@ performance benchmark.
 | [![Two colored volumes extend downstream in a 3D channel](https://yongkyuns.github.io/noon/site/media/showcase-channel-flow.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-channel-flow) | [![Three panels separate a sharp stroke, its soft halo, and the combined result](https://yongkyuns.github.io/noon/site/media/showcase-neon-glow.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-neon-glow) |
 | Use a 3D camera to compare equal volumes through different sections. | Build and combine the sharp and soft layers of neon light. |
 
+**Rectangles become an integral**
+
+[![Left-edge rectangles get thinner under a yellow curve](https://yongkyuns.github.io/noon/site/media/showcase-riemann-sums.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-riemann-sums)
+
 The [gallery](https://yongkyuns.github.io/noon/playground.html?catalog=showcase)
 also includes plots, text and equations, code blocks, 3D examples, audio, and
 input-driven scenes such as

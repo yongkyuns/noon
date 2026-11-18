@@ -31,11 +31,11 @@ test("website live scenes and README GIFs use only the selected project examples
   }
 });
 
-test("project examples cover distinct systems, plotting, spatial and effects lessons", async () => {
+test("project examples cover distinct systems, plotting, calculus, spatial and effects lessons", async () => {
   const selected = JSON.parse(await read("./site/examples.json"));
   const manifest = JSON.parse(await read("./python/examples/noon_showcase_manifest.json"));
   assert.deepEqual(selected.map(entry => entry.id), [
-    "showcase-cache-locality", "showcase-doubling-curve", "showcase-channel-flow", "showcase-neon-glow",
+    "showcase-cache-locality", "showcase-doubling-curve", "showcase-riemann-sums", "showcase-channel-flow", "showcase-neon-glow",
   ]);
   const docs = await read("../docs/site/examples.md");
   const lessons = selected.map(({ id }) => manifest.entries.find(entry => entry.id === id));

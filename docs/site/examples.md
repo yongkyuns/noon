@@ -24,6 +24,15 @@ Try setting `GROWTH_FACTOR` to `1.5` in **Code**. Which plot stays straight?
 
 <!-- noon:demo showcase-doubling-curve -->
 
+## Rectangles become an integral
+
+Start with four rectangles and take each height from the curve at its left
+edge. Watch each strip split and the sum approach the shaded area. Set `B`
+to `3.5` in **Code** to integrate over a shorter interval. Adapted from
+[the ManimGX gallery scene](https://manimgx.academa.ai/gallery/riemann-sums/).
+
+<!-- noon:demo showcase-riemann-sums -->
+
 ## Why water speeds up through a narrow channel
 
 Follow a dye pulse into a constriction. Rotate the channel to compare two

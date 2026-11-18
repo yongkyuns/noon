@@ -47,6 +47,7 @@ const rows = [
   ['showcase-doubling-curve','showcase_doubling_curve.py','a5de438e8df1782cbc45478770d51cc2de9a268f99b823234da96adc17238bf0','incremental','ordinary',['sections'], 'looped'],
   ['showcase-channel-flow','showcase_channel_flow.py','5b1b8f43e7635784f9ae059a7e625673ac18e8333ae74217030073fba522088f','incremental','ordinary',['sections'], 'looped'],
   ['showcase-neon-glow','showcase_neon_glow.py','8afc4e03ec664f0faeaa71735f3ed13bf9da7da95a814dd225350f2319f0701c','incremental','ordinary',['sections'], 'looped'],
+  ['showcase-riemann-sums','showcase_riemann_sums.py','be68831d49d0655018c7f6a023c12fb75e9d88493e91f7db33cd90a839cd9e36','incremental','ordinary',['sections'], 'looped'],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
