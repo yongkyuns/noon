@@ -416,6 +416,7 @@ enum OrdinaryCompositionChild {
         source: noon::MobjectFamily,
         target_state: noon::MobjectFamily,
         method_target: bool,
+        entering: Vec<(ObjectId, noon::Mobject)>,
         options: noon_core::AnimationOptions,
     },
     MatchingFamilyTransformTo {
@@ -2015,6 +2016,7 @@ impl CanonicalAuthoringScene {
                     target_state,
                     method_target,
                     options,
+                    ..
                 } => {
                     if *method_target {
                         noon::AnimationCompositionRequest::FamilyMethodTargetTo {
@@ -2411,6 +2413,7 @@ impl CanonicalAuthoringScene {
                     output.extend(entering.iter().map(|(id, target)| (*id, target)));
                 }
                 OrdinaryCompositionChild::FamilyFade { entering, .. }
+                | OrdinaryCompositionChild::FamilyTransformTo { entering, .. }
                 | OrdinaryCompositionChild::FamilyDissolve { entering, .. }
                 | OrdinaryCompositionChild::FamilyArrowGrow { entering, .. }
                 | OrdinaryCompositionChild::FamilyTextWrite { entering, .. }
@@ -2443,8 +2446,7 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::FocusOn { .. }
                 | OrdinaryCompositionChild::Wait { .. } => {}
                 OrdinaryCompositionChild::ValueTracker { .. } => {}
-                OrdinaryCompositionChild::FamilyTransformTo { .. }
-                | OrdinaryCompositionChild::MatchingFamilyTransformTo { .. }
+                OrdinaryCompositionChild::MatchingFamilyTransformTo { .. }
                 | OrdinaryCompositionChild::MatchingSourceFamilyTransformTo { .. }
                 | OrdinaryCompositionChild::Indicate { .. }
                 | OrdinaryCompositionChild::GlowPulse { .. }
@@ -2893,6 +2895,22 @@ impl CanonicalAuthoringScene {
                     }
                     source.validate()?;
                     target_state.validate()?;
+                    if let OrdinaryCompositionChild::FamilyTransformTo { entering, .. } = child {
+                        for (id, member) in entering {
+                            noon::MobjectTarget::from(member)
+                                .require_store(source.integration_store())?;
+                            member.validate()?;
+                            if self.bindings.contains_key(id)
+                                || self.identities.contains_key(&member.node_id())
+                                || !register_entering(*id, member.node_id())
+                            {
+                                return Err(
+                                    "family method target entering identity is already bound"
+                                        .into(),
+                                );
+                            }
+                        }
+                    }
                     if options.reverse_rate_function == Some(true) {
                         return Err(
                             noon_core::AnimationOptionsError::UnsupportedReverseRateFunction
@@ -5120,6 +5138,7 @@ mod wasm {
                     source: source.semantic_family()?,
                     target_state: target_state.semantic_family()?,
                     method_target: false,
+                    entering: Vec::new(),
                     options,
                 });
             Ok(())
@@ -5149,6 +5168,29 @@ mod wasm {
                 unreachable!("family target append always stages one family child");
             };
             *method_target = true;
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendFamilyMethodTargetEntering)]
+        pub fn append_family_method_target_entering(
+            &mut self,
+            object_id: &str,
+            member: &crate::WasmAuthoringMobjectHandle,
+        ) -> Result<(), JsValue> {
+            let Some(OrdinaryCompositionChild::FamilyTransformTo {
+                method_target: true,
+                entering,
+                ..
+            }) = self.children.last_mut()
+            else {
+                return Err(js_error(
+                    "entering member must follow a family method target",
+                ));
+            };
+            entering.push((
+                parse_object_id("family method target object ID", object_id)?,
+                member.semantic_mobject().clone(),
+            ));
             Ok(())
         }
 
@@ -13178,6 +13220,7 @@ mod tests {
 
         let family_play = [OrdinaryCompositionChild::FamilyTransformTo {
             method_target: false,
+            entering: Vec::new(),
             source: pair,
             target_state: target_pair,
             options: AnimationOptions::new()
@@ -14464,6 +14507,7 @@ mod tests {
                 source: source.clone(),
                 target_state: target,
                 method_target,
+                entering: Vec::new(),
                 options: AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear),
@@ -14529,6 +14573,7 @@ mod tests {
             source: source.clone(),
             target_state: target,
             method_target: true,
+            entering: Vec::new(),
             options: AnimationOptions::new()
                 .run_time(1.0)
                 .rate_func(RateFunction::Linear),
@@ -14577,6 +14622,7 @@ mod tests {
             .rate_func(RateFunction::ThereAndBack);
         let invalid = [OrdinaryCompositionChild::FamilyTransformTo {
             method_target: false,
+            entering: Vec::new(),
             source: source.clone(),
             target_state: invalid_target,
             options: transform_options,
@@ -14584,6 +14630,7 @@ mod tests {
         let revision = context.scene.integration_store().borrow().scene_revision();
         let reversed = [OrdinaryCompositionChild::FamilyTransformTo {
             method_target: false,
+            entering: Vec::new(),
             source: source.clone(),
             target_state: target.clone(),
             options: transform_options.reverse_rate_function(true),
@@ -14614,6 +14661,7 @@ mod tests {
         let children = [
             OrdinaryCompositionChild::FamilyTransformTo {
                 method_target: false,
+                entering: Vec::new(),
                 source: source.clone(),
                 target_state: target,
                 options: transform_options,

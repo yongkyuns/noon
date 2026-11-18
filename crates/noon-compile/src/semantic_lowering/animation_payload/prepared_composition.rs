@@ -1501,29 +1501,13 @@ where
     let captured = if let Some(captured) = effective_properties(leaf.execution_object_id) {
         captured
     } else if admitted {
-        EffectiveAnimationProperties {
-            fill_paint: None,
-            effects: None,
-            z_index: source.z_index(),
-            transform: super::super::projection::lower_semantic_transform_value(source).map_err(
-                |_| PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
-                    animation: leaf.animation,
-                    target: leaf.target,
-                    execution_object_id: leaf.execution_object_id,
-                },
-            )?,
-            style: super::super::projection::lower_semantic_style_value(source).map_err(|_| {
-                PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
-                    animation: leaf.animation,
-                    target: leaf.target,
-                    execution_object_id: leaf.execution_object_id,
-                }
-            })?,
-            appearance: 1.0,
-            reveal: 1.0,
-            world_transform: None,
-            camera_profile: source_camera_profile(source),
-        }
+        authored_activation_properties(source).ok_or(
+            PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
+                animation: leaf.animation,
+                target: leaf.target,
+                execution_object_id: leaf.execution_object_id,
+            },
+        )?
     } else {
         return Err(
             PreparedSemanticAnimationLoweringError::MissingEffectiveProperties {
@@ -1537,6 +1521,22 @@ where
     Ok(captures
         .get(leaf.execution_object_id)
         .expect("inserted base capture"))
+}
+
+pub(super) fn authored_activation_properties(
+    source: &noon_core::SemanticObjectState,
+) -> Option<EffectiveAnimationProperties> {
+    Some(EffectiveAnimationProperties {
+        fill_paint: None,
+        effects: None,
+        z_index: source.z_index(),
+        transform: super::super::projection::lower_semantic_transform_value(source).ok()?,
+        style: super::super::projection::lower_semantic_style_value(source).ok()?,
+        appearance: 1.0,
+        reveal: 1.0,
+        world_transform: None,
+        camera_profile: source_camera_profile(source),
+    })
 }
 
 fn source_camera_profile(

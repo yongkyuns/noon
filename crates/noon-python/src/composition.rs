@@ -1296,6 +1296,25 @@ impl Composition {
         );
         Ok(())
     }
+    #[pyo3(name = "appendFamilyMethodTargetEntering")]
+    fn family_method_target_entering(&mut self, _id: &str, member: &MobjectHandle) -> PyResult<()> {
+        let Some(Child::FamilyTransform {
+            source,
+            kind: FamilyTransformKind::MethodTarget,
+            ..
+        }) = self.children.last()
+        else {
+            return Err(engine_error(
+                "entering member must follow a family method target",
+            ));
+        };
+        noon::MobjectTarget::from(&member.handle)
+            .require_store(source.integration_store())
+            .map_err(engine_error)?;
+        member.handle.validate().map_err(engine_error)?;
+        self.bindings.push(member.handle.clone());
+        Ok(())
+    }
     #[pyo3(name = "appendMatchingFamilyTransformTo")]
     fn matching_family_transform(
         &mut self,

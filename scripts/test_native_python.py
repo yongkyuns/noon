@@ -99,6 +99,33 @@ class Mixed(Scene):
 """
         close_scene(asyncio.run(run_source(source, retain_history=True)))
 
+    def test_detached_group_enters_and_keeps_its_members_on_first_play(self):
+        source = """from noon import *
+class Demo(Scene):
+    def construct(self):
+        marker = Circle()
+        self.add(marker)
+        self.wait(0.125)
+        left, right = Square().shift(LEFT), Square().shift(RIGHT)
+        diagram = VGroup(VGroup(left), VGroup(right, left))
+        try:
+            self.play(diagram.animate.shift(UP), left.animate.shift(UP))
+        except Exception as error:
+            assert "family Transform cannot compose with an animation of its members" in str(error)
+        else:
+            raise AssertionError("the overlapping play should fail")
+        assert self.mobjects == [marker]
+        self.play(diagram.animate.shift(UP), marker.animate.shift(RIGHT))
+        assert self.mobjects == [marker, diagram]
+        assert diagram[0][0] is diagram[1][1] is left
+        assert tuple(left.get_center())[:2] == (-1, 1)
+        self.remove(diagram)
+        self.play(diagram.animate.shift(DOWN))
+        assert self.mobjects == [marker, diagram]
+        assert tuple(left.get_center())[:2] == (-1, 0)
+"""
+        close_scene(asyncio.run(run_source(source, retain_history=True)))
+
     def test_area_and_riemann_rectangles_follow_effective_axes(self):
         source = """from noon import *
 class Demo(Scene):
