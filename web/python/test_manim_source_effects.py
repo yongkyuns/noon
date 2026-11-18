@@ -672,6 +672,24 @@ class Example(Scene):
             with self.subTest(source=unsafe):
                 self.assertFalse(source_execution_proof(unsafe)["admitted"])
 
+    def test_equation_card_admits_bounded_literal_mathtex_parts(self):
+        source = Path(__file__).with_name("examples").joinpath(
+            "showcase_equation_card.py"
+        ).read_text()
+        self.assertEqual(source_execution_proof(source, auto_prepare_latex=True),
+                         {"admitted": True, "reason": None})
+
+        for replacement in ('context["term"]', '*["x"]', '""'):
+            with self.subTest(replacement=replacement):
+                proof = source_execution_proof(source.replace('"x"', replacement, 1),
+                                               auto_prepare_latex=True)
+                self.assertEqual(proof["reason"]["code"], "unproven_text_compiler")
+
+        half_limit = "x" * (512 * 1024)
+        oversized = source.replace('"x", "+"', f'{half_limit!r}, {half_limit!r}')
+        proof = source_execution_proof(oversized, auto_prepare_latex=True)
+        self.assertEqual(proof["reason"]["code"], "unproven_text_compiler")
+
     def test_raster_image_source_requires_fresh_numeric_lists(self):
         source = Path(__file__).with_name("examples").joinpath(
             "showcase_raster_images.py"

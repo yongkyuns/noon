@@ -277,6 +277,17 @@
       "beats": [{"time": 0.8, "label": "Create the blue equation"}, {"time": 1.6, "label": "Write the yellow equation"}, {"time": 3.1, "label": "Compare completed equations"}]
     },
     {
+      "id": "showcase-equation-card", "title": "Animate an equation card",
+      "lesson": "Move a MathTex equation and its frame together, then highlight the original first term.",
+      "primary_feature": "mathtex-group-animation", "category": "Text and mathematics",
+      "path": "python/examples/showcase_equation_card.py", "features": ["MathTex", "VGroup", "animate", "set_color"],
+      "duration": 2.75, "thumbnail_time": 2.5,
+      "thumbnail": "thumbnails/showcase/showcase-equation-card.png",
+      "thumbnail_alt": "A blue frame around x + 1 = 4, with the x highlighted in yellow",
+      "still_intervals": [[0, 0.5], [1.25, 1.5], [2, 2.75]],
+      "beats": [{"time": 0.875, "label": "Move the equation and frame"}, {"time": 1.75, "label": "Highlight x"}, {"time": 2.5, "label": "Read the highlighted term"}]
+    },
+    {
       "id": "showcase-coordinate-plotting", "title": "Functions and samples",
       "lesson": "Draw a function and illustrative sampled observations on common axes.",
       "primary_feature": "coordinate-plotting", "category": "Data visualization",

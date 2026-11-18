@@ -2468,7 +2468,7 @@ impl ExecutionSession {
                         ))
                 {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
-                        "detached family animate requires a target of planar vector shapes or plain text and a straight path".into(),
+                        "detached family animate requires vector shapes, plain text, or MathTex and a straight path".into(),
                     ));
                 }
                 if curved && !flat {
@@ -3542,7 +3542,7 @@ impl ExecutionSession {
         }
         if !crate::animation_request::is_ordinary_method_family(store, source) {
             return Err(invalid(
-                "detached family animate requires a group of planar vector shapes or plain text",
+                "detached family animate requires a group of planar vector shapes, plain text, or MathTex",
             ));
         }
         let nodes = store.ordered_authoring_nodes(source).map_err(|error| {

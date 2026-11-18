@@ -216,7 +216,8 @@ impl Mobject {
 }
 
 impl MobjectFamily {
-    /// Describe animated edits of a family of vector shapes or plain text, captured at play admission.
+    /// Describe animated edits of a family of vector shapes, plain text, or MathTex.
+    /// The source state is captured at play admission.
     /// Members retain their semantic identity and share scale/rotation pivots.
     /// A fully detached family enters the scene when the play is admitted.
     pub fn animate(&self) -> Animate {

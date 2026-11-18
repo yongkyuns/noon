@@ -3155,9 +3155,11 @@ class _SceneOnlySource(ast.NodeVisitor):
             state = self.resource_preparation_scopes[-1] if self.resource_preparation_scopes else None
             keywords = {keyword.arg: keyword.value for keyword in node.keywords}
             if (shadowed or state is None or not state["ready"]
-                    or len(node.args) != 1 or not isinstance(node.args[0], ast.Constant)
-                    or type(node.args[0].value) is not str or not node.args[0].value
-                    or len(node.args[0].value.encode("utf-8")) > 1024 * 1024
+                    or not node.args
+                    or any(not isinstance(arg, ast.Constant) or type(arg.value) is not str
+                           or not arg.value for arg in node.args)
+                    or sum(len(arg.value.encode("utf-8")) for arg in node.args)
+                       + len(node.args) - 1 > 1024 * 1024
                     or any(keyword.arg is None for keyword in node.keywords)
                     or len(keywords) != len(node.keywords)
                     or not set(keywords).issubset({"font_size", "color", "opacity"})):

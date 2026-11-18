@@ -425,7 +425,10 @@ impl Scene {
     // The public constructor starts with a fresh scene and callable table. An
     // existing scene may already reference host callables, which must not be
     // silently rebound to this source's newly allocated callback identities.
-    fn into_script<F, Fut>(self, source: F) -> Result<LiveProgram<SceneScript>, ScriptError>
+    pub(crate) fn into_script<F, Fut>(
+        self,
+        source: F,
+    ) -> Result<LiveProgram<SceneScript>, ScriptError>
     where
         F: FnOnce(ScriptScene) -> Fut + 'static,
         Fut: Future<Output = Result<(), ScriptError>> + 'static,

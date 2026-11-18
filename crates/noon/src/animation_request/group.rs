@@ -24,7 +24,7 @@ impl FamilyMethodTarget {
         let store = live.integration_store().borrow();
         let unsupported = || {
             LiveSessionError::Mobject(
-                "owned family animate requires groups of planar vector shapes or plain text without content-owning roots, effects, composite opacity, or table/graph metadata".into(),
+                "owned family animate requires groups of planar vector shapes, plain text, or MathTex without content-owning roots, effects, composite opacity, or table/graph metadata".into(),
             )
         };
         let mut states = BTreeMap::new();
@@ -192,10 +192,14 @@ fn is_method_leaf(store: &SemanticStore, state: &SemanticObjectState) -> bool {
         && state.spatial_properties().is_none()
         && state.transform.as_planar().is_some()
         && match state.content {
-            SemanticObjectContent::Text(text) => store
-                .text_resources()
-                .get(text)
-                .is_some_and(|resource| resource.kind == TextSourceKind::Plain),
+            SemanticObjectContent::Text(text) => {
+                store.text_resources().get(text).is_some_and(|resource| {
+                    matches!(
+                        resource.kind,
+                        TextSourceKind::Plain | TextSourceKind::MathTex
+                    )
+                })
+            }
             _ => crate::path_queries::authored_content_requires_boundary(store, state.content)
                 .is_ok_and(|required| !required),
         }
