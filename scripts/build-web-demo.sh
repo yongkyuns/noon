@@ -210,6 +210,11 @@ if [[ "${NOON_WASM_SKIP_OPT:-0}" == "1" ]]; then
   wasm_pack_args+=(--no-opt)
 fi
 
+# Never enable allocator instrumentation in ordinary production/CI builds.
+if [[ "${NOON_WASM_ALLOC_PROBE:-0}" == "1" ]]; then
+  wasm_pack_args+=(--features allocator-probe)
+fi
+
 if [[ "${NOON_RENDERER_SMOKE:-0}" == "1" ]]; then
   wasm_pack_args+=(--features renderer-smoke)
 fi

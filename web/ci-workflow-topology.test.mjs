@@ -42,6 +42,7 @@ const exactFamilies = new Map([
   ["pr-fast.yml", "pr-fast"],
   ["ci.yml", "main"],
   ["ci-measurements.yml", "ci-diagnostics"],
+  ["webkit-wasm-memory-probe.yml", "ci-diagnostics"],
   ["architecture-ratchets.yml", "architecture"],
   ["architecture-diagrams.yml", "architecture"],
   ["provider-features.yml", "provider-isolation"],
