@@ -138,8 +138,10 @@ class ChannelFlow(ThreeDScene):
         self.add_fixed_in_frame_mobjects(
             text("Same volume per second · higher speed", 30, 0, -3.27, INK),
         )
-        final_view = dict(phi=0.78, theta=-1.42, focal_distance=10, zoom=0.95)
-        self.move_camera(**final_view, run_time=1.2)
-        # Hold the exact authored endpoint for both playback and replay.
-        self.set_camera_orientation(**final_view)
+        # Mark the two travel distances from the same camera angle.
+        for x, distance in ((inlet_x, inlet_distance), (throat_x, throat_distance)):
+            z = DEPTH + 0.12
+            self.add_world_mobjects(
+                Mesh3D.line3d((x, 0, z), (x + distance, 0, z), thickness=0.035, color=INK),
+            )
         self.wait(4.4)

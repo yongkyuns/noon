@@ -666,11 +666,11 @@
       "category": "Three dimensions",
       "path": "python/examples/showcase_channel_flow.py",
       "features": ["ThreeDScene", "Mesh3D", "WorldTransformTo", "finite camera movement", "fixed-frame labels", "sections"],
-      "duration": 21.4,
+      "duration": 20.2,
       "thumbnail_time": 19,
       "thumbnail": "thumbnails/showcase/showcase-channel-flow.png",
       "thumbnail_alt": "Orange and mint prisms show the equal volumes of water swept out in one second in the wide and narrow channel.",
-      "still_intervals": [[3.5, 4.4], [6, 8], [9.4, 11.4], [13.4, 15.8], [17, 21.4]],
+      "still_intervals": [[3.5, 4.4], [6, 8], [9.4, 11.4], [13.4, 15.8], [15.8, 20.2]],
       "beats": [
         {"time": 0.4, "label": "Start with one pulse in the inlet"},
         {"time": 4, "label": "The same pulse stretches in the throat"},
