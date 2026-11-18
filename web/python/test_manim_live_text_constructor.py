@@ -8,6 +8,58 @@ from pathlib import Path
 
 class ManimLiveTextConstructorTests(unittest.TestCase):
 
+    def test_text_edge_and_masked_placement_forward_to_shared_handles(self):
+        source = r"""
+import noon
+import _manim_typst as text
+
+calls = []
+class Handle:
+    def setColor(self, *args): pass
+    def setObjectOpacity(self, *args): pass
+    def manimMoveToHandle(self, target, *args):
+        calls.append(("cold_object", self, target, args))
+    def manimMoveToPoint(self, *args):
+        calls.append(("cold_point", self, args))
+
+class LiveContext:
+    def requiresLiveMutationRouting(self): return True
+    def liveCreateManimText(self, *args): return Handle()
+    def liveMoveToMobject(self, handle, target, *args):
+        calls.append(("live_object", handle, target, args))
+    def liveMoveToPoint(self, handle, *args):
+        calls.append(("live_point", handle, args))
+
+text._create_authoring_text_handle = lambda *args: Handle()
+for context, prefix in ((None, "cold"), (LiveContext(), "live")):
+    text._live_text_context = lambda: context
+    target, label = text.Text("anchor"), text.Text("moving")
+    # No geometric calculation or fallback is provided by this bridge fixture.
+    # Both signatures must reach the same existing typed placement operation.
+    assert label.move_to(target, noon.UP + noon.LEFT, (1, 0, 0)) is label
+    assert calls[-1] == (
+        prefix + "_object", label._semantic_handle, target._semantic_handle,
+        (-1., 1., 1., 0.),
+    )
+    assert label.move_to((3, 4, 0), aligned_edge=noon.RIGHT,
+                         coor_mask=(0, 1, 0)) is label
+    assert calls[-1] == (
+        prefix + "_point", label._semantic_handle, (3., 4., 1., 0., 0., 1.),
+    )
+    # The scene also uses match_y, whose existing base implementation calls
+    # move_to with a mask. Text must not reject that delegated placement.
+    assert label.match_y(target) is label
+    assert calls[-1] == (
+        prefix + "_object", label._semantic_handle, target._semantic_handle,
+        (0., 0., 0., 1.),
+    )
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", source], cwd=Path(__file__).resolve().parent,
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_latex_routes_raw_source_and_presentation_in_one_constructor(self):
         source = r"""
 from types import SimpleNamespace
