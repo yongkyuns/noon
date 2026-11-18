@@ -40,7 +40,9 @@ class AlignedGroup(Matching):
 
 
 class MatchingTex(Matching):
-    pass
+    def __init__(self, key_map=None, **kwargs):
+        super().__init__(**kwargs)
+        self.key_map = key_map or {}
 
 
 class MatchingTimingScopeTests(unittest.TestCase):
@@ -72,7 +74,7 @@ class MatchingTimingScopeTests(unittest.TestCase):
                       rate_func=opts.get("rate_func", opts.get("easing", "smooth")),
                       lag_ratio=opts.get("lag_ratio", 0.0), path_arc=opts.get("path_arc", 0.0))
         namespace = {"_animate": NS(TransformMatchingShapes=Matching, TransformMatchingTex=MatchingTex, _AlignedGroupAnimationBuilder=AlignedGroup),
-                     "_canonical_transform_options": resolve, "math": math,
+                     "_canonical_transform_options": resolve, "math": math, "array_value": list,
                      "_rate_functions": NS(easing_from_rate_func=lambda value: value)}
         exec(compile(self.module, "_manim_scene.py:matching-transport", "exec"), namespace)
         context = NS(beginOrdinaryCompositionBuilder=lambda kind, duration, lag, play_duration:
@@ -123,12 +125,12 @@ class MatchingTimingScopeTests(unittest.TestCase):
 
     def test_tex_matching_keeps_constructor_and_play_timing_scopes(self):
         parent, completed = self.route(
-            {"rate_func": "smooth", "run_time": 3},
+            {"rate_func": "smooth", "run_time": 3, "key_map": {"x_i": "x"}},
             {"rate_func": "linear", "run_time": 2}, matching_class=MatchingTex)
         outer = parent.children[0]
         self.assertEqual((outer.duration, outer.rate), (2, "linear"))
         tag, args = outer.children[0]
-        self.assertEqual((tag, args[2], args[3]), ("tex", 3, "smooth"))
+        self.assertEqual((tag, args[2], args[3], args[6]), ("tex", 3, "smooth", ["x_i", "x"]))
         self.assertEqual(len(completed), 2)
 
     def test_constructor_family_lag_and_path_remain_child_options(self):

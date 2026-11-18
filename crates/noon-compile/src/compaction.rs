@@ -725,6 +725,7 @@ mod tests {
                 format: noon_core::DecimalFormat::default(),
                 font_size: 12.0,
                 point_to_scene_scale: 1.0,
+                anchor_left: 0.0,
                 token_resources: Arc::from([(Arc::from("token"), retained)]),
             });
 

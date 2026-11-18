@@ -93,6 +93,7 @@ impl SceneInstance {
         self.publication.execution_revision() == self.immutable_playback_revision
             && self.replay_history.is_none()
             && self.effective_driver_rows.is_empty()
+            && self.numeric_text.is_empty()
             && self.effective_content_drivers.is_empty()
             && self.translation_drag_rows.is_empty()
     }
@@ -150,6 +151,11 @@ impl SceneInstance {
     }
     pub fn replay_scope_active(&self) -> bool {
         self.replay_history.is_some()
+    }
+    pub(crate) fn replay_starts_at_current_frame(&self) -> bool {
+        self.replay_history
+            .as_ref()
+            .is_some_and(|history| history.start == self.frame.time)
     }
     pub fn replay_retention_valid(&self) -> bool {
         self.replay_retention_status().is_ok()

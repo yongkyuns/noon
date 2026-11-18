@@ -39,7 +39,9 @@ impl ExecutionSession {
             || self.reactive_projection.has_native_input_routes()
         {
             Some(SourceExecutionRequirement::NativeInput)
-        } else if self.runtime.inset_2d_views().next().is_some() {
+        } else if self.runtime.inset_2d_views().next().is_some()
+            || self.runtime.has_numeric_text_drivers()
+        {
             Some(SourceExecutionRequirement::ReplayUnavailable(
                 ReplayError::UnsupportedDomain,
             ))

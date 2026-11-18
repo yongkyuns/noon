@@ -294,6 +294,7 @@ pub struct CompiledNumericTextDriver {
     pub format: noon_core::DecimalFormat,
     pub font_size: f32,
     pub point_to_scene_scale: f64,
+    pub anchor_left: f64,
     pub token_resources: Arc<[(Arc<str>, noon_core::TextResourceHandle)]>,
 }
 

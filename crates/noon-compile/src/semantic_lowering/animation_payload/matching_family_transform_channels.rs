@@ -199,7 +199,37 @@ fn lower_matched_occurrence(
     // interpolation interval. Fonts/vector artifacts remain immutable and the
     // exact detached target family replaces the source at completion. This keeps
     // correspondence generic without manufacturing a second text runtime.
-    if activation.mode == noon_core::SemanticFamilyTransformMode::MatchingSourceKeys {
+    if matches!(
+        activation.mode,
+        noon_core::SemanticFamilyTransformMode::MatchingSourceKeys
+            | noon_core::SemanticFamilyTransformMode::MatchingMappedSourceKeys(_)
+    ) {
+        let center = |node, content| {
+            super::matching_family_transform_payload::text_center(prepared.store(), node, content)
+                .map_err(|_| {
+                    matching_payload_error(
+                        activation,
+                        source_member.node,
+                        target_node,
+                        AffinePayloadIssue::InvalidEffectiveTransform,
+                    )
+                })
+        };
+        let source_center = center(source_member.node, source.content)?;
+        let target_center = center(target_node, target.content)?;
+        let transform =
+            super::super::projection::lower_semantic_transform_value(&target).map_err(|_| {
+                matching_payload_error(
+                    activation,
+                    source_member.node,
+                    target_node,
+                    AffinePayloadIssue::InvalidEffectiveTransform,
+                )
+            })?;
+        let offset =
+            transform.transform_point(target_center) - transform.transform_point(source_center);
+        target.transform.translation.x += f64::from(offset.x);
+        target.transform.translation.y += f64::from(offset.y);
         target.content = source_member.content;
     }
 

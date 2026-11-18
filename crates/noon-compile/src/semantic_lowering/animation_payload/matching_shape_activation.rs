@@ -44,6 +44,7 @@ pub struct PreparedMatchingShapeActivationProjection {
     source_members: Vec<PreparedMatchingShapeSourceMember>,
     target_members: Vec<PreparedMatchingShapeTargetMember>,
     correspondence: MatchingShapeCorrespondence,
+    mapped_pairs: Vec<(usize, usize)>,
 }
 
 impl PreparedMatchingShapeActivationProjection {
@@ -57,6 +58,10 @@ impl PreparedMatchingShapeActivationProjection {
 
     pub const fn correspondence(&self) -> &MatchingShapeCorrespondence {
         &self.correspondence
+    }
+
+    pub fn mapped_pairs(&self) -> &[(usize, usize)] {
+        &self.mapped_pairs
     }
 }
 
@@ -92,6 +97,7 @@ pub enum PreparedMatchingShapeActivationError {
     MissingSourceKey {
         node: SemanticNodeId,
     },
+    InvalidKeyMap(String),
     ShapeKey {
         node: SemanticNodeId,
         error: MatchingShapeKeyError,
@@ -101,6 +107,7 @@ pub enum PreparedMatchingShapeActivationError {
 impl std::fmt::Display for PreparedMatchingShapeActivationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidKeyMap(message) => formatter.write_str(message),
             Self::InvalidActivationStart(value) => {
                 write!(
                     formatter,
@@ -211,7 +218,7 @@ where
         store,
         index,
         (source_root, target_root),
-        SemanticFamilyTransformMode::MatchingShapes,
+        &SemanticFamilyTransformMode::MatchingShapes,
         activation_start,
         prior_tracks,
         effective_properties,
@@ -222,7 +229,7 @@ pub fn prepare_matching_family_activation_correspondence<F>(
     store: &SemanticStore,
     index: &SemanticExecutionIndex,
     (source_root, target_root): (SemanticNodeId, SemanticNodeId),
-    mode: SemanticFamilyTransformMode,
+    mode: &SemanticFamilyTransformMode,
     activation_start: f64,
     prior_tracks: &[PreparedSemanticAnimationTrack],
     mut effective_properties: F,
@@ -305,11 +312,105 @@ where
         });
     }
 
+    let mut correspondence = matching_shape_correspondence(&source_keys, &target_keys);
+    let mapped_pairs = if let SemanticFamilyTransformMode::MatchingMappedSourceKeys(keys) = mode {
+        mapped_source_correspondence(keys, &source_keys, &target_keys, &mut correspondence)?
+    } else {
+        Vec::new()
+    };
     Ok(PreparedMatchingShapeActivationProjection {
         source_members,
         target_members,
-        correspondence: matching_shape_correspondence(&source_keys, &target_keys),
+        correspondence,
+        mapped_pairs,
     })
+}
+
+fn mapped_source_correspondence(
+    keys: &[(String, String)],
+    source_keys: &[MatchingFamilyKey],
+    target_keys: &[MatchingFamilyKey],
+    correspondence: &mut MatchingShapeCorrespondence,
+) -> Result<Vec<(usize, usize)>, PreparedMatchingShapeActivationError> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn by_key(keys: &[MatchingFamilyKey]) -> BTreeMap<&str, Vec<usize>> {
+        let mut groups = BTreeMap::<_, Vec<_>>::new();
+        for (index, key) in keys.iter().enumerate() {
+            if let MatchingFamilyKey::Source(key) = key {
+                groups.entry(key.trim()).or_default().push(index);
+            }
+        }
+        groups
+    }
+
+    let sources = by_key(source_keys);
+    let targets = by_key(target_keys);
+    let mut source_indices = BTreeSet::new();
+    let mut target_indices = BTreeSet::new();
+    let mut seen_sources = BTreeSet::new();
+    let mut seen_targets = BTreeSet::new();
+    let mut pairs = Vec::new();
+    for (from, to) in keys {
+        let (from, to) = (from.trim(), to.trim());
+        let invalid = |message| PreparedMatchingShapeActivationError::InvalidKeyMap(message);
+        let source = sources
+            .get(from)
+            .ok_or_else(|| invalid(format!("TeX key map source {from:?} is absent")))?;
+        let target = targets
+            .get(to)
+            .ok_or_else(|| invalid(format!("TeX key map target {to:?} is absent")))?;
+        if !seen_sources.insert(from) || !seen_targets.insert(to) {
+            return Err(invalid(
+                "TeX key map must pair each source and target key once".into(),
+            ));
+        }
+        if from == to {
+            continue;
+        }
+        for (&source, &target) in source.iter().zip(target) {
+            source_indices.insert(source);
+            target_indices.insert(target);
+            pairs.push((source, target));
+        }
+    }
+
+    // Explicit pairs take precedence over automatic matches involving either
+    // of their endpoints. Re-pair the remaining occurrences by their own key.
+    let residual = |keys: &[MatchingFamilyKey], used: &BTreeSet<usize>| {
+        keys.iter()
+            .enumerate()
+            .filter(|(index, _)| !used.contains(index))
+            .map(|(index, key)| (index, key.clone()))
+            .unzip::<_, _, Vec<_>, Vec<_>>()
+    };
+    let (source_order, residual_source) = residual(source_keys, &source_indices);
+    let (target_order, residual_target) = residual(target_keys, &target_indices);
+    *correspondence = matching_shape_correspondence(&residual_source, &residual_target);
+    let restore = |indices: &mut [usize], order: &[usize]| {
+        for index in indices {
+            *index = order[*index];
+        }
+    };
+    restore(&mut correspondence.unmatched_source_indices, &source_order);
+    restore(&mut correspondence.unmatched_target_indices, &target_order);
+    // Unpaired repeated terms fade as individual leaves. Each paired term uses
+    // its existing retained row, keeping the entire crossfade seekable.
+    for group in &mut correspondence.matched_groups {
+        restore(&mut group.source_indices, &source_order);
+        restore(&mut group.target_indices, &target_order);
+        let paired = group.source_indices.len().min(group.target_indices.len());
+        correspondence
+            .unmatched_source_indices
+            .extend(group.source_indices.split_off(paired));
+        correspondence
+            .unmatched_target_indices
+            .extend(group.target_indices.split_off(paired));
+    }
+    correspondence.unmatched_source_indices.sort_unstable();
+    correspondence.unmatched_target_indices.sort_unstable();
+    pairs.sort_unstable();
+    Ok(pairs)
 }
 
 fn ordered_nonempty_leaves(
@@ -330,9 +431,13 @@ fn matching_key(
     node: SemanticNodeId,
     content: SemanticObjectContent,
     transform: Transform2D,
-    mode: SemanticFamilyTransformMode,
+    mode: &SemanticFamilyTransformMode,
 ) -> Result<MatchingFamilyKey, PreparedMatchingShapeActivationError> {
-    if mode == SemanticFamilyTransformMode::MatchingSourceKeys {
+    if matches!(
+        mode,
+        SemanticFamilyTransformMode::MatchingSourceKeys
+            | SemanticFamilyTransformMode::MatchingMappedSourceKeys(_)
+    ) {
         let handle = content
             .text()
             .ok_or(PreparedMatchingShapeActivationError::MissingSourceKey { node })?;
@@ -343,11 +448,27 @@ fn matching_key(
         let [part] = resource.parts.as_ref() else {
             return Err(PreparedMatchingShapeActivationError::MissingSourceKey { node });
         };
-        let key = part
-            .semantic_key
-            .as_ref()
-            .ok_or(PreparedMatchingShapeActivationError::MissingSourceKey { node })?;
-        return Ok(MatchingFamilyKey::Source(key.clone()));
+        // The public TeX keys are the same source slices exposed as tex_string.
+        // Standard TeX part markers provide spans without custom semantic keys.
+        let source_key = || {
+            let span = part.source_span;
+            resource
+                .source
+                .get(span.start as usize..span.end as usize)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(std::sync::Arc::from)
+        };
+        let key = if matches!(
+            mode,
+            SemanticFamilyTransformMode::MatchingMappedSourceKeys(_)
+        ) {
+            source_key()
+        } else {
+            part.semantic_key.clone().or_else(source_key)
+        }
+        .ok_or(PreparedMatchingShapeActivationError::MissingSourceKey { node })?;
+        return Ok(MatchingFamilyKey::Source(key));
     }
     let geometry = content
         .geometry()

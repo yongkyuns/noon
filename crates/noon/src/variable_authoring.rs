@@ -572,4 +572,124 @@ mod tests {
             "7.50"
         );
     }
+
+    #[test]
+    fn mapped_tex_and_numeric_readout_share_a_seekable_segment() {
+        use crate::{AnimationCompositionRequest as Request, AnimationOptions, RateFunction};
+        let mut execution = crate::Scene::new().into_execution().unwrap();
+        execution
+            .session_mut()
+            .begin_replay_retention(noon_runtime::ReplayLimits::default())
+            .unwrap();
+        let mut backend = RuleBackend::working();
+        let scene = execution.scene_mut();
+        let area = scene
+            .variable(&mut backend, "A", 8.0, DecimalFormat::default(), 48.0)
+            .unwrap();
+        let source = scene
+            .math_tex_parts(MathTex::new("x_i").unwrap(), &mut backend)
+            .unwrap();
+        let target = scene
+            .math_tex_parts(MathTex::new("x").unwrap(), &mut backend)
+            .unwrap();
+        scene.shift_family(target.family(), 4.0, 0.0).unwrap();
+        scene.add(area.value().mobject()).unwrap();
+        scene
+            .add_many(&[crate::MobjectTarget::Family(source.family())])
+            .unwrap();
+        let number_id = area.value().mobject().node_id();
+        let source_id = source.current_members().unwrap()[0].node_id();
+        let target_id = target.current_members().unwrap()[0].node_id();
+        let options = AnimationOptions::new()
+            .run_time(2.0)
+            .rate_func(RateFunction::Linear);
+
+        let before = execution.session().publication_context();
+        let invalid = Request::MatchingSourceFamilyTransformTo {
+            source: source.family(),
+            target_state: target.family(),
+            options,
+            key_map: &[("x_i".into(), "y".into())],
+        };
+        assert!(execution
+            .live()
+            .declare_and_activate_composition(&invalid, AnimationOptions::new())
+            .is_err());
+        assert_eq!(execution.session().publication_context(), before);
+
+        let request = Request::MatchingSourceFamilyTransformTo {
+            source: source.family(),
+            target_state: target.family(),
+            options,
+            key_map: &[("x_i".into(), "x".into())],
+        };
+        let sample = |execution: &crate::SceneExecution| {
+            let session = execution.session();
+            let store = execution.scene().integration_store().borrow();
+            let number = session
+                .effective_semantic_object(&store, number_id)
+                .unwrap()
+                .object;
+            let text = session
+                .text_resources()
+                .get(number.text().unwrap())
+                .unwrap();
+            let term = |id| {
+                let row = session
+                    .effective_semantic_object(&store, id)
+                    .unwrap()
+                    .object;
+                (row.transform.translation.x, row.appearance)
+            };
+            (
+                text.source.clone(),
+                text.bounds,
+                term(source_id),
+                term(target_id),
+            )
+        };
+        let composition = Request::Composition {
+            kind: noon_core::SemanticAnimationCompositionKind::Parallel,
+            options: AnimationOptions::new().rate_func(RateFunction::Linear),
+            children: vec![
+                request,
+                Request::ValueTracker {
+                    tracker: area.tracker(),
+                    target: 12.0,
+                    options,
+                },
+            ],
+        };
+        let segment = execution
+            .live()
+            .declare_and_activate_composition(&composition, AnimationOptions::new())
+            .unwrap();
+        assert!(!execution.session().has_required_callbacks());
+        let initial = sample(&execution);
+        execution.live().advance_segment_to(segment, 1.0).unwrap();
+        let midpoint = sample(&execution);
+        assert_eq!(midpoint.0.as_ref(), "10.00");
+        assert_eq!(initial.1.min.x, midpoint.1.min.x);
+        assert!(midpoint.1.width() > initial.1.width());
+        assert_eq!(midpoint.2, (2.0, 0.5));
+        assert_eq!(midpoint.3, (2.0, 0.5));
+        execution.live().advance_segment_to(segment, 2.0).unwrap();
+        execution.live().complete_segment(segment).unwrap();
+        {
+            let store = execution.scene().integration_store().borrow();
+            let session = execution.session();
+            assert!(session
+                .effective_semantic_object(&store, source_id)
+                .is_err());
+            assert!(session.effective_semantic_object(&store, target_id).is_ok());
+        }
+        let session = execution.session_mut();
+        session.seal_replay().unwrap();
+        session.seek(1.0).unwrap();
+        assert_eq!(sample(&execution), midpoint);
+        execution.session_mut().seek(0.0).unwrap();
+        assert_eq!(sample(&execution), initial);
+        execution.session_mut().advance_to(1.0).unwrap();
+        assert_eq!(sample(&execution), midpoint);
+    }
 }

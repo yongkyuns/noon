@@ -528,6 +528,7 @@ fn unsupported_family_effect_units_and_matching_targets_reject_atomically() {
         AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
             source: &family,
             target_state: target.root(),
+            key_map: &[],
             options: AnimationOptions::new(),
         },
     ] {
