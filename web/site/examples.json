@@ -1,7 +1,7 @@
 [
   {"id":"showcase-cache-locality","start":2.7,"end":16.3},
   {"id":"showcase-doubling-curve","start":16.3,"end":27.4},
-  {"id":"showcase-riemann-sums","start":7.2,"end":17.5},
+  {"id":"showcase-riemann-sums","start":2.9,"end":17},
   {"id":"showcase-channel-flow","start":5,"end":21},
   {"id":"showcase-neon-glow","start":4,"end":14.4}
 ]

@@ -26,9 +26,10 @@ Try setting `GROWTH_FACTOR` to `1.5` in **Code**. Which plot stays straight?
 
 ## Rectangles become an integral
 
-Start with four rectangles and take each height from the curve at its left
-edge. Watch each strip split and the sum approach the shaded area. Set `B`
-to `3.5` in **Code** to integrate over a shorter interval. Adapted from
+Start with four rectangles that take their heights from the curve at their
+left edges. Watch the width halve, the live sum approach the area, and the
+terms move into the integral. Set `B` to `3.5` in **Code** to shorten the
+interval. Reproduced from
 [the ManimGX gallery scene](https://manimgx.academa.ai/gallery/riemann-sums/).
 
 <!-- noon:demo showcase-riemann-sums -->

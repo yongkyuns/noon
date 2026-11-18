@@ -1,4 +1,4 @@
-"""Noon adaptation of ManimGX's Rectangles become an integral (Academa).
+"""Noon reproduction of ManimGX's Rectangles become an integral (Academa).
 Reference: https://manimgx.academa.ai/gallery/riemann-sums/
 """
 from math import cos, sin
@@ -6,17 +6,12 @@ from math import cos, sin
 from noon import *
 
 A = 0.5
-B = 4.5  # Try 3.5 to measure a shorter stretch of the same curve.
+B = 4.5  # Try 3.5 to change the upper limit.
 REFINEMENTS = 6
-NIGHT = color_from_hex("#101e29")
-CARD = color_from_hex("#192e39")
-EDGE = color_from_hex("#3c5864")
-INK = color_from_hex("#f5efe2")
-MUTED = color_from_hex("#afc9cc")
-CURVE = color_from_hex("#ffda89")
-STRIP_COLORS = tuple(color_from_hex(color) for color in (
-    "#3387b4", "#3699b1", "#43abaf", "#63bd9e",
-))
+AXIS = color_from_hex("#bbbbbb")
+CURVE = color_from_hex("#ffe16e")
+BLUE_END = color_from_hex("#58c4dd")
+GREEN_END = color_from_hex("#83c167")
 
 
 def f(x):
@@ -32,120 +27,202 @@ def rectangle_sum(count):
     return dx * sum(f(A + i * dx) for i in range(count))
 
 
-def label(text, size, x, y, color=INK):
-    return Text(text, font_size=size, color=color).move_to((x, y, 0))
+def left_at(mobject, x, y):
+    return mobject.move_to((x + mobject.width / 2, y, 0))
 
 
-def strips(axes, count, *, split=False, rise=1):
-    """Prepare four colored paths, each containing a quarter of the strips.
+def strip_color(fraction):
+    return Color(*(a + (b - a) * fraction for a, b in zip(
+        (BLUE_END.red, BLUE_END.green, BLUE_END.blue),
+        (GREEN_END.red, GREEN_END.green, GREEN_END.blue),
+    )))
 
-    In the split pose, two adjacent strips reproduce one parent exactly.
-    In the final pose, each half takes its own left-edge height.
-    """
+
+def polygon(frame, points, color):
+    x0, y0, x_unit, y_unit = frame
+    shape = VMobject(fill_color=color, fill_opacity=1, stroke_width=0)
+    shape.set_points_as_corners([(x0 + x * x_unit, y0 + y * y_unit, 0) for x, y in points])
+    return shape.close_path()
+
+
+def strips(frame, count, *, split=False, rise=1):
     dx = (B - A) / count
-    colors = [VMobject(fill_color=color, fill_opacity=1, stroke_width=0)
-              for color in STRIP_COLORS]
-    for index in range(count):
-        left = A + index * dx
-        sample = left - dx if split and index % 2 else left
-        gap = min(0.018, dx / 9)
-        left_gap = right_gap = gap
-        if split:
-            outer = min(0.018, 2 * dx / 9)
-            left_gap, right_gap = (0, outer) if index % 2 else (outer, 0)
-        start, end = left + left_gap, left + dx - right_gap
-        height = rise * f(sample)
-        shape = colors[index // (count // len(colors))]
-        shape.start_new_path(axes.c2p(start, 0))
-        shape.add_line_to(axes.c2p(end, 0))
-        shape.add_line_to(axes.c2p(end, height))
-        shape.add_line_to(axes.c2p(start, height))
-        shape.close_path()
-    return colors
+    heights = [rise * f(A + dx * (i - (i % 2 if split else 0))) for i in range(count)]
+    if count > 32:
+        # Join fine strips into staircases so their internal edges stay seamless.
+        per_band = count // 32
+        paths = []
+        for band in range(32):
+            first = band * per_band
+            end = first + per_band
+            left = A + first * dx
+            # A subpixel overlap keeps neighboring bands joined.
+            right = A + end * dx + (0.004 if end < count else 0)
+            points = [(left, 0), (right, 0)]
+            for i in reversed(range(first, end)):
+                edge = right if i == end - 1 else A + (i + 1) * dx
+                points.extend([(edge, heights[i]), (A + i * dx, heights[i])])
+            paths.append(polygon(frame, points, strip_color((band + 0.5) / 32)))
+        return paths
+
+    def half_gap(width):
+        x_unit = frame[2]
+        return 0.03 * min(1, width * x_unit / 0.5) ** 2 / x_unit
+
+    gap = half_gap(dx)
+    parent_gap = half_gap(dx * 2)
+    result = []
+    for i, height in enumerate(heights):
+        left_inset = (0 if i % 2 else parent_gap) if split else gap
+        right_inset = (parent_gap if i % 2 else 0) if split else gap
+        left = A + i * dx + left_inset
+        right = A + (i + 1) * dx - right_inset
+        midpoint = (i - i % 2 + 1) if split else (i + 0.5)
+        result.append(polygon(frame, [(left, 0), (right, 0), (right, height), (left, height)],
+                              strip_color(midpoint / count)))
+    return result
 
 
-def measures(count):
-    x = 4.78
-    width = (B - A) / count
-    return [
-        label(f"{count} strips", 30, x, 1.16),
-        label(f"Δx = {width:.6g}", 25, x, 0.54, MUTED),
-        label(f"{rectangle_sum(count):.3f}", 44, x, -0.89),
-    ]
+def sum_formula():
+    formula = left_at(MathTex(r"\sum_i", "f(", "x_i", ")", r"\,\Delta x", "=", font_size=54),
+                      -0.91, 3.20)
+    for term in ("f(", "x_i", ")"):
+        formula.set_color_by_tex(term, CURVE)
+    return formula
 
 
 class RiemannSums(Scene):
+    def fade_track(self, *formulae):
+        """Fade each TeX part through the retained opacity binding."""
+        opacity = self.value_tracker(0)
+        self.add(*formulae)
+        for formula in formulae:
+            for part in formula:
+                self.bind_opacity(part, opacity)
+        return opacity
+
+    def width_label(self, dx, *, initial=False):
+        number = left_at(MathTex(f"{dx:g}", font_size=49), -5.14, 3.30)
+        opacity = self.fade_track(number)
+        slide = self.value_tracker(1 if initial else 0)
+        for part in number:
+            x, y, z = part.get_center()
+            self.bind_position(part, slide, direction=(0, 0.3, 0), offset=(x, y - 0.3, z))
+        return opacity, slide
+
+    def moving_term(self, tex, start, direction, opacity, travel):
+        color = CURVE if tex in ("f(", "x", "x_i", ")") else WHITE
+        term = MathTex(tex, font_size=54, color=color)
+        self.add(term)
+        for part in term:
+            self.bind_position(part, travel, direction=direction, offset=start)
+            self.bind_opacity(part, opacity)
+
+    def match_terms(self, summation, integral, travel):
+        """Keep shared glyphs and move the changed terms to matching positions."""
+        shared = self.value_tracker(0)
+        outgoing = self.value_tracker(0)
+        for before, after in zip(summation, integral):
+            start = before.get_center()
+            end = after.get_center()
+            direction = tuple(b - a for a, b in zip(start, end))
+            old, new = before.tex_string.strip(), after.tex_string.strip()
+            self.moving_term(old, start, direction, shared if old == new else outgoing, travel)
+            if old != new:
+                self.moving_term(new, start, direction, travel, travel)
+        return shared, outgoing
+
     def construct(self):
         if not 2 <= B <= 4.75:
             raise ValueError("Choose an upper limit from 2 to 4.75.")
-        axes = Axes([0, 5, 1], [0, 5, 1], x_length=8.65, y_length=4.54, tips=False,
-                    color=EDGE).move_to((-1.82, -0.1, 0))
-        curve = axes.plot(f, [0, 5, 0.025], color=CURVE, stroke_width=4, use_smoothing=False)
+        axes = Axes([0, 5, 1], [0, 5, 1], x_length=10.5, y_length=5.2,
+                    tips=False, color=AXIS).move_to((0.2, -0.75, 0))
+        curve = axes.plot(f, [0.05, 4.95, 0.025], color=CURVE, stroke_width=6.7)
         curve.set_z_index(2)
-        end_of_curve = axes.c2p(4.97, f(4.97))
-        curve_name = label("f(x)", 26, end_of_curve[0] - 0.12, end_of_curve[1] + 0.36, CURVE)
-        ends = [Text(name, font_size=26, color=INK).move_to(axes.c2p(x, -0.29))
+        endpoint = axes.c2p(4.95, f(4.95))
+        curve_name = left_at(MathTex("f(x)", color=CURVE, font_size=48),
+                             endpoint[0] + 0.2, endpoint[1])
+        ends = [MathTex(name, font_size=44).move_to(axes.c2p(x, -0.32))
                 for name, x in (("a", A), ("b", B))]
-        area = axes.get_area(curve, [A, B], color=STRIP_COLORS[-1], opacity=0.78, stroke_width=0)
-        outline = label("How do we measure a curved area?", 42, 0, 3.12)
-        prompt = label("Find the area under f(x) between a and b", 29, 0, -3.38, MUTED)
-        self.add(Rectangle(width=16, height=9, fill=NIGHT, fill_opacity=1, stroke=None), outline)
+        gradient = LinearGradient([(0, BLUE_END), (1, GREEN_END)])
 
-        self.next_section("The area under the curve")
-        self.play(Create(axes), Create(curve), run_time=1.2)
-        self.play(FadeIn(area), Write(curve_name), *(Write(bound) for bound in ends),
-                  FadeIn(prompt), run_time=0.8)
-        self.wait(1.7)
+        width_eq = left_at(MathTex(r"\Delta x =", font_size=50), -6.6, 3.30)
+        written_sum = sum_formula()
+        integral = left_at(MathTex(r"\int_a^b", "f(", "x", ")", r"\,dx", "=", font_size=54),
+                           -2.15, 3.19)
+        for part in integral:
+            if part.tex_string.strip() in ("f(", "x", ")"):
+                part.set_color(CURVE)
+        truth = antiderivative(B) - antiderivative(A)
+        goal = MathTex(rf"\to {truth:.2f}", font_size=51, color=AXIS).move_to((5.60, 3.39, 0))
 
-        self.next_section("Approximate with rectangles")
-        panel = RoundedRectangle(width=3.62, height=4.3, corner_radius=0.22, fill=CARD,
-                                 fill_opacity=1, stroke=EDGE, stroke_width=1.3)
-        panel.move_to((4.78, -0.08, 0))
-        stat_title = label("RECTANGLE SUM", 25, 4.78, 1.75, MUTED)
-        sum_formula = MathTypst("sum_i f(x_i) Delta x", font_size=31, color=INK).move_to((4.78, -0.18, 0))
-        self.play(FadeOut(area), FadeOut(prompt), FadeIn(panel), FadeIn(stat_title), run_time=0.6)
-        active = strips(axes, 4, rise=0.02)
+        # Variable supplies Noon's native numeric binding and the math font.
+        total = Variable(0, "S", num_decimal_places=2, font_size=53, group_with_commas=False)
+        total.label.set_opacity(0)
+        written = self.value_tracker(0)
+        travel = self.value_tracker(0)
+        self.add(axes, total)
+        self.bind_opacity(total.value, written)
+        self.bind_position(total.value, travel, direction=(-1.59, -0.16, 0), offset=(3.57, 3.39, 0))
+
+        annotations = self.fade_track(curve_name, *ends)
+        width_fade = self.fade_track(width_eq)
+        goal_fade = self.fade_track(goal)
+        widths = [self.width_label((B - A) / (4 * 2**level), initial=level == 0)
+                  for level in range(REFINEMENTS + 1)]
+        width_opacity, width_slide = widths[0]
+
+        shared, outgoing = self.match_terms(written_sum, integral, travel)
+        x0, y0 = axes.c2p(0, 0)[:2]
+        x1, y1 = axes.c2p(1, 1)[:2]
+        frame = (x0, y0, x1 - x0, y1 - y0)
+
+        self.next_section("Trace the curve")
+        self.play(Create(curve), annotations.animate.set_value(1), run_time=1.4)
+
+        self.next_section("Grow the first four rectangles")
+        active = strips(frame, 4, rise=0.002)
         self.add(*active)
-        readout = measures(4)
-        caption = label("Each strip uses the height at its left edge", 29, 0, -3.38)
-        self.play(*(Transform(bar, target) for bar, target in zip(active, strips(axes, 4))),
-                  *(FadeIn(item) for item in readout), Write(sum_formula), FadeIn(caption), run_time=1.2)
-        self.wait(1.7)
+        self.play(*(Transform(bar, target) for bar, target in zip(active, strips(frame, 4))),
+                  width_fade.animate.set_value(1), width_opacity.animate.set_value(1), Write(written_sum),
+                  total.tracker.animate.set_value(rectangle_sum(4)), written.animate.set_value(1),
+                  run_time=1.5, rate_func=smooth)
+        self.remove(written_sum)
+        shared.set_value(1)
+        outgoing.set_value(1)
+        self.play(goal_fade.animate.set_value(1), run_time=0.5)
 
-        self.next_section("Split and resample")
-        self.play(FadeOut(caption), run_time=0.3)
-        dx = (B - A) / 4
-        middle = A + dx / 2
-        divider = Line(axes.c2p(middle, 0), axes.c2p(middle, f(A)), color=CURVE, stroke_width=2)
-        caption = label("The right half gets a new height at the split", 29, 0, -3.38)
-        exact = antiderivative(B) - antiderivative(A)
-        goal = label(f"Area ≈ {exact:.3f}", 23, 4.78, -1.69, MUTED)
-        self.play(Create(divider), FadeIn(caption), FadeIn(goal), run_time=0.7)
-        self.wait(0.6)
-        for level in range(1, REFINEMENTS + 1):
-            count = 4 * 2 ** level
-            self.play(*(FadeOut(item) for item in readout), run_time=0.3)
-            halves = strips(axes, count, split=True)
+        self.next_section("Halve the width")
+        for level, (next_opacity, next_slide) in enumerate(widths[1:], start=1):
+            count = 4 * 2**level
+            duration = 1.8 if level <= 3 else 1.4
+            early = round(duration * 0.35, 2)
+            halves = strips(frame, count, split=True)
             self.remove(*active)
             self.add(*halves)
             active = halves
-            motions = [Transform(bar, target) for bar, target in zip(active, strips(axes, count))]
-            if level == 1:
-                motions.append(FadeOut(divider))
-            self.play(*motions, run_time=1.4 if level < 4 else 0.9)
-            readout = measures(count)
-            self.play(*(FadeIn(item) for item in readout), run_time=0.4)
-            self.wait(0.5 if level < 4 else 0.2)
-        self.wait(0.7)
+            targets = strips(frame, count)
+            self.play(AnimationGroup(
+                *(Transform(bar, new, run_time=duration, rate_func=smooth)
+                  for bar, new in zip(active, targets)),
+                total.tracker.animate(run_time=duration, rate_func=smooth).set_value(rectangle_sum(count)),
+                width_opacity.animate(run_time=early, rate_func=smooth).set_value(0),
+                width_slide.animate(run_time=early, rate_func=smooth).set_value(2),
+                next_opacity.animate(run_time=early, rate_func=smooth).set_value(1),
+                next_slide.animate(run_time=early, rate_func=smooth).set_value(1),
+                lag_ratio=0,
+            ))
+            width_opacity, width_slide = next_opacity, next_slide
+            self.wait(0.15)
+        self.wait(0.4)
 
-        self.next_section("Take the limit")
-        self.play(FadeOut(caption), FadeOut(stat_title), FadeOut(sum_formula), FadeOut(goal),
-                  *(FadeOut(item) for item in readout), run_time=0.5)
-        integral = MathTypst("integral_a^b f(x) dif x", font_size=36, color=INK).move_to((4.78, 0.73, 0))
-        value = label(f"≈ {exact:.3f}", 44, 4.78, -0.61)
-        final_title = label("INTEGRAL", 25, 4.78, 1.51, MUTED)
-        limit = label("As Δx approaches 0, the sum approaches the area", 29, 0, -3.38)
-        self.play(FadeIn(area), *(FadeOut(bar) for bar in active), Write(integral),
-                  FadeIn(final_title), FadeIn(limit), run_time=1.3)
-        self.play(FadeIn(value), run_time=0.5)
-        self.wait(3.5)
+        self.next_section("Turn the sum into the integral")
+        region = axes.get_area(curve, [A, B], color=BLUE_END, opacity=1, stroke_width=0)
+        region.set_fill(gradient, opacity=1)
+        self.play(width_fade.animate.set_value(0), width_opacity.animate.set_value(0),
+                  goal_fade.animate.set_value(0), outgoing.animate.set_value(0),
+                  FadeIn(region),
+                  total.tracker.animate.set_value(truth), travel.animate.set_value(1),
+                  run_time=2, rate_func=smooth)
+        self.remove(*active)
+        self.wait(2)

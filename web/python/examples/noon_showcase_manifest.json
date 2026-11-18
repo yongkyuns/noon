@@ -714,20 +714,21 @@
       "primary_feature": "riemann-sum-refinement",
       "category": "Calculus",
       "path": "python/examples/showcase_riemann_sums.py",
-      "features": ["Axes", "get_area", "retained path transforms", "MathTypst", "sections"],
-      "duration": 28.5,
-      "thumbnail_time": 11.2,
+      "features": ["Axes", "MathTex", "retained path transforms", "live numeric binding", "get_area", "sections"],
+      "duration": 18.3,
+      "thumbnail_time": 5.3,
       "thumbnail": "thumbnails/showcase/showcase-riemann-sums.png",
-      "thumbnail_alt": "Eight blue and teal left-edge rectangles under a yellow curve, with their width and total area shown beside the plot.",
-      "still_intervals": [[2, 3.7], [5.5, 7.2], [8.2, 8.8], [10.9, 11.4], [13.5, 14], [16.1, 16.6], [18.2, 18.4], [20, 20.2], [21.8, 22.7], [25, 28.5]],
+      "thumbnail_alt": "Eight blue-to-green rectangles under a yellow curve, with LaTeX labels for the strip width, live sum, and limiting area.",
+      "still_intervals": [[5.2, 5.35], [7.15, 7.3], [9.1, 9.25], [10.65, 10.8], [12.2, 12.35], [13.75, 14.3], [16.3, 18.3]],
       "beats": [
-        {"time": 3, "label": "Shade the area between a and b"},
-        {"time": 6.1, "label": "Measure four strips using left-edge heights"},
-        {"time": 9.7, "label": "Split each strip and adjust the right half"},
-        {"time": 11.2, "label": "Compare the first refinement"},
-        {"time": 16.3, "label": "Repeat the same rule with thirty-two strips"},
-        {"time": 22.1, "label": "The thin strips nearly fill the area"},
-        {"time": 26.2, "label": "The integral gives the limiting area"}
+        {"time": 0.7, "label": "Trace the curve"},
+        {"time": 2.8, "label": "Grow four strips and write their sum"},
+        {"time": 4.4, "label": "The width changes as the rectangles split"},
+        {"time": 5.3, "label": "Eight rectangles with the new sum"},
+        {"time": 8.2, "label": "Keep the left half and resample the right half"},
+        {"time": 12.7, "label": "Follow the live sum as thin strips fill the area"},
+        {"time": 15.3, "label": "Match the terms from the sum to the integral"},
+        {"time": 17.3, "label": "The integral gives the limiting area"}
       ],
       "playback_capability": "deterministic-retained-replay"
     }
