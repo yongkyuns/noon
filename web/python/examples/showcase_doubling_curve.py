@@ -60,9 +60,10 @@ class DoublingCurve(MovingCameraScene):
         ticks = [text(str(i), 24, position(i)[0], -2.49, MUTED) for i in range(STEPS + 1)]
         axis = Line((X0, Y0, 0), (X0, Y0 + HEIGHT, 0), color=MUTED, stroke_width=2)
         graph = curve()
-        self.add(background, *lines, axis, *values, *ticks, periods, title, scale, caption)
+        self.add(background, *lines, *values, *ticks, periods, title, scale)
         self.next_section("The curve")
-        self.play(Create(graph), *(FadeIn(dot) for dot in samples), run_time=1.2)
+        self.play(Create(axis), Create(graph), run_time=1.2)
+        self.play(*(FadeIn(dot) for dot in samples), FadeIn(caption), run_time=0.5)
         self.wait(2.2)
 
         self.next_section("Follow the same ratio")
@@ -72,16 +73,17 @@ class DoublingCurve(MovingCameraScene):
         notes = []
         for i in range(1, STEPS):
             x, y, _ = position(i)
-            note = text(multiplier, 25, x + 0.77, y + 0.18, STEP)
+            middle = (y + position(i - 1)[1]) / 2
+            note = text(multiplier, 25, x + 0.77, middle, STEP)
             bracket = step_bracket(i)
             segment = curve(start=i - 1, end=i).set_stroke(opacity=0)
             self.add(segment)
             self.play(MoveAlongPath(marker, segment),
                       frame.animate.move_to((x - 0.9, y + 0.12, 0)), run_time=0.7)
             self.remove(segment)
-            self.play(FadeIn(bracket), FadeIn(note), run_time=0.25)
+            self.play(Create(bracket), Write(note), run_time=0.4)
             notes.extend([bracket, note])
-            self.wait(0.35)
+            self.wait(0.5)
 
         summary = text(f"Always {multiplier} · each jump gets taller", 30, 0, -3.46)
         last_note = text(multiplier, 25, position(STEPS)[0] + 0.77, position(STEPS)[1] - 0.45, STEP)
@@ -89,17 +91,17 @@ class DoublingCurve(MovingCameraScene):
         segment = curve(start=STEPS - 1).set_stroke(opacity=0)
         self.add(segment)
         self.play(Restore(frame), MoveAlongPath(marker, segment),
-                  FadeIn(title), FadeIn(scale), FadeIn(summary),
-                  FadeIn(last_bracket), FadeIn(last_note), run_time=1.1)
+                  FadeIn(title), FadeIn(scale), run_time=1.1)
         self.remove(segment)
+        self.play(Create(last_bracket), Write(last_note), FadeIn(summary), run_time=0.5)
         self.wait(2)
-        self.remove(title, summary)
+        self.play(FadeOut(title), FadeOut(summary), run_time=0.3)
         puzzle = text(f"What if {multiplier} always took the same height?", 37, 0, 3.13)
-        self.play(FadeIn(puzzle), run_time=0.6)
+        self.play(Write(puzzle), run_time=1.0)
         self.wait(1.8)
 
         self.next_section("Change the scale")
-        self.remove(scale, *notes, last_bracket, last_note)
+        self.play(*(FadeOut(item) for item in [scale, *notes, last_bracket, last_note]), run_time=0.5)
         # The curve and scale markers retain their horizontal coordinates.
         log_scale = text("LOG SCALE", 25, 5.0, 2.2, DATA)
         motions = []
@@ -110,17 +112,18 @@ class DoublingCurve(MovingCameraScene):
                 value.animate.move_to((X0 - 0.58, y, 0)),
                 sample.animate.move_to((x, y, 0)),
             ])
-        self.play(Transform(graph, curve(log=True)), FadeIn(log_scale), *motions, run_time=2.4)
+        self.play(Transform(graph, curve(log=True)), *motions, run_time=2.4, rate_func=smooth)
+        self.play(Write(log_scale), run_time=0.6)
         self.wait(2)
 
         self.next_section("Read the straight line")
-        self.remove(puzzle)
+        self.play(FadeOut(puzzle), run_time=0.3)
         result = text("The same data draws a straight line", 42, 0, 3.13)
         takeaway = text("Equal ratios become equal vertical steps", 30, 0, -3.46)
-        equal_steps = [step_bracket(i, log=True) for i in range(1, STEPS + 1)]
+        self.play(Write(result), run_time=0.9)
         for i in range(1, STEPS + 1):
-            equal_steps.append(text(multiplier, 25, position(i)[0] + 0.77,
-                                    position(i, log=True)[1] - HEIGHT / (2 * STEPS), STEP))
-        self.play(FadeIn(result), FadeIn(takeaway), *(FadeIn(item) for item in equal_steps),
-                  run_time=1.3)
+            x, y, _ = position(i, log=True)
+            ratio = text(multiplier, 25, x + 0.77, y - HEIGHT / (2 * STEPS), STEP)
+            self.play(Create(step_bracket(i, log=True)), Write(ratio), run_time=0.4)
+        self.play(FadeIn(takeaway), run_time=0.5)
         self.wait(3.7)

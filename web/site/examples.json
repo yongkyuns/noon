@@ -1,6 +1,6 @@
 [
-  {"id":"showcase-cache-locality","start":2.5,"end":14.6},
-  {"id":"showcase-doubling-curve","start":11.4,"end":22},
-  {"id":"showcase-channel-flow","start":6,"end":17.8},
-  {"id":"showcase-neon-glow","start":4.2,"end":16.7}
+  {"id":"showcase-cache-locality","start":2.7,"end":16.3},
+  {"id":"showcase-doubling-curve","start":16.3,"end":27.4},
+  {"id":"showcase-channel-flow","start":5,"end":21},
+  {"id":"showcase-neon-glow","start":4,"end":14.4}
 ]

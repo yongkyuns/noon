@@ -107,21 +107,27 @@ class CacheLocality(Scene):
                 return cursor.set_stroke(opacity=0)
             return cursor.move_to((*self.position(row, column), 0))
 
-        def resolve(self, scene, index):
-            row, column, line, misses = self.reads[index]
+        def retire(self, index):
+            row, column, _, misses = self.reads[index]
+            miss = misses != self.misses
+            self.cursor.move_to((*self.position(row, column), 0))
+            animations = [self.cursor.animate.set_stroke(INK, width=2, opacity=1)]
+            if miss and self.resident is not None:
+                animations.append(FadeOut(self.resident))
+            if miss != self.last_miss and self.result is not None:
+                animations.append(FadeOut(self.result))
+            return animations
+
+        def resolve(self, index):
+            _, _, line, misses = self.reads[index]
             miss = misses != self.misses
             color = MISS if miss else HIT
-            self.cursor.move_to((*self.position(row, column), 0))
             animations = [self.cursor.animate.set_stroke(color, width=3, opacity=1)]
             if miss:
-                if self.resident is not None:
-                    scene.remove(self.resident)
                 self.resident = line_words(line, self.slot_x, self.slot_y, self.word, 23)
                 animations.append(FadeIn(self.resident))
                 self.counter.set_value(misses).move_to((self.slot_x, -2.18, 0))
             if miss != self.last_miss:
-                if self.result is not None:
-                    scene.remove(self.result)
                 self.result = label("MISS" if miss else "HIT", 25, self.slot_x, -1.61, color)
                 animations.append(FadeIn(self.result))
                 self.last_miss = miss
@@ -139,21 +145,23 @@ class CacheLocality(Scene):
         down = Arrow((-1.87, 1.89, 0), (-1.87, -1.02, 0), buff=0, color=INK)
         hook_labels = [label("By row", 31, 2.50, 2.15), label("By column", 31, -3.35, 0.44)]
         same_reads = label("Same matrix · 16 reads", 30, 0, -1.75, MUTED)
-        self.add(box(16, 9, 0, 0, PAPER, stroke=None), title, *rows, across, down, *hook_labels, same_reads)
+        self.add(box(16, 9, 0, 0, PAPER, stroke=None), title, *rows)
         self.next_section("Same reads, different order")
-        self.wait(2.5)
+        self.play(GrowArrow(across), Write(hook_labels[0]), run_time=0.6)
+        self.play(GrowArrow(down), Write(hook_labels[1]), FadeIn(same_reads), run_time=0.6)
+        self.wait(1.5)
 
         self.next_section("How memory stores the matrix")
         layout_title = label("Rows sit end to end in memory", 42, 0, 2.95)
-        self.remove(title)
+        self.play(FadeOut(title), FadeOut(across), FadeOut(down),
+                  FadeOut(same_reads), *(FadeOut(item) for item in hook_labels), run_time=0.4)
         self.play(
-            FadeOut(across), FadeOut(down), FadeOut(same_reads),
-            *(FadeOut(item) for item in hook_labels), FadeIn(layout_title),
+            FadeIn(layout_title),
             *(row.animate.shift((x, 0, 0)) for row, x in zip(rows, strip_x)),
             run_time=1,
         )
         memory = label("Memory · 4 adjacent values per line", 30, 0, 2.08, MUTED)
-        cache = label("Cache · 1 slot", 32, 0, -0.62, MUTED)
+        cache = label("Cache · 1 slot", 29, 3.52, slot_y, MUTED)
         slot = box(SIDE * WORD + 0.16, WORD + 0.12, 0, slot_y)
         caption = label("The cache keeps a copy close to the CPU", 29, 0, -2.91, MUTED)
         self.play(
@@ -165,8 +173,8 @@ class CacheLocality(Scene):
         self.next_section("What one read fetches")
         read_title = label("Read address 0", 42, 0, 2.95)
         requested = selection(WORD, word_x(strip_x[0], 0, WORD), strip_y)
-        self.remove(layout_title, caption)
-        self.play(FadeIn(read_title), FadeIn(requested), run_time=0.5)
+        self.play(FadeOut(layout_title), FadeOut(caption), run_time=0.3)
+        self.play(Write(read_title), FadeIn(requested), run_time=0.6)
 
         first_line = line_words(0, strip_x[0], strip_y, WORD, 28)
         miss = label("MISS · fetch addresses 0–3", 34, 0, -2.91, MISS)
@@ -179,7 +187,7 @@ class CacheLocality(Scene):
         self.wait(1.5)
 
         next_read = label("Read address 1", 42, 0, 2.95)
-        self.remove(read_title, miss)
+        self.play(FadeOut(read_title), FadeOut(miss), run_time=0.3)
         self.play(
             FadeIn(next_read),
             requested.animate.move_to((word_x(strip_x[0], 1, WORD), strip_y, 0)),
@@ -194,9 +202,9 @@ class CacheLocality(Scene):
         self.wait(1.5)
 
         jump_read = label("Read address 4", 42, 0, 2.95)
-        self.remove(next_read, hit, requested)
+        self.play(FadeOut(next_read), FadeOut(hit), FadeOut(requested), run_time=0.3)
         requested = selection(WORD, word_x(strip_x[1], 0, WORD), strip_y)
-        self.play(FadeIn(jump_read), FadeIn(requested), run_time=0.5)
+        self.play(Write(jump_read), FadeIn(requested), run_time=0.6)
         second_line = line_words(1, strip_x[1], strip_y, WORD, 28)
         replace = label("MISS · addresses 4–7 replace 0–3", 34, 0, -2.91, MISS)
         self.add(second_line)
@@ -212,24 +220,26 @@ class CacheLocality(Scene):
         left = self.Traversal(-3.50, "row")
         right = self.Traversal(3.50, RIGHT_ORDER)
         compare = label("Which loop reuses its cache line?", 42, 0, 2.95)
-        self.remove(jump_read, replace)
         self.play(
             *(row.animate.shift((0, 0.65, 0)) for row in rows),
-            *(FadeOut(item) for item in [memory, cache, slot, requested, second_line]),
-            FadeIn(compare), *(FadeIn(item) for item in left.objects + right.objects),
-            run_time=1,
+            *(FadeOut(item) for item in [jump_read, replace, memory, cache, slot, requested, second_line]),
+            run_time=0.7,
         )
+        self.play(FadeIn(compare), *(FadeIn(item) for item in left.objects + right.objects),
+                  run_time=0.8)
         self.wait(2)
         for index in range(len(left.reads)):
-            approach, resolve = (0.55, 0.65) if index < 4 else (0.27, 0.33)
-            self.play(left.approach(index), right.approach(index), run_time=approach)
-            self.play(*left.resolve(self, index), *right.resolve(self, index), run_time=resolve)
+            # Keep the first divergence readable, then accelerate the repeated reads.
+            step = max(0.6, 1.25 - 0.15 * max(0, index - 3))
+            self.play(left.approach(index), right.approach(index), run_time=step * 0.45)
+            self.play(*left.retire(index), *right.retire(index), run_time=step * 0.18)
+            self.play(*left.resolve(index), *right.resolve(index), run_time=step * 0.37)
         same_order = left.misses == right.misses
         result_title = (f"{left.misses} misses in each loop" if same_order
                         else f"{left.misses} vs {right.misses} cache misses")
         takeaway = ("Both loops get four reads from each line." if same_order
                     else "Rows finish a line. Columns jump between lines.")
-        self.remove(compare)
-        self.play(FadeIn(label(result_title, 42, 0, 2.95)),
-                  FadeIn(label(takeaway, 32, 0, -3.65)), run_time=0.6)
+        self.play(FadeOut(compare), run_time=0.3)
+        self.play(Write(label(result_title, 42, 0, 2.95)), run_time=0.9)
+        self.play(FadeIn(label(takeaway, 32, 0, -3.65)), run_time=0.5)
         self.wait(3.8)

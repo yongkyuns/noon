@@ -27,7 +27,7 @@ def tube(x, width=2.2, y=0.22, color=CORE):
                 color=color, stroke_width=9)
 
 
-def sign(x):
+def sign(x, scale=1):
     # A single stroked path carries the four tube letters through the GPU glow path.
     letters = VMobject(stroke_color=CORE, stroke_width=7, fill_opacity=0)
     glyphs = (
@@ -49,7 +49,7 @@ def sign(x):
     border = RoundedRectangle(width=4.5, height=2.05, corner_radius=0.38,
                               stroke=HALO, stroke_width=4, fill_opacity=0)
     border.move_to((x, 0.3, 0))
-    return VGroup(letters, border)
+    return tuple(part.scale(scale, about_point=(x, 0.3, 0)) for part in (letters, border))
 
 
 class NeonGlow(Scene):
@@ -61,12 +61,13 @@ class NeonGlow(Scene):
         title = text("Where does the light spill come from?", 41, 0, 3.13)
         left, right = sign(-3.25), sign(3.25)
         hook_parts = [
-            title, panel(-3.25, 5.65), panel(3.25, 5.65), left, right,
+            title, panel(-3.25, 5.65), panel(3.25, 5.65),
             text("Sharp core only", 28, -3.25, -0.96, MUTED),
             text("Core + halo", 28, 3.25, -0.96, MUTED),
             text("Look at the space around the letters", 29, 0, -2.81, GUIDE),
         ]
         self.add(*hook_parts)
+        self.play(*(Create(part) for group in (left, right) for part in group), run_time=1.0)
         self.play(*(part.animate.set_glow(radius=Pixels(HALO_RADIUS), intensity=2.2, color=HALO)
                     for part in right), run_time=1.1)
         self.wait(1.9)
@@ -74,8 +75,9 @@ class NeonGlow(Scene):
         self.next_section("Build the light in two layers")
         heading = text("Take one piece of the tube", 41, 0, 3.13)
         cards = [panel(x, 3.82) for x in (-4.42, 0, 4.42)]
-        core = tube(-4.42)
-        spread = tube(0, color=HALO)
+        # Lift the top stroke of the right-hand E into the first card.
+        core = tube(3.68, width=0.64, y=0.83)
+        spread = tube(-4.42)
         spread.add_effect(Blur(radius=Pixels(0)), name="spread")
         combined = tube(4.42)
         combined.set_glow(radius=Pixels(HALO_RADIUS), intensity=2.2, color=HALO)
@@ -84,45 +86,52 @@ class NeonGlow(Scene):
         combined_label = text("Together", 29, 4.42, -1.05)
         plus = text("+", 37, -2.21, 0.22, GUIDE)
         equals = text("=", 37, 2.21, 0.22, GUIDE)
-        self.remove(title, hook_parts[-1])
-        self.play(*(FadeOut(item) for item in hook_parts[1:-1]), FadeIn(heading), run_time=0.6)
-        self.play(*(FadeIn(item) for item in cards), FadeIn(core_label), Create(core), run_time=0.6)
+        self.add(core)
+        self.play(*(FadeOut(item) for item in [*hook_parts, *left, *right]), run_time=0.6)
+        for card in cards:
+            card.set_opacity(0)
+        self.add(*cards)
+        self.bring_to_front(core)
+        self.play(*(card.animate.set_opacity(1) for card in cards), Write(heading), run_time=0.8)
+        self.play(Transform(core, tube(-4.42)), Write(core_label), run_time=1.0)
         self.wait(1.6)
 
         blur_caption = text("Spread a copy of the tube's light", 31, 0, -2.79, GUIDE)
-        self.play(FadeIn(plus), FadeIn(spread), FadeIn(blur_caption), run_time=0.4)
-        self.play(spread.animate.set_effect("spread", radius=Pixels(HALO_RADIUS)),
-                  FadeIn(spread_label), run_time=0.8)
+        self.add(spread)
+        self.play(spread.animate.shift(4.42 * RIGHT), Write(plus), FadeIn(blur_caption), run_time=0.8)
+        self.play(spread.animate.set_stroke(HALO).set_effect("spread", radius=Pixels(HALO_RADIUS)),
+                  Write(spread_label), run_time=1.0)
         self.wait(1.6)
-        self.remove(blur_caption)
+        self.play(FadeOut(blur_caption), run_time=0.3)
         layering = text("Put the sharp core back on top", 31, 0, -2.79, GUIDE)
-        self.play(FadeIn(equals), FadeIn(combined), FadeIn(combined_label), FadeIn(layering),
+        self.play(Write(equals), Create(combined), Write(combined_label), FadeIn(layering),
                   run_time=1.4)
         self.wait(2.3)
 
         self.next_section("Watch the gap")
-        self.remove(heading, layering)
         gap_heading = text("What happens in the gap?", 41, 0, 3.13)
         gap_card = panel(0, 8.1)
         high, low = tube(0, width=4.4, y=0.84), tube(0, width=4.4, y=-0.84)
         for source in (high, low):
             source.set_glow(radius=Pixels(HALO_RADIUS), intensity=2.2, color=HALO)
-        self.play(*(FadeOut(item) for item in [*cards, core, core_label, spread, spread_label,
-                                              combined, combined_label, plus, equals]),
-                  FadeIn(gap_heading), run_time=0.6)
-        self.play(FadeIn(gap_card), FadeIn(high), FadeIn(low), run_time=0.6)
+        self.play(*(FadeOut(item) for item in [heading, layering, *cards, core, core_label,
+                                              spread, spread_label, combined, combined_label, plus, equals]),
+                  run_time=0.6)
+        self.play(FadeIn(gap_card), Write(gap_heading), run_time=0.7)
+        self.play(Create(high), Create(low), run_time=0.7)
         self.play(high.animate.shift((0, -0.64, 0)), low.animate.shift((0, 0.64, 0)), run_time=1.8)
         gap_caption = text("The two soft halos overlap in the gap", 30, 0, -2.79, GUIDE)
         self.play(FadeIn(gap_caption), run_time=0.4)
         self.wait(1.6)
 
         self.next_section("Return to the sign")
-        self.remove(gap_heading, gap_caption)
-        final = sign(0).scale(1.26)
+        final = sign(0, scale=1.26)
         for part in final:
             part.set_glow(radius=Pixels(HALO_RADIUS), intensity=2.2, color=HALO)
         final_heading = text("Sharp tubing. Soft light.", 43, 0, 3.13)
         conclusion = text("The halo reaches beyond the source", 31, 0, -2.79, GUIDE)
-        self.play(FadeOut(gap_card), FadeOut(high), FadeOut(low), FadeIn(final),
-                  FadeIn(final_heading), FadeIn(conclusion), run_time=1.3)
+        self.play(FadeOut(gap_heading), FadeOut(gap_caption), FadeOut(gap_card),
+                  FadeOut(high), FadeOut(low), run_time=0.5)
+        self.play(*(Create(part) for part in final), Write(final_heading),
+                  FadeIn(conclusion), run_time=1.1)
         self.wait(3.6)

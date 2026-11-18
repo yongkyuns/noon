@@ -43,10 +43,10 @@ const rows = [
   ['showcase-glass-lens','showcase_glass_lens.py','33103a1db643b62d5c14384046a5ea5f4e33e75052048b2c783c85a70ca10d52','incremental','ordinary',[], 'looped'],
   ['showcase-wave-interference','showcase_wave_interference.py','90222ca44bc6c821bdae34453bca323b532090aca125637c0fabea455f4fa128','incremental','ordinary',['sections'], 'looped'],
   ['showcase-editorial-cover','showcase_editorial_cover.py','88addadbd590a95992ec1a37ccbd9b28e0aec31e0c97ff34e9b140f0e2ea2f12','incremental','ordinary',['sections'], 'looped'],
-  ['showcase-cache-locality','showcase_cache_locality.py','e6ca34f5e27ac645dae97309fab6b7ecde64578022d4d9627dbd621ea99804c7','incremental','ordinary',['sections'], 'looped'],
-  ['showcase-doubling-curve','showcase_doubling_curve.py','5572064d453b1a168642bd2cdd95a5635b24310c06283e2837ce8978c142d493','incremental','ordinary',['sections'], 'looped'],
-  ['showcase-channel-flow','showcase_channel_flow.py','a528c724baefda9c05019fa72e11dd8352ba6f50cdd33fefe03e834cbfa5762d','incremental','ordinary',['sections'], 'looped'],
-  ['showcase-neon-glow','showcase_neon_glow.py','8b9f5552fb765fd53af2251d1093b80d7629896dc2a733f9697198f1ea2cbf54','incremental','ordinary',['sections'], 'looped'],
+  ['showcase-cache-locality','showcase_cache_locality.py','b6a48d981b6b1e4ac8313a1a23a17382d147627b055af4ab6462981d9fa0a95a','incremental','ordinary',['sections'], 'looped'],
+  ['showcase-doubling-curve','showcase_doubling_curve.py','a5de438e8df1782cbc45478770d51cc2de9a268f99b823234da96adc17238bf0','incremental','ordinary',['sections'], 'looped'],
+  ['showcase-channel-flow','showcase_channel_flow.py','5b1b8f43e7635784f9ae059a7e625673ac18e8333ae74217030073fba522088f','incremental','ordinary',['sections'], 'looped'],
+  ['showcase-neon-glow','showcase_neon_glow.py','8afc4e03ec664f0faeaa71735f3ed13bf9da7da95a814dd225350f2319f0701c','incremental','ordinary',['sections'], 'looped'],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
