@@ -615,21 +615,24 @@
     {
       "id": "showcase-cache-locality",
       "title": "Why loop order changes cache misses",
-      "lesson": "Read the same matrix by rows and by columns. Watch which four values share a cache line and count the misses in a one-line cache.",
+      "lesson": "Watch four neighboring values load together, then see why walking the same matrix by rows or columns changes how often a one-slot cache needs to fetch.",
       "primary_feature": "cache-locality",
       "category": "Algorithms and systems",
       "path": "python/examples/showcase_cache_locality.py",
-      "features": ["Code", "Integer", "cache simulation", "simultaneous animation", "retained replay"],
-      "duration": 18,
-      "thumbnail_time": 16.4,
+      "features": ["Integer", "cache simulation", "simultaneous animation", "sections", "retained replay"],
+      "duration": 34,
+      "thumbnail_time": 31,
       "thumbnail": "thumbnails/showcase/showcase-cache-locality.png",
-      "thumbnail_alt": "The row-first and column-first traversals finish with four and sixteen cache misses respectively.",
-      "still_intervals": [[0, 0.8], [15.8, 18]],
+      "thumbnail_alt": "Two traversal panels show the same matrix and one-slot cache, with four row-first misses and sixteen column-first misses.",
+      "still_intervals": [[0, 2.5], [4.3, 5.7], [7.3, 8.8], [9.9, 11.4], [13, 14.6], [15.6, 17.6], [30.2, 34]],
       "beats": [
-        {"time": 0.4, "label": "Same matrix, two loop orders"},
-        {"time": 2.45, "label": "Row-first reuses the loaded line"},
-        {"time": 5.16, "label": "Column-first replaces the line at every read"},
-        {"time": 16.4, "label": "Compare the final miss counts"}
+        {"time": 1, "label": "Same matrix, two loop orders"},
+        {"time": 4.8, "label": "Each row becomes a line of adjacent memory addresses"},
+        {"time": 6.7, "label": "A miss copies the whole line into the cache"},
+        {"time": 10.4, "label": "Address 1 is already in the cache"},
+        {"time": 13.7, "label": "Address 4 needs another line"},
+        {"time": 19.7, "label": "Rows reuse the line while columns replace it"},
+        {"time": 31, "label": "Compare the total lines fetched"}
       ],
       "playback_capability": "deterministic-retained-replay"
     }

@@ -23,9 +23,10 @@ numerical wave simulation.
 
 ## Why loop order changes cache misses
 
-Read the same matrix by rows and by columns. In this one-line cache model, each
-row fits in one line. Change `RIGHT_ORDER` to `"row"` in **Code** to see both loops
-finish with four misses.
+Follow one read as it fetches four neighboring values into a one-slot cache.
+Then see why scanning across the rows reuses those values while scanning down
+the columns keeps replacing them in this model. Change `RIGHT_ORDER` to `"row"`
+in **Code** to see both loops finish with four misses.
 
 <!-- noon:demo showcase-cache-locality -->
 

@@ -1,22 +1,24 @@
-"""Compare loop orders in a model with one cache slot and four values per line."""
+"""Follow one cache line, then read the same matrix in two loop orders."""
 from noon import *
 
 RIGHT_ORDER = "column"  # Try "row" to give both panels the same traversal.
 
 SIDE = 4
-WORD = 0.57
+WORD = 0.76
 PAPER = color_from_hex("#f0ece2")
 CARD = color_from_hex("#fffdf7")
 INK = color_from_hex("#182d33")
 MUTED = color_from_hex("#4e6062")
-EDGE = color_from_hex("#c4cfca")
-HIT = color_from_hex("#006c61")
-MISS = color_from_hex("#a84421")
-LOADED = color_from_hex("#d5e9e2")
+EDGE = color_from_hex("#aabcb5")
+HIT = color_from_hex("#006657")
+MISS = color_from_hex("#9a3f23")
+LINE_COLORS = tuple(color_from_hex(hex_color) for hex_color in (
+    "#c8e6dc", "#d7e0f6", "#f6debb", "#e9d8ed",
+))
 
 
 def cache_reads(order):
-    """Return each read's coordinates, resident cache line, and cumulative misses."""
+    """Track the line and cumulative misses in a one-slot, row-major cache."""
     if order not in ("row", "column"):
         raise ValueError('Use "row" or "column" for RIGHT_ORDER.')
     resident = None
@@ -25,8 +27,7 @@ def cache_reads(order):
     for outer in range(SIDE):
         for inner in range(SIDE):
             row, column = (outer, inner) if order == "row" else (inner, outer)
-            address = row * SIDE + column
-            line = address // SIDE
+            line = row  # Our aligned rows are exactly one cache line wide.
             misses += line != resident
             resident = line
             reads.append((row, column, line, misses))
@@ -37,110 +38,198 @@ def label(text, size, x, y, color=INK):
     return Text(text, font_size=size, color=color).move_to((x, y, 0))
 
 
-class CacheLocality(Scene):
-    class TraversalPanel:
-        def __init__(self, scene, x, order):
-            self.scene = scene
-            self.reads = cache_reads(order)
-            self.misses = 0
-            self.last_miss = None
-            outer, inner = ("r", "c") if order == "row" else ("c", "r")
-            code = Code(
-                code_string=f"for {outer} in range({SIDE}):\n    for {inner} in range({SIDE}):\n        read(a[r][c])",
-                language="python", formatter_style="emacs", background="rectangle",
-                add_line_numbers=False, paragraph_config={"font_size": 24},
-            ).move_to((x, 0.92, 0))
-            read_line = code.code_lines[2]
-            self.read_highlight = SurroundingRectangle(read_line, color=HIT, buff=0.11, stroke_width=2)
-            self.read_highlight.set_stroke(opacity=0)
+def box(width, height, x, y, fill=CARD, stroke=EDGE, stroke_width=1.4):
+    return Rectangle(width=width, height=height, fill=fill, fill_opacity=1,
+                     stroke=stroke, stroke_width=stroke_width).move_to((x, y, 0))
 
-            scene.add(
-                Rectangle(width=6.83, height=5.73, fill=CARD, fill_opacity=1,
-                          stroke=EDGE, stroke_width=1.5).move_to((x, -0.24, 0)),
-                label("Row first" if order == "row" else "Column first", 35, x, 2.19),
-                code, self.read_highlight,
-                label("Addresses", 24, x - 1.50, -0.23, MUTED),
-                label("Misses", 24, x + 1.68, -0.23, MUTED),
-            )
-            self.count_position = (x + 1.68, -1.28, 0)
-            self.count = Integer(0, font_size=68, color=INK).move_to(self.count_position)
-            self.lines = [-1.52 - (row - 1.5) * WORD for row in range(SIDE)]
-            self.columns = [x - 1.50 + (column - 1.5) * WORD for column in range(SIDE)]
-            self.rows = []
-            for y in self.lines:
-                line = Rectangle(width=SIDE * WORD, height=WORD - 0.06,
-                                 fill=CARD, fill_opacity=1, stroke=EDGE, stroke_width=1)
-                self.rows.append(line.move_to((x - 1.50, y, 0)))
-            self.cursor = Rectangle(width=WORD - 0.05, height=WORD - 0.06,
-                                    fill=MUTED, fill_opacity=0, stroke=MUTED, stroke_width=2)
-            self.cursor.set_stroke(opacity=0).move_to(self.position(0, 0))
-            self.result_position = (x + 1.68, -2.31)
-            self.result = label("Empty cache", 22, *self.result_position, MUTED)
-            scene.add(*self.rows, self.cursor, self.count, self.result)
-            for row, y in enumerate(self.lines):
-                for column, cx in enumerate(self.columns):
-                    scene.add(label(str(row * SIDE + column), 22, cx, y))
+
+def word_x(x, column, word):
+    return x + (column - (SIDE - 1) / 2) * word
+
+
+def line_words(line, x, y, word, size):
+    tiles = []
+    for column in range(SIDE):
+        cx = word_x(x, column, word)
+        tiles.extend([
+            box(word - 0.04, word - 0.08, cx, y, LINE_COLORS[line], stroke=None),
+            label(str(line * SIDE + column), size, cx, y),
+        ])
+    return VGroup(*tiles)
+
+
+def selection(word, x, y, color=INK):
+    return Rectangle(width=word - 0.04, height=word - 0.08, fill_opacity=0,
+                     stroke=color, stroke_width=3).move_to((x, y, 0))
+
+
+class CacheLocality(Scene):
+    class Traversal:
+        def __init__(self, x, order):
+            self.reads = cache_reads(order)
+            self.word = 0.59
+            self.grid_x = x - 1.59
+            self.slot_x = x + 1.23
+            self.slot_y = -1.04
+            self.resident = None
+            self.result = None
+            self.last_miss = None
+            self.misses = 0
+            self.cursor = selection(self.word, *self.position(0, 0))
+            self.cursor.set_stroke(opacity=0)
+            self.counter = Integer(0, font_size=46, color=INK)
+            self.counter.move_to((self.slot_x, -2.18, 0))
+            title = "By row" if order == "row" else "By column"
+            # Show the first four addresses so viewers can predict which lines they need.
+            addresses = " → ".join(str(row * SIDE + col) for row, col, _, _ in self.reads[:SIDE])
+            self.objects = [
+                box(6.58, 4.45, x, -1.01),
+                label(title, 35, x, 0.68),
+                label(addresses, 24, x, 0.17, MUTED),
+                label("Cache · 1 slot", 24, self.slot_x, -0.47, MUTED),
+                box(SIDE * self.word + 0.14, self.word + 0.1, self.slot_x, self.slot_y),
+                self.counter, label("misses", 24, self.slot_x, -2.76, MUTED),
+            ]
+            for row in range(SIDE):
+                self.objects.append(
+                    line_words(row, self.grid_x, self.position(row, 0)[1], self.word, 23)
+                )
+            self.objects.append(self.cursor)
 
         def position(self, row, column):
-            return (self.columns[column], self.lines[row], 0)
+            return word_x(self.grid_x, column, self.word), -0.38 - row * self.word
 
         def approach(self, index):
             row, column, _, _ = self.reads[index]
-            last_row, last_column = self.reads[index - 1][:2] if index else (row, column)
-            cursor = self.cursor.animate.set_fill(MUTED, opacity=0)
-            if abs(row - last_row) + abs(column - last_column) > 1:
-                # A loop wrap skips cells, so hide the cursor during the jump.
-                cursor.set_stroke(opacity=0)
-            else:
-                cursor.move_to(self.position(row, column)).set_stroke(MUTED, opacity=0.6)
-            return [cursor, self.read_highlight.animate.set_stroke(opacity=0.25)]
+            old_row, old_column = self.reads[index - 1][:2] if index else (row, column)
+            cursor = self.cursor.animate.set_stroke(INK, width=2, opacity=0.85)
+            if abs(row - old_row) + abs(column - old_column) > 1:
+                return cursor.set_stroke(opacity=0)
+            return cursor.move_to((*self.position(row, column), 0))
 
-        def read(self, index):
+        def resolve(self, scene, index):
             row, column, line, misses = self.reads[index]
             miss = misses != self.misses
             color = MISS if miss else HIT
-            # The result starts only after both cursors reach their destinations.
-            self.cursor.move_to(self.position(row, column))
-            animations = [
-                self.cursor.animate.set_fill(color, opacity=0.38)
-                .set_stroke(color, width=2.5, opacity=1),
-                self.read_highlight.animate.set_stroke(color, width=2.5, opacity=1),
-            ]
+            self.cursor.move_to((*self.position(row, column), 0))
+            animations = [self.cursor.animate.set_stroke(color, width=3, opacity=1)]
             if miss:
-                if index:
-                    previous = self.reads[index - 1][2]
-                    animations.append(self.rows[previous].animate.set_fill(CARD).set_stroke(EDGE, width=1))
-                animations.append(self.rows[line].animate.set_fill(LOADED).set_stroke(HIT, width=2))
-                self.count.set_value(misses).move_to(self.count_position)
+                if self.resident is not None:
+                    scene.remove(self.resident)
+                self.resident = line_words(line, self.slot_x, self.slot_y, self.word, 23)
+                animations.append(FadeIn(self.resident))
+                self.counter.set_value(misses).move_to((self.slot_x, -2.18, 0))
             if miss != self.last_miss:
-                self.scene.remove(self.result)
-                self.result = label("MISS" if miss else "HIT", 25, *self.result_position, color)
+                if self.result is not None:
+                    scene.remove(self.result)
+                self.result = label("MISS" if miss else "HIT", 25, self.slot_x, -1.61, color)
                 animations.append(FadeIn(self.result))
                 self.last_miss = miss
             self.misses = misses
             return animations
 
-        def settle(self):
-            return [
-                self.cursor.animate.set_fill(opacity=0.24).set_stroke(width=1.6),
-                self.read_highlight.animate.set_stroke(width=1.5, opacity=0.72),
-            ]
-
     def construct(self):
-        self.add(
-            Rectangle(width=16, height=9, fill=PAPER, fill_opacity=1, stroke=None),
-            label("Cache misses", 37, 0, 3.28),
-            label("1 cache slot · 4 values per line", 24, 0, 2.82, MUTED),
+        strip_x = [(line - 1.5) * (SIDE * WORD + 0.20) for line in range(SIDE)]
+        grid_y = [1.58 - line * WORD for line in range(SIDE)]
+        strip_y = 1.27
+        slot_y = -1.36
+        rows = [line_words(line, 0, grid_y[line], WORD, 28) for line in range(SIDE)]
+        title = label("Which loop fetches more from memory?", 42, 0, 2.95)
+        across = Arrow((-1.48, 2.15, 0), (1.48, 2.15, 0), buff=0, color=INK)
+        down = Arrow((-1.87, 1.89, 0), (-1.87, -1.02, 0), buff=0, color=INK)
+        hook_labels = [label("By row", 31, 2.50, 2.15), label("By column", 31, -3.35, 0.44)]
+        same_reads = label("Same matrix · 16 reads", 30, 0, -1.75, MUTED)
+        self.add(box(16, 9, 0, 0, PAPER, stroke=None), title, *rows, across, down, *hook_labels, same_reads)
+        self.next_section("Same reads, different order")
+        self.wait(2.5)
+
+        self.next_section("How memory stores the matrix")
+        layout_title = label("Rows sit end to end in memory", 42, 0, 2.95)
+        self.remove(title)
+        self.play(
+            FadeOut(across), FadeOut(down), FadeOut(same_reads),
+            *(FadeOut(item) for item in hook_labels), FadeIn(layout_title),
+            *(row.animate.shift((x, 0, 0)) for row, x in zip(rows, strip_x)),
+            run_time=1,
         )
-        left = self.TraversalPanel(self, -3.58, "row")
-        right = self.TraversalPanel(self, 3.58, RIGHT_ORDER)
-        self.wait(0.8)
+        memory = label("Memory · 4 adjacent values per line", 30, 0, 2.08, MUTED)
+        cache = label("Cache · 1 slot", 32, 0, -0.62, MUTED)
+        slot = box(SIDE * WORD + 0.16, WORD + 0.12, 0, slot_y)
+        caption = label("The cache keeps a copy close to the CPU", 29, 0, -2.91, MUTED)
+        self.play(
+            *(row.animate.shift((0, strip_y - y, 0)) for row, y in zip(rows, grid_y)),
+            FadeIn(memory), FadeIn(cache), FadeIn(slot), FadeIn(caption), run_time=0.8,
+        )
+        self.wait(1.4)
+
+        self.next_section("What one read fetches")
+        read_title = label("Read address 0", 42, 0, 2.95)
+        requested = selection(WORD, word_x(strip_x[0], 0, WORD), strip_y)
+        self.remove(layout_title, caption)
+        self.play(FadeIn(read_title), FadeIn(requested), run_time=0.5)
+
+        first_line = line_words(0, strip_x[0], strip_y, WORD, 28)
+        miss = label("MISS · fetch addresses 0–3", 34, 0, -2.91, MISS)
+        self.add(first_line)
+        self.bring_to_front(requested)
+        self.play(
+            first_line.animate.shift((-strip_x[0], slot_y - strip_y, 0)),
+            FadeIn(miss), run_time=1.1,
+        )
+        self.wait(1.5)
+
+        next_read = label("Read address 1", 42, 0, 2.95)
+        self.remove(read_title, miss)
+        self.play(
+            FadeIn(next_read),
+            requested.animate.move_to((word_x(strip_x[0], 1, WORD), strip_y, 0)),
+            run_time=0.5,
+        )
+        retained = selection(WORD, word_x(0, 1, WORD), slot_y, HIT)
+        hit = label("HIT · address 1 is already here", 34, 0, -2.91, HIT)
+        self.play(
+            FadeIn(hit), FadeIn(retained), requested.animate.set_stroke(HIT),
+            run_time=0.6,
+        )
+        self.wait(1.5)
+
+        jump_read = label("Read address 4", 42, 0, 2.95)
+        self.remove(next_read, hit, requested)
+        requested = selection(WORD, word_x(strip_x[1], 0, WORD), strip_y)
+        self.play(FadeIn(jump_read), FadeIn(requested), run_time=0.5)
+        second_line = line_words(1, strip_x[1], strip_y, WORD, 28)
+        replace = label("MISS · addresses 4–7 replace 0–3", 34, 0, -2.91, MISS)
+        self.add(second_line)
+        self.bring_to_front(requested)
+        self.play(
+            second_line.animate.shift((-strip_x[1], slot_y - strip_y, 0)),
+            FadeOut(first_line), FadeOut(retained), FadeIn(replace),
+            run_time=1.1,
+        )
+        self.wait(1.6)
+
+        self.next_section("Compare both loop orders")
+        left = self.Traversal(-3.50, "row")
+        right = self.Traversal(3.50, RIGHT_ORDER)
+        compare = label("Which loop reuses its cache line?", 42, 0, 2.95)
+        self.remove(jump_read, replace)
+        self.play(
+            *(row.animate.shift((0, 0.65, 0)) for row in rows),
+            *(FadeOut(item) for item in [memory, cache, slot, requested, second_line]),
+            FadeIn(compare), *(FadeIn(item) for item in left.objects + right.objects),
+            run_time=1,
+        )
+        self.wait(2)
         for index in range(len(left.reads)):
-            self.play(*left.approach(index), *right.approach(index), run_time=0.3, rate_func=smooth)
-            self.play(*left.read(index), *right.read(index), run_time=0.4, rate_func=smooth)
-            self.play(*left.settle(), *right.settle(), run_time=0.2, rate_func=smooth)
-        takeaway = ("Same order, same number of misses."
-                    if left.misses == right.misses
-                    else "Row-first reuses each line before replacing it.")
-        self.play(FadeIn(label(takeaway, 25, 0, -3.65)), run_time=0.6)
-        self.wait(2.2)
+            approach, resolve = (0.55, 0.65) if index < 4 else (0.27, 0.33)
+            self.play(left.approach(index), right.approach(index), run_time=approach)
+            self.play(*left.resolve(self, index), *right.resolve(self, index), run_time=resolve)
+        same_order = left.misses == right.misses
+        result_title = (f"{left.misses} misses in each loop" if same_order
+                        else f"{left.misses} vs {right.misses} cache misses")
+        takeaway = ("Both loops get four reads from each line." if same_order
+                    else "Rows finish a line. Columns jump between lines.")
+        self.remove(compare)
+        self.play(FadeIn(label(result_title, 42, 0, 2.95)),
+                  FadeIn(label(takeaway, 32, 0, -3.65)), run_time=0.6)
+        self.wait(3.8)
