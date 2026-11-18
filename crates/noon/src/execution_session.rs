@@ -2462,13 +2462,13 @@ impl ExecutionSession {
                     method_target && self.stage_detached_method_family(store, *source, admitted)?;
                 if entering
                     && (curved
-                        || !crate::animation_request::is_ordinary_vector_family(
+                        || !crate::animation_request::is_ordinary_method_family(
                             store,
                             *target_state,
                         ))
                 {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
-                        "detached family animate requires an ordinary vector target and a straight path".into(),
+                        "detached family animate requires a target of planar vector shapes or plain text and a straight path".into(),
                     ));
                 }
                 if curved && !flat {
@@ -2584,7 +2584,7 @@ impl ExecutionSession {
                             && !family_effects
                             && options.lag_ratio.is_some_and(|lag| lag != 0.0)
                             && [*source, *target_state].into_iter().all(|id| {
-                                crate::animation_request::is_ordinary_vector_family(store, id)
+                                crate::animation_request::is_ordinary_method_family(store, id)
                             })
                         {
                             // The composition resolves the stagger before each member's
@@ -3540,9 +3540,9 @@ impl ExecutionSession {
         {
             return Ok(false);
         }
-        if !crate::animation_request::is_ordinary_vector_family(store, source) {
+        if !crate::animation_request::is_ordinary_method_family(store, source) {
             return Err(invalid(
-                "detached family animate requires an ordinary vector group",
+                "detached family animate requires a group of planar vector shapes or plain text",
             ));
         }
         let nodes = store.ordered_authoring_nodes(source).map_err(|error| {

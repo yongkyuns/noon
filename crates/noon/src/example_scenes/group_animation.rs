@@ -1,6 +1,6 @@
-//! A nested diagram enters on its first play while an independent rail animates.
+//! A nested diagram with text labels enters on its first play.
 //! Paired with `showcase_group_animation.py`, also available in the demo gallery.
-use crate::{AnimationOptions, Color, LiveProgram, Scene, SceneScript, ScriptError, Vec2};
+use crate::{AnimationOptions, Color, LiveProgram, Scene, SceneScript, ScriptError, Text, Vec2};
 
 pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
     Scene::script(|scene| async move {
@@ -14,28 +14,17 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
                 })
                 .collect()
         };
-        let step = |x: f32, label: &[([f32; 2], [f32; 2])]| {
+        let step = |x: f32, label: &str| {
             let card = scene.rectangle(2.0, 1.2)?;
             scene.shift(&card, Vec2::new(x, 0.0))?;
             scene.set_color(&card, Color::BLUE)?;
             scene.set_fill_opacity(&card, 0.0)?;
-            scene.family(
-                std::iter::once(card)
-                    .chain(lines(label)?)
-                    .collect::<Vec<_>>()
-                    .iter(),
-            )
+            let label = scene.text(Text::new(label).with_font_size(36.0).color(Color::BLUE))?;
+            scene.shift(&label, Vec2::new(x, 0.0))?;
+            scene.family([&card, &label])
         };
-        let first = step(-1.8, &[([-1.8, -0.25], [-1.8, 0.25])])?;
-        let second = step(
-            1.8,
-            &[
-                ([1.6, 0.25], [2.0, 0.25]),
-                ([2.0, 0.25], [2.0, 0.0]),
-                ([2.0, 0.0], [1.6, -0.25]),
-                ([1.6, -0.25], [2.0, -0.25]),
-            ],
-        )?;
+        let first = step(-1.8, "1")?;
+        let second = step(1.8, "2")?;
         let connector = scene.family(&lines(&[
             ([-0.6, 0.0], [0.6, 0.0]),
             ([0.35, 0.2], [0.6, 0.0]),
@@ -133,7 +122,7 @@ mod tests {
                 program.admit_publication(publication).unwrap();
             }
             assert_eq!(program.session().runtime_identity(), identity);
-            let object_count = if end == 0.75 { 6 } else { 16 };
+            let object_count = if end == 0.75 { 6 } else { 13 };
             assert_eq!(program.session().frame().objects.len(), object_count);
         }
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
@@ -147,5 +136,18 @@ mod tests {
         assert!((marker.transform.translation.x - 2.4).abs() < 1e-5);
         assert!((marker.transform.translation.y + 1.4).abs() < 1e-5);
         assert_eq!(marker.style.fill, Some(Color::BLUE));
+        let labels: Vec<_> = program
+            .session()
+            .frame()
+            .objects
+            .iter()
+            .filter(|object| matches!(object.content, noon_core::ObjectContentRef::Text(_)))
+            .collect();
+        assert_eq!(labels.len(), 2);
+        for (label, x) in labels.into_iter().zip([-1.8, 1.8]) {
+            assert!((label.transform.translation.x - x).abs() < 1e-5);
+            assert!(label.transform.translation.y.abs() < 1e-5);
+            assert_eq!(label.style.fill, Some(Color::ORANGE));
+        }
     }
 }
