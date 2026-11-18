@@ -1348,14 +1348,15 @@ impl Composition {
         arc: Option<f64>,
         terms: Vec<String>,
     ) -> PyResult<()> {
-        let pairs = terms.chunks_exact(2);
-        if !pairs.remainder().is_empty() {
+        let (pairs, remainder) = terms.as_chunks::<2>();
+        if !remainder.is_empty() {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "TeX key map must contain source/target pairs",
             ));
         }
         let key_map = pairs
-            .map(|pair| (pair[0].clone(), pair[1].clone()))
+            .iter()
+            .map(|[source, target]| (source.clone(), target.clone()))
             .collect();
         self.push_family_transform(
             source,

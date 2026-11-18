@@ -5233,12 +5233,13 @@ mod wasm {
             path_arc: Option<f64>,
             terms: Vec<String>,
         ) -> Result<(), JsValue> {
-            let pairs = terms.chunks_exact(2);
-            if !pairs.remainder().is_empty() {
+            let (pairs, remainder) = terms.as_chunks::<2>();
+            if !remainder.is_empty() {
                 return Err(js_error("TeX key map must contain source/target pairs"));
             }
             let key_map = pairs
-                .map(|pair| (pair[0].clone(), pair[1].clone()))
+                .iter()
+                .map(|[source, target]| (source.clone(), target.clone()))
                 .collect();
             let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
             if let Some(path_arc) = path_arc {
