@@ -308,14 +308,14 @@ try {
             }));
             return {initialGeneration:autoplayBefore.generation,autoplayBefore,autoplayAfter};
           }));
-          // After proving concurrent autoplay, pause the other embeds while
-          // each scene is checked for canvas pixels and editor behavior.
-          await Promise.all(frames.map(({frame})=>ready(frame)));
           assert.ok(workers.size>=selection.length,'all live contexts created runtime workers');
-          mark('pause-after-autoplay');
-          await Promise.all(frames.map(({frame})=>pause(frame)));
+          // WebKit can throttle offscreen renders. After proving autoplay,
+          // bring each scene into view before waiting for its replay controls.
           for (const [index,{id,element,frame}] of frames.entries()) {
             await page.setViewportSize({width:index%2 ? 390 : 1280,height:1000});
+            mark('visible-scene-ready',id);
+            await element.scrollIntoViewIfNeeded();
+            await ready(frame);
             const prefix = `${name}-${surface}-${id}`;
             mark('authored-frames',id);
             const {initialGeneration,autoplayBefore,autoplayAfter}=playback[index];
