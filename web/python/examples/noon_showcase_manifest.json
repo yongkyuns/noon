@@ -620,16 +620,16 @@
       "category": "Algorithms and systems",
       "path": "python/examples/showcase_cache_locality.py",
       "features": ["Code", "Integer", "cache simulation", "simultaneous animation", "retained replay"],
-      "duration": 12,
-      "thumbnail_time": 11.2,
+      "duration": 18,
+      "thumbnail_time": 16.4,
       "thumbnail": "thumbnails/showcase/showcase-cache-locality.png",
       "thumbnail_alt": "The row-first and column-first traversals finish with four and sixteen cache misses respectively.",
-      "still_intervals": [[0, 0.8], [10.8, 12]],
+      "still_intervals": [[0, 0.8], [15.8, 18]],
       "beats": [
         {"time": 0.4, "label": "Same matrix, two loop orders"},
-        {"time": 1.73, "label": "Row-first reuses the loaded line"},
-        {"time": 3.55, "label": "Column-first replaces the line at every read"},
-        {"time": 11.2, "label": "Compare the final miss counts"}
+        {"time": 2.45, "label": "Row-first reuses the loaded line"},
+        {"time": 5.16, "label": "Column-first replaces the line at every read"},
+        {"time": 16.4, "label": "Compare the final miss counts"}
       ],
       "playback_capability": "deterministic-retained-replay"
     }

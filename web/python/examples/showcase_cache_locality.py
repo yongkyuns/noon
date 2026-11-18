@@ -66,45 +66,65 @@ class CacheLocality(Scene):
             self.count = Integer(0, font_size=68, color=INK).move_to(self.count_position)
             self.lines = [-1.52 - (row - 1.5) * WORD for row in range(SIDE)]
             self.columns = [x - 1.50 + (column - 1.5) * WORD for column in range(SIDE)]
-            self.matrix_x = x - 1.50
+            self.rows = []
             for y in self.lines:
                 line = Rectangle(width=SIDE * WORD, height=WORD - 0.06,
                                  fill=CARD, fill_opacity=1, stroke=EDGE, stroke_width=1)
-                scene.add(line.move_to((self.matrix_x, y, 0)))
-            self.resident = Rectangle(width=SIDE * WORD, height=WORD - 0.06,
-                                      fill=LOADED, fill_opacity=0, stroke=HIT, stroke_width=2)
-            self.resident.set_stroke(opacity=0).move_to((self.matrix_x, self.lines[0], 0))
+                self.rows.append(line.move_to((x - 1.50, y, 0)))
             self.cursor = Rectangle(width=WORD - 0.05, height=WORD - 0.06,
-                                    fill=MISS, fill_opacity=0, stroke=None)
-            self.cursor.move_to((self.columns[0], self.lines[0], 0))
+                                    fill=MUTED, fill_opacity=0, stroke=MUTED, stroke_width=2)
+            self.cursor.set_stroke(opacity=0).move_to(self.position(0, 0))
             self.result_position = (x + 1.68, -2.31)
             self.result = label("Empty cache", 22, *self.result_position, MUTED)
-            scene.add(self.resident, self.cursor, self.count, self.result)
+            scene.add(*self.rows, self.cursor, self.count, self.result)
             for row, y in enumerate(self.lines):
                 for column, cx in enumerate(self.columns):
                     scene.add(label(str(row * SIDE + column), 22, cx, y))
+
+        def position(self, row, column):
+            return (self.columns[column], self.lines[row], 0)
+
+        def approach(self, index):
+            row, column, _, _ = self.reads[index]
+            last_row, last_column = self.reads[index - 1][:2] if index else (row, column)
+            cursor = self.cursor.animate.set_fill(MUTED, opacity=0)
+            if abs(row - last_row) + abs(column - last_column) > 1:
+                # A loop wrap skips cells, so hide the cursor during the jump.
+                cursor.set_stroke(opacity=0)
+            else:
+                cursor.move_to(self.position(row, column)).set_stroke(MUTED, opacity=0.6)
+            return [cursor, self.read_highlight.animate.set_stroke(opacity=0.25)]
 
         def read(self, index):
             row, column, line, misses = self.reads[index]
             miss = misses != self.misses
             color = MISS if miss else HIT
+            # The result starts only after both cursors reach their destinations.
+            self.cursor.move_to(self.position(row, column))
             animations = [
-                self.cursor.animate.move_to((self.columns[column], self.lines[row], 0))
-                .set_fill(color, opacity=0.28),
+                self.cursor.animate.set_fill(color, opacity=0.38)
+                .set_stroke(color, width=2.5, opacity=1),
+                self.read_highlight.animate.set_stroke(color, width=2.5, opacity=1),
             ]
-            if index == 0:
-                animations.append(self.read_highlight.animate.set_stroke(opacity=1))
             if miss:
-                self.resident.move_to((self.matrix_x, self.lines[line], 0))
-                self.resident.set_fill(LOADED, opacity=1).set_stroke(HIT, opacity=1)
+                if index:
+                    previous = self.reads[index - 1][2]
+                    animations.append(self.rows[previous].animate.set_fill(CARD).set_stroke(EDGE, width=1))
+                animations.append(self.rows[line].animate.set_fill(LOADED).set_stroke(HIT, width=2))
                 self.count.set_value(misses).move_to(self.count_position)
             if miss != self.last_miss:
                 self.scene.remove(self.result)
                 self.result = label("MISS" if miss else "HIT", 25, *self.result_position, color)
-                self.scene.add(self.result)
+                animations.append(FadeIn(self.result))
                 self.last_miss = miss
             self.misses = misses
             return animations
+
+        def settle(self):
+            return [
+                self.cursor.animate.set_fill(opacity=0.24).set_stroke(width=1.6),
+                self.read_highlight.animate.set_stroke(width=1.5, opacity=0.72),
+            ]
 
     def construct(self):
         self.add(
@@ -116,9 +136,11 @@ class CacheLocality(Scene):
         right = self.TraversalPanel(self, 3.58, RIGHT_ORDER)
         self.wait(0.8)
         for index in range(len(left.reads)):
-            self.play(*left.read(index), *right.read(index), run_time=0.6)
+            self.play(*left.approach(index), *right.approach(index), run_time=0.3, rate_func=smooth)
+            self.play(*left.read(index), *right.read(index), run_time=0.4, rate_func=smooth)
+            self.play(*left.settle(), *right.settle(), run_time=0.2, rate_func=smooth)
         takeaway = ("Same order, same number of misses."
                     if left.misses == right.misses
                     else "Row-first reuses each line before replacing it.")
-        self.play(FadeIn(label(takeaway, 25, 0, -3.65)), run_time=0.4)
-        self.wait(1.2)
+        self.play(FadeIn(label(takeaway, 25, 0, -3.65)), run_time=0.6)
+        self.wait(2.2)
