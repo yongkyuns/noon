@@ -34,6 +34,25 @@ For text, callbacks, and Rust, use the repository README's paired-example table
 and current capability restrictions rather than extrapolating from these geometry
 examples. Do not copy legacy Rust snapshot authoring into a new shared-API scene.
 
+## Educational references
+
+Use [teaching patterns](teaching-patterns.md) to select an explanatory structure,
+then [the educational brief and annotated lesson](education.md) to connect the
+structure to ordinary Noon source. These references do not extend the ready
+tutorial table above or change `noon_reference` admission.
+
+The existing **One Extra Column** showcase lesson is annotated in
+[the CUDA walkthrough](education.md#worked-example-one-extra-column). It connects
+source statements, values, addresses, and visible motion using an existing
+maintained scene. Read its current showcase manifest and source-bound evidence;
+do not call its historical capture a fresh validation of the current runtime.
+Its helper named `narrate` creates on-screen captions, not voiceover audio.
+
+For any showcase source referenced by a pattern, obtain support and replay limits
+from current capability discovery and the showcase manifest. A gallery example,
+a ready tutorial candidate, an external source study, and a newly rendered scene
+have different evidence; keep that evidence explicit when reusing them.
+
 This skill's instructions are first-party text. It adopts the general
 capability-discovery and preview/inspection workflow; it does not vendor external
 Manim skill code, examples, fonts, or assets. Existing fixture provenance stays in

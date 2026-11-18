@@ -57,8 +57,9 @@ npm run manifest
 
 The manifest identifies the private package/lockfile, direct dependency versions,
 npm integrity strings and lockfile-declared licenses, `noon-authoring` skill
-version/hash, capability-export schema/provenance/input hashes, shared runner source
-hashes, pinned Playwright container identity, pinned Pyodide archive identity, and
+version/hash and every bundled reference hash, capability-export schema/provenance
+input hashes, shared runner source hashes, pinned Playwright container identity,
+pinned Pyodide archive identity, and
 required Node/Python/Docker environment. It contains no generation timestamp.
 
 The source-package manifest deliberately records `loadedBuildIdentity: null`.

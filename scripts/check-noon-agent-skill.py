@@ -8,17 +8,44 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = "skills/noon-authoring"
 COMMANDS = (
     "scripts/noon-capabilities.py", "scripts/build-web-demo.sh",
     "scripts/check.sh", "scripts/manim-tutorial-smoke.mjs",
+    "scripts/prepare_narration.py",
     "tools/noon-mcp/bin/noon-preview.mjs",
     "tools/noon-mcp/src/server.mjs",
     "tools/noon-mcp/scripts/setup-preview-runtime.mjs",
     "tools/noon-mcp/scripts/package-manifest.mjs",
 )
+
+
+def markdown_anchors(text: str) -> set[str]:
+    """Resolve the ordinary ATX headings used by the maintained skill cards."""
+    anchors: set[str] = set()
+    counts: dict[str, int] = {}
+    fence = None
+    for line in text.splitlines():
+        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if marker:
+            token = marker[1]
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        heading = re.match(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$", line)
+        if heading:
+            slug = re.sub(r"[^\w\- ]", "", heading[1].lower()).replace(" ", "-")
+            count = counts.get(slug, 0)
+            counts[slug] = count + 1
+            anchors.add(f"{slug}-{count}" if count else slug)
+    return anchors
 
 
 def validate_skill(root: Path, report: dict[str, Any]) -> int:
@@ -36,11 +63,16 @@ def validate_skill(root: Path, report: dict[str, Any]) -> int:
         raise ValueError("skill compatibility must state requirements in <= 500 characters")
     for path in sorted(directory.rglob("*.md")):
         for target in re.findall(r"\[[^\]]*\]\(([^)]+)\)", path.read_text(encoding="utf-8")):
-            if "://" in target or target.startswith("#"):
+            if "://" in target:
                 continue
-            resolved = (path.parent / target.split("#", 1)[0]).resolve()
+            relative, _, fragment = target.partition("#")
+            resolved = (path.parent / relative).resolve() if relative else path.resolve()
             if not resolved.is_relative_to(root.resolve()) or not resolved.is_file():
                 raise ValueError(f"{path.name}: missing or unconfined link {target!r}")
+            if fragment and resolved.suffix == ".md":
+                anchors = markdown_anchors(resolved.read_text(encoding="utf-8"))
+                if unquote(fragment) not in anchors:
+                    raise ValueError(f"{path.name}: missing Markdown heading {target!r}")
     for command in COMMANDS:
         if not (root / command).is_file():
             raise ValueError(f"missing documented command: {command}")

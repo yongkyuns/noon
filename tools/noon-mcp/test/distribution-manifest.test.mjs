@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-import { buildDistributionManifest } from "../src/distribution-manifest.mjs";
+import { buildDistributionManifest, skillSourceHashes } from "../src/distribution-manifest.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "..");
@@ -45,8 +47,13 @@ test("distribution manifest pins package, skill, capability and runner identitie
   assert.equal(first.environment.trustedCheckoutRequired, true);
 
   assert.equal(first.skill.name, "noon-authoring");
-  assert.equal(first.skill.version, "0.2.0");
+  assert.equal(first.skill.version, "0.3.0");
   assertSha(first.skill.sha256, "skill");
+  for (const reference of ["education.md", "teaching-patterns.md", "examples.md"]) {
+    const name = `skills/noon-authoring/references/${reference}`;
+    assertSha(first.skill.sourceSha256[name], name);
+    assert.equal(first.runner.sourceSha256[name], first.skill.sourceSha256[name]);
+  }
 
   assert.equal(first.capabilities.schemaVersion, 1);
   assert.equal(first.capabilities.kind, "noon-agent-capabilities");
@@ -72,6 +79,43 @@ test("distribution manifest pins package, skill, capability and runner identitie
     "web/authoring-diagnostic.js",
     "web/runtime-build-verifier.js",
     "skills/noon-authoring/SKILL.md",
+    "scripts/prepare_narration.py",
   ]) assertSha(first.runner.sourceSha256[required], required);
   assertSha(first.notices.sha256, "third-party notices");
+});
+
+test("skill identity includes changed and newly added reference contents", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "noon-skill-identity-"));
+  try {
+    const directory = path.join(root, "skills/noon-authoring");
+    await mkdir(path.join(directory, "references"), { recursive: true });
+    await writeFile(path.join(directory, "SKILL.md"), "# Skill\n");
+    await writeFile(path.join(directory, "references/pattern.md"), "Preserve labels.\n");
+    const before = await skillSourceHashes(root);
+    await writeFile(path.join(directory, "references/pattern.md"), "Preserve labels and units.\n");
+    await writeFile(path.join(directory, "references/lesson.md"), "Compare the same inputs.\n");
+    const after = await skillSourceHashes(root);
+    assert.equal(after["skills/noon-authoring/SKILL.md"], before["skills/noon-authoring/SKILL.md"]);
+    assert.notEqual(after["skills/noon-authoring/references/pattern.md"], before["skills/noon-authoring/references/pattern.md"]);
+    assertSha(after["skills/noon-authoring/references/lesson.md"], "new lesson");
+    assert.deepEqual(await skillSourceHashes(root), after);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("skill identity rejects symlinked reference files and directories", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "noon-skill-links-"));
+  try {
+    const directory = path.join(root, "skills/noon-authoring");
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(root, "external.md"), "external\n");
+    await symlink(path.join(root, "external.md"), path.join(directory, "reference.md"));
+    await assert.rejects(skillSourceHashes(root), /symlink in skill bundle/);
+    await rm(path.join(directory, "reference.md"));
+    await symlink(root, path.join(directory, "references"));
+    await assert.rejects(skillSourceHashes(root), /symlink in skill bundle/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
