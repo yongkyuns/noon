@@ -289,7 +289,7 @@ pub enum SemanticTransformInterpolation {
 }
 
 /// Correspondence policy for one authored family Transform.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum SemanticFamilyTransformMode {
     /// Preserve authored family order/topology and derive positional correspondence.
     #[default]
@@ -298,6 +298,8 @@ pub enum SemanticFamilyTransformMode {
     MatchingShapes,
     /// Match ordinary retained text leaves by compiler-authored source identity.
     MatchingSourceKeys,
+    /// Pair different retained text keys explicitly, with a moving crossfade.
+    MatchingMappedSourceKeys(std::sync::Arc<[(String, String)]>),
 }
 
 /// One authored animation operation before execution scheduling/lowering.
@@ -516,9 +518,9 @@ impl SemanticAnimationIntent {
     }
 
     /// Return the authored correspondence policy for one family Transform.
-    pub const fn family_transform_mode(&self) -> Option<SemanticFamilyTransformMode> {
+    pub fn family_transform_mode(&self) -> Option<SemanticFamilyTransformMode> {
         match self {
-            Self::FamilyTransformTo { mode, .. } => Some(*mode),
+            Self::FamilyTransformTo { mode, .. } => Some(mode.clone()),
             _ => None,
         }
     }

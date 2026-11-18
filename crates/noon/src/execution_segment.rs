@@ -161,6 +161,7 @@ pub(crate) struct ExecutionSegmentFamilyReplacement {
     pub root: SemanticNodeId,
     pub source: SemanticNodeId,
     pub target: SemanticNodeId,
+    pub target_admitted: bool,
 }
 
 /// One authored-time continuation boundary owned by the execution session layer.
@@ -210,11 +211,13 @@ impl ExecutionSegment {
         root: SemanticNodeId,
         source: SemanticNodeId,
         target: SemanticNodeId,
+        target_admitted: bool,
     ) -> Self {
         self.family_replacement = Some(ExecutionSegmentFamilyReplacement {
             root,
             source,
             target,
+            target_admitted,
         });
         self
     }

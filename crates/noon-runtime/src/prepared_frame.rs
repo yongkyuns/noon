@@ -707,11 +707,6 @@ impl SceneInstance {
             .map(|row| (row.object_index, row.state))
             .collect::<BTreeMap<_, _>>();
         let mut next_drivers = BTreeSet::new();
-        next_drivers.extend(
-            self.numeric_text
-                .object_indices()
-                .filter(|&object_index| self.object_slot_is_live(object_index)),
-        );
         for (object_index, write) in effective.writes {
             let row = final_rows
                 .entry(object_index)
@@ -739,7 +734,7 @@ impl SceneInstance {
         }
         self.flush_spatial_anchor_changes();
         self.effective_driver_rows = next_drivers;
-        self.commit_numeric_text_updates(prepared.numeric_text, true);
+        changed |= self.commit_numeric_text_updates(prepared.numeric_text, true);
         self.last_stats = prepared.stats;
         if time_changed {
             self.last_stats.time_effect_rows = self.invalidate_time_effects();

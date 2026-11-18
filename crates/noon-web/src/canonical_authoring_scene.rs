@@ -428,6 +428,7 @@ enum OrdinaryCompositionChild {
     MatchingSourceFamilyTransformTo {
         source: noon::MobjectFamily,
         target_state: noon::MobjectFamily,
+        key_map: Vec<(String, String)>,
         options: noon_core::AnimationOptions,
     },
     Indicate {
@@ -2044,10 +2045,12 @@ impl CanonicalAuthoringScene {
                 OrdinaryCompositionChild::MatchingSourceFamilyTransformTo {
                     source,
                     target_state,
+                    key_map,
                     options,
                 } => noon::AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
                     source,
                     target_state,
+                    key_map,
                     options: *options,
                 },
                 OrdinaryCompositionChild::Indicate {
@@ -2880,6 +2883,7 @@ impl CanonicalAuthoringScene {
                     source,
                     target_state,
                     options,
+                    ..
                 } => {
                     if !std::rc::Rc::ptr_eq(
                         self.scene.integration_store(),
@@ -5218,6 +5222,7 @@ mod wasm {
         }
 
         #[wasm_bindgen(js_name = appendMatchingSourceFamilyTransformTo)]
+        #[allow(clippy::too_many_arguments)]
         pub fn append_matching_source_family_transform_to(
             &mut self,
             source: &crate::WasmAuthoringFamilyHandle,
@@ -5226,7 +5231,16 @@ mod wasm {
             rate_function: Option<String>,
             lag_ratio: Option<f64>,
             path_arc: Option<f64>,
+            terms: Vec<String>,
         ) -> Result<(), JsValue> {
+            let (pairs, remainder) = terms.as_chunks::<2>();
+            if !remainder.is_empty() {
+                return Err(js_error("TeX key map must contain source/target pairs"));
+            }
+            let key_map = pairs
+                .iter()
+                .map(|[source, target]| (source.clone(), target.clone()))
+                .collect();
             let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?;
             if let Some(path_arc) = path_arc {
                 options = options.path_arc(path_arc);
@@ -5235,6 +5249,7 @@ mod wasm {
                 .push(OrdinaryCompositionChild::MatchingSourceFamilyTransformTo {
                     source: source.semantic_family()?,
                     target_state: target_state.semantic_family()?,
+                    key_map,
                     options,
                 });
             Ok(())

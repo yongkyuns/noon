@@ -15,6 +15,7 @@ impl SceneInstance {
             return true;
         };
         self.effective_driver_rows.contains(&index)
+            || self.numeric_text.has_object_driver(index)
             || self.translation_drag_rows.contains_key(&index)
             || self
                 .transient_animations

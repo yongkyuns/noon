@@ -326,6 +326,7 @@ impl ExecutionSession {
                 replacement.root,
                 replacement.source,
                 replacement.target,
+                replacement.target_admitted,
             )
             .map_err(|_| ExecutionSegmentCompletionError::InvalidFamilyReplacement)?;
             membership_removals
@@ -374,7 +375,7 @@ impl ExecutionSession {
         for (root, removed) in membership_removals {
             let added = segment
                 .family_replacement()
-                .filter(|replacement| replacement.root == root)
+                .filter(|replacement| replacement.root == root && !replacement.target_admitted)
                 .map(|replacement| replacement.target);
             stage_semantic_scene_lifecycle_membership(
                 store,
@@ -1969,7 +1970,7 @@ mod tests {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap()
-            .with_family_replacement(root, source_family, target_family);
+            .with_family_replacement(root, source_family, target_family, false);
 
         let source_execution = session
             .execution_index

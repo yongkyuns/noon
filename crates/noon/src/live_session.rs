@@ -203,6 +203,7 @@ pub enum AnimationCompositionRequest<'a> {
     MatchingSourceFamilyTransformTo {
         source: &'a MobjectFamily,
         target_state: &'a MobjectFamily,
+        key_map: &'a [(String, String)],
         options: AnimationOptions,
     },
     Indicate {
@@ -1236,6 +1237,7 @@ impl<'a> LiveSession<'a> {
             AnimationCompositionRequest::MatchingSourceFamilyTransformTo {
                 source,
                 target_state,
+                key_map,
                 options,
             } => {
                 self.require_family(source)?;
@@ -1243,6 +1245,7 @@ impl<'a> LiveSession<'a> {
                 Request::MatchingSourceFamilyTransformTo {
                     source: source.node_id(),
                     target_state: target_state.node_id(),
+                    key_map: (*key_map).into(),
                     options: *options,
                 }
             }

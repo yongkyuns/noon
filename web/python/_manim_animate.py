@@ -249,10 +249,13 @@ class TransformMatchingShapes:
             )
         if key_map is not None and not isinstance(key_map, dict):
             raise TypeError("TransformMatchingShapes key_map must be a dict or None")
-        if key_map:
+        if key_map and type(self) is not TransformMatchingTex:
             raise NotImplementedError(
-                "TransformMatchingShapes key_map is not yet exposed by the public adapter"
+                "TransformMatchingShapes key_map is not supported"
             )
+        if key_map and any(not isinstance(key, str) or not isinstance(value, str)
+                           for key, value in key_map.items()):
+            raise TypeError("TransformMatchingTex key_map must map strings to strings")
         self.mobject = mobject
         self.target_mobject = target_mobject
         self.source = mobject

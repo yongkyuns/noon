@@ -265,6 +265,7 @@ pub(crate) enum SemanticCompositionRequest {
     MatchingSourceFamilyTransformTo {
         source: SemanticNodeId,
         target_state: SemanticNodeId,
+        key_map: std::sync::Arc<[(String, String)]>,
         options: AnimationOptions,
     },
     Indicate {
@@ -2367,6 +2368,7 @@ impl ExecutionSession {
                 source,
                 target_state,
                 options,
+                ..
             } => {
                 family_effect_target::reject_matching(store, *source, *target_state)?;
                 if !self.callback_schedule.is_empty() {
@@ -2382,6 +2384,7 @@ impl ExecutionSession {
                     root,
                     *source,
                     *target_state,
+                    false,
                 )
                 .map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())
@@ -2411,13 +2414,18 @@ impl ExecutionSession {
                 // Matching presentation uses the same foreground-aware admission
                 // as ordinary targets, with stable source identity and topology.
                 admitted.insert((*source).into());
-                let mode = if matches!(
-                    request,
-                    SemanticCompositionRequest::MatchingSourceFamilyTransformTo { .. }
-                ) {
-                    noon_core::SemanticFamilyTransformMode::MatchingSourceKeys
-                } else {
-                    noon_core::SemanticFamilyTransformMode::MatchingShapes
+                use noon_core::SemanticFamilyTransformMode;
+                let mode = match request {
+                    SemanticCompositionRequest::MatchingSourceFamilyTransformTo {
+                        key_map, ..
+                    } if !key_map.is_empty() => {
+                        admitted.insert((*target_state).into());
+                        SemanticFamilyTransformMode::MatchingMappedSourceKeys(key_map.clone())
+                    }
+                    SemanticCompositionRequest::MatchingSourceFamilyTransformTo { .. } => {
+                        SemanticFamilyTransformMode::MatchingSourceKeys
+                    }
+                    _ => SemanticFamilyTransformMode::MatchingShapes,
                 };
                 Ok(declaration.create_family_transform_animation_with_mode(
                     *source,
@@ -4493,7 +4501,7 @@ impl ExecutionSession {
         ) =
             schedule.family_transforms().first()
         {
-            match family.mode {
+            match &family.mode {
                 SemanticFamilyTransformMode::Structural => {
                     let activation = prepare_family_transform_activations(
                         &prepared,
@@ -4568,8 +4576,13 @@ impl ExecutionSession {
                     (channels.stable_tracks().to_vec(), plan, None)
                 }
                 SemanticFamilyTransformMode::MatchingShapes
-                | SemanticFamilyTransformMode::MatchingSourceKeys => {
-                    if !schedule.scalar_leaves().is_empty() {
+                | SemanticFamilyTransformMode::MatchingSourceKeys
+                | SemanticFamilyTransformMode::MatchingMappedSourceKeys(_) => {
+                    let mapped = matches!(
+                        family.mode,
+                        SemanticFamilyTransformMode::MatchingMappedSourceKeys(_)
+                    );
+                    if !mapped && !schedule.scalar_leaves().is_empty() {
                         return Err(ExecutionSessionAnimationError::InvalidComposition(
                             "matching family Transform does not yet compose with scalar leaves"
                                 .into(),
@@ -4603,13 +4616,14 @@ impl ExecutionSession {
                     .map_err(|error| {
                         ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                     })?;
-                    let payload =
-                        lower_prepared_matching_family_transform_payload(&prepared, &activation)
-                            .map_err(|error| {
-                                ExecutionSessionAnimationError::InvalidComposition(
-                                    error.to_string(),
-                                )
-                            })?;
+                    let payload = lower_prepared_matching_family_transform_payload(
+                        &prepared,
+                        &activation,
+                        schedule.start_time(),
+                    )
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })?;
                     let replacement_root = lifecycle
                             .as_ref()
                             .map(PreparedAnimationLifecycle::root)
@@ -4634,6 +4648,7 @@ impl ExecutionSession {
                             replacement_root,
                             payload.source_root(),
                             payload.target_root(),
+                            mapped,
                         )),
                     )
                 }
@@ -5013,7 +5028,7 @@ impl ExecutionSession {
                 // family transform. Use the lifecycle's already validated scope;
                 // the unrooted lowering guard remains unchanged.
                 family_replacement
-                    .map(|(root, _, _)| root)
+                    .map(|(root, _, _, _)| root)
                     .or_else(|| lifecycle.as_ref().map(PreparedAnimationLifecycle::root)),
             )
             .map_err(ExecutionSessionAnimationError::AuthoredPublication)?
@@ -5097,8 +5112,8 @@ impl ExecutionSession {
                 )
                 .collect();
             segment = segment.with_completion_token(token);
-            if let Some((root, source, target)) = family_replacement {
-                segment = segment.with_family_replacement(root, source, target);
+            if let Some((root, source, target, target_admitted)) = family_replacement {
+                segment = segment.with_family_replacement(root, source, target, target_admitted);
             }
             self.next_segment_sequence = next_segment_sequence;
             self.pending_segment_completion = Some(

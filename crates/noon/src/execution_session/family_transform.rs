@@ -369,6 +369,7 @@ pub(super) enum MatchingFamilyCompletionSwapError {
         source: SemanticNodeId,
     },
     TargetNotDetached(SemanticNodeId),
+    TargetNotDirectMember(SemanticNodeId),
     AliasedSourceDescendant(SemanticNodeId),
     AliasedTargetDescendant(SemanticNodeId),
 }
@@ -387,7 +388,8 @@ impl std::error::Error for MatchingFamilyCompletionSwapError {}
 /// Validate the exact-end source-family -> target-family replacement topology.
 ///
 /// The source must be one direct member of `execution_root` with no shared
-/// descendants; the authored target must be detached. Shared descendants require
+/// descendants. The target is detached before activation. A moving TeX crossfade
+/// admits its target at activation and keeps it at completion. Shared descendants require
 /// membership restructuring before their active presentation can move to the tail,
 /// so this bounded path rejects them before staging any edit. Both families retain
 /// their internal authored topology and no execution identity is manufactured. The
@@ -398,6 +400,7 @@ pub(super) fn validate_matching_family_completion_swap(
     execution_root: SemanticNodeId,
     source_root: SemanticNodeId,
     target_root: SemanticNodeId,
+    target_admitted: bool,
 ) -> Result<(), MatchingFamilyCompletionSwapError> {
     store
         .node(execution_root)
@@ -429,7 +432,12 @@ pub(super) fn validate_matching_family_completion_swap(
             source: source_root,
         });
     }
-    if target.is_scene_owned() || !target.parents().is_empty() {
+    if target_admitted && (target.parents() != [execution_root] || target.is_scene_owned()) {
+        return Err(MatchingFamilyCompletionSwapError::TargetNotDirectMember(
+            target_root,
+        ));
+    }
+    if !target_admitted && (!target.parents().is_empty() || target.is_scene_owned()) {
         return Err(MatchingFamilyCompletionSwapError::TargetNotDetached(
             target_root,
         ));
@@ -488,7 +496,7 @@ mod matching_completion_tests {
         target: SemanticNodeId,
         transaction: &mut SemanticMutationTransaction,
     ) -> Result<(), MatchingFamilyCompletionSwapError> {
-        validate_matching_family_completion_swap(store, root, source, target)?;
+        validate_matching_family_completion_swap(store, root, source, target, false)?;
         noon_core::stage_semantic_scene_lifecycle_membership(
             store,
             root,
