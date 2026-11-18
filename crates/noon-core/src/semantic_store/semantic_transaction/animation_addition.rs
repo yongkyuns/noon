@@ -305,7 +305,7 @@ impl SemanticTransactionAnimation {
             } => SemanticTransactionAnimationIntent::FamilyTransformTo {
                 source: (*source).into(),
                 target_state: (*target_state).into(),
-                mode: *mode,
+                mode: mode.clone(),
             },
             SemanticAnimationIntent::Rotate {
                 target,
@@ -493,7 +493,7 @@ impl SemanticTransactionAnimation {
             } => SemanticAnimationIntent::FamilyTransformTo {
                 source: resolve_node_ref(*source, committed),
                 target_state: resolve_node_ref(*target_state, committed),
-                mode: *mode,
+                mode: mode.clone(),
             },
             SemanticTransactionAnimationIntent::Rotate {
                 target,
@@ -1167,7 +1167,7 @@ pub(super) fn commit_add_animation(
             .insert_semantic_family_transform_animation_with_mode(
                 *source,
                 *target_state,
-                *mode,
+                mode.clone(),
                 options,
             )
             .expect("preflighted semantic family Transform insertion must remain valid while transaction owns the store"),

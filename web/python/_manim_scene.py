@@ -35,7 +35,7 @@ from _manim_source_execution import (
     current_source_invocation,
 )
 from _noon_errors import engine_await, engine_call, is_effect_preparation_required, raise_engine_error
-from _noon_host import encode_callback, decode_callback
+from _noon_host import array_value, encode_callback, decode_callback
 import _noon_ir as _ir
 import noon as _base
 
@@ -2886,7 +2886,7 @@ def _build_canonical_composition_candidate_steps(
                     else destination.appendFamilyTransformTo
                 )
             )
-            append_family_transform(
+            parameters = (
                 source._semantic_family_handle,
                 target._semantic_family_handle,
                 float(child.run_time),
@@ -2894,6 +2894,10 @@ def _build_canonical_composition_candidate_steps(
                 float(child.lag_ratio),
                 float(child.path_arc),
             )
+            if source_matching:
+                keys = array_value([term for pair in leaf.key_map.items() for term in pair])
+                parameters += (keys,)
+            append_family_transform(*parameters)
             if entering:
                 family_registrations.append(source)
                 for member in entering:

@@ -643,6 +643,9 @@ impl crate::SceneInstance {
             .map_err(crate::EvaluationError::Reactive)?;
         let changed = !prepared.is_empty();
         let property_changes = prepared.property_changes().to_vec();
+        let numeric = self
+            .prepare_changed_numeric_text(&prepared)
+            .map_err(crate::EvaluationError::NumericText)?;
         if self.publication.frame_epoch().checked_next().is_none() {
             return Err(crate::EvaluationError::FrameEpochExhausted(
                 self.publication.frame_epoch(),
@@ -660,8 +663,9 @@ impl crate::SceneInstance {
             self.advance_to(preview.time)?;
             self.apply_retained_scalar_reactive_changes(&property_changes);
         }
+        let numeric_changed = self.commit_numeric_text_updates(numeric, true);
         self.last_reactive_stats = stats;
-        if changed && self.publication == publication {
+        if (changed || numeric_changed) && self.publication == publication {
             self.publish_effective_change();
         }
         Ok(&self.frame)

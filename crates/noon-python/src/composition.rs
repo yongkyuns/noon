@@ -65,12 +65,12 @@ impl DissolveTarget {
         }
     }
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum FamilyTransformKind {
     Transform,
     MethodTarget,
     MatchShape,
-    MatchSource,
+    MatchSource(Vec<(String, String)>),
 }
 
 #[derive(Clone)]
@@ -208,11 +208,14 @@ impl Child {
                     target_state: target,
                     options: *options,
                 },
-                FamilyTransformKind::MatchSource => Request::MatchingSourceFamilyTransformTo {
-                    source,
-                    target_state: target,
-                    options: *options,
-                },
+                FamilyTransformKind::MatchSource(key_map) => {
+                    Request::MatchingSourceFamilyTransformTo {
+                        source,
+                        target_state: target,
+                        key_map,
+                        options: *options,
+                    }
+                }
             },
             Self::Create(target, options) => Request::Create {
                 target,
@@ -1333,7 +1336,8 @@ impl Composition {
         );
         Ok(())
     }
-    #[pyo3(name = "appendMatchingSourceFamilyTransformTo")]
+    #[pyo3(name = "appendMatchingSourceFamilyTransformTo", signature = (source, target, duration, easing, lag, arc, terms))]
+    #[allow(clippy::too_many_arguments)]
     fn matching_source_family_transform(
         &mut self,
         source: &FamilyHandle,
@@ -1342,11 +1346,22 @@ impl Composition {
         easing: Option<&str>,
         lag: Option<f64>,
         arc: Option<f64>,
+        terms: Vec<String>,
     ) -> PyResult<()> {
+        let (pairs, remainder) = terms.as_chunks::<2>();
+        if !remainder.is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "TeX key map must contain source/target pairs",
+            ));
+        }
+        let key_map = pairs
+            .iter()
+            .map(|[source, target]| (source.clone(), target.clone()))
+            .collect();
         self.push_family_transform(
             source,
             target,
-            FamilyTransformKind::MatchSource,
+            FamilyTransformKind::MatchSource(key_map),
             Self::family_transform_options(duration, easing, lag, arc)?,
         );
         Ok(())

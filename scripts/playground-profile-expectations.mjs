@@ -49,7 +49,7 @@ const rows = [
   ['showcase-doubling-curve','showcase_doubling_curve.py','a5de438e8df1782cbc45478770d51cc2de9a268f99b823234da96adc17238bf0','observed','observed-replay',['sections'], 'observed-complete'],
   ['showcase-channel-flow','showcase_channel_flow.py','bbd3f3734b0e9870b27ddc1b638911938ad5aabc46d6a93295c6500084cbeb73','observed','observed-replay',['sections'], 'observed-complete'],
   ['showcase-neon-glow','showcase_neon_glow.py','8afc4e03ec664f0faeaa71735f3ed13bf9da7da95a814dd225350f2319f0701c','incremental','ordinary',['sections'], 'looped'],
-  ['showcase-riemann-sums','showcase_riemann_sums.py','d617e1dc55fabda053a9511af1d2bd84d3b4a439e6ba5ab720b2c1ea5b382176','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-riemann-sums','showcase_riemann_sums.py','38a09733491041836e83ad709d9b268c6ffaa51c978e50f2001721e126b482a1','observed','observed-replay',['sections'], 'observed-complete'],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
