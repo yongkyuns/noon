@@ -111,11 +111,12 @@ where
         family.mode,
         SemanticFamilyTransformMode::MatchingShapes
             | SemanticFamilyTransformMode::MatchingSourceKeys
+            | SemanticFamilyTransformMode::MatchingMappedSourceKeys(_)
     ) {
         return Err(
             PreparedMatchingFamilyTransformActivationError::UnsupportedMode {
                 animation: family.animation,
-                mode: family.mode,
+                mode: family.mode.clone(),
             },
         );
     }
@@ -133,7 +134,7 @@ where
             prepared.store(),
             index,
             (source_root, target_root),
-            family.mode,
+            &family.mode,
             activation_start,
             prior_tracks,
             effective_properties,
@@ -153,7 +154,7 @@ where
         time_map: family.time_map.clone(),
         finish_time_map: family.finish_time_map.clone(),
         options: family.options,
-        mode: family.mode,
+        mode: family.mode.clone(),
         matching,
     })
 }

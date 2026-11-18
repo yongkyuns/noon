@@ -648,8 +648,15 @@ impl SceneInstance {
     }
 
     pub fn object_has_effective_driver(&self, id: ObjectId) -> bool {
-        self.frame_index_for_object(id)
-            .is_some_and(|index| self.effective_driver_rows.contains(&index))
+        self.frame_index_for_object(id).is_some_and(|index| {
+            self.effective_driver_rows.contains(&index)
+                || self.numeric_text.has_object_driver(index)
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn has_numeric_text_drivers(&self) -> bool {
+        !self.numeric_text.is_empty()
     }
 
     pub fn text_resources(&self) -> &impl noon_core::TextResourceLookup {

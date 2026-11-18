@@ -187,7 +187,7 @@ where
         if family.mode != SemanticFamilyTransformMode::Structural {
             return Err(PreparedFamilyTransformActivationError::UnsupportedMode {
                 animation: family.animation,
-                mode: family.mode,
+                mode: family.mode.clone(),
             });
         }
         let source_family = existing_endpoint(family.animation, family.source)?;

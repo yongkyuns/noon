@@ -917,14 +917,14 @@ impl ExecutionSession {
             self.callback_schedule
                 .refresh_native_bindings(store, changed_native_bindings);
         }
+        self.runtime
+            .commit_numeric_text_driver_revision(prepared_numeric);
         self.publish_replay_membership(&exited, &entered);
         self.reconcile_callback_membership(&exited, false);
         self.execution_index
             .apply_transaction_result(store, &result);
         self.execution_index.apply_reachability_update(&membership);
         self.reconcile_callback_membership(&entered, true);
-        self.runtime
-            .commit_numeric_text_driver_revision(prepared_numeric);
         self.refresh_interaction_bindings(store, &result, &entered, &exited);
         self.reconcile_pointer_selection();
         self.last_structural_publication = StructuralPublicationStats {

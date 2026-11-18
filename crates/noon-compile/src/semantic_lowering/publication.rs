@@ -1797,6 +1797,14 @@ fn lower_numeric_text_driver(
         },
         font_size: number.font_size(),
         point_to_scene_scale: binding.point_to_scene_scale(),
+        anchor_left: state
+            .content
+            .text()
+            .and_then(|handle| store.text_resources().get(handle))
+            .expect("semantic numeric metadata has an authored text resource")
+            .bounds
+            .min
+            .x,
         token_resources: binding.token_resources().to_vec().into(),
     }))
 }

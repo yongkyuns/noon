@@ -297,6 +297,14 @@ fn materialize_semantic_projection(
                     },
                     font_size: number.font_size(),
                     point_to_scene_scale: binding.point_to_scene_scale(),
+                    anchor_left: store
+                        .and_then(|store| {
+                            store.text_resources().get(objects[index].content.text()?)
+                        })
+                        .expect("lowered numeric object has its authored text resource")
+                        .bounds
+                        .min
+                        .x,
                     token_resources: binding.token_resources().to_vec().into(),
                 });
             }

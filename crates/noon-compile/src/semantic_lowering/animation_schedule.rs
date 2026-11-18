@@ -1245,7 +1245,7 @@ impl AnimationScheduleLookup for PublishedAnimationLookup<'_> {
                 AnimationDeclarationIntent::FamilyTransformTo {
                     source: *source,
                     target_state: *target_state,
-                    mode: *mode,
+                    mode: mode.clone(),
                 }
             }
             SemanticAnimationIntent::TransformTo {
@@ -1570,7 +1570,7 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     } => AnimationDeclarationIntent::FamilyTransformTo {
                         source: (*source).into(),
                         target_state: (*target_state).into(),
-                        mode: *mode,
+                        mode: mode.clone(),
                     },
                     SemanticAnimationIntent::TransformTo {
                         target,
@@ -1752,7 +1752,7 @@ impl AnimationScheduleLookup for PreparedAnimationLookup<'_, '_> {
                     } => AnimationDeclarationIntent::FamilyTransformTo {
                         source: *source,
                         target_state: *target_state,
-                        mode: *mode,
+                        mode: mode.clone(),
                     },
                     SemanticTransactionAnimationIntent::TransformTo {
                         target,
@@ -3132,7 +3132,7 @@ fn collect_leaves<R: Copy>(
             animation: plan.animation,
             source: *source,
             target_state: *target_state,
-            mode: *mode,
+            mode: mode.clone(),
             timing: TrackTiming::new(root_start_time, root_run_time, options.rate_func),
             time_map: CompositionTimeMap::from_steps(steps.clone()),
             options: *options,
