@@ -12,6 +12,18 @@ QUALIFIED_BROWSER_MODULES = {"noon", "math", "colorsys", "struct", "zlib", "arra
 
 
 class ShowcaseSourceContract(unittest.TestCase):
+    def test_featured_lessons_compile_portable_constructs(self):
+        from _manim_source_execution import compile_authoring_source
+
+        examples = {entry["id"]: entry["path"] for entry in MANIFEST["entries"]}
+        featured = json.loads((WEB / "site/examples.json").read_text())
+        for entry in featured:
+            with self.subTest(example=entry["id"]):
+                source = (WEB / examples[entry["id"]]).read_text()
+                _, portable = compile_authoring_source(source)
+                self.assertTrue(any(code.co_name == "construct" for code in portable),
+                                "the featured source must run without relying on JSPI")
+
     def test_sources_are_self_contained_animated_lessons(self):
         for entry in MANIFEST["entries"]:
             with self.subTest(example=entry["id"]):
@@ -32,7 +44,9 @@ class ShowcaseSourceContract(unittest.TestCase):
                 if entry["id"] == "showcase-background-music":
                     self._assert_finite_audio_lesson(entry, tree)
                     continue
-                scenes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+                scene_types = {"Scene", "MovingCameraScene", "ThreeDScene", "LinearTransformationScene"}
+                scenes = [node for node in tree.body if isinstance(node, ast.ClassDef)
+                          and any(isinstance(base, ast.Name) and base.id in scene_types for base in node.bases)]
                 self.assertEqual(len(scenes), 1)
                 is_surface = entry["id"] == "showcase-spatial-scene"
                 is_axes = entry["id"] == "showcase-three-d-axes"

@@ -92,74 +92,75 @@ def sum_formula():
     return formula
 
 
+def digit_positions(value, opacity):
+    positions = {}
+    slot = 0
+    for digit in f"{value:.2f}":
+        positions[(slot, digit)] = opacity
+        slot += 1 if digit == "." else 2
+    return positions
+
+
+def animate_readout(readout, index):
+    phases, opacity_tracks = readout
+    duration, cues = phases[index]
+    tracks = []
+    for key, changes in cues.items():
+        pieces = []
+        time = 0
+        for end, opacity in changes:
+            # Finish before the sample so it shows the rounded value.
+            transition = min(0.004, end - time)
+            pause = end - time - transition
+            if pause > 0:
+                pieces.append(Wait(pause))
+            pieces.append(opacity_tracks[key].animate(run_time=transition, rate_func=lingering).set_value(opacity))
+            time = end
+        tracks.append(Succession(*pieces, rate_func=linear))
+    return AnimationGroup(*tracks, Wait(duration), run_time=duration, rate_func=linear)
+
+
 class RiemannSums(Scene):
-    class AreaReadout:
+    def prepare_readout(self, amounts, durations, travel):
         """Schedule the formatted digits as retained opacity tracks."""
-
-        def __init__(self, scene, amounts, durations, travel):
-            self.cues = []
-            visible = {}
-            glyphs = set()
-            for phase, duration in enumerate(durations):
-                cues = {}
-                frames = round(duration * 60)
-                start, end = amounts[phase:phase + 2]
-                for frame in range(1, frames + 1):
-                    progress = smooth(frame / frames)
-                    value = start + progress * (end - start)
-                    opacity = progress if phase == 0 else 1
-                    next_visible = self.digit_positions(value, opacity)
-                    time = min(duration * frame / frames, duration - 0.005)
-                    for key in sorted(visible.keys() | next_visible.keys()):
-                        alpha = next_visible.get(key, 0)
-                        if alpha != visible.get(key, 0):
-                            cues.setdefault(key, []).append((time, alpha))
-                    visible = next_visible
-                self.cues.append((duration, cues))
-                glyphs.update(cues)
-            self.glyphs = {}
-            for key in sorted(glyphs):
-                slot, digit = key
-                if digit == ".":
-                    formula = MathTex(".", font_size=53)
-                    scene.add(formula)
-                    shape = formula[0]
-                    y, advance = 3.22, 1
-                else:
-                    shape = DecimalNumber(int(digit), num_decimal_places=0, font_size=53)
-                    scene.add(shape)
-                    y, advance = 3.39, 2
-                opacity = scene.value_tracker(0)
-                x = 3.05 + 0.143 * (slot + advance / 2)
-                scene.bind_position(shape, travel, direction=(-1.59, -0.16, 0), offset=(x, y, 0))
-                scene.bind_opacity(shape, opacity)
-                self.glyphs[key] = opacity
-
-        @staticmethod
-        def digit_positions(value, opacity):
-            positions = {}
-            slot = 0
-            for digit in f"{value:.2f}":
-                positions[(slot, digit)] = opacity
-                slot += 1 if digit == "." else 2
-            return positions
-
-        def animate_phase(self, index):
-            duration, cues = self.cues[index]
-            tracks = []
-            for key, changes in cues.items():
-                pieces = []
-                time = 0
-                for end, opacity in changes:
-                    # Finish before the sample so it shows the rounded value.
-                    transition = min(0.004, end - time)
-                    pause = end - time - transition
-                    if pause > 0:
-                        pieces.append(Wait(pause))
-                    pieces.append(self.glyphs[key].animate(run_time=transition, rate_func=lingering).set_value(opacity))
-                    time = end
-                tracks.append(Succession(*pieces, rate_func=linear))
-            return AnimationGroup(*tracks, Wait(duration), run_time=duration, rate_func=linear)
+        phases = []
+        visible = {}
+        glyphs = set()
+        for phase, duration in enumerate(durations):
+            cues = {}
+            frames = round(duration * 60)
+            start, end = amounts[phase:phase + 2]
+            for frame in range(1, frames + 1):
+                progress = smooth(frame / frames)
+                value = start + progress * (end - start)
+                opacity = progress if phase == 0 else 1
+                next_visible = digit_positions(value, opacity)
+                time = min(duration * frame / frames, duration - 0.005)
+                for key in sorted(visible.keys() | next_visible.keys()):
+                    alpha = next_visible.get(key, 0)
+                    if alpha != visible.get(key, 0):
+                        cues.setdefault(key, []).append((time, alpha))
+                visible = next_visible
+            phases.append((duration, cues))
+            glyphs.update(cues)
+        opacity_tracks = {}
+        for key in sorted(glyphs):
+            slot, digit = key
+            if digit == ".":
+                formula = MathTex(".", font_size=53)
+                self.add(formula)
+                shape = formula[0]
+                y, advance = 3.22, 1
+            else:
+                shape = DecimalNumber(int(digit), num_decimal_places=0, font_size=53)
+                self.add(shape)
+                y, advance = 3.39, 2
+            opacity = self.value_tracker(0)
+            x = 3.05 + 0.143 * (slot + advance / 2)
+            self.bind_position(shape, travel, direction=(-1.59, -0.16, 0), offset=(x, y, 0))
+            self.bind_opacity(shape, opacity)
+            opacity_tracks[key] = opacity
+        return phases, opacity_tracks
 
     def fade_track(self, *formulae):
         """Fade each TeX part through the retained opacity binding."""
@@ -229,7 +230,7 @@ class RiemannSums(Scene):
         self.add(axes)
         refinement_times = [1.8 if level <= 3 else 1.4 for level in range(1, REFINEMENTS + 1)]
         totals = [0] + [rectangle_sum(4 * 2**level) for level in range(REFINEMENTS + 1)] + [truth]
-        readout = self.AreaReadout(self, totals, [1.5, *refinement_times, 2], travel)
+        readout = self.prepare_readout(totals, [1.5, *refinement_times, 2], travel)
 
         annotations = self.fade_track(curve_name, *ends)
         width_fade = self.fade_track(width_eq)
@@ -255,7 +256,7 @@ class RiemannSums(Scene):
             width_fade.animate(run_time=1.5, rate_func=smooth).set_value(1),
             width_opacity.animate(run_time=1.5, rate_func=smooth).set_value(1),
             Write(written_sum, run_time=1.5, rate_func=smooth),
-            readout.animate_phase(0),
+            animate_readout(readout, 0),
             rate_func=linear,
         ))
         self.remove(written_sum)
@@ -276,7 +277,7 @@ class RiemannSums(Scene):
             self.play(AnimationGroup(
                 *(Transform(bar, new, run_time=duration, rate_func=smooth)
                   for bar, new in zip(active, targets)),
-                readout.animate_phase(level),
+                animate_readout(readout, level),
                 width_opacity.animate(run_time=early, rate_func=smooth).set_value(0),
                 width_slide.animate(run_time=early, rate_func=smooth).set_value(2),
                 next_opacity.animate(run_time=early, rate_func=smooth).set_value(1),
@@ -297,7 +298,7 @@ class RiemannSums(Scene):
             outgoing.animate(run_time=2, rate_func=smooth).set_value(0),
             FadeIn(region, run_time=2, rate_func=smooth),
             travel.animate(run_time=2, rate_func=smooth).set_value(1),
-            readout.animate_phase(REFINEMENTS + 1),
+            animate_readout(readout, REFINEMENTS + 1),
             rate_func=linear,
         ))
         self.remove(*active)

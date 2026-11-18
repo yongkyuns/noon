@@ -63,77 +63,78 @@ def selection(word, x, y, color=INK):
                      stroke=color, stroke_width=3).move_to((x, y, 0))
 
 
+class Traversal:
+    def __init__(self, x, order):
+        self.reads = cache_reads(order)
+        self.word = 0.59
+        self.grid_x = x - 1.59
+        self.slot_x = x + 1.23
+        self.slot_y = -1.04
+        self.resident = None
+        self.result = None
+        self.last_miss = None
+        self.misses = 0
+        self.cursor = selection(self.word, *self.position(0, 0))
+        self.cursor.set_stroke(opacity=0)
+        self.counter = Integer(0, font_size=46, color=INK)
+        self.counter.move_to((self.slot_x, -2.18, 0))
+        title = "By row" if order == "row" else "By column"
+        # Show the first four addresses so viewers can predict which lines they need.
+        addresses = " → ".join(str(row * SIDE + col) for row, col, _, _ in self.reads[:SIDE])
+        self.objects = [
+            box(6.58, 4.45, x, -1.01),
+            label(title, 35, x, 0.68),
+            label(addresses, 24, x, 0.17, MUTED),
+            label("Cache · 1 slot", 24, self.slot_x, -0.47, MUTED),
+            box(SIDE * self.word + 0.14, self.word + 0.1, self.slot_x, self.slot_y),
+            self.counter, label("misses", 24, self.slot_x, -2.76, MUTED),
+        ]
+        for row in range(SIDE):
+            self.objects.append(
+                line_words(row, self.grid_x, self.position(row, 0)[1], self.word, 23)
+            )
+        self.objects.append(self.cursor)
+
+    def position(self, row, column):
+        return word_x(self.grid_x, column, self.word), -0.38 - row * self.word
+
+    def approach(self, index):
+        row, column, _, _ = self.reads[index]
+        old_row, old_column = self.reads[index - 1][:2] if index else (row, column)
+        cursor = self.cursor.animate.set_stroke(INK, width=2, opacity=0.85)
+        if abs(row - old_row) + abs(column - old_column) > 1:
+            return cursor.set_stroke(opacity=0)
+        return cursor.move_to((*self.position(row, column), 0))
+
+    def retire(self, index):
+        row, column, _, misses = self.reads[index]
+        miss = misses != self.misses
+        self.cursor.move_to((*self.position(row, column), 0))
+        animations = [self.cursor.animate.set_stroke(INK, width=2, opacity=1)]
+        if miss and self.resident is not None:
+            animations.append(FadeOut(self.resident))
+        if miss != self.last_miss and self.result is not None:
+            animations.append(FadeOut(self.result))
+        return animations
+
+    def resolve(self, index):
+        _, _, line, misses = self.reads[index]
+        miss = misses != self.misses
+        color = MISS if miss else HIT
+        animations = [self.cursor.animate.set_stroke(color, width=3, opacity=1)]
+        if miss:
+            self.resident = line_words(line, self.slot_x, self.slot_y, self.word, 23)
+            animations.append(FadeIn(self.resident))
+            self.counter.set_value(misses).move_to((self.slot_x, -2.18, 0))
+        if miss != self.last_miss:
+            self.result = label("MISS" if miss else "HIT", 25, self.slot_x, -1.61, color)
+            animations.append(FadeIn(self.result))
+            self.last_miss = miss
+        self.misses = misses
+        return animations
+
+
 class CacheLocality(Scene):
-    class Traversal:
-        def __init__(self, x, order):
-            self.reads = cache_reads(order)
-            self.word = 0.59
-            self.grid_x = x - 1.59
-            self.slot_x = x + 1.23
-            self.slot_y = -1.04
-            self.resident = None
-            self.result = None
-            self.last_miss = None
-            self.misses = 0
-            self.cursor = selection(self.word, *self.position(0, 0))
-            self.cursor.set_stroke(opacity=0)
-            self.counter = Integer(0, font_size=46, color=INK)
-            self.counter.move_to((self.slot_x, -2.18, 0))
-            title = "By row" if order == "row" else "By column"
-            # Show the first four addresses so viewers can predict which lines they need.
-            addresses = " → ".join(str(row * SIDE + col) for row, col, _, _ in self.reads[:SIDE])
-            self.objects = [
-                box(6.58, 4.45, x, -1.01),
-                label(title, 35, x, 0.68),
-                label(addresses, 24, x, 0.17, MUTED),
-                label("Cache · 1 slot", 24, self.slot_x, -0.47, MUTED),
-                box(SIDE * self.word + 0.14, self.word + 0.1, self.slot_x, self.slot_y),
-                self.counter, label("misses", 24, self.slot_x, -2.76, MUTED),
-            ]
-            for row in range(SIDE):
-                self.objects.append(
-                    line_words(row, self.grid_x, self.position(row, 0)[1], self.word, 23)
-                )
-            self.objects.append(self.cursor)
-
-        def position(self, row, column):
-            return word_x(self.grid_x, column, self.word), -0.38 - row * self.word
-
-        def approach(self, index):
-            row, column, _, _ = self.reads[index]
-            old_row, old_column = self.reads[index - 1][:2] if index else (row, column)
-            cursor = self.cursor.animate.set_stroke(INK, width=2, opacity=0.85)
-            if abs(row - old_row) + abs(column - old_column) > 1:
-                return cursor.set_stroke(opacity=0)
-            return cursor.move_to((*self.position(row, column), 0))
-
-        def retire(self, index):
-            row, column, _, misses = self.reads[index]
-            miss = misses != self.misses
-            self.cursor.move_to((*self.position(row, column), 0))
-            animations = [self.cursor.animate.set_stroke(INK, width=2, opacity=1)]
-            if miss and self.resident is not None:
-                animations.append(FadeOut(self.resident))
-            if miss != self.last_miss and self.result is not None:
-                animations.append(FadeOut(self.result))
-            return animations
-
-        def resolve(self, index):
-            _, _, line, misses = self.reads[index]
-            miss = misses != self.misses
-            color = MISS if miss else HIT
-            animations = [self.cursor.animate.set_stroke(color, width=3, opacity=1)]
-            if miss:
-                self.resident = line_words(line, self.slot_x, self.slot_y, self.word, 23)
-                animations.append(FadeIn(self.resident))
-                self.counter.set_value(misses).move_to((self.slot_x, -2.18, 0))
-            if miss != self.last_miss:
-                self.result = label("MISS" if miss else "HIT", 25, self.slot_x, -1.61, color)
-                animations.append(FadeIn(self.result))
-                self.last_miss = miss
-            self.misses = misses
-            return animations
-
     def construct(self):
         strip_x = [(line - 1.5) * (SIDE * WORD + 0.20) for line in range(SIDE)]
         grid_y = [1.58 - line * WORD for line in range(SIDE)]
@@ -217,8 +218,8 @@ class CacheLocality(Scene):
         self.wait(1.6)
 
         self.next_section("Compare both loop orders")
-        left = self.Traversal(-3.50, "row")
-        right = self.Traversal(3.50, RIGHT_ORDER)
+        left = Traversal(-3.50, "row")
+        right = Traversal(3.50, RIGHT_ORDER)
         compare = label("Which loop reuses its cache line?", 42, 0, 2.95)
         self.play(
             *(row.animate.shift((0, 0.65, 0)) for row in rows),
