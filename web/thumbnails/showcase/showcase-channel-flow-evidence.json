@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "c9717b4995d4c2129c48da545b32ef965d334fde",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "c9717b4995d4c2129c48da545b32ef965d334fde",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "6dfdb7520fe64026f5c33e48a0accf2d8f6654b481e0336396cda2ca47e2c5ba"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "5dbf03e72c993f7ac6ee77220af1eb16bf4f3da0c18e387ca128b4aa4a905757"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "85502b18d3f52c15716003f1d5334a48e2c1b2e956e7611c049135c8eea3ccbd"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
+      }
+    },
+    "buildId": "055bad84a6cc78da08bf6195689bb4faad2cdb2eaf5474571064260e16b529fe"
+  },
+  "posters": [
+    {
+      "id": "showcase-channel-flow",
+      "captureBuildId": "055bad84a6cc78da08bf6195689bb4faad2cdb2eaf5474571064260e16b529fe",
+      "sourceSha256": "a528c724baefda9c05019fa72e11dd8352ba6f50cdd33fefe03e834cbfa5762d",
+      "thumbnailTime": 19,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 94424,
+        "pngSha256": "0ab588287c61a318a18c2ba0f7c948fcf498274b9b2cf1ee8aa7b3e2ba5bad72",
+        "pixelSha256": "dd404fb114be853036f43a0737deacd20802bbacfbc835c94c4665d090f9524a"
+      },
+      "sample": {
+        "requestedTime": 19,
+        "publishedTime": 19,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}
