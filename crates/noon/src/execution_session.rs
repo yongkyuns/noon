@@ -206,7 +206,7 @@ pub(crate) enum SemanticCompositionRequest {
         interpolation: noon_core::SemanticTransformInterpolation,
         options: AnimationOptions,
     },
-    /// An owned flat-family endpoint staged in the admission transaction.
+    /// An owned fixed-membership family endpoint staged in the admission transaction.
     FamilyMethodTarget {
         source: SemanticNodeId,
         target: Box<crate::animation_request::FamilyMethodTarget>,
@@ -2271,6 +2271,7 @@ impl ExecutionSession {
                 target,
                 options,
             } => {
+                self.stage_detached_method_family(store, *source, admitted)?;
                 let copied = target.stage(store, *source, declaration).map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                 })?;
@@ -2457,6 +2458,19 @@ impl ExecutionSession {
                 let path_arc = options.path_arc.unwrap_or(0.0);
                 let curved = path_arc.abs() >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD;
                 let flat = is_flat_family(*source) && is_flat_family(*target_state);
+                let entering =
+                    method_target && self.stage_detached_method_family(store, *source, admitted)?;
+                if entering
+                    && (curved
+                        || !crate::animation_request::is_ordinary_vector_family(
+                            store,
+                            *target_state,
+                        ))
+                {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "detached family animate requires an ordinary vector target and a straight path".into(),
+                    ));
+                }
                 if curved && !flat {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
                         "curved family Transform requires matching flat family topology".into(),
@@ -2523,23 +2537,23 @@ impl ExecutionSession {
                 // The canonical family channel owns padding appearance, including restoration
                 // after an earlier unequal-family contraction. Curved equal-family transforms
                 // keep the per-leaf path below because each leaf owns the authored path arc.
-                if !family_effects && !curved && flat {
-                    let source_count = store
-                        .semantic_family_members_checked(*source)
-                        .map_err(|error| {
-                            ExecutionSessionAnimationError::InvalidComposition(error.to_string())
-                        })?
-                        .len();
-                    let target_count = store
-                        .semantic_family_members_checked(*target_state)
-                        .map_err(|error| {
-                            ExecutionSessionAnimationError::InvalidComposition(error.to_string())
-                        })?
-                        .len();
-                    if source_count != target_count && !self.reachability.is_reachable(*source) {
-                        return Err(ExecutionSessionAnimationError::InvalidComposition(
-                            "unequal family Transform requires the source family to be reachable in the execution domain".into(),
-                        ));
+                if entering || (!family_effects && !curved && flat) {
+                    if !entering && !self.reachability.is_reachable(*source) {
+                        let member_count = |family| {
+                            store
+                                .semantic_family_members_checked(family)
+                                .map(|members| members.len())
+                                .map_err(|error| {
+                                    ExecutionSessionAnimationError::InvalidComposition(
+                                        error.to_string(),
+                                    )
+                                })
+                        };
+                        if member_count(*source)? != member_count(*target_state)? {
+                            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                                "unequal family Transform requires the source family to be reachable in the execution domain".into(),
+                            ));
+                        }
                     }
                     let mut options = *options;
                     if options
@@ -3504,6 +3518,66 @@ impl ExecutionSession {
         Ok(())
     }
 
+    fn stage_detached_method_family(
+        &self,
+        store: &SemanticStore,
+        source: SemanticNodeId,
+        admitted: &mut AnimationAdmissions,
+    ) -> Result<bool, ExecutionSessionAnimationError> {
+        if self.reachability.is_reachable(source) {
+            return Ok(false);
+        }
+        let invalid =
+            |message: &str| ExecutionSessionAnimationError::InvalidComposition(message.into());
+        let leaves = store.ordered_leaf_nodes(source).map_err(|error| {
+            ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+        })?;
+        // An unmounted group can already refer exclusively to live objects.
+        // Preserve that animation's existing scope and painter order.
+        if leaves
+            .iter()
+            .all(|&leaf| self.reachability.is_object_reachable(leaf))
+        {
+            return Ok(false);
+        }
+        if !crate::animation_request::is_ordinary_vector_family(store, source) {
+            return Err(invalid(
+                "detached family animate requires an ordinary vector group",
+            ));
+        }
+        let nodes = store.ordered_authoring_nodes(source).map_err(|error| {
+            ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+        })?;
+        if self.lifecycle_targets_have_pending_updaters(store, nodes.iter().copied()) {
+            return Err(invalid(
+                "detached family animate does not support active updaters",
+            ));
+        }
+        for id in nodes {
+            let node = store.node(id).expect("validated family member");
+            if node.is_scene_owned() || self.reachability.is_reachable(id) {
+                return Err(invalid(
+                    "family animate requires the entire entering group to be detached",
+                ));
+            }
+            if node
+                .semantic_object_state()
+                .is_some_and(|state| !state.signal_bindings().is_empty())
+            {
+                return Err(invalid(
+                    "detached family animate does not support reactive bindings",
+                ));
+            }
+        }
+        if !admitted.insert(source.into()) {
+            return Err(ExecutionSessionAnimationError::CreateTarget {
+                target: source,
+                error: ExecutionSessionCreateError::DuplicateTarget,
+            });
+        }
+        Ok(true)
+    }
+
     /// Lifecycle admission is local to its target, not the scene's callback history.
     /// Ancestor updaters can own the same family presentation. Until target-updater
     /// suspension is supported, reject their nonempty current/future intervals too.
@@ -3513,8 +3587,16 @@ impl ExecutionSession {
         store: &SemanticStore,
         target: SemanticNodeId,
     ) -> bool {
+        self.lifecycle_targets_have_pending_updaters(store, [target])
+    }
+
+    fn lifecycle_targets_have_pending_updaters(
+        &self,
+        store: &SemanticStore,
+        targets: impl IntoIterator<Item = SemanticNodeId>,
+    ) -> bool {
         let time = self.frame().time;
-        let mut pending = vec![target];
+        let mut pending = targets.into_iter().collect::<Vec<_>>();
         let mut visited = HashSet::new();
         while let Some(target) = pending.pop() {
             if !visited.insert(target) {
