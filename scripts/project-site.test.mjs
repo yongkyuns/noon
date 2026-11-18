@@ -94,6 +94,8 @@ test("real autoplay proof requires frame and time progress without a source reru
   assert.equal(observedUnpromptedProgress(first, win, doc), false, "paused session not autoplay");
   playing = "true"; inFlight = true;
   assert.equal(observedUnpromptedProgress(first, win, doc), false, "source still building");
+  win.__noonExampleGallery.executionDiagnostics = { events: [{ stage: "attached", profile: "observed" }] };
+  assert.equal(observedUnpromptedProgress(first, win, doc), true, "observed source renders during its first pass");
   inFlight = false; generation = 2;
   assert.equal(observedUnpromptedProgress(first, win, doc), false, "new generation not the observed initial Run");
 });

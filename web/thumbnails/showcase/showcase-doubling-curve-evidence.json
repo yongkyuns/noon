@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "5aed8c3ba3cd4adabd26ae5516eead712df53462",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "5aed8c3ba3cd4adabd26ae5516eead712df53462",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "6dfdb7520fe64026f5c33e48a0accf2d8f6654b481e0336396cda2ca47e2c5ba"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "5dbf03e72c993f7ac6ee77220af1eb16bf4f3da0c18e387ca128b4aa4a905757"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "85502b18d3f52c15716003f1d5334a48e2c1b2e956e7611c049135c8eea3ccbd"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
+      }
+    },
+    "buildId": "27c352934a5546f07ab158c817ecacc9b4710064f73915f4a0da4b9ef0e635ac"
+  },
+  "posters": [
+    {
+      "id": "showcase-doubling-curve",
+      "captureBuildId": "27c352934a5546f07ab158c817ecacc9b4710064f73915f4a0da4b9ef0e635ac",
+      "sourceSha256": "a5de438e8df1782cbc45478770d51cc2de9a268f99b823234da96adc17238bf0",
+      "thumbnailTime": 26,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 21618,
+        "pngSha256": "1bf281798465074d19477a796bf8e71918d3b73a607e563dad3bfbd9c00c740e",
+        "pixelSha256": "0f3e888ebbfcb94624d2d78539f91481585e3b078e6d5db4a4ca805d7a3dd7b9"
+      },
+      "sample": {
+        "requestedTime": 26,
+        "publishedTime": 26,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}

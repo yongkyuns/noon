@@ -8,7 +8,7 @@ const pages = JSON.parse(await readFile(new URL("./site/navigation.json", import
 
 // This suite validates documentation presentation and navigation. Playground
 // documents are deliberately stubbed; it is NOT an embedded-renderer proof.
-export async function qualifyDocumentation(browser, base, output) {
+export async function qualifyDocumentation(browser, base, output, demoCount) {
   const root = new URL("./", base);
   const validateContrast = async (page) => {
     const contrast = (values) => {
@@ -124,6 +124,6 @@ export async function qualifyDocumentation(browser, base, output) {
   } finally {
     await noJs.close();
   }
-  await qualifyPreviewShell(browser, base, output);
+  await qualifyPreviewShell(browser, base, output, demoCount);
   console.log(`Documentation: ${pages.length} routes, four widths, system/manual themes, links, and no-JS navigation passed. Preview-shell tests are layout/lifecycle only.`);
 }

@@ -10,7 +10,8 @@ html[data-noon-embed] .topbar,html[data-noon-embed] .example-gallery,html[data-n
 html[data-noon-embed] .pane-toolbar .actions,html[data-noon-embed] .preview-head,html[data-noon-embed] .playback-slot,
 html[data-noon-embed] .playback-controls,html[data-noon-embed] .metrics,html[data-noon-embed] .python-editor-tools{display:none!important}
 html[data-noon-embed] .preview-pane,html[data-noon-embed] .editor-pane{position:absolute;inset:0;width:100%;height:100%;min-height:0;border:0;background:var(--embed-paper);overflow:hidden}
-html[data-noon-embed] .preview-pane{z-index:0}
+/* Reserve the same toolbar row in View and Code so it cannot cover a scene title. */
+html[data-noon-embed] .preview-pane{z-index:0;top:var(--embed-editor-header);height:auto}
 html[data-noon-embed] .editor-pane{z-index:1;display:flex;visibility:hidden;pointer-events:none}
 html[data-noon-embed] .pane-toolbar{flex:none;min-height:var(--embed-editor-header);padding-inline:1rem;background:var(--embed-panel);color:var(--embed-ink)}
 html[data-noon-embed] .file-label{color:var(--embed-muted)}

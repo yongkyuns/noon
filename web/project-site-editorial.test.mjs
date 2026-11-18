@@ -31,18 +31,17 @@ test("website live scenes and README GIFs use only the selected project examples
   }
 });
 
-test("wave-interference lesson is deliberately selected for project examples", async () => {
+test("project examples cover distinct systems, plotting, calculus, spatial and effects lessons", async () => {
   const selected = JSON.parse(await read("./site/examples.json"));
-  const wave = selected.find(entry => entry.id === "showcase-wave-interference");
-  assert.deepEqual(wave, { id: "showcase-wave-interference", start: 1, end: 9 });
   const manifest = JSON.parse(await read("./python/examples/noon_showcase_manifest.json"));
-  const lesson = manifest.entries.find(entry => entry.id === wave.id);
-  assert.equal(lesson.title, "Interference is addition");
-  assert.equal(lesson.path, "python/examples/showcase_wave_interference.py");
-  assert.ok(wave.end <= lesson.duration);
-  for (const relative of ["../README.md", "./site/index.html"]) {
-    const content = await read(relative);
-    assert.ok(content.includes("Interference is addition"), relative);
-    assert.ok(content.includes("example=showcase-wave-interference"), relative);
+  assert.deepEqual(selected.map(entry => entry.id), [
+    "showcase-cache-locality", "showcase-doubling-curve", "showcase-riemann-sums", "showcase-channel-flow", "showcase-neon-glow",
+  ]);
+  const docs = await read("../docs/site/examples.md");
+  const lessons = selected.map(({ id }) => manifest.entries.find(entry => entry.id === id));
+  assert.equal(new Set(lessons.map(lesson => lesson.primary_feature)).size, selected.length);
+  for (const lesson of lessons) {
+    assert.equal(lesson.playback_capability, "deterministic-retained-replay", lesson.id);
+    assert.ok(docs.includes(`<!-- noon:demo ${lesson.id} -->`), lesson.id);
   }
 });

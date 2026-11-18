@@ -15,7 +15,7 @@ test('homepage and documentation share theme tokens and a navigation model',asyn
  const home=await read('./site/index.html');
  for(const route of ['site/docs/index.html','site/docs/getting-started.html','site/docs/examples.html','site/docs/api.html']) assert.ok(home.includes(route),route);
  assert.match(home,/data-search-shortcut/);
- assert.equal((home.match(/data-demo="/g)||[]).length,4);
+ assert.match(home,/data-demo="/);
  assert.doesNotMatch(home,/<video\b|demo-poster|data-demo-open/);
 });
 test('late showcase CSS cannot reintroduce full gallery chrome in the embed',async()=>{

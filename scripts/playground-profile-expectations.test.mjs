@@ -29,7 +29,8 @@ function diagnosticsFor(expected) {
     audio: expected.capabilities.audio, sections: expected.capabilities.sections };
   const events = [{ sequence: 0, stage: 'attached', profile: expected.attachedProfile, contextId,
     continuationGeneration: 4, capabilities: attachedCapabilities,
-    reason: expected.dispositionKind === 'callback' ? { code: 'host_callbacks' } : undefined,
+    reason: expected.dispositionKind === 'callback' ? { code: 'host_callbacks' }
+      : expected.dispositionKind === 'observed-replay' ? { code: 'host_effects' } : undefined,
   }];
   if (expected.dispositionKind === 'input-handoff') events.push({ sequence: events.length, stage: 'profile-change',
     profile: 'observed', contextId, continuationGeneration: 4, preparedFrontier: 3, time: 2,
@@ -49,9 +50,10 @@ function diagnosticsFor(expected) {
     requestedProfile: expected.requestedProfile, events, droppedEvents: 0 };
 }
 
-test('inventory binds all 36 showcase IDs, paths and exact source bytes', () => {
-  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.length, 36);
-  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'ordinary').length, 31);
+test('inventory binds all 41 showcase IDs, paths and exact source bytes', () => {
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.length, 41);
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'ordinary').length, 32);
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'observed-replay').length, 4);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.attachedProfile === 'immutable').length, 1);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'callback' ||
     row.dispositionKind === 'input-handoff').length, 4);
@@ -238,6 +240,17 @@ test('completed callback dispositions expose no transport commands', () => {
   const missingCapabilityList = diagnosticsFor(expected);
   delete missingCapabilityList.events.at(-1).capabilities.commands;
   assert.throws(() => validateShowcaseDiagnostics(expected, missingCapabilityList), /must be explicit/);
+});
+
+test('observed first passes must acquire retained replay on completion', () => {
+  const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.dispositionKind === 'observed-replay');
+  const diagnostics = diagnosticsFor(expected);
+  assert.equal(validateShowcaseDiagnostics(expected, diagnostics).disposition, 'observed-complete');
+  diagnostics.events.at(-1).capabilities.replay = false;
+  assert.throws(() => validateShowcaseDiagnostics(expected, diagnostics), /replay capability mismatch/);
+  diagnostics.events.at(-1).capabilities.replay = true;
+  diagnostics.events[0].capabilities.replay = true;
+  assert.throws(() => validateShowcaseDiagnostics(expected, diagnostics), /after the observed first pass/);
 });
 
 test('translation drag requires the original native-input transition', () => {

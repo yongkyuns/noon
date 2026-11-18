@@ -16,6 +16,13 @@ class GroupAnimation(Scene):
             number = Text(label, color=BLUE, font_size=36).shift(x * RIGHT)
             return VGroup(card, number)
 
+        beam = Rectangle(width=0.72, height=0.12, fill=ORANGE, fill_opacity=1,
+                         stroke=None).shift(1.56 * LEFT + 0.24 * DOWN)
+        tip = Circle(radius=0.12, fill=YELLOW, fill_opacity=1,
+                     stroke=None).shift(1.24 * LEFT + 0.24 * DOWN)
+        callout = VGroup(beam, tip).set_glow(radius=Pixels(10), intensity=1.4, color=ORANGE)
+        self.add(callout)
+
         first = step(-1.8, "1")
         second = step(1.8, "2")
         connector = VGroup(*lines([
@@ -30,12 +37,7 @@ class GroupAnimation(Scene):
         # Each group has its own pivot; the marker advances between rail ticks.
         marker = Circle(radius=0.16, color=ORANGE, fill_opacity=1).shift(
             2.4 * LEFT + 1.4 * DOWN)
-        beam = Rectangle(width=0.72, height=0.12, fill=ORANGE, fill_opacity=1,
-                         stroke=None).shift(1.56 * LEFT + 0.24 * DOWN)
-        tip = Circle(radius=0.12, fill=YELLOW, fill_opacity=1,
-                     stroke=None).shift(1.24 * LEFT + 0.24 * DOWN)
-        callout = VGroup(beam, tip).set_glow(radius=Pixels(10), intensity=1.4, color=ORANGE)
-        self.add(callout, rail, marker)
+        self.add(rail, marker)
         self.wait(0.75)
         # The diagram enters at the start of its first animation.
         self.play(diagram.animate(lag_ratio=0.08).shift(0.5 * UP).scale(0.8),
