@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "9b5ced297f4a25caf6fba7002f6b692b82ca80f6",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "9b5ced297f4a25caf6fba7002f6b692b82ca80f6",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "6dfdb7520fe64026f5c33e48a0accf2d8f6654b481e0336396cda2ca47e2c5ba"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "5dbf03e72c993f7ac6ee77220af1eb16bf4f3da0c18e387ca128b4aa4a905757"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "85502b18d3f52c15716003f1d5334a48e2c1b2e956e7611c049135c8eea3ccbd"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
+      }
+    },
+    "buildId": "849f37f714102224f5d562d51e1502aad2d7661f8186da719ad1a628526a0e2c"
+  },
+  "posters": [
+    {
+      "id": "showcase-riemann-sums",
+      "captureBuildId": "849f37f714102224f5d562d51e1502aad2d7661f8186da719ad1a628526a0e2c",
+      "sourceSha256": "be68831d49d0655018c7f6a023c12fb75e9d88493e91f7db33cd90a839cd9e36",
+      "thumbnailTime": 11.2,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 85369,
+        "pngSha256": "a5d1c9d156ac43b2ad84586bb275fff2e7a247199f34fb1dfecd18220267c56b",
+        "pixelSha256": "b8f6add99e1e44091b4c29c9c3d28830f0f42b216e2b3f6b6877e73e7edf4f49"
+      },
+      "sample": {
+        "requestedTime": 11.2,
+        "publishedTime": 11.2,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}
