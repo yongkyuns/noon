@@ -92,6 +92,74 @@ def sum_formula():
 
 
 class RiemannSums(Scene):
+    class AreaReadout:
+        """Schedule the formatted digits as retained opacity tracks."""
+
+        def __init__(self, scene, amounts, durations, travel):
+            self.cues = []
+            visible = {}
+            glyphs = set()
+            for phase, duration in enumerate(durations):
+                cues = {}
+                frames = round(duration * 60)
+                start, end = amounts[phase:phase + 2]
+                for frame in range(1, frames + 1):
+                    progress = smooth(frame / frames)
+                    value = start + progress * (end - start)
+                    opacity = progress if phase == 0 else 1
+                    next_visible = self.digit_positions(value, opacity)
+                    time = min(duration * frame / frames, duration - 0.005)
+                    for key in sorted(visible.keys() | next_visible.keys()):
+                        alpha = next_visible.get(key, 0)
+                        if alpha != visible.get(key, 0):
+                            cues.setdefault(key, []).append((time, alpha))
+                    visible = next_visible
+                self.cues.append((duration, cues))
+                glyphs.update(cues)
+            self.glyphs = {}
+            for key in sorted(glyphs):
+                slot, digit = key
+                if digit == ".":
+                    formula = MathTex(".", font_size=53)
+                    scene.add(formula)
+                    shape = formula[0]
+                    y, advance = 3.22, 1
+                else:
+                    shape = DecimalNumber(int(digit), num_decimal_places=0, font_size=53)
+                    scene.add(shape)
+                    y, advance = 3.39, 2
+                opacity = scene.value_tracker(0)
+                x = 3.05 + 0.143 * (slot + advance / 2)
+                scene.bind_position(shape, travel, direction=(-1.59, -0.16, 0), offset=(x, y, 0))
+                scene.bind_opacity(shape, opacity)
+                self.glyphs[key] = opacity
+
+        @staticmethod
+        def digit_positions(value, opacity):
+            positions = {}
+            slot = 0
+            for digit in f"{value:.2f}":
+                positions[(slot, digit)] = opacity
+                slot += 1 if digit == "." else 2
+            return positions
+
+        def animate_phase(self, index):
+            duration, cues = self.cues[index]
+            tracks = []
+            for key, changes in cues.items():
+                pieces = []
+                time = 0
+                for end, opacity in changes:
+                    # Finish before the sample so it shows the rounded value.
+                    transition = min(0.004, end - time)
+                    pause = end - time - transition
+                    if pause > 0:
+                        pieces.append(Wait(pause))
+                    pieces.append(self.glyphs[key].animate(run_time=transition, rate_func=lingering).set_value(opacity))
+                    time = end
+                tracks.append(Succession(*pieces, rate_func=linear))
+            return AnimationGroup(*tracks, Wait(duration), run_time=duration, rate_func=linear)
+
     def fade_track(self, *formulae):
         """Fade each TeX part through the retained opacity binding."""
         opacity = self.value_tracker(0)
@@ -156,14 +224,11 @@ class RiemannSums(Scene):
         truth = antiderivative(B) - antiderivative(A)
         goal = MathTex(rf"\to {truth:.2f}", font_size=51, color=AXIS).move_to((5.60, 3.39, 0))
 
-        # Variable supplies Noon's native numeric binding and the math font.
-        total = Variable(0, "S", num_decimal_places=2, font_size=53, group_with_commas=False)
-        total.label.set_opacity(0)
-        written = self.value_tracker(0)
         travel = self.value_tracker(0)
-        self.add(axes, total)
-        self.bind_opacity(total.value, written)
-        self.bind_position(total.value, travel, direction=(-1.59, -0.16, 0), offset=(3.57, 3.39, 0))
+        self.add(axes)
+        refinement_times = [1.8 if level <= 3 else 1.4 for level in range(1, REFINEMENTS + 1)]
+        totals = [0] + [rectangle_sum(4 * 2**level) for level in range(REFINEMENTS + 1)] + [truth]
+        readout = self.AreaReadout(self, totals, [1.5, *refinement_times, 2], travel)
 
         annotations = self.fade_track(curve_name, *ends)
         width_fade = self.fade_track(width_eq)
@@ -183,10 +248,15 @@ class RiemannSums(Scene):
         self.next_section("Grow the first four rectangles")
         active = strips(frame, 4, rise=0.002)
         self.add(*active)
-        self.play(*(Transform(bar, target) for bar, target in zip(active, strips(frame, 4))),
-                  width_fade.animate.set_value(1), width_opacity.animate.set_value(1), Write(written_sum),
-                  total.tracker.animate.set_value(rectangle_sum(4)), written.animate.set_value(1),
-                  run_time=1.5, rate_func=smooth)
+        self.play(AnimationGroup(
+            *(Transform(bar, target, run_time=1.5, rate_func=smooth)
+              for bar, target in zip(active, strips(frame, 4))),
+            width_fade.animate(run_time=1.5, rate_func=smooth).set_value(1),
+            width_opacity.animate(run_time=1.5, rate_func=smooth).set_value(1),
+            Write(written_sum, run_time=1.5, rate_func=smooth),
+            readout.animate_phase(0),
+            rate_func=linear,
+        ))
         self.remove(written_sum)
         shared.set_value(1)
         outgoing.set_value(1)
@@ -195,7 +265,7 @@ class RiemannSums(Scene):
         self.next_section("Halve the width")
         for level, (next_opacity, next_slide) in enumerate(widths[1:], start=1):
             count = 4 * 2**level
-            duration = 1.8 if level <= 3 else 1.4
+            duration = refinement_times[level - 1]
             early = round(duration * 0.35, 2)
             halves = strips(frame, count, split=True)
             self.remove(*active)
@@ -205,7 +275,7 @@ class RiemannSums(Scene):
             self.play(AnimationGroup(
                 *(Transform(bar, new, run_time=duration, rate_func=smooth)
                   for bar, new in zip(active, targets)),
-                total.tracker.animate(run_time=duration, rate_func=smooth).set_value(rectangle_sum(count)),
+                readout.animate_phase(level),
                 width_opacity.animate(run_time=early, rate_func=smooth).set_value(0),
                 width_slide.animate(run_time=early, rate_func=smooth).set_value(2),
                 next_opacity.animate(run_time=early, rate_func=smooth).set_value(1),
@@ -219,10 +289,15 @@ class RiemannSums(Scene):
         self.next_section("Turn the sum into the integral")
         region = axes.get_area(curve, [A, B], color=BLUE_END, opacity=1, stroke_width=0)
         region.set_fill(gradient, opacity=1)
-        self.play(width_fade.animate.set_value(0), width_opacity.animate.set_value(0),
-                  goal_fade.animate.set_value(0), outgoing.animate.set_value(0),
-                  FadeIn(region),
-                  total.tracker.animate.set_value(truth), travel.animate.set_value(1),
-                  run_time=2, rate_func=smooth)
+        self.play(AnimationGroup(
+            width_fade.animate(run_time=2, rate_func=smooth).set_value(0),
+            width_opacity.animate(run_time=2, rate_func=smooth).set_value(0),
+            goal_fade.animate(run_time=2, rate_func=smooth).set_value(0),
+            outgoing.animate(run_time=2, rate_func=smooth).set_value(0),
+            FadeIn(region, run_time=2, rate_func=smooth),
+            travel.animate(run_time=2, rate_func=smooth).set_value(1),
+            readout.animate_phase(REFINEMENTS + 1),
+            rate_func=linear,
+        ))
         self.remove(*active)
         self.wait(2)

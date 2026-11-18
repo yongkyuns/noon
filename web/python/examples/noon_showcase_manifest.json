@@ -714,7 +714,7 @@
       "primary_feature": "riemann-sum-refinement",
       "category": "Calculus",
       "path": "python/examples/showcase_riemann_sums.py",
-      "features": ["Axes", "MathTex", "retained path transforms", "live numeric binding", "get_area", "sections"],
+      "features": ["Axes", "MathTex", "retained path transforms", "retained decimal readout", "get_area", "sections"],
       "duration": 18.3,
       "thumbnail_time": 5.3,
       "thumbnail": "thumbnails/showcase/showcase-riemann-sums.png",
