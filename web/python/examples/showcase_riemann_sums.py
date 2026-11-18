@@ -8,10 +8,6 @@ from noon import *
 A = 0.5
 B = 4.5  # Try 3.5 to change the upper limit.
 REFINEMENTS = 6
-AXIS = color_from_hex("#bbbbbb")
-CURVE = color_from_hex("#ffe16e")
-BLUE_END = color_from_hex("#58c4dd")
-GREEN_END = color_from_hex("#83c167")
 
 
 def f(x):
@@ -33,8 +29,8 @@ def left_at(mobject, x, y):
 
 def strip_color(fraction):
     return Color(*(a + (b - a) * fraction for a, b in zip(
-        (BLUE_END.red, BLUE_END.green, BLUE_END.blue),
-        (GREEN_END.red, GREEN_END.green, GREEN_END.blue),
+        (BLUE.red, BLUE.green, BLUE.blue),
+        (GREEN.red, GREEN.green, GREEN.blue),
     )))
 
 
@@ -87,7 +83,7 @@ def sum_formula():
     formula = left_at(MathTex(r"\sum_i", "f(", "x_i", ")", r"\,\Delta x", "=", font_size=54),
                       -0.91, 3.20)
     for term in ("f(", "x_i", ")"):
-        formula.set_color_by_tex(term, CURVE)
+        formula.set_color_by_tex(term, YELLOW)
     return formula
 
 
@@ -179,7 +175,7 @@ class RiemannSums(Scene):
         return opacity, slide
 
     def moving_term(self, tex, start, direction, opacity, travel):
-        color = CURVE if tex in ("f(", "x", "x_i", ")") else WHITE
+        color = YELLOW if tex in ("f(", "x", "x_i", ")") else WHITE
         term = MathTex(tex, font_size=54, color=color)
         self.add(term)
         for part in term:
@@ -204,15 +200,15 @@ class RiemannSums(Scene):
         if not 2 <= B <= 4.75:
             raise ValueError("Choose an upper limit from 2 to 4.75.")
         axes = Axes([0, 5, 1], [0, 5, 1], x_length=10.5, y_length=5.2,
-                    tips=False, color=AXIS).move_to((0.2, -0.75, 0))
-        curve = axes.plot(f, [0.05, 4.95, 0.025], color=CURVE, stroke_width=6.7)
+                    tips=False, color=GRAY_B).move_to((0.2, -0.75, 0))
+        curve = axes.plot(f, [0.05, 4.95, 0.025], color=YELLOW, stroke_width=6.7)
         curve.set_z_index(2)
         endpoint = axes.c2p(4.95, f(4.95))
-        curve_name = left_at(MathTex("f(x)", color=CURVE, font_size=48),
+        curve_name = left_at(MathTex("f(x)", color=YELLOW, font_size=48),
                              endpoint[0] + 0.2, endpoint[1])
         ends = [MathTex(name, font_size=44).move_to(axes.c2p(x, -0.32))
                 for name, x in (("a", A), ("b", B))]
-        gradient = LinearGradient([(0, BLUE_END), (1, GREEN_END)])
+        gradient = LinearGradient([(0, BLUE), (1, GREEN)])
 
         width_eq = left_at(MathTex(r"\Delta x =", font_size=50), -6.6, 3.30)
         written_sum = sum_formula()
@@ -220,9 +216,9 @@ class RiemannSums(Scene):
                            -2.15, 3.19)
         for part in integral:
             if part.tex_string.strip() in ("f(", "x", ")"):
-                part.set_color(CURVE)
+                part.set_color(YELLOW)
         truth = antiderivative(B) - antiderivative(A)
-        goal = MathTex(rf"\to {truth:.2f}", font_size=51, color=AXIS).move_to((5.60, 3.39, 0))
+        goal = MathTex(rf"\to {truth:.2f}", font_size=51, color=GRAY_B).move_to((5.60, 3.39, 0))
 
         travel = self.value_tracker(0)
         self.add(axes)
@@ -287,7 +283,7 @@ class RiemannSums(Scene):
         self.wait(0.4)
 
         self.next_section("Turn the sum into the integral")
-        region = axes.get_area(curve, [A, B], color=BLUE_END, opacity=1, stroke_width=0)
+        region = axes.get_area(curve, [A, B], color=BLUE, opacity=1, stroke_width=0)
         region.set_fill(gradient, opacity=1)
         self.play(AnimationGroup(
             width_fade.animate(run_time=2, rate_func=smooth).set_value(0),
