@@ -49,9 +49,9 @@ function diagnosticsFor(expected) {
     requestedProfile: expected.requestedProfile, events, droppedEvents: 0 };
 }
 
-test('inventory binds all 35 showcase IDs, paths and exact source bytes', () => {
-  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.length, 35);
-  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'ordinary').length, 30);
+test('inventory binds all 36 showcase IDs, paths and exact source bytes', () => {
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.length, 36);
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'ordinary').length, 31);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.attachedProfile === 'immutable').length, 1);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'callback' ||
     row.dispositionKind === 'input-handoff').length, 4);

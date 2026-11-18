@@ -852,6 +852,15 @@ pub async fn create_direct_scope_opacity_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+#[wasm_bindgen(js_name = createDirectGroupOpacitySmokeRenderer)]
+pub async fn create_direct_group_opacity_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::scope_opacity::comparison_program()
+        .map_err(|error| js_error(error.to_string()))?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Persistent composed masks through native's shared live Rust program.
 #[wasm_bindgen(js_name = createDirectNoiseDissolveSmokeRenderer)]
 pub async fn create_direct_noise_dissolve_smoke_renderer(

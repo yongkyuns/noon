@@ -6,6 +6,30 @@ fn error(message: impl std::fmt::Display) -> ExecutionSessionAnimationError {
     ExecutionSessionAnimationError::InvalidComposition(message.to_string())
 }
 
+/// Stage only the family's appearance endpoint, preserving its original source plan.
+pub(super) fn stage_owned_opacity(
+    execution: &ExecutionSession,
+    store: &SemanticStore,
+    owner: SemanticNodeId,
+    opacity: f64,
+    options: AnimationOptions,
+    declaration: &mut SemanticMutationTransaction,
+) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+    let source = store
+        .node(owner)
+        .filter(|node| node.semantic_object_state().is_none())
+        .and_then(|node| node.family_style())
+        .filter(|_| execution.reachability.is_reachable(owner))
+        .ok_or_else(|| error("composite opacity animation requires an added unrendered group"))?;
+    let mut style = source.clone();
+    crate::semantic_mobject::edit_object_opacity(&mut style, opacity).map_err(error)?;
+    let target = declaration.create_node(SemanticNodeCreation::family());
+    declaration.set_copied_family_opacity_target(target, owner, style);
+    crate::effective_capture::stage_effect_copy(store, execution, owner, target, declaration)
+        .map_err(error)?;
+    Ok(declaration.create_effect_target_animation(owner, target, true, options))
+}
+
 fn has_effects(
     store: &SemanticStore,
     source: SemanticNodeId,

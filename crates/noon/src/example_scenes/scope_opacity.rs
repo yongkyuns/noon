@@ -1,8 +1,8 @@
 //! Final composed-family opacity, paired with scope_opacity.py.
 use crate::{
     effects::{Blur, DissolveDirection, DissolveStyle, EffectUpdate, Glow, GlowSource, Pixels},
-    AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
-    MobjectFamily, RateFunction, Scene, SemanticAnimationCompositionKind,
+    AnimationCompositionRequest, AnimationOptions, ContinuationStep, IntoAnimationRequest,
+    LiveContinuation, LiveProgram, MobjectFamily, RateFunction, Scene,
 };
 
 pub struct FamilyOpacity {
@@ -21,54 +21,33 @@ impl LiveContinuation for FamilyOpacity {
                 .run_time(1.0)
                 .rate_func(RateFunction::Linear);
             let segment = match self.stage {
-                10 | 14 => {
-                    let target = scene.copy_family(&self.group).map_err(message)?;
-                    scene
-                        .set_family_object_opacity(
-                            target.root(),
-                            if self.stage == 10 { 0.25 } else { 0.0 },
-                        )
-                        .map_err(message)?;
-                    scene.live().declare_and_activate_composition(
-                        &AnimationCompositionRequest::FamilyMethodTargetTo {
-                            source: &self.group,
-                            target_state: target.root(),
-                            options: if self.stage == 14 {
-                                options.rate_func(RateFunction::ThereAndBack)
-                            } else {
-                                options
-                            },
-                        },
-                        AnimationOptions::new(),
+                10 | 14 => crate::animation_request::activate(
+                    &mut scene.live(),
+                    self.group
+                        .animate()
+                        .set_object_opacity(if self.stage == 10 { 0.25 } else { 0.0 })
+                        .into(),
+                    if self.stage == 14 {
+                        options.rate_func(RateFunction::ThereAndBack)
+                    } else {
+                        options
+                    },
+                ),
+                12 => crate::animation_request::activate(
+                    &mut scene.live(),
+                    (
+                        self.group
+                            .animate()
+                            .set_object_opacity(0.75)
+                            .with_options(options),
+                        self.parent
+                            .animate()
+                            .set_object_opacity(0.5)
+                            .with_options(options),
                     )
-                }
-                12 => {
-                    let child = scene.copy_family(&self.group).map_err(message)?;
-                    let parent = scene.copy_family(&self.parent).map_err(message)?;
-                    scene
-                        .set_family_object_opacity(child.root(), 0.75)
-                        .map_err(message)?;
-                    scene
-                        .set_family_object_opacity(parent.root(), 0.5)
-                        .map_err(message)?;
-                    scene.live().declare_and_activate_animation_composition(
-                        SemanticAnimationCompositionKind::Parallel,
-                        &[
-                            AnimationCompositionRequest::FamilyMethodTargetTo {
-                                source: &self.group,
-                                target_state: child.root(),
-                                options,
-                            },
-                            AnimationCompositionRequest::FamilyMethodTargetTo {
-                                source: &self.parent,
-                                target_state: parent.root(),
-                                options,
-                            },
-                        ],
-                        AnimationOptions::new(),
-                        AnimationOptions::new(),
-                    )
-                }
+                        .into_animation_request(),
+                    AnimationOptions::new(),
+                ),
                 18 | 20 => scene.live().declare_and_activate_composition(
                     &AnimationCompositionRequest::Dissolve {
                         target: (&self.group).into(),
@@ -196,6 +175,51 @@ impl LiveContinuation for FamilyOpacity {
             scene.live().wait_segment(0.5).map_err(message)?,
         ))
     }
+}
+
+/// Paired with the gallery's comparison of group and per-shape fades.
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub fn comparison_program() -> Result<LiveProgram<crate::SceneScript>, crate::ScriptError> {
+    use crate::{Color, Text, Vec2};
+
+    let mut scene = Scene::new();
+    for (label, x) in [("As a group", -2.25), ("Per shape", 2.25)] {
+        let text = scene.text(Text::new(label).with_font_size(34.0))?;
+        scene.shift(&text, Vec2::new(x, 1.27))?;
+        scene.add(&text)?;
+    }
+    let mut spot = |x| {
+        let circle = scene.circle(0.82)?;
+        scene.set_fill(&circle, Color::BLUE, 1.0)?;
+        scene.disable_stroke(&circle)?;
+        scene.shift(&circle, Vec2::new(x, -0.2))?;
+        Ok::<_, crate::ScriptError>(circle)
+    };
+    let left = spot(-2.7)?;
+    let right = spot(-1.8)?;
+    let first = spot(1.8)?;
+    let second = spot(2.7)?;
+    let group = scene.family(&[(&left).into(), (&right).into()])?;
+    scene.add_many(&[(&group).into(), (&first).into(), (&second).into()])?;
+    scene.into_script(move |scene| async move {
+        scene.wait(0.6).await?;
+        for (opacity, duration, hold) in [(0.42, 1.2, 1.2), (1.0, 1.0, 0.8)] {
+            scene
+                .play_with(
+                    (
+                        group.animate().set_object_opacity(opacity),
+                        first.animate().set_object_opacity(opacity),
+                        second.animate().set_object_opacity(opacity),
+                    ),
+                    AnimationOptions::new()
+                        .run_time(duration)
+                        .rate_func(RateFunction::Linear),
+                )
+                .await?;
+            scene.wait(hold).await?;
+        }
+        Ok(())
+    })
 }
 
 pub fn program() -> Result<LiveProgram<FamilyOpacity>, String> {

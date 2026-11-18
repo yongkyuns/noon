@@ -1252,6 +1252,25 @@ impl SemanticMutationTransaction {
         self
     }
 
+    /// Stage an explicit composite-opacity edit on a family animation endpoint.
+    pub fn set_copied_family_opacity_target(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        source: SemanticNodeId,
+        style: SemanticStyle,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetFamilyStyle {
+            node: node.into(),
+            style,
+            opacity_write: true,
+            copy_source: Some(source),
+            background_stroke_color: None,
+            background_stroke_width: None,
+            background_stroke_opacity: None,
+        });
+        self
+    }
+
     /// One copied family style plus its weak appearance-target provenance.
     pub fn set_copied_family_style_with_background_stroke_update(
         &mut self,
@@ -3350,10 +3369,15 @@ impl SemanticMutationTransaction {
                                 .and_then(|node| node.family_opacity_copy_provenance())
                         });
                     let next_copy = if let Some(source) = copy_source {
-                        Some(crate::SemanticFamilyOpacityCopyProvenance::new(
+                        let copy = crate::SemanticFamilyOpacityCopyProvenance::new(
                             *source,
                             next_style.object_opacity,
-                        ))
+                        );
+                        Some(if *opacity_write {
+                            copy.with_object_opacity_write()
+                        } else {
+                            copy
+                        })
                     } else if *opacity_write
                         || previous_style.object_opacity != next_style.object_opacity
                     {
