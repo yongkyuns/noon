@@ -87,6 +87,8 @@ try {
  assert.equal(await view.locator('.topbar').isVisible(),false);
  const bounds=await view.locator('#scene').boundingBox();
  assert.ok(bounds.y>=0 && bounds.y+bounds.height<=241,'late gallery chrome does not move canvas offscreen');
+ const tabs=await view.locator('.embed-tabs').boundingBox();
+ assert.ok(tabs.y+tabs.height<=bounds.y,'View and Code controls leave the picture unobscured');
  assert.equal(await view.locator('button:visible').count(),2);
  await shell.close();
  console.log('Documentation design: search, copy, filters, keyboard, no-JS navigation and late showcase CSS passed. No runtime claim.');

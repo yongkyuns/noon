@@ -77,6 +77,9 @@ class ShowcaseSourceContract(unittest.TestCase):
                                         and node.func.id == "ThreeDAxes" for node in calls))
                     self.assertTrue(any(isinstance(node.func, ast.Attribute)
                                         and node.func.attr == "c2p" for node in calls))
+                elif is_spatial:
+                    self.assertTrue(any(isinstance(node.func, ast.Name)
+                                        and node.func.id == "WorldTransformTo" for node in calls))
                 elif is_linear:
                     self.assertTrue(any(isinstance(node.func, ast.Attribute)
                                         and node.func.attr == "add_vector" for node in calls))

@@ -45,7 +45,7 @@ const rows = [
   ['showcase-editorial-cover','showcase_editorial_cover.py','88addadbd590a95992ec1a37ccbd9b28e0aec31e0c97ff34e9b140f0e2ea2f12','incremental','ordinary',['sections'], 'looped'],
   ['showcase-cache-locality','showcase_cache_locality.py','e6ca34f5e27ac645dae97309fab6b7ecde64578022d4d9627dbd621ea99804c7','incremental','ordinary',['sections'], 'looped'],
   ['showcase-doubling-curve','showcase_doubling_curve.py','5572064d453b1a168642bd2cdd95a5635b24310c06283e2837ce8978c142d493','incremental','ordinary',['sections'], 'looped'],
-  ['showcase-channel-flow','showcase_channel_flow.py','e7565596381583137ac0843406ffb0a8122ffa7e9d0406056ffe3ca9560e3f58','incremental','ordinary',['sections'], 'looped'],
+  ['showcase-channel-flow','showcase_channel_flow.py','8e2b16e91c6deab84b6a1170842e1ef4b7f7aca2a33fbed41cb621e37f94dd53','incremental','ordinary',['sections'], 'looped'],
   ['showcase-neon-glow','showcase_neon_glow.py','8b9f5552fb765fd53af2251d1093b80d7629896dc2a733f9697198f1ea2cbf54','incremental','ordinary',['sections'], 'looped'],
 ];
 
