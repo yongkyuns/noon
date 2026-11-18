@@ -1,5 +1,10 @@
-"""Noon reproduction of ManimGX's Rectangles become an integral (Academa).
-Reference: https://manimgx.academa.ai/gallery/riemann-sums/
+"""Noon adaptation of Academa's ManimGX scene "Rectangles become an integral".
+
+https://manimgx.academa.ai/gallery/riemann-sums/
+
+For an earlier Manim treatment, see 3Blue1Brown's AreaUnderVGraph from
+The Essence of Calculus, Chapter 8.
+https://github.com/3b1b/videos/blob/master/_2017/eoc/chapter8.py
 """
 from math import cos, sin
 
