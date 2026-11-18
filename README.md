@@ -22,8 +22,8 @@ performance benchmark.
 | --- | --- |
 | [![A blue circle and pink square being created, moved, and rotated](https://yongkyuns.github.io/noon/site/media/showcase-first-scene.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-first-scene) | [![Two circular wave fields and their sum as the relative phase changes](https://yongkyuns.github.io/noon/site/media/showcase-wave-interference.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-wave-interference) |
 | Create objects, arrange them, and animate their properties. | Add two wave fields and see how a half-cycle phase shift changes the result. |
-| **A field in motion** | **Make it move** |
-| [![A field of colored shapes forming waves and a spiral](https://yongkyuns.github.io/noon/site/media/showcase-dynamic-scene.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-dynamic-scene) | [![An editorial layout with animated gradients, grain, and a frosted caption](https://yongkyuns.github.io/noon/site/media/showcase-editorial-cover.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-editorial-cover) |
+| **Why loop order changes cache misses** | **Make it move** |
+| [![Two loops traverse the same matrix and count misses in a one-line cache](https://yongkyuns.github.io/noon/site/media/showcase-cache-locality.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-cache-locality) | [![An editorial layout with animated gradients, grain, and a frosted caption](https://yongkyuns.github.io/noon/site/media/showcase-editorial-cover.gif)](https://yongkyuns.github.io/noon/playground.html?catalog=showcase&example=showcase-editorial-cover) |
 | Coordinate a larger composition of shapes and labels. | Combine typography, procedural surfaces, and visual effects. |
 
 The [gallery](https://yongkyuns.github.io/noon/playground.html?catalog=showcase)

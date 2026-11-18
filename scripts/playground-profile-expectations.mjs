@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 
-// Test-owned expectations for the 34-entry public showcase catalog.
+// Test-owned expectations for the public showcase catalog.
 // This ledger binds exact source bytes; it does not grant runtime admission.
 const replayCommands = Object.freeze(["play", "pause", "seek", "restart"]);
 const ordinaryCommands = Object.freeze([...replayCommands, "loop"]);
@@ -43,6 +43,7 @@ const rows = [
   ['showcase-glass-lens','showcase_glass_lens.py','33103a1db643b62d5c14384046a5ea5f4e33e75052048b2c783c85a70ca10d52','incremental','ordinary',[], 'looped'],
   ['showcase-wave-interference','showcase_wave_interference.py','90222ca44bc6c821bdae34453bca323b532090aca125637c0fabea455f4fa128','incremental','ordinary',['sections'], 'looped'],
   ['showcase-editorial-cover','showcase_editorial_cover.py','88addadbd590a95992ec1a37ccbd9b28e0aec31e0c97ff34e9b140f0e2ea2f12','incremental','ordinary',['sections'], 'looped'],
+  ['showcase-cache-locality','showcase_cache_locality.py','bf9d5eac8038643348ccca95d0f6aa71ce3911094e6632f0350687e470d82992','incremental','ordinary',[], 'looped'],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(

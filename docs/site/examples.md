@@ -21,12 +21,13 @@ numerical wave simulation.
 
 <!-- noon:demo showcase-wave-interference -->
 
-## A field in motion
+## Why loop order changes cache misses
 
-A larger composition of shapes and labels with coordinated animation. The scene
-illustrates authoring; the preview is not a real-time performance benchmark.
+Read the same matrix by rows and by columns. In this one-line cache model, each
+row fits in one line. Change `RIGHT_ORDER` to `"row"` in **Code** to see both loops
+finish with four misses.
 
-<!-- noon:demo showcase-dynamic-scene -->
+<!-- noon:demo showcase-cache-locality -->
 
 ## Make it move
 

@@ -611,6 +611,27 @@
         {"time": 8, "label": "Resolve the cover"}
       ],
       "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-cache-locality",
+      "title": "Why loop order changes cache misses",
+      "lesson": "Read the same matrix by rows and by columns. Watch which four values share a cache line and count the misses in a one-line cache.",
+      "primary_feature": "cache-locality",
+      "category": "Algorithms and systems",
+      "path": "python/examples/showcase_cache_locality.py",
+      "features": ["Code", "Integer", "cache simulation", "simultaneous animation", "retained replay"],
+      "duration": 12,
+      "thumbnail_time": 11.2,
+      "thumbnail": "thumbnails/showcase/showcase-cache-locality.png",
+      "thumbnail_alt": "The row-first and column-first traversals finish with four and sixteen cache misses respectively.",
+      "still_intervals": [[0, 0.8], [10.8, 12]],
+      "beats": [
+        {"time": 0.4, "label": "Same matrix, two loop orders"},
+        {"time": 1.73, "label": "Row-first reuses the loaded line"},
+        {"time": 3.55, "label": "Column-first replaces the line at every read"},
+        {"time": 11.2, "label": "Compare the final miss counts"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
     }
   ]
 }
