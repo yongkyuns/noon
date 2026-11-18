@@ -1,36 +1,36 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "5aed8c3ba3cd4adabd26ae5516eead712df53462",
+  "captureRevision": "17bf452594eae40114f153a8bcbdb89b8024ec99",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "5aed8c3ba3cd4adabd26ae5516eead712df53462",
+    "sourceRevision": "17bf452594eae40114f153a8bcbdb89b8024ec99",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "6dfdb7520fe64026f5c33e48a0accf2d8f6654b481e0336396cda2ca47e2c5ba"
+        "sha256": "707c9dd68bdc90b76e01c014a67b21ed13611fb63094fb0b6b2bb8b63095f280"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "5dbf03e72c993f7ac6ee77220af1eb16bf4f3da0c18e387ca128b4aa4a905757"
+        "sha256": "72bed5052beea736e5de43207bf0344470e90de253b8f726579387c560478149"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "85502b18d3f52c15716003f1d5334a48e2c1b2e956e7611c049135c8eea3ccbd"
+        "sha256": "81defa3242a7bb43b967945b2e59e574740ff9a4bb2091f07d080dec88629582"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
         "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
       }
     },
-    "buildId": "27c352934a5546f07ab158c817ecacc9b4710064f73915f4a0da4b9ef0e635ac"
+    "buildId": "47db2dcac4018fe1b22135a9c7bd6d56f30f4007778f70a9f8ba7cb817c3b832"
   },
   "posters": [
     {
       "id": "showcase-cache-locality",
-      "captureBuildId": "27c352934a5546f07ab158c817ecacc9b4710064f73915f4a0da4b9ef0e635ac",
-      "sourceSha256": "b6a48d981b6b1e4ac8313a1a23a17382d147627b055af4ab6462981d9fa0a95a",
+      "captureBuildId": "47db2dcac4018fe1b22135a9c7bd6d56f30f4007778f70a9f8ba7cb817c3b832",
+      "sourceSha256": "ded7f652358993655f78bf73c9993faa174199c7579e1d60c11f36158ebc18aa",
       "thumbnailTime": 35.5,
       "image": {
         "width": 960,
