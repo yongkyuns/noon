@@ -1,43 +1,43 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "16ecaa5b9ca0721355cca1780df575fa450a06e0",
+  "captureRevision": "6ca22a386a77f1a53592c29126db38f988ba004a",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "16ecaa5b9ca0721355cca1780df575fa450a06e0",
+    "sourceRevision": "6ca22a386a77f1a53592c29126db38f988ba004a",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "1433416cc9a7a53545a4b64f7c289ad3bacfc4b13935a88d9a2c538258acecb0"
+        "sha256": "a79d8ad6ccf595a01f23288226025738c2e6dc3bcbe0cfc482fb503e473a2375"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "c8efac4f4b52778e01bb5d637e66b4ddffa0d71ab1ece96d5dc62308e44cfe67"
+        "sha256": "eb5b38343520f219401868bbd1e1e1146fdb7c50cc0b094c3287cbac2e04ac7f"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "50f82f477ccf408791f6c6b414635e347900032e59c418c0931b787c6e9a68f4"
+        "sha256": "f183fe0344b6a2641301182280d82aa2a59b6aeaf87b3636b0a267109288aefa"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
-        "sha256": "85bd5c6c48203a2b6be7f7fe2c0c619563855a21aa3a01c6161f3a681ec8a9cf"
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
       }
     },
-    "buildId": "b0b4b42173dd18a696600e1b18ec2c83b286c49bb0d3bab8a2bf5fe9ddefb97e"
+    "buildId": "6485f521b2f7ba271fd26dc618dacbd0b6688f624ccca00951293e7989b894c9"
   },
   "posters": [
     {
       "id": "showcase-group-animation",
-      "captureBuildId": "b0b4b42173dd18a696600e1b18ec2c83b286c49bb0d3bab8a2bf5fe9ddefb97e",
-      "sourceSha256": "87be1d5db3621e2c7499e380661eaa30fe99cad30f9e952ad0acebe6ba94e465",
+      "captureBuildId": "6485f521b2f7ba271fd26dc618dacbd0b6688f624ccca00951293e7989b894c9",
+      "sourceSha256": "8d43424480d79628dd8741dbafaa837490d1667dfcbda99dd9e3b521b04aefe2",
       "thumbnailTime": 6.5,
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 5607,
-        "pngSha256": "2642916ac7c038522b1de1132ebde1e327e84560d62224d19c8ddf106124e3e3",
-        "pixelSha256": "85ecbcbb3986b87b71be49e0546363c95fb3c1a0059ea60c4a822c55d98ba174"
+        "foregroundPixels": 5477,
+        "pngSha256": "fb9f9e6fd411f919269c3872a4a2dd02821458b6db3c58c8b705464bb977433d",
+        "pixelSha256": "2a5f11a279d13cd3c40b92c9f8522cb3ba09bde7b4d7a1de2531a83c725fce9a"
       },
       "sample": {
         "requestedTime": 6.500000001,

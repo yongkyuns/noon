@@ -1874,8 +1874,9 @@ def _canonical_cyclic_replace_transform(
 
 def _canonical_family_transform_animation(
     scene: _base.Scene, animation: object
-) -> tuple[_compat.Group, _compat.Group, object] | None:
-    if isinstance(animation, _animate._AlignedGroupAnimationBuilder):
+) -> tuple[_compat.Group, _compat.Group, object, list[_base.Mobject]] | None:
+    method_target = isinstance(animation, _animate._AlignedGroupAnimationBuilder)
+    if method_target:
         source, target = animation.source, animation.target
     elif type(animation) in (_animate.TransformMatchingShapes, _animate.TransformMatchingTex):
         source, target = animation.source, animation.target
@@ -1886,7 +1887,12 @@ def _canonical_family_transform_animation(
     if not isinstance(source, (_compat.Group, _compat.VGroup)):
         return None
     source_leaves = _compat._leaf_mobjects(source)
-    if not source_leaves or any(member._scene is not scene for member in source_leaves):
+    if not source_leaves:
+        return None
+    entering = source_leaves if method_target and all(
+        member._scene is None for member in source_leaves
+    ) else []
+    if not entering and any(member._scene is not scene for member in source_leaves):
         return None
     if not isinstance(target, (_compat.Group, _compat.VGroup)) or any(
         member._scene is not None for member in _compat._leaf_mobjects(target)
@@ -1896,7 +1902,7 @@ def _canonical_family_transform_animation(
         target, "_semantic_family_handle", None
     ) is None:
         raise NotImplementedError("canonical family Transform requires shared family handles")
-    return source, target, animation
+    return source, target, animation, entering
 
 
 def _canonical_indicate_animation(
@@ -2840,7 +2846,7 @@ def _build_canonical_composition_candidate_steps(
             return
         family_transform = _canonical_family_transform_animation(self, animation)
         if family_transform is not None:
-            source, target, leaf = family_transform
+            source, target, leaf, entering = family_transform
             matching = type(leaf) in (_animate.TransformMatchingShapes, _animate.TransformMatchingTex)
             source_matching = type(leaf) is _animate.TransformMatchingTex
             # Manim constructor options belong to the Transform/Fade children;
@@ -2885,6 +2891,16 @@ def _build_canonical_composition_candidate_steps(
                 float(child.lag_ratio),
                 float(child.path_arc),
             )
+            if entering:
+                family_registrations.append(source)
+                for member in entering:
+                    if _semantic_wrapper_key(member) in reserved_targets:
+                        continue
+                    reservation = reserve(member)
+                    if not reservation.reuse_existing_identity:
+                        destination.appendFamilyMethodTargetEntering(
+                            str(reservation.object.id), member._semantic_handle
+                        )
             if matching:
                 builder.appendComposition(destination)
                 completed_families.extend((source, target))
