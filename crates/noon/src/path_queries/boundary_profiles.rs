@@ -1,7 +1,7 @@
 //! Select existing point/content boundary operations from semantic content.
 use super::*;
 
-fn authored_content_requires_boundary(
+pub(crate) fn authored_content_requires_boundary(
     store: &SemanticStore,
     content: SemanticObjectContent,
 ) -> Result<bool, AuthoringError> {

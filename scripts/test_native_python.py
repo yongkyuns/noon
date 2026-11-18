@@ -76,6 +76,29 @@ class NativePythonTests(unittest.TestCase):
         self.assertNotIn("js", sys.modules)
         self.assertNotIn("pyodide", sys.modules)
 
+    def test_nested_group_keeps_existing_mixed_play_compositions(self):
+        source = """from noon import *
+class Mixed(Scene):
+    def construct(self):
+        left, right = Square().shift(LEFT), Square().shift(RIGHT)
+        diagram = VGroup(VGroup(left), VGroup(right))
+        tracker = ValueTracker(0)
+        self.add(diagram)
+        self.play(diagram.animate(lag_ratio=0.5).shift(UP), tracker.animate.set_value(2))
+        assert tracker.get_value() == 2
+        assert tuple(left.get_center())[:2] == (-1, 1)
+        self.play(diagram.animate.shift(RIGHT), left.animate.set_color(RED))
+        assert tuple(left.get_center())[:2] == (0, 1)
+        self.play(Succession(diagram.animate.shift(UP), diagram.animate.shift(DOWN)))
+        assert tuple(left.get_center())[:2] == (0, 0)
+        source = VGroup(Triangle().shift(3 * RIGHT))
+        target = VGroup(Triangle().shift(3 * RIGHT + UP))
+        self.add(source)
+        self.play(diagram.animate.shift(UP), TransformMatchingShapes(source, target))
+        assert tuple(left.get_center())[:2] == (0, 1)
+"""
+        close_scene(asyncio.run(run_source(source, retain_history=True)))
+
     def test_area_and_riemann_rectangles_follow_effective_axes(self):
         source = """from noon import *
 class Demo(Scene):
