@@ -1,4 +1,4 @@
-//! A nested diagram and progress rail animate as independent groups in one play.
+//! A nested diagram enters on its first play while an independent rail animates.
 //! Paired with `showcase_group_animation.py`, also available in the demo gallery.
 use crate::{AnimationOptions, Color, LiveProgram, Scene, SceneScript, ScriptError, Vec2};
 
@@ -42,7 +42,6 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
             ([0.35, -0.2], [0.6, 0.0]),
         ])?)?;
         let diagram = scene.family([&first, &connector, &second])?;
-        scene.add(&diagram)?;
         let mut rail_parts = Vec::new();
         rail_parts.push(scene.line(Vec2::new(-2.4, -1.4), Vec2::new(2.4, -1.4))?);
         for x in [-2.4, -0.8, 0.8, 2.4] {
@@ -60,6 +59,7 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
         scene.set_fill_opacity(&marker, 1.0)?;
         scene.add(&marker)?;
         scene.wait(0.75).await?;
+        // The diagram enters at the start of its first animation.
         let timing = AnimationOptions::new().run_time(1.25);
         scene
             .play_with(
@@ -133,10 +133,17 @@ mod tests {
                 program.admit_publication(publication).unwrap();
             }
             assert_eq!(program.session().runtime_identity(), identity);
-            assert_eq!(program.session().frame().objects.len(), 16);
+            let object_count = if end == 0.75 { 6 } else { 16 };
+            assert_eq!(program.session().frame().objects.len(), object_count);
         }
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
-        let marker = program.session().frame().objects.last().unwrap();
+        let marker = program
+            .session()
+            .frame()
+            .objects
+            .iter()
+            .find(|object| object.style.fill == Some(Color::BLUE))
+            .unwrap();
         assert!((marker.transform.translation.x - 2.4).abs() < 1e-5);
         assert!((marker.transform.translation.y + 1.4).abs() < 1e-5);
         assert_eq!(marker.style.fill, Some(Color::BLUE));

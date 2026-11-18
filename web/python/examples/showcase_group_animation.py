@@ -1,4 +1,4 @@
-"""Move a nested diagram and progress rail as independent groups in one play.
+"""Introduce a nested diagram on its first play while the progress rail animates.
 
 The paired Rust example uses the same families and shared animation compiler.
 """
@@ -34,8 +34,9 @@ class GroupAnimation(Scene):
         # Each group has its own pivot; the marker advances between rail ticks.
         marker = Circle(radius=0.16, color=ORANGE, fill_opacity=1).shift(
             2.4 * LEFT + 1.4 * DOWN)
-        self.add(diagram, rail, marker)
+        self.add(rail, marker)
         self.wait(0.75)
+        # The diagram enters at the start of its first animation.
         self.play(diagram.animate(lag_ratio=0.08).shift(0.5 * UP).scale(0.8),
                   rail.animate.scale(0.8),
                   marker.animate.shift(1.76 * RIGHT), run_time=1.25)

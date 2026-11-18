@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use noon_core::{
     resolve_uniform_composition_schedule, CompositionError, CompositionTimeMapStep, ObjectId,
-    PreparedSemanticMutationTransaction, RateFunction, SemanticFamilyTransformMode, SemanticNodeId,
-    SemanticNodeKind, SemanticStore, SemanticTransactionNodeRef,
+    PreparedSemanticMutationTransaction, RateFunction, SemanticFamilyTransformMode,
+    SemanticMutation, SemanticNodeId, SemanticNodeKind, SemanticStore, SemanticTransactionNodeRef,
 };
 
 use super::super::{PreparedSemanticAnimationScheduleProjection, SemanticExecutionIndex};
@@ -11,14 +11,15 @@ use super::affine::EffectiveAnimationProperties;
 use super::family_transform::{
     derive_family_transform_correspondence, FamilyTransformCorrespondenceError,
 };
+use super::prepared_composition::authored_activation_properties;
 
 /// One activation-time family Transform occurrence before execution publication.
 ///
 /// The source is an authored leaf identity; the target may be transaction-local. `source_padding` and
 /// `target_padding` describe a renderer-derived occurrence only; they do not allocate
-/// semantic or execution identity. `source_execution_object_id` is the existing source
-/// leaf's stable execution row and serves only as the effective-state capture/ordering
-/// anchor for a derived source copy.
+/// semantic or execution identity. `source_execution_object_id` is the stable identity
+/// of the source leaf's live or newly admitted execution row. Derived copies can only
+/// use live rows as effective-state capture and ordering anchors.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedFamilyTransformOccurrence {
     pub animation: SemanticTransactionNodeRef,
@@ -155,9 +156,8 @@ impl std::error::Error for PreparedFamilyTransformActivationError {
 /// each distinct source leaf's coherent effective value exactly once.
 ///
 /// Family endpoints used by the current live-session API are existing semantic
-/// source families. Transaction-local targets retain their tokens through lowering;
-/// local copies must match the complete source tree. Existing endpoints use flat
-/// correspondence, where padding can require structural completion.
+/// source families. Entering families and local copies use exact tree correspondence.
+/// Existing flat endpoints may instead pad their correspondence for structural completion.
 /// Repeated source padding occurrences deliberately reuse the same captured effective
 /// source value; independent visual evolution is introduced only by the later
 /// identity-free derived-display materializer.
@@ -174,6 +174,14 @@ where
     let mut occurrences = Vec::new();
     let multiple_families = schedule.family_transforms().len() > 1;
     let mut source_groups = HashSet::new();
+    // Only staged membership permits a family to begin from authored state.
+    let admissions: HashSet<_> = prepared
+        .candidate_mutations()
+        .filter_map(|mutation| match mutation {
+            SemanticMutation::AddMember { member, .. } => member.existing(),
+            _ => None,
+        })
+        .collect();
 
     for family in schedule.family_transforms() {
         if family.mode != SemanticFamilyTransformMode::Structural {
@@ -183,6 +191,7 @@ where
             });
         }
         let source_family = existing_endpoint(family.animation, family.source)?;
+        let entering = admissions.contains(&source_family);
         let mut register_group = |id| !multiple_families || source_groups.insert(id);
         let topology_error = |reason| PreparedFamilyTransformActivationError::FixedTopology {
             animation: family.animation,
@@ -193,8 +202,8 @@ where
                 "family Transforms share a source group".into(),
             ));
         }
-        let endpoints: Vec<_> = match family.target_state.existing() {
-            Some(target) => {
+        let endpoints: Vec<_> = match (family.target_state.existing(), entering) {
+            (Some(target), false) => {
                 if ![source_family, target]
                     .into_iter()
                     .all(|id| is_flat(prepared.store(), id))
@@ -222,7 +231,7 @@ where
                     })
                     .collect()
             }
-            None => fixed_family_leaf_pairs(
+            _ => fixed_family_leaf_pairs(
                 prepared,
                 source_family,
                 family.target_state,
@@ -248,22 +257,32 @@ where
         for (member_index, (source, target_state, source_padding, target_padding)) in
             endpoints.into_iter().enumerate()
         {
-            let execution_object_id = index.execution_object_id(source).ok_or(
-                PreparedFamilyTransformActivationError::MissingExecutionSource {
-                    animation: family.animation,
-                    source,
-                },
-            )?;
+            let execution_object_id = index
+                .execution_object_id(source)
+                .or_else(|| entering.then(|| super::super::semantic_execution_object_id(source)))
+                .ok_or(
+                    PreparedFamilyTransformActivationError::MissingExecutionSource {
+                        animation: family.animation,
+                        source,
+                    },
+                )?;
             let effective_source = if let Some(captured) = captures.get(&execution_object_id) {
                 captured.clone()
             } else {
-                let captured = effective_properties(execution_object_id).ok_or(
-                    PreparedFamilyTransformActivationError::MissingEffectiveSource {
-                        animation: family.animation,
-                        source,
-                        execution_object_id,
-                    },
-                )?;
+                let captured = effective_properties(execution_object_id)
+                    .or_else(|| {
+                        if !entering {
+                            return None;
+                        }
+                        authored_activation_properties(prepared.object_state(source).ok()?)
+                    })
+                    .ok_or(
+                        PreparedFamilyTransformActivationError::MissingEffectiveSource {
+                            animation: family.animation,
+                            source,
+                            execution_object_id,
+                        },
+                    )?;
                 captures.insert(execution_object_id, captured.clone());
                 captured
             };
