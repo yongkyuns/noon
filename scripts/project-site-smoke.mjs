@@ -66,6 +66,6 @@ try {
   assert.ok(await plain.locator('a[href*="playground.html"]').count()>0);
   assert.equal(await plain.locator('iframe').count(),0);
   await noJs.close();
-  await qualifyDocumentation(browser,base,output);
+  await qualifyDocumentation(browser,base,output,selections.length);
   console.log('Project site layout/navigation passed; actual autoplay and hot reload are qualified separately.');
 } finally { await browser?.close(); await server.close(); }

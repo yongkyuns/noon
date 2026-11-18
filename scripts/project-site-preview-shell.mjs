@@ -12,7 +12,7 @@ export async function installLayoutPlaceholder(context) {
 
 // Actual shell/CSS/tabs, with the gallery runtime explicitly stubbed. The separate
 // three-engine gate uses the untouched runtime and actual rendered canvas pixels.
-export async function qualifyPreviewShell(browser, base, output) {
+export async function qualifyPreviewShell(browser, base, output, demoCount) {
   const root = new URL('./', base);
   const context = await browser.newContext();
   await context.route('**/python-editor-bootstrap.js', route => route.fulfill({
@@ -32,7 +32,7 @@ export async function qualifyPreviewShell(browser, base, output) {
         await page.emulateMedia({colorScheme});
         await page.setViewportSize({width,height:1000});
         await page.goto(new URL(route,root).href);
-        await page.waitForFunction(() => document.querySelectorAll('iframe[data-shell-ready=true]').length === 4);
+        await page.waitForFunction(count => document.querySelectorAll('iframe[data-shell-ready=true]').length === count, demoCount);
         const label = `live-shell-${surface}-${colorScheme}-${width}`;
         await assertDocumentWidth(page,label,output);
         const cards = page.locator('[data-demo]');
@@ -80,7 +80,7 @@ export async function qualifyPreviewShell(browser, base, output) {
           assert.deepEqual([restoredCanvas.width, restoredCanvas.height], [bounds.width, bounds.height],
             'tab switches preserve the canvas dimensions');
         }
-        assert.equal(await page.locator('iframe').count(),4,'examples do not evict one another');
+        assert.equal(await page.locator('iframe').count(),demoCount,'examples do not evict one another');
         await assertDocumentWidth(page,`${label}-restored`,output);
         assert.deepEqual(errors,[],`${label}: no shell errors`);
         await page.screenshot({path:path.join(output,`${label}.png`),fullPage:true});
@@ -92,6 +92,6 @@ export async function qualifyPreviewShell(browser, base, output) {
     await page.clock.fastForward(31000);
     assert.equal(await page.locator('iframe').count(),0);
     assert.match(await page.locator('[data-demo-status]').first().textContent(),/could not load|did not respond/);
-    assert.equal(await page.locator('[data-demo-retry]:visible').count(),4);
+    assert.equal(await page.locator('[data-demo-retry]:visible').count(),demoCount);
   } finally { await context.close(); }
 }
