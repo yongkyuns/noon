@@ -2271,6 +2271,11 @@ impl ExecutionSession {
                 target,
                 options,
             } => {
+                if target.has_composed_effects && !self.reachability.is_reachable(*source) {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "owned family animate requires groups with composed effects to be added first".into(),
+                    ));
+                }
                 self.stage_detached_method_family(store, *source, admitted)?;
                 let copied = target.stage(store, *source, declaration).map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())

@@ -12,6 +12,7 @@ use std::{collections::BTreeMap, rc::Rc};
 pub(crate) struct FamilyMethodTarget {
     states: BTreeMap<SemanticNodeId, SemanticObjectState>,
     pub(crate) styles: BTreeMap<SemanticNodeId, SemanticStyle>,
+    pub(crate) has_composed_effects: bool,
 }
 
 impl FamilyMethodTarget {
@@ -24,20 +25,22 @@ impl FamilyMethodTarget {
         let store = live.integration_store().borrow();
         let unsupported = || {
             LiveSessionError::Mobject(
-                "owned family animate requires groups of planar vector shapes, plain text, or MathTex without content-owning roots, effects, composite opacity, or table/graph metadata".into(),
+                "owned family animate requires groups of planar vector shapes, plain text, or MathTex without content-owning roots, per-object effects, composite opacity, or table/graph metadata".into(),
             )
         };
         let mut states = BTreeMap::new();
         let mut styles = BTreeMap::new();
+        let mut has_composed_effects = false;
         for id in store
             .ordered_authoring_nodes(family.node_id())
             .map_err(AuthoringError::from)?
         {
             let node = store.node(id).expect("validated member");
             if matches!(node.kind(), SemanticNodeKind::Family(_)) {
-                let Some(style) = ordinary_group_style(&store, id) else {
+                let Some(style) = method_group_style(&store, id) else {
                     return Err(unsupported());
                 };
+                has_composed_effects |= !node.effect_ids().is_empty();
                 styles.insert(id, style.clone());
                 continue;
             }
@@ -53,6 +56,16 @@ impl FamilyMethodTarget {
                 return Err(unsupported());
             }
             states.insert(id, state);
+        }
+        if has_composed_effects
+            && methods
+                .iter()
+                .any(|method| !matches!(method, Method::Shift(_) | Method::Scale(_)))
+        {
+            return Err(LiveSessionError::Mobject(
+                "owned family animate supports shift and scale on groups with composed effects"
+                    .into(),
+            ));
         }
         for method in methods {
             let mut bounds = None;
@@ -138,7 +151,11 @@ impl FamilyMethodTarget {
                 }
             }
         }
-        Ok(Self { states, styles })
+        Ok(Self {
+            states,
+            styles,
+            has_composed_effects,
+        })
     }
 
     pub(crate) fn stage(
@@ -167,17 +184,18 @@ impl FamilyMethodTarget {
                     .ok_or(AuthoringError::MissingCopySource(id))?;
                 Ok(())
             },
-            |_, _, _, _| Ok(()), // Admission rejects all attachment-bearing targets.
+            // Motion drives only the original drawable leaves. Their composed
+            // effect still reads those same leaves through its existing scope.
+            |_, _, _, _| Ok(()),
         )?;
         Ok(copied[&source])
     }
 }
 
-fn ordinary_group_style(store: &SemanticStore, id: SemanticNodeId) -> Option<&SemanticStyle> {
+fn method_group_style(store: &SemanticStore, id: SemanticNodeId) -> Option<&SemanticStyle> {
     let node = store.node(id)?;
     let style = node.family_style()?;
     (node.semantic_object_state().is_none()
-        && node.effect_ids().is_empty()
         && style.object_opacity == 1.0
         && !store.has_family_appearance_target(id)
         && node.graph_declaration().is_none()
@@ -209,15 +227,15 @@ pub(crate) fn is_ordinary_method_family(store: &SemanticStore, root: SemanticNod
     store.ordered_authoring_nodes(root).is_ok_and(|nodes| {
         nodes.into_iter().all(|id| {
             let node = store.node(id).expect("validated authoring node");
-            if matches!(node.kind(), SemanticNodeKind::Family(_)) {
-                ordinary_group_style(store, id).is_some()
-            } else {
-                node.member_count() == 0
-                    && node.effect_ids().is_empty()
-                    && node
-                        .semantic_object_state()
-                        .is_some_and(|state| is_method_leaf(store, state))
-            }
+            node.effect_ids().is_empty()
+                && if matches!(node.kind(), SemanticNodeKind::Family(_)) {
+                    method_group_style(store, id).is_some()
+                } else {
+                    node.member_count() == 0
+                        && node
+                            .semantic_object_state()
+                            .is_some_and(|state| is_method_leaf(store, state))
+                }
         })
     })
 }

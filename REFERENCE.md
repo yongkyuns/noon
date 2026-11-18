@@ -245,14 +245,13 @@ scene.arrange_family_in_grid_with_options(
 ```
 
 Import `FamilyArrangeOptions` and `FamilyGridOptions` from `noon` for this example.
-Owned group animation currently supports one added flat vector family per play,
-with fixed topology and shared scale/rotation pivots. It uses the existing family
-transform interpolation, member lag, and completion rules. Nested/content-owning
-groups, effects, table/graph metadata, and mixing a group target with other animation
-leaves fail explicitly. The paired [Rust](crates/noon/src/example_scenes/group_animation.rs)
-and [Python](web/python/examples/showcase_group_animation.py) diagram tutorial is
-available as **Move the whole diagram** in the demo gallery; run its native version
-with `cargo run -p noon-native --example ordinary_group_animation`.
+Owned group animation supports fixed-membership planar groups with shared
+scale and rotation pivots. Several independent groups and objects can animate in
+one play. An added group with a composed effect supports shift and uniform scale.
+The paired [Rust](crates/noon/src/example_scenes/group_animation.rs) and
+[Python](web/python/examples/showcase_group_animation.py) lesson **Move the whole
+diagram** demonstrates this with a glowing underline. Run the native lesson with
+`cargo run -p noon-native --example ordinary_group_animation`.
 
 Mixed object/family collections use `MobjectTarget::Object(&object)` and
 `MobjectTarget::Family(&family)`. Construction accepts arrays, vectors, and borrowed

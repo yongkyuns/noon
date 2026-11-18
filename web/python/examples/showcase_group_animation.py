@@ -1,4 +1,4 @@
-"""Introduce a nested diagram with real text labels on its first play.
+"""Introduce a nested diagram, then move a glowing underline between its steps.
 
 The paired Rust example uses the same families and shared animation compiler.
 """
@@ -30,7 +30,12 @@ class GroupAnimation(Scene):
         # Each group has its own pivot; the marker advances between rail ticks.
         marker = Circle(radius=0.16, color=ORANGE, fill_opacity=1).shift(
             2.4 * LEFT + 1.4 * DOWN)
-        self.add(rail, marker)
+        beam = Rectangle(width=0.72, height=0.12, fill=ORANGE, fill_opacity=1,
+                         stroke=None).shift(1.56 * LEFT + 0.24 * DOWN)
+        tip = Circle(radius=0.12, fill=YELLOW, fill_opacity=1,
+                     stroke=None).shift(1.24 * LEFT + 0.24 * DOWN)
+        callout = VGroup(beam, tip).set_glow(radius=Pixels(10), intensity=1.4, color=ORANGE)
+        self.add(callout, rail, marker)
         self.wait(0.75)
         # The diagram enters at the start of its first animation.
         self.play(diagram.animate(lag_ratio=0.08).shift(0.5 * UP).scale(0.8),
@@ -44,6 +49,7 @@ class GroupAnimation(Scene):
         self.play(diagram.animate.rotate(0.25).scale(1.25)
                   .shift(0.5 * DOWN).set_color(ORANGE),
                   rail.animate.scale(1.25).shift(0.25 * UP),
+                  callout.animate.shift(3.32 * RIGHT + 0.58 * DOWN).scale(1.2),
                   marker.animate.shift(1.76 * RIGHT + 0.25 * UP).set_color(BLUE),
                   run_time=1.25)
         self.wait(1.0)
