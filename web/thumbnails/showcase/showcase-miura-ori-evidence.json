@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "b00a94e2986b1cbaa10d6bd85f01e93f26995f06",
+  "backend": "webgpu",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "b00a94e2986b1cbaa10d6bd85f01e93f26995f06",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "aa4a44b4a9c02ec74a840ffc8dd455c148d49e73da8a1b52d614376dc873a718"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "106269ed2a6cb07baea8258bc5823e60540924510a723c040ef1304d0fd22bb2"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "bca5c80feb0d873f37ec5c1816d0c17ef4f8aeec4bbd308219bec4a19331fbca"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
+      }
+    },
+    "buildId": "e72ca878723ca103c90bfd88ce3f29720b4acbb8c31afe3ec809497edb816322"
+  },
+  "posters": [
+    {
+      "id": "showcase-miura-ori",
+      "captureBuildId": "e72ca878723ca103c90bfd88ce3f29720b4acbb8c31afe3ec809497edb816322",
+      "sourceSha256": "8d06ade3d3af97e3326860b2998ad9cb2b317b470f35f28ba889f4ed36b99f96",
+      "thumbnailTime": 7.9,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 49574,
+        "pngSha256": "18bdbb8b542aed0a257fd8d2c64add77bb10776134b351540993ee7d0719cb80",
+        "pixelSha256": "7f227e3190b1649936054dc3d31b5afff362a5536e71f33ce1128257a38c2388"
+      },
+      "sample": {
+        "requestedTime": 7.9,
+        "publishedTime": 7.9,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}

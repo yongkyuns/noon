@@ -760,7 +760,7 @@
           "url": "https://www.3blue1brown.com/lessons/clt/"
         }
       ],
-      "features": ["MoveAlongPath", "LaggedStart", "Create", "histogram transforms", "Variable", "sections"],
+      "features": ["Succession", "LaggedStart", "Create", "histogram transforms", "sections"],
       "duration": 21.2,
       "thumbnail_time": 19.8,
       "thumbnail": "thumbnails/showcase/showcase-galton-board.png",

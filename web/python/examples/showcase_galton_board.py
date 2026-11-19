@@ -15,7 +15,16 @@ def route(bits):
         x += 0.58 if bit else -0.58
         y -= 0.95
         points.append((x, y, 0))
+    points.extend(((x, y - 0.08, 0), (x, y - 0.16, 0)))
     return points
+
+
+def drop(bead, points):
+    # One native translation per edge of the path. Equal dyadic time slices
+    # match Create's curve-by-curve reveal and keep the bead on the trail.
+    return Succession(*(Transform(bead, bead.copy().move_to(point),
+                                  run_time=1 / 8, rate_func=linear)
+                        for point in points[1:]), rate_func=linear)
 
 
 def path(points, color, width):
@@ -50,11 +59,8 @@ class GaltonBoard(Scene):
         self.play(FadeIn(caption), run_time=0.5)
         points = route((0, 1, 1))
         trail, bead = path(points, GOLD, 3), Dot(points[0], radius=0.095, color=YELLOW)
-        track = trail.copy().set_object_opacity(0)
-        self.add(track)
         self.play(FadeIn(bead), run_time=0.25)
-        self.play(MoveAlongPath(bead, track), Create(trail), run_time=2.1, rate_func=linear)
-        self.remove(track)
+        self.play(drop(bead, points), Create(trail), run_time=2.1, rate_func=linear)
         self.wait(0.7)
 
         self.next_section("Count routes")
@@ -90,14 +96,7 @@ class GaltonBoard(Scene):
         # Keep the route count below the chart, leaving the measured heights clear.
         self.play(FadeOut(route_heading), *(FadeOut(card) for card in route_labels),
                   run_time=0.45)
-        # Noon's retained path motion uses a path attached to the scene. Reuse
-        # eight invisible tracks for all the sample beads.
-        tracks = {}
-        for words in routes:
-            for word in words:
-                bits = tuple(letter == "R" for letter in word)
-                tracks[bits] = path(route(bits), TEAL, 2).set_object_opacity(0)
-        self.add(*bars, *tracks.values())
+        self.add(*bars)
         self.play(Create(axis), *(Create(mark) for mark in expected),
                   *(FadeIn(label(f"{k} right", slot, -1.61, 18, GREY_B))
                     for k, slot in enumerate(slots)),
@@ -106,10 +105,8 @@ class GaltonBoard(Scene):
         tally = [0] * 4
         total = 0
         seed = 1729
-        sample = Variable(0, "beads", num_decimal_places=0, font_size=26)
-        sample.move_to((-3.4, -1.95, 0))
-        self.add(sample)
-        self.wait(0.25)
+        sample = label("0 beads", -3.4, -1.95, 24, TEAL_A)
+        self.play(FadeIn(sample), run_time=0.25)
         for _ in range(4):
             drops, motions = [], []
             for _ in range(12):
@@ -120,14 +117,15 @@ class GaltonBoard(Scene):
                 points = route(bits)
                 dot = Dot(points[0], radius=0.064, color=TEAL)
                 drops.append(dot)
-                motions.append(MoveAlongPath(dot, tracks[bits], rate_func=linear))
+                motions.append(drop(dot, points))
             self.add(*drops)
             self.play(LaggedStart(*motions, lag_ratio=0.06), run_time=1.65, rate_func=linear)
             self.remove(*drops)
+            current_sample = label(f"{total} beads", -3.4, -1.95, 24, TEAL_A)
             self.play(*(Transform(bar, histogram(slot, n / total))
                         for bar, slot, n in zip(bars, slots, tally)),
-                      sample.tracker.animate.set_value(total),
-                      run_time=0.4)
+                      FadeOut(sample), FadeIn(current_sample), run_time=0.4)
+            sample = current_sample
         self.play(Write(label("More routes lead inward, so the middle bins are more likely.",
                               0, -3.05, 26, GREY_B)), run_time=0.8)
         self.wait(2.0)
