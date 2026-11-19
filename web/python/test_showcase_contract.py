@@ -12,7 +12,7 @@ QUALIFIED_BROWSER_MODULES = {"noon", "math", "bisect", "colorsys", "struct", "zl
 
 
 class ShowcaseSourceContract(unittest.TestCase):
-    def test_manim_ports_admit_incremental_playback(self):
+    def test_credited_ports_admit_incremental_playback(self):
         from _manim_source_execution import source_execution_proof
 
         for entry in MANIFEST["entries"]:
@@ -121,8 +121,8 @@ class ShowcaseSourceContract(unittest.TestCase):
                                for node in ast.walk(scenes[0])),
                         "teach an entrance or ordinary target animation")
                 # The BooleanOperations port ends with its final label. The
-                # Miura-ori port keeps its camera moving through the final hold.
-                if entry["id"] not in {"showcase-vector-cutout", "showcase-miura-ori"}:
+                # Miura-ori and the drip gauge animate through their final holds.
+                if entry["id"] not in {"showcase-vector-cutout", "showcase-miura-ori", "showcase-drip-fill-gauge"}:
                     self.assertTrue(any(isinstance(node.func, ast.Attribute) and node.func.attr == "wait"
                                         for node in calls), "hold a readable state")
     def _assert_finite_audio_lesson(self, entry, tree):

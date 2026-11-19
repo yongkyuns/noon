@@ -1,15 +1,30 @@
-# Manim example notices
+# Ported example notices
 
 The four ManimGX ports are based on Academa's examples at
 [ManimGX revision 1fb4dd7](https://github.com/academa-labs/manimgx/tree/1fb4dd7327bf5ed7d0c40d022c05cb816455ae1d/examples).
 The BooleanOperations port is based on the
 [Manim Community v0.21.0 gallery](https://github.com/ManimCommunity/manim/blob/v0.21.0/docs/source/examples.rst).
 
+Circle area from one radius is based on
+[Motion Canvas’s `node-signal.tsx`](https://github.com/motion-canvas/motion-canvas/blob/7b91435c301d530351dcf5ebb91dd139c002e405/packages/examples/src/scenes/node-signal.tsx).
+Market Share Race and Drip Fill Gauge are based on
+[RenderComp’s Racing Bar Chart](https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/components/racing-chart/RacingChart.tsx)
+and [Drip Fill Gauge](https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/components/pourover-drip-fill-gauge/PouroverDripFillGauge.tsx).
+The gauge also draws from RenderComp’s pixel kit at the same revision, including its
+[bitmap glyphs](https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/pixel-kit/font.ts),
+[particle formulas](https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/pixel-kit/particles.ts),
+[idle pulse](https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/pixel-kit/render.tsx),
+and [CRT and dither effects](https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/pixel-kit/fx.tsx).
+
 MIT License
 
 Copyright (c) 2026 Academa, Inc. (ManimGX)
 
 Copyright (c) 2018 3Blue1Brown LLC (Manim Community license)
+
+Copyright (c) 2022 motion-canvas
+
+Copyright (c) 2026 Trimora Inc. (RenderComp)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
