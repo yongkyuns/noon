@@ -45,7 +45,7 @@ test("distribution manifest pins package, skill, capability and runner identitie
   assert.equal(first.environment.trustedCheckoutRequired, true);
 
   assert.equal(first.skill.name, "noon-authoring");
-  assert.equal(first.skill.version, "0.3.0");
+  assert.equal(first.skill.version, "0.3.2");
   assertSha(first.skill.sha256, "skill");
 
   assert.equal(first.capabilities.schemaVersion, 1);

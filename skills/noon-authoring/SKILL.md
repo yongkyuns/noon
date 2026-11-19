@@ -3,7 +3,7 @@ name: noon-authoring
 description: Author and review Noon animation scenes using capability-qualified ManimCE-style Python or the shared Rust API. Use when a user asks to create, explain, repair, or verify a Noon animation, lecture, or tutorial, or when scene source imports noon. Not a generic ManimGL skill or a contract for modifying Noon internals.
 compatibility: Requires a trusted Noon repository checkout, Python 3.12+, and Node 22+ for local capability/MCP tooling. Isolated preview additionally requires Docker, a built current browser package, and the repository-pinned preview runtime; capability discovery alone does not render or install dependencies.
 metadata:
-  version: "0.3.0"
+  version: "0.3.2"
 ---
 
 # Noon authoring
@@ -41,6 +41,9 @@ For a lecture, tutorial, or explanatory demo, use [lecture design](references/le
 to choose the audience's question, storyboard the answer, and check whether a
 viewer can explain the cause from the rendered sequence.
 
+When porting an existing scene, use the original as the specification. Preserve
+its intended appearance and behavior, and [verify fidelity against the source](references/verification.md#faithful-scene-ports).
+
 1. List the important visual states and transitions. Include what appears,
    moves, transforms, and disappears, along with labels, layout, and holds.
 2. Choose a relevant [existing example](references/examples.md), query its current
@@ -54,7 +57,11 @@ viewer can explain the cause from the rendered sequence.
    boundaries, and final membership. A final blank frame after `FadeOut` can be
    correct; a successful run alone is not visual verification. Apply the
    [verification checks](references/verification.md).
-5. Revise source based on actual diagnostics and frames. Preserve the original
+5. Require [first-play seeking](references/verification.md#first-play-seeking)
+   for animations with an authored timeline. Verify it as soon as the target
+   player's first buffered interval is available. Document any unavoidable
+   limitation.
+6. Revise source based on actual diagnostics and frames. Preserve the original
    mathematical and animation semantics; never conceal an unsupported operation by
    replacing `MathTex` with `Text` or removing an updater.
 

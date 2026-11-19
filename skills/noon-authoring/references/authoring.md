@@ -36,10 +36,13 @@ example and restrictions. Wall-clock reads, unseeded randomness, I/O, and hidden
 mutable callback state undermine repeatability. Never assume a fresh replay safely
 repeats external side effects.
 
-Seek/rewind is a capability of the actual session, not of every Noon scene. The
-current external-sampling raster harness is forward-only and fixes its sample
-schedule. Do not change a running schedule or promise reverse playback for opaque
-callbacks. An interactive continuation may have no known final duration.
+Design authored timelines for retained playback. Prefer ordinary animations,
+deterministic setup, and supported tracker or sampled bindings. If the player
+falls back to observed execution, inspect why source or history was rejected.
+Try an equivalent retained representation that preserves the scene's timing,
+visuals, and behavior. A first-play seek exception requires a concrete limitation
+in the target runtime, such as essential host callbacks or unrecorded user input
+whose effects cannot be represented faithfully in retained history.
 
 ## Rust
 

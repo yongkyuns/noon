@@ -15,6 +15,44 @@ metadata is not a license to guess. Compare raster evidence only within the
 qualified backend and tolerance policy; do not require universal cross-GPU bit
 identity or widen thresholds to make a failing scene pass.
 
+## Faithful scene ports
+
+Identify the upstream scene and exact source revision or release. Use the
+original footage or frames as the visual reference when available. Credit the
+original authors in the source and any gallery entry, and follow the source license.
+
+Preserve the scene's mathematical meaning, text and formulas, composition,
+styling, camera motion, animation order, timing, holds, and final state. Keep
+authored randomness, audio, and interactions where they affect the result.
+Use equivalent Noon operations that preserve the visible behavior.
+
+Compare the Noon render with the reference at matching scene times and framing.
+Inspect the opening, transition interiors, and final state, then watch the full
+sequence at playback speed. Resolve material differences before calling the
+port complete. If a required Noon capability or reference is unavailable, report
+the exact gap and any differences you observed.
+
+## First-play seeking
+
+Open the exact scene in a fresh session of its normal target player. On the
+initial run, seek forward and backward between two buffered times as soon as
+the first playable interval is available. For incremental preparation, do this
+while later history is still being prepared. Check that the range grows as
+history arrives and that the player presents the expected state at the selected
+time. For a fully prepared timeline, test once the controls become available.
+
+For checked-in gallery scenes that prepare incrementally, use
+`requireInitialSeek` in `scripts/playground-profile-expectations.mjs` to guard
+initial admission. Exercise the actual browser scrubber on that same run and
+record the selected and presented times. Use the preview CLI for forward-only
+frame inspection.
+
+If first-play seeking is impossible for a faithful scene, report the exact
+blocker and when seeking becomes available, if ever. If you could not exercise
+the player, report that first-play seeking is unverified.
+
+## Repository validation
+
 For repository changes, the existing validation entrypoints are:
 
 ```bash
