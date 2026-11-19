@@ -102,7 +102,8 @@ jobs:
     name: Actual showcase frames (${{ matrix.backend }})
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 65
+    # The full catalog can take longer to capture and replay on hosted WebGPU.
+    timeout-minutes: ${{ matrix.backend == 'webgpu' && 85 || 65 }}
     strategy:
       fail-fast: false
       matrix:
@@ -138,6 +139,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: showcase-review-${{ matrix.backend }}
-          path: browser-smoke-artifacts/showcase/${{ matrix.backend }}
+          # Final videos are saved under live/ before scratch recordings are deleted.
+          path: |
+            browser-smoke-artifacts/showcase/${{ matrix.backend }}/
+            !browser-smoke-artifacts/showcase/${{ matrix.backend }}/live/recordings/**
           if-no-files-found: warn
           retention-days: 3
