@@ -19,8 +19,7 @@ pub(super) fn stage_owned_opacity(
         .node(owner)
         .filter(|node| node.semantic_object_state().is_none())
         .and_then(|node| node.family_style())
-        .filter(|_| execution.reachability.is_reachable(owner))
-        .ok_or_else(|| error("composite opacity animation requires an added unrendered group"))?;
+        .ok_or_else(|| error("composite opacity animation requires an unrendered group"))?;
     let mut style = source.clone();
     crate::semantic_mobject::edit_object_opacity(&mut style, opacity).map_err(error)?;
     let target = declaration.create_node(SemanticNodeCreation::family());
@@ -28,6 +27,80 @@ pub(super) fn stage_owned_opacity(
     crate::effective_capture::stage_effect_copy(store, execution, owner, target, declaration)
         .map_err(error)?;
     Ok(declaration.create_effect_target_animation(owner, target, true, options))
+}
+
+pub(super) fn is_opacity_copy(
+    store: &SemanticStore,
+    source: SemanticNodeId,
+    target: SemanticNodeId,
+) -> bool {
+    store
+        .node(target)
+        .and_then(noon_core::SemanticNode::family_opacity_copy_provenance)
+        .is_some_and(|copy| copy.source() == source && copy.writes_object_opacity())
+}
+
+/// Python's method builder already has a copied endpoint. Admit a root fade
+/// through the same appearance track as Rust, rejecting edits that track cannot carry.
+pub(super) fn validate_entering_opacity(
+    store: &SemanticStore,
+    owner: SemanticNodeId,
+    target: SemanticNodeId,
+) -> Result<(), ExecutionSessionAnimationError> {
+    let unsupported =
+        || error("detached family animate uses a separate request for composite opacity");
+    if !crate::animation_request::is_method_family(
+        store,
+        target,
+        MethodFamilyAppearance::RootOpacity,
+    ) {
+        return Err(unsupported());
+    }
+    for (source, target) in store
+        .ordered_family_root_pairs(owner, target)
+        .map_err(error)?
+    {
+        require_preserved_effects(store, source, target)?;
+        let original = store.node(source).expect("validated family pair");
+        let copied = store.node(target).expect("validated family pair");
+        let mut style = original
+            .family_style()
+            .expect("validated family style")
+            .clone();
+        let target_style = copied.family_style().expect("validated family style");
+        if source == owner {
+            style.object_opacity = target_style.object_opacity;
+        }
+        let original_paint = original
+            .presentation()
+            .expect("validated family presentation");
+        let copied_paint = copied
+            .presentation()
+            .expect("validated family presentation");
+        if style != *target_style
+            || original_paint.draw_enabled != copied_paint.draw_enabled
+            || original_paint.z_index != copied_paint.z_index
+            || original.family_fallback_color() != copied.family_fallback_color()
+            || original.family_background_stroke_color() != copied.family_background_stroke_color()
+            || original.family_background_stroke_width() != copied.family_background_stroke_width()
+            || original.family_background_stroke_opacity()
+                != copied.family_background_stroke_opacity()
+            || original.sheen_direction() != copied.sheen_direction()
+        {
+            return Err(unsupported());
+        }
+    }
+    for (source, target) in store
+        .ordered_family_leaf_pairs(owner, target)
+        .map_err(error)?
+    {
+        let original = store.semantic_object_state_checked(source).map_err(error)?;
+        let copied = store.semantic_object_state_checked(target).map_err(error)?;
+        if !copied.matches_authored_state_of(original) {
+            return Err(unsupported());
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn has_effects(
@@ -94,17 +167,26 @@ pub(super) fn validate(
     }
     // The entering geometry uses the original scopes without appearance tracks.
     for (source, target) in pairs {
-        let source = store.animation_effect_snapshot(source).map_err(error)?;
-        let target = store.animation_effect_snapshot(target).map_err(error)?;
-        if source
-            .iter()
-            .map(|item| (&item.name, &item.definition))
-            .ne(target.iter().map(|item| (&item.name, &item.definition)))
-        {
-            return Err(error(
-                "detached family animate must preserve its composed effects",
-            ));
-        }
+        require_preserved_effects(store, source, target)?;
+    }
+    Ok(())
+}
+
+fn require_preserved_effects(
+    store: &SemanticStore,
+    source: SemanticNodeId,
+    target: SemanticNodeId,
+) -> Result<(), ExecutionSessionAnimationError> {
+    let source = store.animation_effect_snapshot(source).map_err(error)?;
+    let target = store.animation_effect_snapshot(target).map_err(error)?;
+    if source
+        .iter()
+        .map(|item| (&item.name, &item.definition))
+        .ne(target.iter().map(|item| (&item.name, &item.definition)))
+    {
+        return Err(error(
+            "detached family animate must preserve its composed effects",
+        ));
     }
     Ok(())
 }

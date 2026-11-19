@@ -101,10 +101,10 @@ const cases=times.map(sampleTime=>({
     stopAtSourceCompletion:sampleTime===14,
   }));
 cases.push({...cases.at(-1),id:"scope-opacity-14-cold",pythonFrameTimes:undefined});
-cases.push(...[0, 1.2, 2.4, 4.8].map(sampleTime => ({
+cases.push(...[0, 0.9, 1.2, 2.4, 4.8].map(sampleTime => ({
   id: `group-opacity-${sampleTime}`, file: "showcase_group_opacity.py",
   factory: "createDirectGroupOpacitySmokeRenderer", duration: 4.8, sampleTime,
-  objectCount: sampleTime === 0 ? 6 : 7,
+  objectCount: sampleTime === 0 ? 4 : 7,
   directHeldSampleTime: sampleTime === 2.4 ? 1.8 : undefined,
   playback: "live", boundaries: [0.6, 1.8, 3, 4],
   stopAtSourceCompletion: sampleTime === 4.8,

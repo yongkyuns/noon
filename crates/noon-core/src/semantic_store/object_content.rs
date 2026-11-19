@@ -629,6 +629,13 @@ impl SemanticObjectState {
         self.presentation.insertion_order
     }
 
+    /// A copied animation endpoint has its own store-assigned painter tie-break.
+    pub fn matches_authored_state_of(&self, source: &Self) -> bool {
+        let mut candidate = self.clone();
+        candidate.presentation.insertion_order = source.presentation.insertion_order;
+        &candidate == source
+    }
+
     pub const fn view_color_profile(&self) -> crate::ViewColorProfile {
         self.view_color_profile
     }

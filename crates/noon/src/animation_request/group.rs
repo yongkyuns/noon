@@ -37,7 +37,7 @@ impl FamilyMethodTarget {
         {
             let node = store.node(id).expect("validated member");
             if matches!(node.kind(), SemanticNodeKind::Family(_)) {
-                let Some(style) = method_group_style(&store, id) else {
+                let Some(style) = method_group_style(&store, id, false) else {
                     return Err(unsupported());
                 };
                 has_composed_effects |= !node.effect_ids().is_empty();
@@ -192,12 +192,16 @@ impl FamilyMethodTarget {
     }
 }
 
-fn method_group_style(store: &SemanticStore, id: SemanticNodeId) -> Option<&SemanticStyle> {
+fn method_group_style(
+    store: &SemanticStore,
+    id: SemanticNodeId,
+    allow_opacity: bool,
+) -> Option<&SemanticStyle> {
     let node = store.node(id)?;
     let style = node.family_style()?;
     (node.semantic_object_state().is_none()
-        && style.object_opacity == 1.0
-        && !store.has_family_appearance_target(id)
+        && (allow_opacity
+            || style.object_opacity == 1.0 && !store.has_family_appearance_target(id))
         && node.graph_declaration().is_none()
         && store
             .semantic_table_layout(id)
@@ -224,20 +228,42 @@ fn is_method_leaf(store: &SemanticStore, state: &SemanticObjectState) -> bool {
 }
 
 pub(crate) fn is_ordinary_method_family(store: &SemanticStore, root: SemanticNodeId) -> bool {
-    is_method_family(store, root, false)
+    is_method_family(store, root, MethodFamilyAppearance::Ordinary)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MethodFamilyAppearance {
+    Ordinary,
+    ComposedEffects,
+    RootOpacity,
+}
+
+impl MethodFamilyAppearance {
+    pub(crate) fn for_motion(has_composed_effects: bool) -> Self {
+        if has_composed_effects {
+            Self::ComposedEffects
+        } else {
+            Self::Ordinary
+        }
+    }
 }
 
 pub(crate) fn is_method_family(
     store: &SemanticStore,
     root: SemanticNodeId,
-    allow_composed_effects: bool,
+    appearance: MethodFamilyAppearance,
 ) -> bool {
     store.ordered_authoring_nodes(root).is_ok_and(|nodes| {
         nodes.into_iter().all(|id| {
             let node = store.node(id).expect("validated authoring node");
             if matches!(node.kind(), SemanticNodeKind::Family(_)) {
-                (allow_composed_effects || node.effect_ids().is_empty())
-                    && method_group_style(store, id).is_some()
+                (appearance != MethodFamilyAppearance::Ordinary || node.effect_ids().is_empty())
+                    && method_group_style(
+                        store,
+                        id,
+                        appearance == MethodFamilyAppearance::RootOpacity,
+                    )
+                    .is_some()
             } else {
                 node.effect_ids().is_empty()
                     && node.member_count() == 0
