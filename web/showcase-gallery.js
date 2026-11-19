@@ -34,6 +34,7 @@ export function normalizeShowcaseManifest(manifest) {
     if (primaryFeatures.has(entry.primary_feature)) throw new Error(`${entry.id}: duplicated primary learning outcome`);
     if (entry.thumbnail !== `thumbnails/showcase/${entry.id}.png`) throw new Error(`${entry.id}: poster must be a local captured PNG`);
     if (!Number.isFinite(entry.duration) || entry.duration <= 0) throw new Error(`${entry.id}: duration must be positive`);
+    if (entry.loop != null && typeof entry.loop !== "boolean") throw new Error(`${entry.id}: loop must be a boolean`);
     if (!Number.isFinite(entry.thumbnail_time) || entry.thumbnail_time <= 0 || entry.thumbnail_time > entry.duration) throw new Error(`${entry.id}: invalid poster time`);
     if (!Array.isArray(entry.features) || entry.features.length === 0 || entry.features.some((feature) => typeof feature !== "string" || !feature.trim())) throw new Error(`${entry.id}: expected feature tags`);
     if (!Array.isArray(entry.beats) || entry.beats.length < 3 || entry.beats.some((beat) =>
@@ -87,6 +88,7 @@ export function normalizeShowcaseManifest(manifest) {
       interaction: entry.interaction ? { type: entry.interaction.type, maxMovement: 4 } : null,
       inspectionZoom: entry.inspection_zoom === true,
       performance: entry.performance === true,
+      loop: entry.loop !== false,
       playbackCapability,
       playbackLimitation: entry.playback_limitation ?? null,
     };

@@ -1309,6 +1309,11 @@ export async function attachSemanticEngine(
               if (currentPlayerTime() === player.finiteAudioDuration()) {
                 await awaitPresentation(send(player.seekDeltaJson(0)));
               }
+            } else if (prepared !== null) {
+              const playback = JSON.parse(player.preparedPlaybackStateJson(performance.now()));
+              if (playback.completed && playback.end > 0) {
+                await awaitPresentation(send(player.seekDeltaJson(0)));
+              }
             }
             if (prepared !== null) {
               const mutationStartedAtEpochMs = hostEpochMs();

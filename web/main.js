@@ -1248,6 +1248,7 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
           preparedPlayback,
           preparationLookaheadSeconds,
           diagnosticPreparationTiming,
+          loopPlayback: example.loop !== false,
           async onSemanticContinuation(registration) {
             if (earlyContinuation !== null) {
               throw new Error("Python source registered more than one semantic continuation");

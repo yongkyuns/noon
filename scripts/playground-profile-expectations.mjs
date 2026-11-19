@@ -49,11 +49,11 @@ const rows = [
   ['showcase-channel-flow','showcase_channel_flow.py','bbd3f3734b0e9870b27ddc1b638911938ad5aabc46d6a93295c6500084cbeb73','observed','observed-replay',['sections'], 'observed-complete'],
   ['showcase-neon-glow','showcase_neon_glow.py','8afc4e03ec664f0faeaa71735f3ed13bf9da7da95a814dd225350f2319f0701c','incremental','ordinary',['sections'], 'looped'],
   ['showcase-riemann-sums','showcase_riemann_sums.py','38a09733491041836e83ad709d9b268c6ffaa51c978e50f2001721e126b482a1','observed','observed-replay',['sections'], 'observed-complete'],
-  ['showcase-galton-board','showcase_galton_board.py','1fa1751f4649deae1e51cd83dc67dc74156a6baff7572c777987f0e774c8ab49','incremental','ordinary',['sections'], 'looped', true],
-  ['showcase-vector-cutout','showcase_vector_cutout.py','103d703d30623202e7127e159fbd2c7c45b846ed27757929ff1d4c55107274f2','incremental','ordinary',[], 'looped', true],
-  ['showcase-fourier-epicycles','showcase_fourier_epicycles.py','44085edde6cf80f56c71152131aed2c665359561dfbaa5f250a27f51a7ee5439','incremental','ordinary',['sections'], 'looped', true],
-  ['showcase-miura-ori','showcase_miura_ori.py','4fbd478fc05fe003540121dcb3b8e33e0a6e61d5033023cee0ef8dd82a8f4253','incremental','ordinary',['sections'], 'looped', true],
-  ['showcase-pythagoras','showcase_pythagoras.py','63d34f23d78383eddf4bcda7c7bbeefaccf58479c8aaaeada4a8db0b34c69c09','incremental','ordinary',['sections'], 'looped', true],
+  ['showcase-galton-board','showcase_galton_board.py','1fa1751f4649deae1e51cd83dc67dc74156a6baff7572c777987f0e774c8ab49','incremental','ordinary',['sections'], 'finite-complete', true],
+  ['showcase-vector-cutout','showcase_vector_cutout.py','103d703d30623202e7127e159fbd2c7c45b846ed27757929ff1d4c55107274f2','incremental','ordinary',[], 'finite-complete', true],
+  ['showcase-fourier-epicycles','showcase_fourier_epicycles.py','44085edde6cf80f56c71152131aed2c665359561dfbaa5f250a27f51a7ee5439','incremental','ordinary',['sections'], 'finite-complete', true],
+  ['showcase-miura-ori','showcase_miura_ori.py','4fbd478fc05fe003540121dcb3b8e33e0a6e61d5033023cee0ef8dd82a8f4253','incremental','ordinary',['sections'], 'finite-complete', true],
+  ['showcase-pythagoras','showcase_pythagoras.py','63d34f23d78383eddf4bcda7c7bbeefaccf58479c8aaaeada4a8db0b34c69c09','incremental','ordinary',['sections'], 'finite-complete', true],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
@@ -66,7 +66,7 @@ export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
     attachedProfile: profile,
     dispositionKind,
     requireInitialSeek,
-    completionPolicy: dispositionKind === 'ordinary' ? 'gallery-loop'
+    completionPolicy: dispositionKind === 'ordinary' ? (disposition === 'looped' ? 'gallery-loop' : 'finite-replay')
       : dispositionKind === 'immutable' ? 'finite-audio'
         : dispositionKind === 'observed-replay' ? 'observed-then-replay'
           : dispositionKind === 'callback' ? 'observed-nonreplayable' : 'native-input-handoff',

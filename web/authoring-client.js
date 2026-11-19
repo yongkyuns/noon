@@ -98,7 +98,7 @@ export class PythonAuthoringClient {
     source,
     context = {},
     { onSemanticContinuation = null, preparedPlayback = false, preparationLookaheadSeconds = 1,
-      diagnosticPreparationTiming = false } = {},
+      diagnosticPreparationTiming = false, loopPlayback = true } = {},
   ) {
     if (typeof source !== "string" || source.trim() === "") {
       throw new TypeError("Python authoring source must be a non-empty string");
@@ -110,6 +110,7 @@ export class PythonAuthoringClient {
       throw new TypeError("onSemanticContinuation must be a function");
     }
     if (typeof preparedPlayback !== "boolean") throw new TypeError("preparedPlayback must be a boolean");
+    if (typeof loopPlayback !== "boolean") throw new TypeError("loopPlayback must be a boolean");
     if (typeof diagnosticPreparationTiming !== "boolean") {
       throw new TypeError("diagnosticPreparationTiming must be a boolean");
     }
@@ -146,6 +147,7 @@ export class PythonAuthoringClient {
         source,
         context,
         ...(preparedPlayback ? { preparedPlayback, preparationLookaheadSeconds } : {}),
+        ...(preparedPlayback && !loopPlayback ? { loopPlayback } : {}),
         ...(diagnosticPreparationTiming ? { diagnosticPreparationTiming } : {}),
       }),
     );

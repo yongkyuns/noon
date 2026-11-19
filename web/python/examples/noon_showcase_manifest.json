@@ -750,6 +750,7 @@
       "primary_feature": "galton-board-route-counts",
       "category": "Probability",
       "path": "python/examples/showcase_galton_board.py",
+      "loop": false,
       "credits": [
         {
           "label": "Academa’s ManimGX Galton board",
@@ -777,6 +778,7 @@
       "primary_feature": "boolean-vector-cutout",
       "category": "Geometry",
       "path": "python/examples/showcase_vector_cutout.py",
+      "loop": false,
       "credits": [
         {
           "label": "Manim Community’s BooleanOperations example",
@@ -805,6 +807,7 @@
       "primary_feature": "fourier-epicycle-chain",
       "category": "Periodic motion",
       "path": "python/examples/showcase_fourier_epicycles.py",
+      "loop": false,
       "credits": [
         {
           "label": "Academa’s ManimGX Circles draw π",
@@ -837,6 +840,7 @@
       "primary_feature": "miura-ori-rigid-folding",
       "category": "Three dimensions",
       "path": "python/examples/showcase_miura_ori.py",
+      "loop": false,
       "credits": [
         {
           "label": "Academa’s ManimGX Miura-ori",
@@ -869,6 +873,7 @@
       "primary_feature": "pythagoras-area-rearrangement",
       "category": "Geometry",
       "path": "python/examples/showcase_pythagoras.py",
+      "loop": false,
       "credits": [
         {
           "label": "Academa’s ManimGX Pythagoras by rearrangement",
