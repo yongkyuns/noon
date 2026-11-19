@@ -7,17 +7,28 @@ import unittest
 WEB = Path(__file__).resolve().parents[1]
 MANIFEST = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())
 # Qualified by the actual Pyodide showcase captures on both renderer backends.
-# These are bundled standard-library modules; optional packages stay excluded.
-QUALIFIED_BROWSER_MODULES = {"noon", "math", "colorsys", "struct", "zlib", "array", "re"}
+# NumPy is supplied by the browser worker for the pinned ManimGX ports.
+QUALIFIED_BROWSER_MODULES = {"noon", "math", "bisect", "colorsys", "struct", "zlib", "array", "re", "numpy"}
 
 
 class ShowcaseSourceContract(unittest.TestCase):
+    def test_manim_ports_admit_incremental_playback(self):
+        from _manim_source_execution import source_execution_proof
+
+        for entry in MANIFEST["entries"]:
+            if entry.get("credits"):
+                with self.subTest(example=entry["id"]):
+                    source = (WEB / entry["path"]).read_text()
+                    proof = source_execution_proof(source, auto_prepare_latex=True)
+                    self.assertTrue(proof["admitted"], proof["reason"])
+
     def test_featured_lessons_compile_portable_constructs(self):
         from _manim_source_execution import compile_authoring_source
 
         examples = {entry["id"]: entry["path"] for entry in MANIFEST["entries"]}
         featured = json.loads((WEB / "site/examples.json").read_text())
-        for entry in featured:
+        ports = [entry for entry in MANIFEST["entries"] if entry.get("credits")]
+        for entry in featured + ports:
             with self.subTest(example=entry["id"]):
                 source = (WEB / examples[entry["id"]]).read_text()
                 _, portable = compile_authoring_source(source)
@@ -50,7 +61,7 @@ class ShowcaseSourceContract(unittest.TestCase):
                 self.assertEqual(len(scenes), 1)
                 is_surface = entry["id"] == "showcase-spatial-scene"
                 is_axes = entry["id"] == "showcase-three-d-axes"
-                is_spatial = is_surface or is_axes or entry["id"] == "showcase-channel-flow"
+                is_spatial = is_surface or is_axes or entry["id"] in {"showcase-channel-flow", "showcase-miura-ori"}
                 is_linear = entry["id"] == "showcase-linear-algebra"
                 is_camera = entry["id"] == "showcase-camera-follows-path"
                 scene_bases = {base.id for base in scenes[0].bases if isinstance(base, ast.Name)}
@@ -78,7 +89,12 @@ class ShowcaseSourceContract(unittest.TestCase):
                 plays = [node for node in calls if isinstance(node.func, ast.Attribute)
                          and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
                          and node.func.attr in progression]
-                self.assertGreaterEqual(len(plays), 2, "a lesson needs a progression, not just a static API probe")
+                if entry["id"] == "showcase-miura-ori":
+                    self.assertEqual(len(plays), 1)
+                    self.assertTrue(any(isinstance(node, ast.For) and plays[0] in list(ast.walk(node))
+                                        for node in ast.walk(scenes[0])))
+                else:
+                    self.assertGreaterEqual(len(plays), 2, "a lesson needs a progression, not just a static API probe")
                 if is_surface:
                     self.assertTrue(any(isinstance(node.func, ast.Attribute)
                                         and isinstance(node.func.value, ast.Name)
@@ -104,7 +120,11 @@ class ShowcaseSourceContract(unittest.TestCase):
                         or any(isinstance(node, ast.Attribute) and node.attr == "animate"
                                for node in ast.walk(scenes[0])),
                         "teach an entrance or ordinary target animation")
-                self.assertTrue(any(isinstance(node.func, ast.Attribute) and node.func.attr == "wait" for node in calls), "hold a readable state")
+                # The BooleanOperations port ends with its final label. The
+                # Miura-ori port keeps its camera moving through the final hold.
+                if entry["id"] not in {"showcase-vector-cutout", "showcase-miura-ori"}:
+                    self.assertTrue(any(isinstance(node.func, ast.Attribute) and node.func.attr == "wait"
+                                        for node in calls), "hold a readable state")
     def _assert_finite_audio_lesson(self, entry, tree):
         """The explicit result profile is separate from ordinary continuation lessons."""
         self.assertEqual(entry["path"], "python/examples/background_music_lesson.py")

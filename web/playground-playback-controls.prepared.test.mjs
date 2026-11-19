@@ -79,20 +79,22 @@ test("completed observed replay retires open-prefix controls without inventing a
   assert.deepEqual(f.errors, []);
 });
 
-test("preparation holds the existing timeline and preserves Pause before full playback", async () => {
+test("preparation allows seeking the adopted range and preserves Pause before full playback", async () => {
   const f = fixture(prepared({ time: 0, preparing: true, playing: true }));
   const rail = f.range;
   assert.equal(f.output.value, "0.00 / 2.00+ s");
   assert.equal(f.controls.element.dataset.buffered, "open");
   assert.equal(f.status.textContent, "Preparing animation…");
-  assert.equal(f.range.disabled, true);
+  assert.equal(f.range.disabled, false);
   assert.equal(f.restart.disabled, true);
   assert.equal(f.toggle.disabled, false);
   f.toggle.click(); await flush();
   assert.equal(f.calls.some(call => call[0] === "pause"), true);
+  f.seek(0.75); await flush();
+  assert.deepEqual(f.calls.at(-1), ["seek", 0.75]);
   f.setState(prepared({ time: 0, preparing: true, preparedFrontier: 7 }));
   assert.equal(f.output.value, "0.00 / 7.00+ s");
-  assert.equal(f.range.disabled, true);
+  assert.equal(f.range.disabled, false);
   f.setState(prepared({ time: 0, preparing: false, playing: false,
     preparedFrontier: 19, durationSeconds: 19 }));
   assert.equal(f.range, rail);
@@ -157,10 +159,7 @@ test("keyboard seeking uses the admitted history range and coalesces through the
   press("ArrowLeft"); await flush();
   press("ArrowLeft"); await flush();
   assert.equal(f.calls.at(-1)[1], 2, "rewind respects the retained start");
-  for (const state of [
-    prepared({ seekRange: null }),
-    prepared({ time: 0, preparing: true }),
-  ]) {
+  for (const state of [prepared({ seekRange: null }), prepared({ preparing: true, seekRange: null })]) {
     f.setState(state);
     const before = f.calls.length;
     press("ArrowRight"); await flush();

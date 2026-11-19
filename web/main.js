@@ -241,6 +241,16 @@ galleryStyle.textContent = `
     color: #8592aa;
     font-size: 0.68rem;
   }
+  .selected-credits {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.55rem;
+    margin-top: 0.35rem;
+    color: #aab5ca;
+    font-size: 0.68rem;
+  }
+  .selected-credits:empty { display: none; }
+  .selected-credits a { color: #b1c9fa; }
   .selected-tags {
     display: flex;
     flex-wrap: wrap;
@@ -352,7 +362,9 @@ const selectedTitle = document.createElement("span");
 selectedTitle.className = "selected-title";
 const selectedSummary = document.createElement("span");
 selectedSummary.className = "selected-summary";
-selectedCopy.append(selectedTitle, selectedSummary);
+const selectedCredits = document.createElement("span");
+selectedCredits.className = "selected-credits";
+selectedCopy.append(selectedTitle, selectedSummary, selectedCredits);
 const selectedTags = document.createElement("div");
 selectedTags.className = "selected-tags";
 selectedExampleStrip.append(selectedCopy, selectedTags);
@@ -882,6 +894,20 @@ function renderSelectedMetadata() {
   if (!example) return;
   selectedTitle.textContent = example.title;
   selectedSummary.textContent = example.summary;
+  selectedCredits.replaceChildren();
+  if (example.credits?.length) {
+    const label = document.createElement("span");
+    label.textContent = "Sources";
+    selectedCredits.append(label);
+    for (const credit of example.credits) {
+      const link = document.createElement("a");
+      link.href = credit.url;
+      link.textContent = credit.label;
+      link.target = "_blank";
+      link.rel = "noopener";
+      selectedCredits.append(link);
+    }
+  }
   selectedTags.replaceChildren();
   const parity = document.createElement("span");
   parity.className = "selected-tag parity";
@@ -1222,6 +1248,7 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
           preparedPlayback,
           preparationLookaheadSeconds,
           diagnosticPreparationTiming,
+          loopPlayback: example.loop !== false,
           async onSemanticContinuation(registration) {
             if (earlyContinuation !== null) {
               throw new Error("Python source registered more than one semantic continuation");

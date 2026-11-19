@@ -39,8 +39,9 @@ _COOPERATIVE_YIELD_QUANTUM_SECONDS = 0.001
 # deliberately a positive capability list, not a blacklist of known I/O calls.
 # Unknown dispatch, descriptors and source hooks keep observed execution.
 _SOURCE_CONSTRUCTORS = frozenset("""
-Scene Circle Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
-Dot Line Arrow DoubleArrow DashedLine VMobject VGroup Group Text MarkupText Code MathTypst
+Scene Circle Ellipse Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
+Dot Line Arrow DoubleArrow DashedLine Underline VMobject VGroup Group Text MarkupText Code MathTypst FunctionGraph
+Intersection Union Exclusion Difference
 Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform AudioSource
 ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes ThreeDScene MovingCameraScene LinearTransformationScene
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
@@ -57,13 +58,13 @@ always_redraw
 # LaTeX preparation performs an explicit, bounded worker resource fetch. It is
 # not a generally pure function and is admitted only as a direct awaited call.
 _SOURCE_RESOURCE_PREPARATIONS = frozenset({"prepare_latex"})
-_SOURCE_CONTROLLED_TEXT_COMPILERS = frozenset({"MathTex"})
+_SOURCE_CONTROLLED_TEXT_COMPILERS = frozenset({"MathTex", "Tex", "Variable"})
 _SOURCE_SHADER_CONSTRUCTORS = frozenset({"WgslEffectProgram", "ShaderParameter", "ShaderEffect"})
 _SOURCE_TYPED_PAINT_CONSTRUCTORS = frozenset({"LinearGradient"})
 _SOURCE_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
 GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
-PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GRAY GOLD TEAL MAROON
+PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GREY_A GREY_B GREY_C GRAY GOLD TEAL MAROON
 UP DOWN LEFT RIGHT IN OUT ORIGIN UL UR DL DR PI TAU DEGREES
 """.split())
 _SOURCE_BUILTINS = frozenset("""
@@ -73,7 +74,8 @@ sum tuple type zip ValueError RuntimeError
 """.split())
 _SOURCE_MEMBERS = frozenset("""
 add remove clear play wait audio on_click set_drag_targets next_section
-add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace
+add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace replace_content
+value_tracker bind_sampled
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
 set_fill set_stroke set_color set_opacity set_emission set_object_opacity set_z_index set_glow remove_glow set_effect
 add_effect remove_effect get_center get_x get_y get_width get_height get_value get_left get_right
@@ -82,12 +84,12 @@ plot plot_samples
 start_new_path add_line_to add_cubic_bezier_curve_to close_path set_points_as_corners
 set_points set_object_opacity family_members_with_points get_subpaths get_arc_length
 point_from_proportion from_string
-animate id width height radius append extend insert pop count index get keys values
+animate id width height radius red green blue append extend insert pop count index get keys values tracker value
 items update union intersection difference join split strip lstrip rstrip lower upper replace bit_length
 startswith endswith encode decode hex fromhex tobytes reverse sort small_discovery
 """.split())
 _SOURCE_SPATIAL_MEMBERS = frozenset("""
-set_camera_orientation move_camera point_light add_world_mobjects
+set_camera_orientation move_camera point_light add_world_mobjects set_world_transform
 add_fixed_in_frame_mobjects add_fixed_orientation_mobjects parametric sphere c2p
 """.split())
 _SOURCE_MOVING_CAMERA_MEMBERS = frozenset("camera frame set_view_color_profile".split())
@@ -101,9 +103,10 @@ _SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Dot3D Mesh3D ThreeDAxes Typst WorldTra
 _SOURCE_COLOR_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
 GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
-PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GRAY GOLD TEAL MAROON
+PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GREY_A GREY_B GREY_C GRAY GOLD TEAL MAROON
 """.split())
 _SOURCE_MODULES = {
+    "bisect": frozenset({"bisect_right"}),
     "math": frozenset("""
         pi tau e inf nan sin cos tan asin acos atan atan2 sinh cosh tanh sqrt hypot
         exp log log2 log10 floor ceil trunc degrees radians copysign fabs fmod pow
@@ -119,8 +122,9 @@ _SOURCE_MODULES = {
 # Only the numeric subset used by the original Fourier helpers is source-safe.
 # These are exact call paths, not a general NumPy attribute or object-dispatch grant.
 _NUMPY_ARRAY_CALLS = frozenset({
-    "np.array", "np.asarray", "np.concatenate", "np.cumsum", "np.diff", "np.exp",
-    "np.interp", "np.linspace", "np.outer", "np.zeros", "np.fft.fft",
+    "np.angle", "np.array", "np.asarray", "np.clip", "np.column_stack", "np.concatenate",
+    "np.cumsum", "np.diff", "np.exp", "np.interp", "np.linalg.norm", "np.linspace",
+    "np.maximum", "np.ones_like", "np.outer", "np.zeros", "np.zeros_like", "np.fft.fft",
 })
 _NUMPY_SCALAR_CALLS = frozenset({
     "np.abs", "np.all", "np.isfinite", "np.max", "np.min", "np.ptp", "np.sum",
@@ -160,13 +164,22 @@ def _attribute_path(node):
     return ".".join([node.id, *reversed(parts)])
 
 
+def _seeded_numpy_integer_factory(node):
+    method = node.func
+    if (isinstance(method, ast.Attribute) and method.attr == "integers"
+            and isinstance(method.value, ast.Call)
+            and _attribute_path(method.value.func) == "np.random.default_rng"):
+        return method.value
+    return None
+
+
 def _numpy_array_expression(node, names, array_functions=()):
     """Recognize only array-producing results needed by this closed data subset."""
     if isinstance(node, ast.Name):
         return node.id in names
     if isinstance(node, ast.Call):
         path = _attribute_path(node.func)
-        if path in _NUMPY_ARRAY_CALLS:
+        if path in _NUMPY_ARRAY_CALLS or _seeded_numpy_integer_factory(node) is not None:
             return True
         if isinstance(node.func, ast.Name) and node.func.id in array_functions:
             return True
@@ -1084,6 +1097,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         }
         self.admitted_resource_preparation_loads = set()
         self.admitted_controlled_text_loads = set()
+        self.admitted_function_graph_loads = set()
         self.resource_preparation_scopes = []
         self.admitted_regex_attributes = []
         self.admitted_local_group_attributes = []
@@ -1139,6 +1153,16 @@ class _SceneOnlySource(ast.NodeVisitor):
             and bindings.binding_counts.get(node.targets[0].id) == 1
             and _static_numpy_literal(node.value)
         }
+        for node in tree.body:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and bindings.binding_counts.get(node.targets[0].id) == 1
+                    and isinstance(node.value, ast.BinOp)
+                    and all(isinstance(item, (ast.Constant, ast.Name, ast.BinOp, ast.UnaryOp,
+                                              ast.Load, ast.operator, ast.unaryop))
+                            for item in ast.walk(node.value))
+                    and _numpy_numeric_expression(node.value, (), (), self.module_numpy_literals)):
+                self.module_numpy_literals[node.targets[0].id] = node.value
         self.module_integer_literals = {
             node.targets[0].id: node.value for node in tree.body
             if isinstance(node, ast.Assign) and len(node.targets) == 1
@@ -1343,6 +1367,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.admitted_audio_factory_attributes = set()
         self.admitted_svg_from_string_attributes = set()
         self.admitted_numpy_attributes = set()
+        self.admitted_numpy_generator_factories = set()
         self.admitted_numpy_function_loads = set()
         self.numpy_import = None
         self.image_pixel_sources = [set()]
@@ -1757,6 +1782,9 @@ class _SceneOnlySource(ast.NodeVisitor):
         if (isinstance(node.ctx, ast.Load) and node.id in _SOURCE_CONTROLLED_TEXT_COMPILERS
                 and id(node) not in self.admitted_controlled_text_loads):
             raise _OpaqueSource(node, "unproven_text_compiler")
+        if (isinstance(node.ctx, ast.Load) and node.id == "FunctionGraph"
+                and id(node) not in self.admitted_function_graph_loads):
+            raise _OpaqueSource(node, "unproven_plot_function")
         if (isinstance(node.ctx, ast.Load) and node.id in self.pixel_factory_names
                 and id(node) not in self.admitted_pixel_factory_loads):
             raise _OpaqueSource(node, "unproven_image_factory_reference")
@@ -2907,6 +2935,14 @@ class _SceneOnlySource(ast.NodeVisitor):
         return True
 
     def visit_Call(self, node):
+        if isinstance(node.func, ast.Name) and node.func.id == "FunctionGraph":
+            function = node.args[0] if node.args else None
+            if (not self._trusted_noon_binding("FunctionGraph") or not isinstance(function, ast.Name)
+                    or function.id not in self.local_function_names[-1]
+                    or any(isinstance(arg, ast.Starred) for arg in node.args)
+                    or any(keyword.arg is None for keyword in node.keywords)):
+                raise _OpaqueSource(node, "unproven_plot_function")
+            self.admitted_function_graph_loads.add(id(node.func))
         if isinstance(node.func, ast.Name) and node.func.id in {"bytearray", "array"}:
             name = node.func.id
             if any(name in scope for scope in self.scopes[1:]):
@@ -3001,8 +3037,25 @@ class _SceneOnlySource(ast.NodeVisitor):
             bound = any(name in scope for scope in self.scopes)
             if bound and not safe_direct and name not in self.safe_callable_aliases[-1]:
                 raise _OpaqueSource(node, "unproven_callable")
+        factory = _seeded_numpy_integer_factory(node)
+        if factory is not None:
+            integers = self.numpy_integer_names[-1]
+
+            def integer(value):
+                return _integer_expression(value, integers, self.module_numpy_literals)
+
+            if (self.numpy_import is None or len(factory.args) != 1 or factory.keywords
+                    or not integer(factory.args[0]) or len(node.args) != 2
+                    or not all(integer(arg) for arg in node.args)
+                    or len(node.keywords) != 1 or node.keywords[0].arg != "size"
+                    or not isinstance(size := node.keywords[0].value, ast.Tuple)
+                    or not size.elts or not all(integer(item) for item in size.elts)):
+                raise _OpaqueSource(node, "unproven_numpy_arguments")
+            self.admitted_numpy_generator_factories.add(id(factory))
+            self.admitted_numpy_attributes.update((id(node.func), id(factory.func), id(factory.func.value)))
         numpy_path = _attribute_path(node.func)
-        if numpy_path and (numpy_path.startswith("np.") or numpy_path in _NUMPY_CALLS):
+        if (numpy_path and (numpy_path.startswith("np.") or numpy_path in _NUMPY_CALLS)
+                and id(node) not in self.admitted_numpy_generator_factories):
             if numpy_path not in _NUMPY_CALLS:
                 raise _OpaqueSource(node, "unsupported_numpy_operation")
             if self.numpy_import is None or self.module_binding_counts.get("np") != 1:
@@ -3014,7 +3067,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             allowed_keywords = {
                 "np.array": {"dtype"}, "np.asarray": {"dtype"},
                 "np.linspace": {"endpoint"}, "np.concatenate": {"axis"},
-                "np.cumsum": {"axis"}, "np.zeros": {"dtype"},
+                "np.cumsum": {"axis"}, "np.diff": {"axis"}, "np.linalg.norm": {"axis"},
+                "np.zeros": {"dtype"},
             }.get(numpy_path, set())
             if any(keyword.arg not in allowed_keywords for keyword in node.keywords):
                 raise _OpaqueSource(node, "unproven_numpy_arguments")
@@ -3027,12 +3081,14 @@ class _SceneOnlySource(ast.NodeVisitor):
                     raise _OpaqueSource(node, "unproven_numpy_argument_origin")
             arrays = self.numpy_array_names[-1]
             containers = self.numpy_safe_containers[-1]
-            scalars = self.numpy_scalar_names[-1]
+            scalars = self.numpy_scalar_names[-1] | self.numpy_integer_names[-1]
             for index, argument in enumerate(node.args):
-                if numpy_path == "np.concatenate":
-                    valid = index == 0 and _numpy_array_collection(
-                        argument, arrays, self.module_numpy_literals, self.numpy_array_functions)
-                elif numpy_path in {"np.cumsum", "np.diff", "np.exp", "np.interp", "np.outer", "np.fft.fft"}:
+                if index == 0 and numpy_path in {"np.column_stack", "np.concatenate"}:
+                    valid = _numpy_array_collection(argument, arrays, self.module_numpy_literals,
+                                                    self.numpy_array_functions)
+                elif numpy_path in {"np.angle", "np.diff", "np.exp", "np.ones_like", "np.outer",
+                                    "np.zeros_like", "np.fft.fft"} or (
+                        index == 0 and numpy_path in {"np.cumsum", "np.linalg.norm"}):
                     valid = _numpy_array_expression(argument, arrays, self.numpy_array_functions)
                 elif numpy_path in {"np.array", "np.linspace", "np.zeros"}:
                     valid = _numpy_numeric_expression(argument, arrays, containers,
@@ -3048,6 +3104,9 @@ class _SceneOnlySource(ast.NodeVisitor):
                 if not valid:
                     raise _OpaqueSource(argument, "unproven_numpy_argument_origin")
             for keyword in node.keywords:
+                if keyword.arg == "axis" and not _integer_expression(
+                        keyword.value, self.numpy_integer_names[-1], self.module_numpy_literals):
+                    raise _OpaqueSource(keyword.value, "unproven_numpy_arguments")
                 if keyword.arg == "dtype" and not (
                     isinstance(keyword.value, ast.Name) and keyword.value.id in {"float", "complex"}
                 ):
@@ -3091,7 +3150,7 @@ class _SceneOnlySource(ast.NodeVisitor):
             for formal in self.numpy_scalar_parameters[node.func.id]:
                 if (formal not in actuals or not _numpy_numeric_expression(
                         actuals[formal], arrays, self.numpy_safe_containers[-1],
-                        self.module_numpy_literals, self.numpy_scalar_names[-1])):
+                        self.module_numpy_literals, self.numpy_scalar_names[-1] | self.numpy_integer_names[-1])):
                     raise _OpaqueSource(node, "unproven_numpy_argument_origin")
         if (isinstance(node.func, ast.Name)
                 and node.func.id in self.numpy_integer_functions_with_parameters):
@@ -3144,7 +3203,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                     or node.args[0].id not in self.image_pixel_sources[-1]):
                 raise _OpaqueSource(node, "unproven_image_paint_source")
             self.admitted_image_paint_loads.add(id(node.func))
-        if isinstance(node.func, ast.Name) and node.func.id == "MathTex":
+        if isinstance(node.func, ast.Name) and node.func.id in _SOURCE_CONTROLLED_TEXT_COMPILERS:
             name = node.func.id
             shadowed = any(name in scope for scope in self.scopes[1:])
             if name in self.module_bindings:
@@ -3154,15 +3213,20 @@ class _SceneOnlySource(ast.NodeVisitor):
                 shadowed = shadowed or not trusted_import
             state = self.resource_preparation_scopes[-1] if self.resource_preparation_scopes else None
             keywords = {keyword.arg: keyword.value for keyword in node.keywords}
-            if (shadowed or state is None or not state["ready"]
-                    or not node.args
-                    or any(not isinstance(arg, ast.Constant) or type(arg.value) is not str
-                           or not arg.value for arg in node.args)
-                    or sum(len(arg.value.encode("utf-8")) for arg in node.args)
-                       + len(node.args) - 1 > 1024 * 1024
-                    or any(keyword.arg is None for keyword in node.keywords)
-                    or len(keywords) != len(node.keywords)
-                    or not set(keywords).issubset({"font_size", "color", "opacity"})):
+            if (shadowed or state is None or not state["ready"] or len(keywords) != len(node.keywords)):
+                raise _OpaqueSource(node, "unproven_text_compiler")
+            if name == "Variable":
+                if (len(node.args) != 2 or not self._finite_number(node.args[0])
+                        or not isinstance(node.args[1], ast.Constant) or type(node.args[1].value) is not str
+                        or len(node.args[1].value.encode("utf-8")) > 1024 * 1024
+                        or not set(keywords) <= {"font_size", "num_decimal_places", "unit"}
+                        or any(not isinstance(value, ast.Constant) for value in keywords.values())
+                        or "unit" in keywords and (type(keywords["unit"].value) is not str
+                            or len(keywords["unit"].value.encode("utf-8")) > 1024 * 1024)):
+                    raise _OpaqueSource(node, "unproven_text_compiler")
+            elif (not node.args or sum(self._controlled_tex_length(arg) for arg in node.args)
+                    + len(node.args) - 1 > 1024 * 1024
+                    or not set(keywords) <= {"font_size", "color", "opacity"}):
                 raise _OpaqueSource(node, "unproven_text_compiler")
             font_size = keywords.get("font_size")
             if font_size is not None and (
@@ -3241,7 +3305,12 @@ class _SceneOnlySource(ast.NodeVisitor):
             if node.args or "code_string" not in keywords or "code_file" in keywords or None in keywords:
                 raise _OpaqueSource(node, "unproven_resource_input")
             self.admitted_code_loads.add(id(node.func))
-        if self._spatial_constructor_call(node):
+        if (isinstance(node.func, ast.Attribute) and node.func.attr == "polyhedron"
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == "Mesh3D"):
+            if (not self._trusted_noon_binding("Mesh3D") or not self._valid_mesh_polyhedron_call(node)):
+                raise _OpaqueSource(node, "unproven_spatial_constructor")
+            self.admitted_spatial_constructor_loads.update((id(node.func.value), id(node.func)))
+        elif self._spatial_constructor_call(node):
             linear_text = (self.linear_method_depth and isinstance(node.func, ast.Name)
                            and node.func.id == "Typst" and self._trusted_noon_binding("Typst"))
             if not self.spatial_method_depth and not linear_text:
@@ -3253,6 +3322,28 @@ class _SceneOnlySource(ast.NodeVisitor):
             else:
                 self.admitted_spatial_constructor_loads.add(id(node.func.value))
         self.generic_visit(node)
+
+    def _controlled_tex_length(self, node):
+        if isinstance(node, ast.Constant) and type(node.value) is str and node.value:
+            return len(node.value.encode("utf-8"))
+        if isinstance(node, ast.JoinedStr) and node.values:
+            length = 0
+            for part in node.values:
+                if isinstance(part, ast.Constant) and type(part.value) is str:
+                    length += len(part.value.encode("utf-8"))
+                elif (isinstance(part, ast.FormattedValue) and part.conversion == -1
+                      and isinstance(part.format_spec, ast.JoinedStr) and len(part.format_spec.values) == 1
+                      and isinstance(part.format_spec.values[0], ast.Constant)
+                      and part.format_spec.values[0].value == "g"
+                      and _numpy_numeric_expression(part.value, self.numpy_array_names[-1],
+                          self.numpy_safe_containers[-1], self.module_numpy_literals,
+                          self.numpy_scalar_names[-1])):
+                    length += 32  # Fixed general-format precision for a numeric value.
+                else:
+                    break
+            else:
+                return length
+        raise _OpaqueSource(node, "unproven_text_compiler")
 
     def visit_Await(self, node):
         call = node.value
@@ -3316,7 +3407,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             if node.func.id == "WorldTransformTo":
                 return (len(node.args) == 1 and isinstance(node.args[0], ast.Name)
                         and set(values) <= {"translation", "rotation", "scale"}
-                        and all(cls._finite_tuple(value, 4 if name == "rotation" else 3)
+                        and all(isinstance(value, ast.Name)
+                                or cls._finite_tuple(value, 4 if name == "rotation" else 3)
                                 for name, value in values.items()))
             return False
         values = {keyword.arg: keyword.value for keyword in node.keywords}
@@ -3344,6 +3436,12 @@ class _SceneOnlySource(ast.NodeVisitor):
             return (isinstance(function.body, ast.Tuple) and len(function.body.elts) == 3
                     and all(cls._numeric_expression(item, parameters) for item in function.body.elts))
         return False
+
+    @staticmethod
+    def _valid_mesh_polyhedron_call(node):
+        keywords = {keyword.arg for keyword in node.keywords}
+        return (len(node.args) == 2 and not any(isinstance(arg, ast.Starred) for arg in node.args)
+                and len(keywords) == len(node.keywords) and keywords <= {"color", "point_lit"})
 
     @staticmethod
     def _finite_number(node, *, integers=False):
@@ -3417,6 +3515,9 @@ class _SceneOnlySource(ast.NodeVisitor):
 
     def visit_Attribute(self, node):
         if self.admitted_regex_attributes and id(node) in self.admitted_regex_attributes[-1]:
+            self.visit(node.value)
+            return
+        if id(node) in self.admitted_spatial_constructor_loads and node.attr == "polyhedron":
             self.visit(node.value)
             return
         if id(node) in self.admitted_scene_helper_attributes:
@@ -3510,6 +3611,10 @@ class _SceneOnlySource(ast.NodeVisitor):
         if node not in self.module_imports or len(self.scopes) != 1 or node.level:
             raise _OpaqueSource(node, "unsupported_import")
         if node.module in {"noon", "manim"} and any(
+            alias.name == "FunctionGraph" and alias.asname is not None for alias in node.names
+        ):
+            raise _OpaqueSource(node, "unproven_plot_function")
+        if node.module in {"noon", "manim"} and any(
             alias.name == "LaggedStartMap" and alias.asname is not None for alias in node.names
         ):
             raise _OpaqueSource(node, "unproven_callback_factory")
@@ -3548,6 +3653,8 @@ class _SceneOnlySource(ast.NodeVisitor):
         for alias in node.names:
             if alias.name == "*" and node.module in {"noon", "manim"}:
                 self.scopes[0].update(noon_names)
+                if node.module == "noon":
+                    self.scopes[0].update(_SOURCE_SPATIAL_CONSTRUCTORS)
             elif alias.name not in allowed:
                 raise _OpaqueSource(node, "unsupported_import")
 
@@ -3627,7 +3734,8 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.numpy_safe_containers.append(_safe_numpy_containers(body))
         self.local_scope_names.append(bindings.names | parameters)
         self.local_function_names.append({node.name for node in body
-                                          if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))})
+                                          if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                                          and bindings.binding_counts.get(node.name) == 1})
         safe_names = set(_SOURCE_BUILTINS | _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS)
         safe_names.update(self.numpy_module_functions)
         safe_names.update(self.source_callable_imports)
@@ -4322,7 +4430,9 @@ class _SceneOnlySource(ast.NodeVisitor):
                 raise _OpaqueSource(node, "unsupported_class_contract")
             methods = [member for member in node.body
                        if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))]
-            if (any(member.name not in {"__init__", "construct"} for member in methods)
+            if (any(member.name not in {"__init__", "construct"}
+                    and (linear or member.name.startswith("_")
+                         or member.name in _SOURCE_SPATIAL_MEMBERS) for member in methods)
                     or sum(member.name == "construct" for member in methods) > 1
                     or sum(member.name == "__init__" for member in methods) > 1
                     or any(member.name == "construct" and not self._simple_construct(member)
@@ -4627,7 +4737,7 @@ def source_execution_proof(source: str, *, auto_prepare_latex=False) -> dict:
                     raise _OpaqueSource(node, "unproven_wildcard_exports")
                 exports[node.module] = frozenset(module.__all__)
         latex_prepared = False
-        if auto_prepare_latex and "MathTex" in source:
+        if auto_prepare_latex and "Tex" in source:
             from _manim_namespace import needs_latex
 
             latex_prepared = needs_latex(tree)
@@ -4670,7 +4780,7 @@ RESOURCE_BARRIER_METHODS = frozenset({
     "add_world_mobjects", "add_fixed_in_frame_mobjects", "add_fixed_orientation_mobjects",
 })
 
-PORTABLE_REACTIVE_METHODS = frozenset({"value_tracker", "bind_position", "bind_opacity"})
+PORTABLE_REACTIVE_METHODS = frozenset({"value_tracker", "bind_position", "bind_opacity", "bind_sampled"})
 PORTABLE_VECTOR_METHODS = frozenset({"add_vector", "apply_matrix"})
 CONSTRUCT_SCENE_BARRIERS = frozenset({"play", "wait", "move_camera"}) | PORTABLE_VECTOR_METHODS
 PORTABLE_SPATIAL_METHODS = frozenset({
@@ -4765,7 +4875,7 @@ _SCENE_CALLS = frozenset({
     "play", "wait", "audio", "add", "remove", "clear", "on_click", "set_drag_targets",
     "add_foreground_mobject", "add_foreground_mobjects",
     "activate_zooming", "get_zoomed_display_pop_out_animation",
-    "bring_to_front", "bring_to_back", "replace", "next_section",
+    "bring_to_front", "bring_to_back", "replace", "replace_content", "next_section",
 }) | PORTABLE_REACTIVE_METHODS | PORTABLE_SPATIAL_METHODS | PORTABLE_VECTOR_METHODS
 
 

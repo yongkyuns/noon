@@ -199,7 +199,6 @@ fn prepare_before_playback_holds_time_until_terminal_adoption_then_reanchors() {
         .is_err());
     let mut player = staged_player_before_snapshot(936, true);
     player.set_prepared_playing(true);
-    let initial_time = player.prepared_time();
     player.prepare_source_before_playback().unwrap();
     assert!(player.playback.preparing());
     assert!(
@@ -224,11 +223,13 @@ fn prepare_before_playback_holds_time_until_terminal_adoption_then_reanchors() {
         "audio is held without losing intent"
     );
 
-    assert!(player.seek_delta_json(0.75).is_err());
+    let selected_time = 0.75;
+    player.seek_delta_json(selected_time).unwrap();
+    assert!(player.seek_delta_json(player.prepared_frontier()).is_err());
     assert!(player.seek_delta_json(f64::NAN).is_err());
-    assert_eq!(player.prepared_time(), initial_time);
+    assert_eq!(player.prepared_time(), selected_time);
     player.tick_delta_json(100_000.0).unwrap();
-    assert_eq!(player.prepared_time(), initial_time);
+    assert_eq!(player.prepared_time(), selected_time);
 
     player.reserve_source_prefix_capacity().unwrap();
     assert!(player.deliver_source_prefix().unwrap());
@@ -239,13 +240,13 @@ fn prepare_before_playback_holds_time_until_terminal_adoption_then_reanchors() {
     );
     assert_eq!(
         player.prepared_time(),
-        initial_time,
+        selected_time,
         "adoption does not catch up"
     );
     player.tick_delta_json(200_000.0).unwrap();
     assert_eq!(
         player.prepared_time(),
-        initial_time,
+        selected_time,
         "clock starts from adoption"
     );
 }

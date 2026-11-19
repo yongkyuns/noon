@@ -326,6 +326,7 @@ pub enum SemanticSignalExpr {
     Neg(Box<Self>),
     Sin(Box<Self>),
     Cos(Box<Self>),
+    Sample(Box<Self>, crate::SignalSamples),
 }
 
 impl SemanticSignalExpr {
@@ -1098,6 +1099,14 @@ fn infer_expression_kind(
         }
         SemanticSignalExpr::Cos(value) => {
             infer_scalar_unary_kind(store, value, cycle_target, cache, "cos")
+        }
+        SemanticSignalExpr::Sample(value, samples) => {
+            infer_scalar_unary_kind(store, value, cycle_target, cache, "sample")?;
+            Ok(match samples.value_kind() {
+                crate::ValueKind::Scalar => SemanticSignalValueKind::Scalar,
+                crate::ValueKind::Vec2 => SemanticSignalValueKind::Vec3,
+                _ => unreachable!("validated sample table"),
+            })
         }
     }
 }

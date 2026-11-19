@@ -561,7 +561,11 @@ pub fn lower_semantic_reactive_projection_for_roots(
             let property = lower_property(
                 object.semantic_id,
                 binding.property(),
-                object.spatial.is_some(),
+                object.spatial.as_ref().is_some_and(|spatial| {
+                    spatial.composition_domain
+                        != noon_core::SemanticSpatialCompositionDomain::FixedFrame
+                        || spatial.draw_kind != crate::CompiledSpatialDrawKind::Planar
+                }),
             )?;
             let signal = lowerer.lower_signal(binding.signal())?;
             lowerer.bindings.push(noon_core::ReactiveBinding {
@@ -735,6 +739,10 @@ impl ReactiveLowerer<'_> {
             SemanticSignalExpr::Cos(value) => Ok(ReactiveExpr::Cos(Box::new(
                 self.lower_expression(owner, value)?,
             ))),
+            SemanticSignalExpr::Sample(value, samples) => Ok(ReactiveExpr::Sample(
+                Box::new(self.lower_expression(owner, value)?),
+                samples.clone(),
+            )),
         }
     }
 }

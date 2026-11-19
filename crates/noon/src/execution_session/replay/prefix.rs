@@ -8,6 +8,57 @@ pub use reader::PrefixReader;
 
 #[cfg(test)]
 #[test]
+fn reserve_and_append_sampled_tracker_suffix_while_paused() {
+    use crate::Scene;
+    use noon_core::{RateFunction, Vec2};
+    use noon_runtime::ReplayLimits;
+
+    let mut scene = Scene::new();
+    let target = scene.circle(0.5).unwrap();
+    let tracker = scene.value_tracker(0.0).unwrap();
+    scene.add(&target).unwrap();
+    scene
+        .bind_sampled(
+            &target,
+            &tracker,
+            "position",
+            true,
+            vec![0.0, 0.0, 0.0, 2.0, 2.0, 0.0],
+        )
+        .unwrap();
+    let mut source = scene.execution_session().unwrap();
+    source
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let wait = source.wait_segment(1.0).unwrap();
+    source.advance_to(wait.end_time()).unwrap();
+    scene.live(&mut source).complete_segment(wait).unwrap();
+    let (mut publisher, mut reader) = source.create_prepared_prefix(wait).unwrap();
+    reader.seek(0.5).unwrap();
+    let before = reader.frame().clone();
+
+    let segment = scene
+        .live(&mut source)
+        .declare_and_activate_value_tracker(&tracker, 2.0, 1.0, RateFunction::Linear)
+        .unwrap();
+    source.advance_to(segment.end_time()).unwrap();
+    scene.live(&mut source).complete_segment(segment).unwrap();
+    let batch = source
+        .publish_prepared_prefix(segment, &mut publisher)
+        .unwrap();
+    reader.reserve_append_capacity(&batch).unwrap();
+    reader.append(batch).unwrap();
+    assert_eq!(reader.frame(), &before);
+    assert_eq!(reader.end_time(), None);
+    assert_eq!(
+        reader.seek(1.5).unwrap().objects[0].transform.translation,
+        Vec2::new(1.0, 0.0)
+    );
+    assert_eq!(reader.seek(0.5).unwrap(), &before);
+}
+
+#[cfg(test)]
+#[test]
 fn observed_prefix_handoff_rejects_another_stream_before_releasing_history() {
     use crate::Scene;
     use noon_core::{HostCallbackId, SemanticMutationTransaction};

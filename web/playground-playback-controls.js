@@ -790,7 +790,7 @@ export class PlaygroundPlaybackControls {
     this.#restartButton.disabled = blockCommands;
     this.#undoDragButton.disabled = blockCommands || this.#preparedFrontier !== null || !this.#canUndoTranslationDrag;
     const range = this.#currentSeekRange();
-    this.#scrubber.disabled = this.#preparing || !this.#controllable || this.#externalBusy || this.#commandPending ||
+    this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending ||
       range === null || range.end < range.start ||
       (range.end === range.start && !(this.#preparedFrontier !== null &&
         this.#durationSeconds === null && this.#preparedFrontier > range.end));

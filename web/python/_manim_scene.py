@@ -1660,9 +1660,6 @@ def _canonical_family_fade_animation(
     leaves = _compat._leaf_mobjects(family)
     if not leaves:
         raise ValueError("canonical family Fade requires at least one leaf")
-    if any(isinstance(member, _typst._RetainedTextMobject) and not isinstance(member, _typst.Text)
-           for member in leaves):
-        raise NotImplementedError("canonical family Fade does not yet support Typst or MathTypst")
     if any(getattr(member, "_semantic_handle", None) is None for member in leaves):
         raise NotImplementedError("canonical family Fade requires shared semantic leaves")
     if getattr(family, "_semantic_family_handle", None) is None:
@@ -3516,6 +3513,32 @@ def _canonical_bind_position(
         float(offset_ir["y"]),
     )
     engine_call(context.bindTrackerPosition, handle, position, operation="Scene.bind_position")
+    return self
+
+
+def _canonical_bind_sampled(self, mobject, tracker, channel, samples, linear):
+    from array import array
+    from _noon_host import array_value
+
+    if not isinstance(tracker, _reactive.ValueTracker):
+        raise TypeError("bind_sampled requires a ValueTracker")
+    context = _context(self)
+    handle = _scene_object_handle(self, mobject, allow_detached=False)
+    _associate_tracker(self, tracker)
+    tracker_context, tracker_handle = tracker._canonical_context_handle()
+    if tracker_context is not context:
+        raise ValueError("ValueTracker belongs to another Scene")
+    width = 3 if channel in ("position", "scale") else 2
+    packed = array("f")
+    for sample in samples:
+        row = tuple(sample)
+        if len(row) != width:
+            raise ValueError(f"{channel} samples require {width} components")
+        if channel == "stroke_width":
+            row = (row[0], _compat._manim_stroke_width(row[1]))
+        packed.extend(row)
+    engine_call(context.bindSampled, handle, tracker_handle, channel, bool(linear),
+                array_value(memoryview(packed)), operation="Scene.bind_sampled")
     return self
 
 
