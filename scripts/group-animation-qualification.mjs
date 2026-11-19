@@ -13,6 +13,8 @@ await qualifyPairedAuthoring({
     factory: "createDirectMountedCalloutSmokeRenderer", objectCount: 7,
     duration: 4, sampleTime, playback: "live",
     boundaries: [0.5, 1.5, 2, 3],
+    directHeldSampleTime: sampleTime === 1.75 ? 1.5 : undefined,
+
     stopAtSourceCompletion: sampleTime === 4,
   }))],
   artifactDirectory: "browser-smoke-artifacts/group-animation",

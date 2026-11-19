@@ -26,17 +26,6 @@
       "beats": [{"time": 1.375, "label": "Bring in the diagram and glow"}, {"time": 3.125, "label": "Rotate together"}, {"time": 4.875, "label": "Move the glowing underline"}]
     },
     {
-      "id": "showcase-mounted-callout", "title": "Move a labeled callout",
-      "lesson": "Move a callout from one sample to the next, then scale it around a shared center so the outline and its label stay aligned.",
-      "primary_feature": "content-owning-group-animation", "category": "Visual design",
-      "path": "python/examples/showcase_mounted_callout.py", "features": ["VGroup", "Text", "animate", "shared pivot"],
-      "duration": 4.0, "thumbnail_time": 3.5,
-      "thumbnail": "thumbnails/showcase/showcase-mounted-callout.png",
-      "thumbnail_alt": "A mint callout labeled Inspect above Sample B, with Sample A and B joined by a line",
-      "still_intervals": [[0, 0.5], [1.5, 2], [3, 4]],
-      "beats": [{"time": 1, "label": "Move to Sample B"}, {"time": 2.5, "label": "Scale the outline and label together"}]
-    },
-    {
       "id": "showcase-dynamic-scene", "title": "A field in motion",
       "lesson": "Explore dense animation through six coordinated sequences: assembly, morphs, waves, a spiral, an object exchange, and a resolved finale.",
       "primary_feature": "dense-dynamic-composition", "category": "Dynamic scenes", "performance": true,
@@ -57,6 +46,17 @@
       "thumbnail_alt": "Two pairs of faded blue circles. The left pair has uniform color and the right pair has a brighter overlap.",
       "still_intervals": [[0, 0.6], [1.8, 3], [4, 4.8]],
       "beats": [{"time": 1.2, "label": "Bring in both overlays"}, {"time": 2.4, "label": "Compare the overlap"}, {"time": 3.5, "label": "Reach full opacity"}]
+    },
+    {
+      "id": "showcase-mounted-callout", "title": "Move a labeled callout",
+      "lesson": "Move a callout from one sample to the next, then scale it around a shared center so the outline and its label stay aligned.",
+      "primary_feature": "content-owning-group-animation", "category": "Visual design",
+      "path": "python/examples/showcase_mounted_callout.py", "features": ["VGroup", "Text", "animate", "shared pivot"],
+      "duration": 4.0, "thumbnail_time": 3.5,
+      "thumbnail": "thumbnails/showcase/showcase-mounted-callout.png",
+      "thumbnail_alt": "A mint callout labeled Inspect above Sample B, with Sample A and B joined by a line",
+      "still_intervals": [[0, 0.5], [1.5, 2], [3, 4]],
+      "beats": [{"time": 0.25, "label": "Inspect Sample A"}, {"time": 1, "label": "Move to Sample B"}, {"time": 2.5, "label": "Scale the outline and label together"}]
     },
     {
       "id": "showcase-background-music", "title": "Double the input",
