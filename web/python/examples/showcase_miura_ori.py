@@ -17,146 +17,147 @@ at build time). Width and length shrink together, a negative Poisson ratio ν = 
 why Koryo Miura's fold opens a satellite's solar array with one pull (Space Flyer Unit, 1995).
 """
 
-from math import atan2, cos, hypot, sin
-
-import numpy as np
+from math import atan2, ceil, cos, hypot, pi, radians, sin, sqrt, tan
 
 from noon import *
 
 
-def camera_axes(phi: float, theta: float, gamma: float) -> np.ndarray:
-    """The camera's axes for its orbit angles, as rows: right, up, and toward the viewer."""
-
-    def spin(a: float) -> np.ndarray:  # a turn about z
-        return np.array(
-            [[np.cos(a), -np.sin(a), 0.0], [np.sin(a), np.cos(a), 0.0], [0.0, 0.0, 1.0]]
-        )
-
-    c, s = np.cos(phi), np.sin(phi)
-    tilt = np.array(
-        [[1.0, 0.0, 0.0], [0.0, c, s], [0.0, -s, c]]
-    )  # a turn by −φ about x
-    return spin(gamma) @ tilt @ spin(-theta - np.pi / 2)
-
-
-A, B, GAMMA = 1.0, 1.0, np.radians(60)  # facet sides and angle
+A, B, GAMMA = 1.0, 1.0, radians(60)  # facet sides and angle
 COLS, ROWS = 14, 12  # facets across (b edges) and along (a edges)
 SCALE = 0.44  # sheet units → scene units
 PAPER, INK = "#d3c8ae", "#2f4b7c"  # the sheet, and alternate columns once it folds
 MOUNTAIN, VALLEY = "#d62828", "#1d5fd8"
-
-
-def cell(theta: float) -> tuple[float, float, float, float]:
-    """Schenk & Guest's unit cell at fold angle θ: height H, zigzag step S, row pitch L, offset V."""
-    s, c = np.sin(theta), np.cos(theta)
-    k = np.sqrt(1 + (c * np.tan(GAMMA)) ** 2)
-    return (
-        A * s * np.sin(GAMMA),
-        B * c * np.tan(GAMMA) / k,
-        A * np.sqrt(1 - (s * np.sin(GAMMA)) ** 2),
-        B / k,
-    )
-
-
-def sheet(theta: float) -> np.ndarray:
-    """The folded sheet's vertices (COLS + 1, ROWS + 1, 3), in sheet units."""
-    h, s, pitch, v = cell(theta)
-    i, j = np.meshgrid(np.arange(COLS + 1), np.arange(ROWS + 1), indexing="ij")
-    return np.stack([i * s, j * pitch + (i % 2) * v, (j % 2) * h], -1).astype(float)
-
-
-def rigidity(theta: float) -> float:
-    """The largest error, at fold angle θ, in any edge length or in any facet's flatness."""
-    p = sheet(theta)
-    across = np.linalg.norm(p[1:] - p[:-1], axis=-1) - B
-    along = np.linalg.norm(p[:, 1:] - p[:, :-1], axis=-1) - A
-    o, x, y, far = p[:-1, :-1], p[1:, :-1], p[:-1, 1:], p[1:, 1:]
-    normal = np.cross(x - o, y - o)
-    normal /= np.linalg.norm(normal, axis=-1, keepdims=True)
-    warp = np.einsum("ijk,ijk->ij", far - o, normal)
-    return float(max(np.abs(across).max(), np.abs(along).max(), np.abs(warp).max()))
-
-
-def facets(p: np.ndarray) -> np.ndarray:
-    """Each facet's own four corners (COLS · ROWS · 4, 3): unshared, so every facet is flat-lit."""
-    quads = np.stack([p[:-1, :-1], p[1:, :-1], p[1:, 1:], p[:-1, 1:]], 2)
-    return quads.reshape(-1, 3)
-
-
-def creases() -> tuple[np.ndarray, np.ndarray]:
-    """Every interior crease as (vertex a, vertex b, facet 1, facet 2) index rows into the
-    vertex grid and the facet list, and whether it is a mountain (seen from above)."""
-    vid = np.arange((COLS + 1) * (ROWS + 1)).reshape(COLS + 1, ROWS + 1)
-    fid = np.arange(COLS * ROWS).reshape(COLS, ROWS)
-    rows = []
-    for i in range(COLS):  # zigzag creases between facet rows j − 1 and j
-        for j in range(1, ROWS):
-            rows.append([vid[i, j], vid[i + 1, j], fid[i, j - 1], fid[i, j]])
-    for i in range(1, COLS):  # creases between facet columns i − 1 and i
-        for j in range(ROWS):
-            rows.append([vid[i, j], vid[i, j + 1], fid[i - 1, j], fid[i, j]])
-    index = np.array(rows)
-    # a crease is a mountain where it stands above the midpoint of its two facets' centers
-    p = sheet(np.radians(10)).reshape(-1, 3)
-    centers = facets(sheet(np.radians(10))).reshape(-1, 4, 3).mean(axis=1)
-    middle = (p[index[:, 0]] + p[index[:, 1]]) / 2
-    return index, middle[:, 2] > (centers[index[:, 2], 2] + centers[index[:, 3], 2]) / 2
-
-
-def ribbons(p: np.ndarray, index: np.ndarray, width: np.ndarray) -> np.ndarray:
-    """Strips `width` wide (one per crease) along the creases, half on each of the two facets,
-    lifted a hair off them: (creases · 8, 3) vertices, 4 per half."""
-    grid = p.reshape(-1, 3)
-    corners = facets(p).reshape(-1, 4, 3)
-    a, b = grid[index[:, 0]], grid[index[:, 1]]
-    halves = []
-    for side in (2, 3):
-        center = corners[index[:, side]].mean(axis=1)
-        normal = np.cross(
-            corners[index[:, side], 1] - corners[index[:, side], 0],
-            corners[index[:, side], 3] - corners[index[:, side], 0],
-        )
-        normal /= np.linalg.norm(normal, axis=1, keepdims=True)
-        along = (b - a) / np.linalg.norm(b - a, axis=1, keepdims=True)
-        inward = center - a - ((center - a) * along).sum(axis=1, keepdims=True) * along
-        inward /= np.linalg.norm(inward, axis=1, keepdims=True)
-        lift = 0.012 * normal
-        side_edge = width[:, None] * inward
-        halves.append(np.stack([a, b, b + side_edge, a + side_edge], 1) + lift[:, None])
-    return np.concatenate(halves, 1).reshape(-1, 3)
-
-
 FACES = ((0, 1, 2), (0, 2, 3))
 FOCAL_DISTANCE = 20
-SPOT = np.array([2.5, -0.3])
+SPOT = (2.5, -0.3)
 WIDTH, LENGTH = "#8ecae6", "#ffb703"
 FONT = "NewComputerModern"
 
 
+def vector_add(a, b):
+    return tuple(x + y for x, y in zip(a, b))
+
+
+def vector_subtract(a, b):
+    return tuple(x - y for x, y in zip(a, b))
+
+
+def vector_scale(a, scalar):
+    return tuple(x * scalar for x in a)
+
+
+def dot_product(a, b):
+    return sum(x * y for x, y in zip(a, b))
+
+
+def cross_product(a, b):
+    ax, ay, az = a
+    bx, by, bz = b
+    return ay*bz - az*by, az*bx - ax*bz, ax*by - ay*bx
+
+
+def unit_direction(a):
+    return vector_scale(a, 1 / sqrt(dot_product(a, a)))
+
+
+def center_of(points):
+    return tuple(sum(axis) / len(axis) for axis in zip(*points))
+
+
+def camera_axes(phi, theta):
+    """Camera axes as rows: right, up, and toward the viewer."""
+    c, s = cos(-theta - pi / 2), sin(-theta - pi / 2)
+    cp, sp = cos(phi), sin(phi)
+    return (c, -s, 0.0), (cp*s, cp*c, sp), (-sp*s, -sp*c, cp)
+
+
+def cell(theta):
+    """Schenk & Guest's unit cell: height, zigzag step, row pitch, offset."""
+    s, c = sin(theta), cos(theta)
+    k = sqrt(1 + (c * tan(GAMMA)) ** 2)
+    return (
+        A * s * sin(GAMMA),
+        B * c * tan(GAMMA) / k,
+        A * sqrt(1 - (s * sin(GAMMA)) ** 2),
+        B / k,
+    )
+
+
+def sheet(theta):
+    """The folded sheet's (COLS + 1) × (ROWS + 1) vertices, in sheet units."""
+    h, s, pitch, v = cell(theta)
+    return [[(i * s, j * pitch + (i % 2) * v, (j % 2) * h)
+             for j in range(ROWS + 1)] for i in range(COLS + 1)]
+
+
+def facets(points):
+    """Four corners per facet, ordered consistently for flat lighting."""
+    return [(points[i][j], points[i+1][j], points[i+1][j+1], points[i][j+1])
+            for i in range(COLS) for j in range(ROWS)]
+
+
+def rigidity(theta):
+    """Largest error in edge lengths or facet flatness at this fold angle."""
+    error = 0
+    for a, b, c, d in facets(sheet(theta)):
+        along_b = vector_subtract(b, a)
+        along_a = vector_subtract(d, a)
+        normal = unit_direction(cross_product(along_b, along_a))
+        error = max(error, abs(hypot(*along_b) - B), abs(hypot(*along_a) - A),
+                    abs(dot_product(vector_subtract(c, a), normal)))
+    return error
+
+
+def creases():
+    """Interior crease endpoints, adjacent facet indices, and mountain/valley sign."""
+    edges = []
+    for i in range(COLS):
+        for j in range(1, ROWS):
+            edges.append((i, j, i+1, j, i*ROWS+j-1, i*ROWS+j))
+    for i in range(1, COLS):
+        for j in range(ROWS):
+            edges.append((i, j, i, j+1, (i-1)*ROWS+j, i*ROWS+j))
+    points = sheet(radians(10))
+    centers = [center_of(quad) for quad in facets(points)]
+    return [(*edge, points[edge[0]][edge[1]][2] + points[edge[2]][edge[3]][2] >
+             centers[edge[4]][2] + centers[edge[5]][2]) for edge in edges]
+
+
+def ribbon(a, b, facet, width, lift):
+    """One half of a narrow crease ribbon, lifted just above the facet."""
+    o, u, _, v = facet
+    normal = unit_direction(cross_product(vector_subtract(u, o), vector_subtract(v, o)))
+    along = unit_direction(vector_subtract(b, a))
+    toward = vector_subtract(center_of(facet), a)
+    inward = unit_direction(vector_subtract(toward, vector_scale(along, dot_product(toward, along))))
+    edge = vector_scale(inward, width)
+    corners = [a, b, vector_add(b, edge), vector_add(a, edge)]
+    if cross_product(along, inward)[2] < 0:
+        corners = [corners[1], corners[0], corners[3], corners[2]]
+    offset = vector_add(vector_scale(normal, 0.012), (0.0, 0.0, lift))
+    return [vector_add(corner, offset) for corner in corners]
+
+
 def pose(points):
-    # Local X is the first edge. The local Y component of the second edge
-    # fixes the plane, including its choice of normal.
+    # Local X is the first edge. The projection of the second edge fixes the
+    # local Y axis and therefore the orientation of the panel's normal.
     a, b, _, d = points
-    x = b - a
-    width = np.linalg.norm(x)
-    x = x / width
-    y = d - a - np.dot(d - a, x) * x
-    height = np.linalg.norm(y)
-    y = y / height
+    x = unit_direction(vector_subtract(b, a))
+    delta = vector_subtract(d, a)
+    y = unit_direction(vector_subtract(delta, vector_scale(x, dot_product(delta, x))))
     yaw = atan2(x[1], x[0])
     pitch = -atan2(x[2], hypot(x[0], x[1]))
-    basis_y = np.array([-sin(yaw), cos(yaw), 0.0])
-    basis_z = np.cross(x, basis_y)
-    roll = atan2(np.dot(y, basis_z), np.dot(y, basis_y))
+    basis_y = (-sin(yaw), cos(yaw), 0.0)
+    roll = atan2(dot_product(y, cross_product(x, basis_y)), dot_product(y, basis_y))
     cy, sy = cos(yaw / 2), sin(yaw / 2)
     cp, sp = cos(pitch / 2), sin(pitch / 2)
     cr, sr = cos(roll / 2), sin(roll / 2)
-    return tuple(a), (cy*cp*cr + sy*sp*sr, cy*cp*sr - sy*sp*cr,
-                      cy*sp*cr + sy*cp*sr, sy*cp*cr - cy*sp*sr), width, height
+    return a, (cy*cp*cr + sy*sp*sr, cy*cp*sr - sy*sp*cr,
+               cy*sp*cr + sy*cp*sr, sy*cp*cr - cy*sp*sr)
 
 
 def ease(t, start, end):
-    alpha = float(np.clip((t-start)/(end-start), 0, 1))
+    alpha = max(0, min(1, (t-start)/(end-start)))
     return alpha*alpha*(3-2*alpha)
 
 
@@ -164,36 +165,56 @@ def fold_angle(t):
     return 82*ease(t, 5.3, 13.8) - 54*ease(t, 15.7, 22.2) + 17*ease(t, 22.8, 25.8)
 
 
+def bounds(points):
+    axes = list(zip(*(p for row in points for p in row)))
+    return tuple(min(axis) for axis in axes), tuple(max(axis) for axis in axes)
+
+
 def patch(angle):
-    points = sheet(np.radians(angle))
-    grid = points.reshape(-1, 3)
-    return SCALE * (points - (grid.min(axis=0) + grid.max(axis=0)) / 2)
+    points = sheet(radians(angle))
+    low, high = bounds(points)
+    center = vector_scale(vector_add(low, high), 0.5)
+    return [[vector_scale(vector_subtract(p, center), SCALE) for p in row] for row in points]
 
 
 def span(points):
-    return np.array([points[-1, 0, 0] - points[0, 0, 0],
-                     points[0, -1, 1] - points[0, 0, 1]])
+    return points[-1][0][0] - points[0][0][0], points[0][-1][1] - points[0][0][1]
 
 
 def camera(t, points, flat_diagonal):
-    phi, theta = np.radians(54), np.radians(-104) + 0.03*t
-    zoom = 0.95 * (flat_diagonal / np.linalg.norm(span(points))) ** 0.85
-    axes = camera_axes(phi, theta, 0)
-    center = -(SPOT @ axes[:2]) / zoom
+    phi, theta = radians(54), radians(-104) + 0.03*t
+    zoom = 0.95 * (flat_diagonal / hypot(*span(points))) ** 0.85
+    axes = camera_axes(phi, theta)
+    center = vector_scale(vector_add(vector_scale(axes[0], SPOT[0]),
+                                     vector_scale(axes[1], SPOT[1])), -1 / zoom)
     return phi, theta, zoom, axes, center
 
 
 def projected_arrow(points, view, axis, side):
     _, _, zoom, axes, center = view
-    grid = points.reshape(-1, 3)
-    low, high = grid.min(axis=0), grid.max(axis=0)
-    start = (low + high) / 2
-    start[axis] = (low if side < 0 else high)[axis] + side * 0.15
-    end = start.copy()
-    end[axis] += side * 0.9
-    q = (np.array([start, end]) - center) @ axes.T
-    xy = q[:, :2] * (zoom / (1 - q[:, 2] / FOCAL_DISTANCE))[:, None]
-    return xy[0], xy[1]
+    low, high = bounds(points)
+    center_of_sheet = vector_scale(vector_add(low, high), 0.5)
+    edge = (low if side < 0 else high)[axis] + side * 0.15
+    start = tuple(edge if i == axis else value for i, value in enumerate(center_of_sheet))
+    end = tuple(value + side * 0.9 if i == axis else value for i, value in enumerate(start))
+    xy = []
+    for point in (start, end):
+        q = vector_subtract(point, center)
+        perspective = zoom / (1 - dot_product(axes[2], q) / FOCAL_DISTANCE)
+        xy.append((perspective * dot_product(axes[0], q), perspective * dot_product(axes[1], q)))
+    return xy
+
+
+def unwrap_turns(endpoints):
+    turns = []
+    previous = 0.0
+    for a, b in endpoints:
+        angle = atan2(b[1]-a[1], b[0]-a[0])
+        if turns:
+            angle = previous + (angle - previous + pi) % (2*pi) - pi
+        turns.append(angle)
+        previous = angle
+    return turns
 
 
 def leaves(mob):
@@ -210,25 +231,25 @@ def mesh(vert, color, *, point_lit=True):
     return Mesh3D.polyhedron(vert, FACES, color=color_from_hex(color), point_lit=point_lit)
 
 
-def crease_meshes(t, points, index, across, mountain):
-    fade = 1 - np.clip(3*(t-5.3)/8.5, 0, 1)
+def crease_meshes(t, points, edges, across):
+    fade = 1 - max(0, min(1, 3*(t-5.3)/8.5))
     sweep = ease(t, 1, 2.8)
-    width = 0.03 * fade * np.clip((1.3*sweep-across)/0.3, 0, 1)
-    quads = ribbons(points, index, np.maximum(width, 0.00001)).reshape(-1, 4, 3)
-    normal_z = np.cross(quads[:, 1]-quads[:, 0], quads[:, 3]-quads[:, 0])[:, 2]
-    reversed_quads = normal_z < 0
-    quads[reversed_quads] = quads[reversed_quads][:, [1, 0, 3, 2]]
-    colors = np.repeat(mountain, 2)
+    quads = facets(points)
     meshes = []
-    for color, mask in ((MOUNTAIN, colors), (VALLEY, ~colors)):
-        faces = quads[mask]
-        # Keep red and blue at distinct depths where their ribbons cross.
-        # Otherwise coplanar fragments can change order after a replay seek.
-        if color == MOUNTAIN:
-            faces[:, :, 2] += 0.008
-        triangles = np.arange(len(faces))[:, None, None]*4 + np.array(FACES)
-        meshes.append(Mesh3D.polyhedron(faces.reshape(-1, 3), triangles.reshape(-1, 3),
-                                       color=color_from_hex(color)))
+    for is_mountain, color in ((True, MOUNTAIN), (False, VALLEY)):
+        vertices = []
+        triangles = []
+        lift = 0.008 if is_mountain else 0  # Order antialiased overlaps consistently.
+        for edge, position in zip(edges, across):
+            i, j, k, l, left, right, mountain = edge
+            if mountain != is_mountain:
+                continue
+            width = max(0.00001, 0.03 * fade * max(0, min(1, (1.3*sweep-position)/0.3)))
+            for side in (left, right):
+                offset = len(vertices)
+                vertices.extend(ribbon(points[i][j], points[k][l], quads[side], width, lift))
+                triangles.extend((a+offset, b+offset, c+offset) for a, b, c in FACES)
+        meshes.append(Mesh3D.polyhedron(vertices, triangles, color=color_from_hex(color)))
     return meshes
 
 
@@ -245,11 +266,13 @@ class MiuraOri(ThreeDScene):
         times = [0]
         for start, end in zip(boundaries, boundaries[1:]):
             # Use enough endpoints for the tint change at the start of folding.
-            count = int(np.ceil((end-start)*(8 if 5.3 <= start <= 8.1333333333 else 4)))
-            times.extend(np.linspace(start, end, count+1)[1:])
+            count = ceil((end-start)*(8 if 5.3 <= start <= 8.1333333333 else 4))
+            step = (end-start) / count
+            times.extend(start + step*k for k in range(1, count))
+            times.append(end)
         angle = [fold_angle(t) for t in times]
         grid = [patch(value) for value in angle]
-        flat_diagonal = np.linalg.norm(span(grid[0]))
+        flat_diagonal = hypot(*span(grid[0]))
         views = [camera(t, points, flat_diagonal) for t, points in zip(times, grid)]
         clock = self.value_tracker(0)
 
@@ -263,14 +286,14 @@ class MiuraOri(ThreeDScene):
         # Each panel remains rigid. Share the two mirrored corner meshes
         # across the sheet and batch the sampled ink tints as family paint.
         panels = []
-        base_quads = facets(grid[0]).reshape(-1, 4, 3)
+        base_quads = facets(grid[0])
         templates = []
-        width, height = B*SCALE, A*SCALE*np.sin(GAMMA)
+        width, height = B*SCALE, A*SCALE*sin(GAMMA)
         for sign in (1, -1):
-            slant = sign*A*SCALE*np.cos(GAMMA)
+            slant = sign*A*SCALE*cos(GAMMA)
             templates.append(mesh([(0, 0, 0), (width, 0, 0), (width+slant, height, 0), (slant, height, 0)], PAPER))
         for k, corners in enumerate(base_quads):
-            translation, rotation, _, _ = pose(corners)
+            translation, rotation = pose(corners)
             panel = templates[k // ROWS % 2].copy()
             self.add_world_mobjects(panel)
             self.set_world_transform(panel, translation=translation, rotation=rotation)
@@ -279,16 +302,18 @@ class MiuraOri(ThreeDScene):
         paper_color, ink_color = color_from_hex(PAPER), color_from_hex(INK)
         previous_tint = 0
 
-        index, mountain = creases()
-        flat = grid[0].reshape(-1, 3)
-        across = (flat[index[:, 0], :2] + flat[index[:, 1], :2]).sum(axis=1)
-        across = (across-across.min())/(across.max()-across.min())
+        edges = creases()
+        flat = grid[0]
+        diagonal_sums = [sum(flat[i][j][:2]) + sum(flat[k][l][:2])
+                         for i, j, k, l, _, _, _ in edges]
+        start, end = min(diagonal_sums), max(diagonal_sums)
+        across = [(x-start)/(end-start) for x in diagonal_sums]
         # All crease ribbons of one color share a mesh revision. This
         # preserves the drawn sweep and the folds without giving every strip
         # its own world-pose history.
-        strips = crease_meshes(0, grid[0], index, across, mountain)
+        strips = crease_meshes(0, grid[0], edges, across)
         self.add_world_mobjects(*strips)
-        strip_frames = {i: crease_meshes(t, grid[i], index, across, mountain)
+        strip_frames = {i: crease_meshes(t, grid[i], edges, across)
                         for i, t in enumerate(times) if 1 < t <= 2.8 or 5.3 < t < 8.1333333333}
 
         title = Text("Miura-ori", font_size=40, font=FONT).to_corner(UL)
@@ -314,7 +339,8 @@ class MiuraOri(ThreeDScene):
         self.clock_fade(VGroup(track, knob), clock, panel_fade)
         self.bind_sampled(knob, clock, "position", [(t, -6.7 + 3*value/90, 1.2) for t, value in zip(times, angle)])
 
-        values = np.array([span(points) / span(grid[0]) for points in grid])
+        flat_width, flat_length = span(grid[0])
+        values = [(w/flat_width, l/flat_length) for w, l in (span(points) for points in grid)]
         meters = []
         for k, (name, color) in enumerate((("width", WIDTH), ("length", LENGTH))):
             y = 0.45 - 0.55*k
@@ -323,11 +349,11 @@ class MiuraOri(ThreeDScene):
             bar = Rectangle(width=2.2, height=0.22, color=paint, fill_opacity=0.9, stroke_width=0)
             number = Variable(100, "", num_decimal_places=0, unit=r"\%", font_size=22)
             self.clock_fade(VGroup(word, bar, number.value), clock, panel_fade)
-            self.bind_sampled(bar, clock, "scale", [(t, ratio, 1) for t, ratio in zip(times, values[:, k])])
-            self.bind_sampled(bar, clock, "position", [(t, -5.45 + 1.1*ratio, y) for t, ratio in zip(times, values[:, k])])
+            self.bind_sampled(bar, clock, "scale", [(t, ratio, 1) for t, ratio in zip(times, [pair[k] for pair in values])])
+            self.bind_sampled(bar, clock, "position", [(t, -5.45 + 1.1*ratio, y) for t, ratio in zip(times, [pair[k] for pair in values])])
             text_offset = -5.3 + number.value.width/2
             self.bind_sampled(number.value, clock, "position", [(t, text_offset + 2.2*ratio, y)
-                                                                 for t, ratio in zip(times, values[:, k])])
+                                                                 for t, ratio in zip(times, [pair[k] for pair in values])])
             meters.append(number.tracker)
 
         angle_number = Variable(0, "", num_decimal_places=0, unit=r"{}^\circ", font_size=30)
@@ -343,9 +369,9 @@ class MiuraOri(ThreeDScene):
         law = MathTex(r"\nu = -\tan^2\gamma\,\cos^2\theta", font_size=32)
         left_at(law, -6.7, -1.8)
         self.clock_fade(law, clock, [(0, 0), (15.7, 0), (22.2, 1)])
-        error = max(rigidity(np.radians(deg)) for deg in range(90))
-        mantissa, power = f"{error:.0e}".split("e")
-        note = MathTex(rf"\text{{rigid: edges and flatness exact to }} {mantissa} \times 10^{{{int(power)}}}",
+        if max(rigidity(radians(deg)) for deg in range(90)) > 3.5e-15:
+            raise ValueError("The Miura-ori facets must remain rigid")
+        note = MathTex(r"\text{rigid: edges and flatness exact to } 3 \times 10^{-15}",
                        font_size=24, color=GREY_B)
         left_at(note, -6.7, -2.45)
         closing = VGroup(Text("Koryo Miura's fold opens", font_size=28, font=FONT),
@@ -361,9 +387,9 @@ class MiuraOri(ThreeDScene):
                 endpoints = [projected_arrow(points, view, axis, side) for points, view in zip(grid, views)]
                 for part in arrow:
                     positions, rotations, scales = [], [], []
-                    turns = np.unwrap([atan2(*(b-a)[::-1]) for a, b in endpoints])
+                    turns = unwrap_turns(endpoints)
                     for t, turn, (a, b) in zip(times, turns, endpoints):
-                        scale = float(np.linalg.norm(b-a))
+                        scale = hypot(b[0]-a[0], b[1]-a[1])
                         positions.append((t, a[0], a[1]))
                         rotations.append((t, turn))
                         scales.append((t, scale, scale))
@@ -388,11 +414,11 @@ class MiuraOri(ThreeDScene):
                         (1-tint)*paper_color.blue + tint*ink_color.blue,
                     ))
                     previous_tint = tint
-                for face, corners in zip(panels, facets(grid[i]).reshape(-1, 4, 3)):
-                    position, rotation, _, _ = pose(corners)
+                for face, corners in zip(panels, facets(grid[i])):
+                    position, rotation = pose(corners)
                     motions.append(WorldTransformTo(face, translation=position, rotation=rotation))
                 motions.extend((angle_number.tracker.animate.set_value(angle[i]),
-                                nu_number.tracker.animate.set_value(float(-np.tan(GAMMA)**2*np.cos(np.radians(angle[i]))**2)),
+                                nu_number.tracker.animate.set_value(-tan(GAMMA)**2*cos(radians(angle[i]))**2),
                                 *(tracker.animate.set_value(100*ratio) for tracker, ratio in zip(meters, values[i]))))
             if i in strip_frames:
                 for strip, keyframe in zip(strips, strip_frames[i]):
@@ -401,6 +427,7 @@ class MiuraOri(ThreeDScene):
             self.move_camera(phi=phi, theta=theta, zoom=zoom, frame_center=center,
                              added_anims=motions, run_time=t-previous, rate_func=linear)
             if strips and t >= 8.1333333333:
-                self.remove(*strips)
+                for strip in strips:
+                    self.remove(strip)
                 strips.clear()
             previous = t

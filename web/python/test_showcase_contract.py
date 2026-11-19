@@ -8,10 +8,20 @@ WEB = Path(__file__).resolve().parents[1]
 MANIFEST = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())
 # Qualified by the actual Pyodide showcase captures on both renderer backends.
 # NumPy is supplied by the browser worker for the pinned ManimGX ports.
-QUALIFIED_BROWSER_MODULES = {"noon", "math", "colorsys", "struct", "zlib", "array", "re", "numpy"}
+QUALIFIED_BROWSER_MODULES = {"noon", "math", "bisect", "colorsys", "struct", "zlib", "array", "re", "numpy"}
 
 
 class ShowcaseSourceContract(unittest.TestCase):
+    def test_manim_ports_admit_incremental_playback(self):
+        from _manim_source_execution import source_execution_proof
+
+        for entry in MANIFEST["entries"]:
+            if entry.get("credits"):
+                with self.subTest(example=entry["id"]):
+                    source = (WEB / entry["path"]).read_text()
+                    proof = source_execution_proof(source, auto_prepare_latex=True)
+                    self.assertTrue(proof["admitted"], proof["reason"])
+
     def test_featured_lessons_compile_portable_constructs(self):
         from _manim_source_execution import compile_authoring_source
 

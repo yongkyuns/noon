@@ -220,12 +220,8 @@ impl PreparedCanvasPlayback {
         }
     }
     pub(crate) fn seek(&mut self, time: f64) -> Result<(), PrefixError> {
-        if self.preparing {
-            if !time.is_finite() || time < 0.0 {
-                self.reader.seek(time)?;
-            }
-            return Err(PrefixError::NotReady);
-        }
+        // The preparation gate holds the clock. Explicit selection still uses
+        // the reader's current range and never asks the source to move backward.
         self.reader.seek(time)?;
         self.buffering = false;
         self.last_clock_sample = time;

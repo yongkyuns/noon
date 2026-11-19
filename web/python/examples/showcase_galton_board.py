@@ -14,6 +14,9 @@ the 2ⁿ ways down, C(n, k) end in bin k. A few balls make a ragged pile; many m
 normal curve with the binomial's mean n/2 and variance n/4 (de Moivre, 1733; Galton, 1889).
 """
 
+from bisect import bisect_right
+from math import exp, pi, sqrt, ceil
+
 import numpy as np
 
 from noon import *
@@ -31,93 +34,70 @@ RELEASE = TOP + 0.62  # where balls are let go, in the funnel's neck
 SEED = 7
 
 
-def peg(row: int, k: int) -> np.ndarray:
+def peg(row, k):
     """The k-th peg (from the left) of a row."""
-    return np.array([(k - row / 2) * DX, TOP - row * DY, 0.0])
+    return (k - row / 2) * DX, TOP - row * DY, 0.0
 
 
-def pile(count: int) -> np.ndarray:
-    """Where the balls of a bin come to rest, relative to its floor's middle: rows of five
-    and of four in turn, packed, each row filled in a scattered order."""
-    fives = np.array([0.0, -2.0, 2.0, -1.0, 1.0]) * GAP
-    fours = np.array([-0.5, 1.5, 0.5, -1.5]) * GAP
-    places = np.empty((count, 2))
-    for s in range(count):
-        pair, r = divmod(s, 9)
-        layer, x = (2 * pair, fives[r]) if r < 5 else (2 * pair + 1, fours[r - 5])
-        places[s] = [x, BALL + layer * GAP * np.sqrt(3) / 2]
-    return places
+def pile_slot(rank):
+    """Rows of five and four offset balls, packed within one bin."""
+    fives = (0.0, -2.0, 2.0, -1.0, 1.0)
+    fours = (-0.5, 1.5, 0.5, -1.5)
+    pair, rest = divmod(rank, 9)
+    layer, x = (2 * pair, fives[rest]) if rest < 5 else (2 * pair + 1, fours[rest - 5])
+    return x * GAP, BALL + layer * GAP * sqrt(3) / 2
 
 
-def release_times() -> np.ndarray:
-    """When each ball is let go, in board time: three alone, then faster and faster."""
-    first = [0.0, 1.4, 2.8]
-    times, s = list(first), 0.0
+def release_times():
+    """Three balls alone, then a progressively faster stream."""
+    times, s = [0.0, 1.4, 2.8], 0.0
     while len(times) < BALLS:
         times.append(4.2 + s)
-        s += 1 / min(2 + 9 * s**2, 70)  # balls per second, s seconds into the rush
-    return np.array(times)
+        s += 1 / min(2 + 9 * s**2, 70)
+    return times
 
 
-class Board:
-    """Every ball's way down, worked out in advance: its release, its bounces, its rest."""
+def contacts_for_ball(choices):
+    contacts = []
+    rights = 0
+    for row in range(ROWS):
+        contacts.append(((rights - row / 2) * DX, TOP - row * DY + PEG + BALL))
+        rights += int(choices[row])
+    return contacts, rights
 
-    def __init__(self, releases: np.ndarray, rng: np.random.Generator) -> None:
-        count = len(releases)
-        self.releases = releases
-        rights = rng.integers(0, 2, size=(count, ROWS))  # 1: it bounced right
-        self.bins = rights.sum(1)
-        before = np.concatenate([np.zeros((count, 1), int), np.cumsum(rights, 1)], 1)
-        rows = np.arange(ROWS)
-        # where it touches the peg of each row: above its center, by the two radii
-        self.contacts = np.stack(
-            [
-                (before[:, :ROWS] - rows / 2) * DX,
-                np.broadcast_to(TOP - rows * DY + PEG + BALL, (count, ROWS)),
-            ],
-            -1,
-        )
-        self.fall = float(np.sqrt(2 * (RELEASE - self.contacts[0, 0, 1]) / GRAVITY))
-        self.kick = (
-            GRAVITY * HOP**2 / 2 - DY
-        ) / HOP  # up, off a peg: each hop drops DY
-        # it comes to rest in its bin on top of those that came before it
-        rank = np.zeros(count, int)
-        self.counts = np.zeros(ROWS + 1, int)
-        for i in np.argsort(releases, kind="stable"):
-            rank[i] = self.counts[self.bins[i]]
-            self.counts[self.bins[i]] += 1
-        places = pile(int(self.counts.max()))
-        self.rest = places[rank] + np.column_stack(
-            [(self.bins - ROWS / 2) * DX, np.full(count, FLOOR)]
-        )
-        drop = self.contacts[:, -1, 1] - self.rest[:, 1]
-        self.last = (self.kick + np.sqrt(self.kick**2 + 2 * GRAVITY * drop)) / GRAVITY
-        self.landed = releases + self.fall + (ROWS - 1) * HOP + self.last
 
-    def flight(self, i: int) -> np.ndarray:
-        """One bead's time and position per retained keyframe."""
-        start = self.releases[i]
-        contact = self.contacts[i]
-        rest = self.rest[i]
-        path = [(start, 0.0, RELEASE)]
-        segments = [(np.array([0.0, RELEASE]), contact[0], self.fall, 0.0)]
-        segments.extend((a, b, HOP, self.kick) for a, b in zip(contact, contact[1:]))
-        segments.append((contact[-1], rest, self.last[i], self.kick))
-        for a, b, duration, speed in segments:
-            samples = int(np.ceil(120 * duration))
-            for k in range(1, samples + 1):
-                u = duration * k / samples
-                x = a[0] + (b[0] - a[0]) * k / samples
-                y = b[1] if k == samples else a[1] + speed * u - GRAVITY * u*u / 2
-                path.append((start + u, x, y))
-            start += duration
-        return np.array(path)
+def flight(release, contacts, rest, fall, kick, final_drop):
+    """One bead's time and position per retained keyframe."""
+    path = [(release, 0.0, RELEASE)]
+    segments = [((0.0, RELEASE), contacts[0], fall, 0.0)]
+    segments.extend((a, b, HOP, kick) for a, b in zip(contacts, contacts[1:]))
+    segments.append((contacts[-1], rest, final_drop, kick))
+    start = release
+    for a, b, duration, speed in segments:
+        samples = ceil(120 * duration)
+        for k in range(1, samples + 1):
+            u = duration * k / samples
+            x = a[0] + (b[0] - a[0]) * k / samples
+            y = b[1] if k == samples else a[1] + speed * u - GRAVITY * u*u / 2
+            path.append((start + u, x, y))
+        start += duration
+    return path
+
+
+def film_time(time, board_time, film):
+    i = bisect_right(board_time, time) - 1
+    if i < 0:
+        return film[0]
+    if i == len(board_time) - 1:
+        return film[-1]
+    slope = (film[i + 1] - film[i]) / (board_time[i + 1] - board_time[i])
+    return film[i] + slope * (time - board_time[i])
 
 
 class GaltonBoard(Scene):
-    def construct(self) -> None:
-        board = Board(release_times(), np.random.default_rng(SEED))
+    def construct(self):
+        releases = release_times()
+        choices = np.random.default_rng(SEED).integers(0, 2, size=(BALLS, ROWS))
 
         pegs = VGroup(
             *(
@@ -127,7 +107,7 @@ class GaltonBoard(Scene):
             )
         )
         wall_top = TOP - (ROWS - 1) * DY - 0.45
-        edges = (np.arange(ROWS + 2) - (ROWS + 1) / 2) * DX
+        edges = [(k - (ROWS + 1) / 2) * DX for k in range(ROWS + 2)]
         bins = VGroup(
             Line([edges[0], FLOOR, 0], [edges[-1], FLOOR, 0]),
             *(Line([x, FLOOR, 0], [x, wall_top, 0]) for x in edges),
@@ -140,27 +120,41 @@ class GaltonBoard(Scene):
 
         # The source runs one board clock against the film clock. Use the inverse
         # of that curve for the retained keys, so releases and landings keep their timing.
-        end = float(board.landed.max()) + 0.2
-        film = np.linspace(0, 30, 3001)
-        speed = np.interp(film, [0, 5.0, 8.0], [0.8, 0.8, 2.0])
-        board_time = np.concatenate(
-            [[0], np.cumsum((speed[1:] + speed[:-1]) / 2 * np.diff(film))]
-        )
-        seconds = round(float(np.interp(end, board_time, film)), 9)
+        film = [k * 0.01 for k in range(3001)]
+        board_time = [0.0]
+        speed = 0.8
+        elapsed = 0.0
+        for previous, t in zip(film, film[1:]):
+            next_speed = 0.8 + (2 - 0.8) / 3 * min(3, max(0, t - 5))
+            elapsed += (speed + next_speed) / 2 * (t - previous)
+            board_time.append(elapsed)
+            speed = next_speed
         clock = self.value_tracker(0)
 
         self.next_section("Build the board")
-        balls = [Dot(radius=BALL, color=BLUE) for _ in board.releases]
+        balls = [Dot(radius=BALL, color=BLUE) for release in releases]
         self.add(*balls)
+        counts = [0 for k in range(ROWS + 1)]
+        landed = []
+        fall = sqrt(2 * (RELEASE - (TOP + PEG + BALL)) / GRAVITY)
+        kick = (GRAVITY * HOP**2 / 2 - DY) / HOP
         for i, ball in enumerate(balls):
-            flight = board.flight(i)
-            flight[:, 0] = np.interp(flight[:, 0], board_time, film)
-            self.bind_sampled(ball, clock, "position", flight)
-            self.bind_sampled(ball, clock, "opacity", [(-1, 0), (flight[0, 0], 1)], linear=False)
+            contacts, bin_index = contacts_for_ball(choices[i])
+            x, y = pile_slot(counts[bin_index])
+            counts[bin_index] += 1
+            rest = x + (bin_index - ROWS / 2) * DX, y + FLOOR
+            drop = contacts[-1][1] - rest[1]
+            final_drop = (kick + sqrt(kick**2 + 2 * GRAVITY * drop)) / GRAVITY
+            path = flight(releases[i], contacts, rest, fall, kick, final_drop)
+            keys = [(film_time(t, board_time, film), x, y) for t, x, y in path]
+            self.bind_sampled(ball, clock, "position", keys)
+            self.bind_sampled(ball, clock, "opacity", [(-1, 0), (keys[0][0], 1)], linear=False)
+            landed.append(releases[i] + fall + (ROWS - 1) * HOP + final_drop)
+        seconds = round(film_time(max(landed) + 0.2, board_time, film), 9)
 
         # Keep the small integer repertoire resident. The counter changes at
         # the exact same landing times as the original scene.
-        count_events = np.interp(np.sort(board.landed), board_time, film)
+        count_events = [film_time(time, board_time, film) for time in sorted(landed)]
         word = Tex("balls", font_size=44)
         zero = Integer(0, font_size=56)
         VGroup(word, zero).arrange(RIGHT, buff=0.3).to_corner(UL)
@@ -192,14 +186,13 @@ class GaltonBoard(Scene):
         self.next_section("Fit the normal curve")
 
         # the bell: the normal curve with the binomial's mean and variance, over the bins
-        mean, variance = ROWS / 2, ROWS / 4
-        per_ball = GAP * np.sqrt(3) / 9  # a pile's height, per ball in it
+        mean = ROWS / 2
+        variance = ROWS / 4
+        per_ball = GAP * sqrt(3) / 9  # a pile's height, per ball in it
 
-        def bell(x: float) -> float:
+        def bell(x):
             k = x / DX + ROWS / 2  # x, in bins
-            density = np.exp(-((k - mean) ** 2) / (2 * variance)) / np.sqrt(
-                2 * np.pi * variance
-            )
+            density = exp(-((k - mean) ** 2) / (2 * variance)) / sqrt(2 * pi * variance)
             return FLOOR + BALLS * density * per_ball
 
         curve = FunctionGraph(bell, x_range=[edges[0], edges[-1]], color=YELLOW)
@@ -208,6 +201,6 @@ class GaltonBoard(Scene):
             MathTex(rf"\mu = {mean:g}", font_size=52),
             MathTex(rf"\sigma^2 = {variance:g}", font_size=52),
         ).arrange(DOWN, aligned_edge=LEFT, buff=0.25)
-        label.set_color(YELLOW).move_to(np.array([edges[-1] + 1.6, FLOOR + 2.2, 0.0]))
+        label.set_color(YELLOW).move_to((edges[-1] + 1.6, FLOOR + 2.2, 0.0))
         self.play(Create(curve), FadeIn(label), run_time=2.0)
         self.wait(2.0)

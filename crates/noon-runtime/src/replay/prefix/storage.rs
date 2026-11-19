@@ -1,6 +1,8 @@
 //! Explicit capacity maintenance; append itself never relocates scene storage.
 use super::object_budget;
-use super::{PrefixError, PrefixReceiver, ReplayError, Revision};
+use super::{
+    PrefixBatch, PrefixError, PrefixReceiver, ReplayError, Revision, SignalTimelineSchedule,
+};
 use crate::{FrameObjectState, SceneInstance};
 
 /// Constant-time admission for the index allocation only, including spare slots.
@@ -60,9 +62,36 @@ impl PrefixReceiver {
     pub fn reserve_append_capacity(
         &mut self,
         runtime: &mut SceneInstance,
-        batch: &super::PrefixBatch,
+        batch: &PrefixBatch,
     ) -> Result<(), PrefixError> {
-        match self.preflight_append(runtime, batch) {
+        if !batch.scalar_timeline_entries.is_empty() {
+            return Err(ReplayError::UnsupportedDomain.into());
+        }
+        self.reserve_prefix_batch_storage(runtime, batch)
+    }
+
+    /// Reserve capacity for a source suffix whose scalar tracks will be adopted
+    /// together with the runtime revisions by the owning PrefixReader.
+    #[doc(hidden)]
+    pub fn reserve_append_capacity_with_scalar_timeline(
+        &mut self,
+        runtime: &mut SceneInstance,
+        batch: &PrefixBatch,
+        schedule: &SignalTimelineSchedule,
+    ) -> Result<(), PrefixError> {
+        schedule.prepare_append_batch(
+            batch.scalar_timeline_entries.iter().cloned(),
+            runtime.frame().time,
+        )?;
+        self.reserve_prefix_batch_storage(runtime, batch)
+    }
+
+    fn reserve_prefix_batch_storage(
+        &mut self,
+        runtime: &mut SceneInstance,
+        batch: &PrefixBatch,
+    ) -> Result<(), PrefixError> {
+        match self.validate_append(runtime, batch) {
             Ok(_)
             | Err(PrefixError::CapacityRequired { .. })
             | Err(PrefixError::FamilyAnimationCapacityRequired { .. }) => {}

@@ -145,8 +145,11 @@ impl PrefixReader {
     /// Reserves only required object slots and immutable glyph-plan tables.
     /// It never consumes output, evaluates a frame or invokes source code.
     pub fn reserve_append_capacity(&mut self, batch: &PrefixBatch) -> Result<(), PrefixError> {
-        self.receiver
-            .reserve_append_capacity(&mut self.session.runtime, batch)?;
+        self.receiver.reserve_append_capacity_with_scalar_timeline(
+            &mut self.session.runtime,
+            batch,
+            &self.session.signal_timeline,
+        )?;
         self.session
             .slots
             .reserve_object_capacity(batch.required_object_capacity())

@@ -900,6 +900,8 @@ Only selected frame output uses the existing bounded render transport. The first
 actual presentation receipt admits the Rust playback clock; pure typed status
 observations do not start it. Pausing commits elapsed interior static-wait time
 through the same clock and reader, without selecting an unavailable open frontier.
+When the gallery holds the clock while preparing the full source, explicit seeking
+can still select an adopted frame within the reader's open range.
 Source failure retires preparation and preserves already-adopted history; explicit
 cancellation retires the endpoint and releases its reader. Late attachment results
 cannot revive a cancelled invocation. Terminal adoption keeps that same reader,
@@ -943,10 +945,12 @@ the player are retained until it returns, after any required pointer cancellatio
 After cleanup, Rust may seal that original journal for ordinary replay. Successful
 admission clears the completed live receipt and exposes its actual authored range;
 failure preserves explicit replay denial and native input. Completed lesson cues
-refresh on the same player. Python lessons with section navigation stay observed
-because the prefix profile does not carry that metadata; their completed replay
-still uses ordinary admission. Existing resource preparation on an observed source
-keeps its original GPU handshake and suspended callback.
+refresh on the same player. Prepared playback publishes section cues with the matching
+prefix, so a cue can be selected only once its time is available. Fixed numeric text
+drivers evaluate the same retained scalar schedule as other bindings. Changes to
+those driver declarations after history starts invalidate that retention scope.
+Existing resource preparation on an observed source keeps its original GPU handshake
+and suspended callback.
 Authored publication during an active translation drag
 and native input with required callbacks retain their existing explicit gates.
 These transitions neither rerun source nor create another history or clock.

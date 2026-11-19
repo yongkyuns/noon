@@ -584,7 +584,7 @@ export async function attachSemanticEngine(
       diagnosticTerminal = true;
       onExecutionDiagnostic({ stage: "terminal-adopted", ...facts });
     }
-    if (prepared !== null && snapshot.time > 0 && !diagnosticStarted) {
+    if (prepared !== null && snapshot.advancing && snapshot.time > 0 && !diagnosticStarted) {
       diagnosticStarted = true;
       onExecutionDiagnostic({ stage: "playback-started", ...facts });
     }

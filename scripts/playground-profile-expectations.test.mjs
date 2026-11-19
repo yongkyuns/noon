@@ -29,6 +29,8 @@ function diagnosticsFor(expected) {
     audio: expected.capabilities.audio, sections: expected.capabilities.sections };
   const events = [{ sequence: 0, stage: 'attached', profile: expected.attachedProfile, contextId,
     continuationGeneration: 4, capabilities: attachedCapabilities,
+    ...(expected.requireInitialSeek ? { durationSeconds: null, preparedFrontier: 2,
+      seekRange: { start: 0, end: 1.9999999999999998 } } : {}),
     reason: expected.dispositionKind === 'callback' ? { code: 'host_callbacks' }
       : expected.dispositionKind === 'observed-replay' ? { code: 'host_effects' } : undefined,
   }];
@@ -51,8 +53,8 @@ function diagnosticsFor(expected) {
 }
 
 test('inventory binds all showcase IDs, paths and exact source bytes', () => {
-  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'ordinary').length, 31);
-  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'observed-replay').length, 9);
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'ordinary').length, 36);
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'observed-replay').length, 4);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.attachedProfile === 'immutable').length, 1);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'callback' ||
     row.dispositionKind === 'input-handoff').length, 4);
@@ -89,6 +91,14 @@ test('ordinary first playback rejects unfinished source or a partial timeline', 
     trace.events.forEach((event, sequence) => { event.sequence = sequence; });
     assert.throws(() => validateShowcaseDiagnostics(expected, trace), /first playback must follow source completion/);
   }
+});
+
+test('ports require a real open seek range on the first attachment', () => {
+  const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-miura-ori');
+  assert.equal(expected.requireInitialSeek, true);
+  const trace = diagnosticsFor(expected);
+  trace.events[0].seekRange = null;
+  assert.throws(() => validateShowcaseDiagnostics(expected, trace), /must expose selectable history/);
 });
 
 test('runtime package identity records clean source revision and file hashes for profile gating', () => {
