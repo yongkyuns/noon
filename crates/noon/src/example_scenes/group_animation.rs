@@ -10,7 +10,7 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
     let beam = scene.rectangle(0.72, 0.12)?;
     let tip = scene.circle(0.12)?;
     for (part, x, color) in [(&beam, -1.56, Color::ORANGE), (&tip, -1.24, Color::YELLOW)] {
-        scene.shift(part, Vec2::new(x, -0.49))?;
+        scene.shift(part, Vec2::new(x, -0.5))?;
         scene.set_fill(part, color, 1.0)?;
         scene.disable_stroke(part)?;
     }

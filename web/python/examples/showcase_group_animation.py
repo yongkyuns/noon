@@ -17,9 +17,9 @@ class GroupAnimation(Scene):
             return VGroup(card, number)
 
         beam = Rectangle(width=0.72, height=0.12, fill=ORANGE, fill_opacity=1,
-                         stroke=None).shift(1.56 * LEFT + 0.49 * DOWN)
+                         stroke=None).shift(1.56 * LEFT + 0.5 * DOWN)
         tip = Circle(radius=0.12, fill=YELLOW, fill_opacity=1,
-                     stroke=None).shift(1.24 * LEFT + 0.49 * DOWN)
+                     stroke=None).shift(1.24 * LEFT + 0.5 * DOWN)
         callout = VGroup(beam, tip).set_glow(radius=Pixels(10), intensity=1.4, color=ORANGE)
 
         first = step(-1.8, "1")

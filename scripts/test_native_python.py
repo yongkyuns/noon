@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 import _noon_native
+from noon import NoonError
 from noon_native import close_scene, prepare_view, run_scene, run_source
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,7 +84,7 @@ class GlowEdit(Scene):
         group = VGroup(Circle(), Square().shift(RIGHT)).set_glow(radius=Pixels(8))
         self.play(group.animate.shift(UP).set_glow(radius=Pixels(12)))
 """
-        with self.assertRaisesRegex(RuntimeError, "detached family animate must preserve its composed effects"):
+        with self.assertRaisesRegex(NoonError, "detached family animate must preserve its composed effects"):
             asyncio.run(run_source(source))
 
     def test_nested_group_keeps_existing_mixed_play_compositions(self):
