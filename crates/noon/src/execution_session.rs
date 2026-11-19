@@ -2280,7 +2280,7 @@ impl ExecutionSession {
                 options,
             } => {
                 let mode = if target.has_owned_geometry {
-                    self.require_mounted_geometry_motion(*source, *options)?;
+                    self.stage_geometry_method_family(store, *source, *options, admitted)?;
                     SemanticFamilyTransformMode::FixedTopology
                 } else {
                     self.stage_detached_method_family(
@@ -2513,7 +2513,6 @@ impl ExecutionSession {
                 if method_target
                     && (has_owned_geometry(*source)? || has_owned_geometry(*target_state)?)
                 {
-                    self.require_mounted_geometry_motion(*source, *options)?;
                     if !crate::animation_request::supports_geometry_method_target(
                         store,
                         *source,
@@ -2523,9 +2522,11 @@ impl ExecutionSession {
                         ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                     })? {
                         return Err(ExecutionSessionAnimationError::InvalidComposition(
-                            "mounted groups with their own geometry support only shift and uniform scale".into(),
+                            "groups with their own geometry support only shift and uniform scale"
+                                .into(),
                         ));
                     }
+                    self.stage_geometry_method_family(store, *source, *options, admitted)?;
                     return Ok(declaration.create_family_transform_animation_with_mode(
                         *source,
                         *target_state,
@@ -3617,20 +3618,27 @@ impl ExecutionSession {
         Ok(())
     }
 
-    fn require_mounted_geometry_motion(
+    fn stage_geometry_method_family(
         &self,
+        store: &SemanticStore,
         source: SemanticNodeId,
         options: AnimationOptions,
+        admitted: &mut AnimationAdmissions,
     ) -> Result<(), ExecutionSessionAnimationError> {
-        if !self.reachability.is_reachable(source)
-            || options
-                .path_arc
-                .is_some_and(|arc| arc.abs() >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD)
+        if options
+            .path_arc
+            .is_some_and(|arc| arc.abs() >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD)
         {
             return Err(ExecutionSessionAnimationError::InvalidComposition(
-                "groups with their own geometry require a mounted source and a straight motion path".into(),
+                "groups with their own geometry require a straight motion path".into(),
             ));
         }
+        self.stage_detached_method_family(
+            store,
+            source,
+            MethodFamilyAppearance::OwnedGeometry,
+            admitted,
+        )?;
         Ok(())
     }
 

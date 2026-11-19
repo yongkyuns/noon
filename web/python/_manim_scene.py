@@ -1874,7 +1874,7 @@ def _canonical_cyclic_replace_transform(
 
 def _canonical_family_transform_animation(
     scene: _base.Scene, animation: object
-) -> tuple[_compat.Group, _compat.Group, object, list[_base.Mobject]] | None:
+) -> tuple[_compat.Group, _compat.Group, object, list[_base.Mobject] | None] | None:
     method_target = isinstance(animation, _animate._AlignedGroupAnimationBuilder)
     if method_target:
         source, target = animation.source, animation.target
@@ -1891,8 +1891,8 @@ def _canonical_family_transform_animation(
         return None
     entering = source_leaves if method_target and all(
         member._scene is None for member in source_leaves
-    ) else []
-    if not entering and any(member._scene is not scene for member in source_leaves):
+    ) else None
+    if entering is None and any(member._scene is not scene for member in source_leaves):
         return None
     if not isinstance(target, (_compat.Group, _compat.VGroup)) or any(
         member._scene is not None for member in _compat._leaf_mobjects(target)
@@ -2895,7 +2895,7 @@ def _build_canonical_composition_candidate_steps(
                 keys = array_value([term for pair in leaf.key_map.items() for term in pair])
                 parameters += (keys,)
             append_family_transform(*parameters)
-            if entering:
+            if entering is not None:
                 family_registrations.append(source)
                 for member in entering:
                     if _semantic_wrapper_key(member) in reserved_targets:

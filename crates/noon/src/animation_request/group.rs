@@ -246,6 +246,7 @@ pub(crate) enum MethodFamilyAppearance {
     Ordinary,
     ComposedEffects,
     RootOpacity,
+    OwnedGeometry,
 }
 
 impl MethodFamilyAppearance {
@@ -263,25 +264,20 @@ pub(crate) fn is_method_family(
     root: SemanticNodeId,
     appearance: MethodFamilyAppearance,
 ) -> bool {
-    supports_method_family(store, root, appearance, false)
-}
-
-fn supports_method_family(
-    store: &SemanticStore,
-    root: SemanticNodeId,
-    appearance: MethodFamilyAppearance,
-    allow_owned_geometry: bool,
-) -> bool {
     store.ordered_authoring_nodes(root).is_ok_and(|nodes| {
         nodes.into_iter().all(|id| {
             let node = store.node(id).expect("validated authoring node");
             if matches!(node.kind(), SemanticNodeKind::Family(_)) {
                 node.semantic_object_state().is_none_or(|state| {
-                    allow_owned_geometry
+                    appearance == MethodFamilyAppearance::OwnedGeometry
                         && matches!(state.content, SemanticObjectContent::Geometry(_))
                         && is_method_leaf(store, state)
-                }) && (appearance != MethodFamilyAppearance::Ordinary
-                    || node.effect_ids().is_empty())
+                }) && (node.effect_ids().is_empty()
+                    || matches!(
+                        appearance,
+                        MethodFamilyAppearance::ComposedEffects
+                            | MethodFamilyAppearance::RootOpacity
+                    ))
                     && method_group_style(
                         store,
                         id,
@@ -320,7 +316,7 @@ pub(crate) fn supports_geometry_method_target(
 ) -> Result<bool, AuthoringError> {
     if ![source, target]
         .into_iter()
-        .all(|id| supports_method_family(store, id, MethodFamilyAppearance::Ordinary, true))
+        .all(|id| is_method_family(store, id, MethodFamilyAppearance::OwnedGeometry))
     {
         return Ok(false);
     }

@@ -49,14 +49,14 @@
     },
     {
       "id": "showcase-mounted-callout", "title": "Move a labeled callout",
-      "lesson": "Move a callout from one sample to the next, then scale it around a shared center so the outline and its label stay aligned.",
+      "lesson": "Slide a callout in on its first play, then scale it around a shared center so its outline and label stay aligned.",
       "primary_feature": "content-owning-group-animation", "category": "Visual design",
       "path": "python/examples/showcase_mounted_callout.py", "features": ["VGroup", "Text", "animate", "shared pivot"],
       "duration": 4.0, "thumbnail_time": 3.5,
       "thumbnail": "thumbnails/showcase/showcase-mounted-callout.png",
       "thumbnail_alt": "A mint callout labeled Inspect above Sample B, with Sample A and B joined by a line",
       "still_intervals": [[0, 0.5], [1.5, 2], [3, 4]],
-      "beats": [{"time": 0.25, "label": "Inspect Sample A"}, {"time": 1, "label": "Move to Sample B"}, {"time": 2.5, "label": "Scale the outline and label together"}]
+      "beats": [{"time": 0.25, "label": "See both samples"}, {"time": 1, "label": "Slide the callout in"}, {"time": 2.5, "label": "Scale the outline and label together"}]
     },
     {
       "id": "showcase-background-music", "title": "Double the input",

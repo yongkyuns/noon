@@ -471,20 +471,20 @@ class Demo(Scene):
         finally:
             view.close()
 
-    def test_mounted_vector_group_can_animate_its_own_path_without_children(self):
+    def test_vector_group_can_enter_with_its_own_path_without_children(self):
         source = """from noon import *
 class Outline(Scene):
     def construct(self):
         outline = VGroup().set_points([(0, 0, 0), (1/3, 0, 0), (2/3, 0, 0), (1, 0, 0)])
-        self.add(outline)
         self.play(outline.animate.shift(2 * RIGHT).scale(0.5))
+        assert self.mobjects[0] is outline
         assert tuple(outline.get_center()) == (2.5, 0.0, 0.0)
         assert outline.width == 0.5
 """
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
-    def test_native_callout_rewinds_outline_and_label_together(self):
+    def test_native_callout_rewinds_across_first_play(self):
         path = ROOT / "web/python/examples/showcase_mounted_callout.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
         callout = scene.mobjects[-1]
@@ -493,11 +493,13 @@ class Outline(Scene):
         self.assertEqual(tuple(callout.submobjects[0].get_center()), (2.25, 0.859375, 0.0))
         view = prepare_view(scene)
         try:
-            times = (0.0, 1.0, 1.75, 2.5, view.duration)
+            times = (0.25, 1.0, 1.75, 2.5, view.duration)
             frames = [view.capture(time=t, width=320, height=180) for t in times]
+            self.assertEqual(frames[0], view.capture(time=0.0, width=320, height=180))
             self.assertEqual(len(set(frames)), len(frames))
             for time, pixels in reversed(tuple(zip(times[:-1], frames[:-1]))):
                 self.assertEqual(view.capture(time=time, width=320, height=180), pixels)
+            self.assertEqual(view.capture(time=1.0, width=320, height=180), frames[1])
         finally:
             view.close()
 
