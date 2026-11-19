@@ -203,17 +203,27 @@ impl LiveContinuation for OverlayComparison {
                 } else {
                     (1.0, 1.0)
                 };
+                let options = AnimationOptions::new()
+                    .run_time(duration)
+                    .rate_func(RateFunction::Linear);
                 crate::animation_request::activate(
                     &mut live,
                     (
-                        self.group.animate().set_object_opacity(opacity),
-                        self.first.animate().set_object_opacity(opacity),
-                        self.second.animate().set_object_opacity(opacity),
+                        self.group
+                            .animate()
+                            .set_object_opacity(opacity)
+                            .with_options(options),
+                        self.first
+                            .animate()
+                            .set_object_opacity(opacity)
+                            .with_options(options),
+                        self.second
+                            .animate()
+                            .set_object_opacity(opacity)
+                            .with_options(options),
                     )
                         .into_animation_request(),
-                    AnimationOptions::new()
-                        .run_time(duration)
-                        .rate_func(RateFunction::Linear),
+                    AnimationOptions::new(),
                 )?
             }
             2 => live.wait_segment(1.2)?,
@@ -284,6 +294,7 @@ mod tests {
         for (time, opacity) in [
             (0.3, None),
             (0.6, Some(0.0)),
+            (0.9, Some(0.105)),
             (1.2, Some(0.21)),
             (2.4, Some(0.42)),
             (4.8, Some(1.0)),
