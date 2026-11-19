@@ -107,7 +107,7 @@ sys.exit(int(os.environ['NOON_TEST_INSTALL_STATUS']))
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(calls, [])
 
-    def test_workflow_routes_both_jobs_without_changing_existing_deadlines_or_pins(self):
+    def test_workflow_preserves_installer_pins_and_gallery_budgets(self):
         p = Path(__file__).resolve().parents[1] / ".github/workflows/playground-cross-browser.yml"
         source = p.read_text()
         self.assertEqual(source.count("run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}"), 2)
@@ -117,7 +117,8 @@ sys.exit(int(os.environ['NOON_TEST_INSTALL_STATUS']))
         self.assertIn("playwright@1.62.1", source)
         self.assertIn("python3 -S scripts/test_ci_install_playwright_browser.py", source)
         self.assertIn("node --test --test-concurrency=2 scripts/gallery-shards.test.mjs scripts/playground-stress-observation.test.mjs", source)
-        self.assertIn("timeout-minutes: 20", source)
+        gallery_step = source.split("- name: Qualify the full gallery shard", 1)[1].split("- name:", 1)[0]
+        self.assertIn("timeout-minutes: ${{ matrix.browser == 'firefox' && 25 || 20 }}", gallery_step)
         self.assertIn('NOON_GALLERY_SHARD_COUNT: "3"', source)
         for name in ["ci-install-playwright-browser.sh", "ci_reference_apt_sources.py", "test_ci_install_playwright_browser.py"]:
             self.assertEqual(source.count('      - "scripts/' + name + '"'), 2)
