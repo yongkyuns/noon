@@ -1887,7 +1887,7 @@ def _canonical_family_transform_animation(
     if not isinstance(source, (_compat.Group, _compat.VGroup)):
         return None
     source_leaves = _compat._leaf_mobjects(source)
-    if not source_leaves:
+    if not source_leaves and not (method_target and source.family_members_with_points()):
         return None
     entering = source_leaves if method_target and all(
         member._scene is None for member in source_leaves

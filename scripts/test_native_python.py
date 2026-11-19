@@ -471,6 +471,19 @@ class Demo(Scene):
         finally:
             view.close()
 
+    def test_mounted_vector_group_can_animate_its_own_path_without_children(self):
+        source = """from noon import *
+class Outline(Scene):
+    def construct(self):
+        outline = VGroup().set_points([(0, 0, 0), (1/3, 0, 0), (2/3, 0, 0), (1, 0, 0)])
+        self.add(outline)
+        self.play(outline.animate.shift(2 * RIGHT).scale(0.5))
+        assert tuple(outline.get_center()) == (2.5, 0.0, 0.0)
+        assert outline.width == 0.5
+"""
+        scene = asyncio.run(run_source(source))
+        close_scene(scene)
+
     def test_native_callout_rewinds_outline_and_label_together(self):
         path = ROOT / "web/python/examples/showcase_mounted_callout.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
