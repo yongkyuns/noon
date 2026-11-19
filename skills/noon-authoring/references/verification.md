@@ -15,6 +15,27 @@ metadata is not a license to guess. Compare raster evidence only within the
 qualified backend and tolerance policy; do not require universal cross-GPU bit
 identity or widen thresholds to make a failing scene pass.
 
+## First-play seeking
+
+Open the exact scene in a fresh session of its normal target player. On the
+initial run, seek forward and backward between two buffered times as soon as
+the first playable interval is available. For incremental preparation, do this
+while later history is still being prepared. Check that the range grows as
+history arrives and that the player presents the expected state at the selected
+time. For a fully prepared timeline, test once the controls become available.
+
+For checked-in gallery scenes that prepare incrementally, use
+`requireInitialSeek` in `scripts/playground-profile-expectations.mjs` to guard
+initial admission. Exercise the actual browser scrubber on that same run and
+record the selected and presented times. Use the preview CLI for forward-only
+frame inspection.
+
+If first-play seeking is impossible for a faithful scene, report the exact
+blocker and when seeking becomes available, if ever. If you could not exercise
+the player, report that first-play seeking is unverified.
+
+## Repository validation
+
 For repository changes, the existing validation entrypoints are:
 
 ```bash
