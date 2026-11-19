@@ -212,6 +212,11 @@ pub(crate) enum SemanticCompositionRequest {
         target: Box<crate::animation_request::FamilyMethodTarget>,
         options: AnimationOptions,
     },
+    FamilyObjectOpacity {
+        source: SemanticNodeId,
+        opacity: f64,
+        options: AnimationOptions,
+    },
     MoveAlongPath {
         target: SemanticNodeId,
         path: SemanticNodeId,
@@ -394,6 +399,7 @@ impl SemanticCompositionRequest {
             Self::TransformTo { source, .. }
             | Self::MethodTarget { source, .. }
             | Self::FamilyMethodTarget { source, .. }
+            | Self::FamilyObjectOpacity { source, .. }
             | Self::WorldTransform { target: source, .. }
             | Self::CameraProfile { target: source, .. }
             | Self::FamilyTransformTo { source, .. }
@@ -2272,6 +2278,11 @@ impl ExecutionSession {
                 target,
                 options,
             } => {
+                if target.has_composed_effects && !self.reachability.is_reachable(*source) {
+                    return Err(ExecutionSessionAnimationError::InvalidComposition(
+                        "owned family animate requires groups with composed effects to be added first".into(),
+                    ));
+                }
                 self.stage_detached_method_family(store, *source, admitted)?;
                 let copied = target.stage(store, *source, declaration).map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())
@@ -2290,6 +2301,18 @@ impl ExecutionSession {
                 // in the canonical family channel, including local endpoints.
                 Ok(declaration.create_family_transform_animation(*source, copied, *options))
             }
+            SemanticCompositionRequest::FamilyObjectOpacity {
+                source,
+                opacity,
+                options,
+            } => family_effect_target::stage_owned_opacity(
+                self,
+                store,
+                *source,
+                *opacity,
+                *options,
+                declaration,
+            ),
             SemanticCompositionRequest::MoveAlongPath {
                 target,
                 path,

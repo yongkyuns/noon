@@ -60,6 +60,178 @@ fn group_requests_capture_at_admission_and_share_chained_pivots() {
 }
 
 #[test]
+fn mounted_group_motion_preserves_composed_glow_and_members() {
+    use crate::effects::{EffectUpdate, Pixels};
+
+    let (mut scene, family, left, right) = group_scene();
+    let leaf = scene.circle(0.25).unwrap();
+    let detached = scene.family(&[(&leaf).into()]).unwrap();
+    for target in [&family, &detached] {
+        scene
+            .set_glow(target, EffectUpdate::default().radius(Pixels(8.0)))
+            .unwrap();
+    }
+    let attachment = scene.get_effect(&family, "glow").unwrap().node_id();
+    let mut execution = scene.into_execution().unwrap();
+    let before = execution.session().frame().clone();
+    let context = execution.session().publication_context();
+    let scope = execution
+        .session()
+        .execution_object_id(family.node_id())
+        .unwrap();
+    let ids = [&left, &right].map(|leaf| {
+        execution
+            .session()
+            .execution_object_id(leaf.node_id())
+            .unwrap()
+    });
+    let original = before.objects.iter().find(|row| row.id == scope).unwrap();
+    assert_eq!(original.content.composed_source().unwrap().members(), ids);
+
+    for invalid in [
+        detached.animate().shift(UP).into_animation_request(),
+        family.animate().rotate(0.5).into_animation_request(),
+        (family.animate().shift(UP), left.animate().shift(RIGHT)).into_animation_request(),
+    ] {
+        assert!(activate(&mut execution.live(), invalid, linear()).is_err());
+        assert_eq!(execution.session().publication_context(), context);
+        assert_eq!(execution.session().frame(), &before);
+    }
+
+    let segment = activate(
+        &mut execution.live(),
+        family.animate().shift(UP).scale(0.5).into(),
+        linear(),
+    )
+    .unwrap();
+    execution.live().advance_segment_to(segment, 0.5).unwrap();
+    for (x, id) in [-1.5, 1.5].into_iter().zip(ids) {
+        let midpoint = execution
+            .session()
+            .frame()
+            .objects
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap();
+        assert_eq!(midpoint.transform.translation, Vec2::new(x, 0.5));
+        assert_eq!(midpoint.transform.scale, Vec2::new(0.75, 0.75));
+    }
+    finish(&mut execution.live(), segment);
+
+    let frame = execution.session().frame();
+    let retained = frame.objects.iter().find(|row| row.id == scope).unwrap();
+    assert_eq!(retained.content, original.content);
+    assert_eq!(retained.effects, original.effects);
+    assert_eq!(
+        execution
+            .scene()
+            .get_effect(&family, "glow")
+            .unwrap()
+            .node_id(),
+        attachment
+    );
+    for (x, id) in [-1.0, 1.0].into_iter().zip(ids) {
+        let end = frame.objects.iter().find(|row| row.id == id).unwrap();
+        assert_eq!(end.transform.translation, Vec2::new(x, 1.0));
+    }
+}
+
+#[test]
+fn owned_group_opacity_admits_one_scope_and_leaves_member_paint_unchanged() {
+    let (mut scene, family, left, right) = group_scene();
+    scene.set_object_opacity(&right, 0.5).unwrap();
+    let detached_leaf = scene.circle(0.25).unwrap();
+    let detached = scene.family(&[(&detached_leaf).into()]).unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let before = execution.session().frame().clone();
+    let context = execution.session().publication_context();
+    assert_eq!(
+        execution.session().execution_object_id(family.node_id()),
+        None
+    );
+
+    for invalid in [
+        detached
+            .animate()
+            .set_object_opacity(0.25)
+            .into_animation_request(),
+        family
+            .animate()
+            .set_object_opacity(f64::NAN)
+            .into_animation_request(),
+        (
+            family.animate().set_object_opacity(1.0),
+            family.animate().set_object_opacity(0.25),
+        )
+            .into_animation_request(),
+    ] {
+        assert!(activate(&mut execution.live(), invalid, linear()).is_err());
+        assert_eq!(execution.session().publication_context(), context);
+        assert_eq!(execution.session().frame(), &before);
+    }
+
+    let segment = activate(
+        &mut execution.live(),
+        family.animate().set_object_opacity(0.25).into(),
+        linear(),
+    )
+    .unwrap();
+    execution.live().advance_segment_to(segment, 0.5).unwrap();
+    let frame = execution.session().frame();
+    let scope = frame
+        .objects
+        .iter()
+        .find(|row| row.content.composed_source().is_some())
+        .unwrap();
+    let scope_id = scope.id;
+    assert_eq!(scope.style.opacity, 0.625);
+    assert_eq!(
+        scope.content.composed_source().unwrap().members(),
+        before.objects.iter().map(|row| row.id).collect::<Vec<_>>()
+    );
+    assert_eq!(&frame.objects[..2], &before.objects);
+    assert_eq!(family.own_style().unwrap().object_opacity, 1.0);
+
+    finish(&mut execution.live(), segment);
+    assert_eq!(family.own_style().unwrap().object_opacity, 0.25);
+    assert_eq!(
+        execution.session().execution_object_id(family.node_id()),
+        Some(scope_id)
+    );
+    assert_eq!(left.state().unwrap().style.object_opacity, 1.0);
+    assert_eq!(right.state().unwrap().style.object_opacity, 0.5);
+
+    execution
+        .scene_mut()
+        .set_glow(
+            &family,
+            crate::effects::EffectUpdate::default().radius(crate::effects::Pixels(8.0)),
+        )
+        .unwrap();
+    let glow = execution.scene().get_effect(&family, "glow").unwrap();
+    let segment = activate(
+        &mut execution.live(),
+        family.animate().set_object_opacity(1.0).into(),
+        linear(),
+    )
+    .unwrap();
+    finish(&mut execution.live(), segment);
+    assert_eq!(family.own_style().unwrap().object_opacity, 1.0);
+    assert_eq!(
+        execution.session().execution_object_id(family.node_id()),
+        Some(scope_id)
+    );
+    assert_eq!(
+        execution
+            .scene()
+            .get_effect(&family, "glow")
+            .unwrap()
+            .node_id(),
+        glow.node_id()
+    );
+}
+
+#[test]
 fn group_animation_preserves_alias_identity_and_unrelated_state() {
     let (mut scene, family, left, right) = group_scene();
     let alias = scene.family(&[(&left).into()]).unwrap();

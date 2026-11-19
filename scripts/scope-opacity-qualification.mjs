@@ -101,11 +101,22 @@ const cases=times.map(sampleTime=>({
     stopAtSourceCompletion:sampleTime===14,
   }));
 cases.push({...cases.at(-1),id:"scope-opacity-14-cold",pythonFrameTimes:undefined});
+cases.push(...[0, 1.2, 2.4, 4.8].map(sampleTime => ({
+  id: `group-opacity-${sampleTime}`, file: "showcase_group_opacity.py",
+  factory: "createDirectGroupOpacitySmokeRenderer", duration: 4.8, sampleTime,
+  objectCount: sampleTime === 0 ? 6 : 7,
+  directHeldSampleTime: sampleTime === 2.4 ? 1.8 : undefined,
+  playback: "live", boundaries: [0.6, 1.8, 3, 4],
+  stopAtSourceCompletion: sampleTime === 4.8,
+})));
 await qualifyPairedAuthoring({
   cases,
   artifactDirectory:"browser-smoke-artifacts/scope-opacity",prepareContext:disableAuthoringJspi,
-  qualifyPixels({fixture,backend,rust,python}) {return {
-    rust:reference(rust,fixture.sampleTime,`${backend}/rust-wasm`),
-    python:reference(python,fixture.sampleTime,`${backend}/python`),
-  };},
+  qualifyPixels({fixture,backend,rust,python}) {
+    if (!fixture.id.startsWith("scope-opacity-")) return {};
+    return {
+      rust:reference(rust,fixture.sampleTime,`${backend}/rust-wasm`),
+      python:reference(python,fixture.sampleTime,`${backend}/python`),
+    };
+  },
 });

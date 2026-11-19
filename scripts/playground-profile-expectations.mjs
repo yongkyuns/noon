@@ -10,8 +10,9 @@ const audioCommands = Object.freeze([...replayCommands, "sections"]);
 const initialObservedCommands = Object.freeze(["play", "pause"]);
 const rows = [
   ['showcase-first-scene','showcase_first_scene.py','1a6ba47220c25148f6c24d1fc82733e728690c7548ab1183e8f9905d0396f7e8','incremental','ordinary',[], 'looped'],
-  ['showcase-group-animation','showcase_group_animation.py','8d43424480d79628dd8741dbafaa837490d1667dfcbda99dd9e3b521b04aefe2','incremental','ordinary',[], 'looped'],
+  ['showcase-group-animation','showcase_group_animation.py','8a4f275107a44f9834b5b08924f4c95fec0244c23bffdf329ab42c1e2addcb26','incremental','ordinary',[], 'looped'],
   ['showcase-dynamic-scene','showcase_dynamic_scene.py','bcc689a8cb5d71eefc2afdf69b187260ebf0df5029cc67cca08db43d01541dca','incremental','ordinary',[], 'looped'],
+  ['showcase-group-opacity','showcase_group_opacity.py','d98df05318bf2f99a47e67b4a3a42b8def1842e4529e9fea2938ced69a528fc9','incremental','ordinary',[], 'looped'],
   ['showcase-background-music','background_music_lesson.py','b5bcced4ffb30c44b4bf476e16ae1416a6fad072d2f0df88edd98346a4711a40','immutable','immutable',['audio','sections'], 'finite-complete'],
   ['showcase-entrances-exits','showcase_entrances_exits.py','55818966017c4643b8abb1fab036164f28fc9c019b2ce3b415e28679c1911f73','incremental','ordinary',[], 'looped'],
   ['showcase-timing','showcase_timing.py','d0fa3d4e2281f066a2aaa35ae1f5b3e1272b5a2f1d202437a80a457c238e7c2b','incremental','ordinary',[], 'looped'],

@@ -1,9 +1,29 @@
 //! A nested diagram with text labels enters on its first play.
 //! Paired with `showcase_group_animation.py`, also available in the demo gallery.
-use crate::{AnimationOptions, Color, LiveProgram, Scene, SceneScript, ScriptError, Text, Vec2};
+use crate::{
+    effects::{EffectUpdate, Pixels},
+    AnimationOptions, Color, LiveProgram, Scene, SceneScript, ScriptError, Text, Vec2,
+};
 
 pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
-    Scene::script(|scene| async move {
+    let mut scene = Scene::new();
+    let beam = scene.rectangle(0.72, 0.12)?;
+    let tip = scene.circle(0.12)?;
+    for (part, x, color) in [(&beam, -1.56, Color::ORANGE), (&tip, -1.24, Color::YELLOW)] {
+        scene.shift(part, Vec2::new(x, -0.24))?;
+        scene.set_fill(part, color, 1.0)?;
+        scene.disable_stroke(part)?;
+    }
+    let callout = scene.family(&[(&beam).into(), (&tip).into()])?;
+    scene.set_glow(
+        &callout,
+        EffectUpdate::default()
+            .radius(Pixels(10.0))
+            .intensity(1.4)
+            .color(Color::ORANGE),
+    )?;
+    scene.add_many(&[(&callout).into()])?;
+    scene.into_script(move |scene| async move {
         let lines = |segments: &[([f32; 2], [f32; 2])]| -> Result<Vec<_>, ScriptError> {
             segments
                 .iter()
@@ -86,6 +106,7 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
                         .shift(Vec2::new(0.0, -0.5))
                         .set_color(Color::ORANGE),
                     rail.animate().scale(1.25).shift(Vec2::new(0.0, 0.25)),
+                    callout.animate().shift(Vec2::new(3.32, -0.58)).scale(1.2),
                     marker
                         .animate()
                         .shift(Vec2::new(1.76, 0.25))
@@ -122,7 +143,7 @@ mod tests {
                 program.admit_publication(publication).unwrap();
             }
             assert_eq!(program.session().runtime_identity(), identity);
-            let object_count = if end == 0.75 { 6 } else { 13 };
+            let object_count = if end == 0.75 { 9 } else { 16 };
             assert_eq!(program.session().frame().objects.len(), object_count);
         }
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);

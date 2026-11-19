@@ -16,14 +16,14 @@
     },
     {
       "id": "showcase-group-animation", "title": "Move the whole diagram",
-      "lesson": "Bring a labeled diagram into the scene on its first animation, then move the cards and text together around a shared pivot while the progress rail advances independently.",
+      "lesson": "Bring a labeled diagram into view, then move a glowing underline from the first step to the second as the diagram and progress rail animate.",
       "primary_feature": "group-animation", "category": "Visual design",
-      "path": "python/examples/showcase_group_animation.py", "features": ["VGroup", "Text", "animate", "shared pivot", "set_color"],
+      "path": "python/examples/showcase_group_animation.py", "features": ["VGroup", "Text", "animate", "shared pivot", "composed Glow"],
       "duration": 6.5, "thumbnail_time": 6.5,
       "thumbnail": "thumbnails/showcase/showcase-group-animation.png",
-      "thumbnail_alt": "Two orange outlined steps labeled 1 and 2, joined by an arrow, above a blue progress rail and marker",
+      "thumbnail_alt": "Two orange outlined steps above a blue progress rail, with a glowing underline beneath step 2",
       "still_intervals": [[0, 0.75], [2, 2.5], [3.75, 4.25], [5.5, 6.5]],
-      "beats": [{"time": 1.375, "label": "Introduce and scale"}, {"time": 3.125, "label": "Rotate together"}, {"time": 4.875, "label": "Restore and recolor"}]
+      "beats": [{"time": 1.375, "label": "Introduce and scale"}, {"time": 3.125, "label": "Rotate together"}, {"time": 4.875, "label": "Move the glowing underline"}]
     },
     {
       "id": "showcase-dynamic-scene", "title": "A field in motion",
@@ -35,6 +35,17 @@
       "thumbnail_alt": "The actual 600-shape field recomposing into a colorful spiral beside 24 animated labels",
       "still_intervals": [[2.6, 2.9], [17.7, 19.0]],
       "beats": [{"time": 2.5, "label": "Assemble"}, {"time": 4.4, "label": "Morph"}, {"time": 7.8, "label": "Waves"}, {"time": 12.4, "label": "Spiral"}, {"time": 13.5, "label": "Exchange"}, {"time": 17.6, "label": "Finale"}]
+    },
+    {
+      "id": "showcase-group-opacity", "title": "Fade an overlay as one layer",
+      "lesson": "Compare fading an entire overlay with fading its shapes separately. The overlap brightens only when each shape fades on its own.",
+      "primary_feature": "composite-group-opacity", "category": "Visual design",
+      "path": "python/examples/showcase_group_opacity.py", "features": ["VGroup", "animate", "composite opacity"],
+      "duration": 4.8, "thumbnail_time": 2.4,
+      "thumbnail": "thumbnails/showcase/showcase-group-opacity.png",
+      "thumbnail_alt": "Two pairs of faded blue circles. The left pair has uniform color and the right pair has a brighter overlap.",
+      "still_intervals": [[0, 0.6], [1.8, 3], [4, 4.8]],
+      "beats": [{"time": 1.2, "label": "Fade both overlays"}, {"time": 2.4, "label": "Compare the overlap"}, {"time": 3.5, "label": "Restore full opacity"}]
     },
     {
       "id": "showcase-background-music", "title": "Double the input",

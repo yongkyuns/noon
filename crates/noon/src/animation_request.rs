@@ -5,7 +5,7 @@
 
 use crate::execution_session::SemanticCompositionRequest;
 use crate::semantic_mobject::{
-    authoring_render_f64, edit_color, edit_fill, rotate_affine_about_point,
+    authoring_render_f64, edit_color, edit_fill, edit_object_opacity, rotate_affine_about_point,
     scale_state_about_center, state_center,
 };
 use crate::{
@@ -188,6 +188,7 @@ tuple_request!(A a, B b, C c, D d, E e, F f, G g, H h);
 pub struct Animate {
     source: CompositeEntryHandle,
     methods: Vec<Method>,
+    object_opacity: Option<f64>,
     options: AnimationOptions,
 }
 
@@ -210,6 +211,7 @@ impl Mobject {
         Animate {
             source: CompositeEntryHandle::Mobject(self.clone()),
             methods: Vec::new(),
+            object_opacity: None,
             options: AnimationOptions::new(),
         }
     }
@@ -220,10 +222,12 @@ impl MobjectFamily {
     /// The source state is captured at play admission.
     /// Members retain their semantic identity and share scale/rotation pivots.
     /// A fully detached family enters the scene when the play is admitted.
+    /// A family already in the scene can shift or scale with its composed effects.
     pub fn animate(&self) -> Animate {
         Animate {
             source: CompositeEntryHandle::Family(self.clone()),
             methods: Vec::new(),
+            object_opacity: None,
             options: AnimationOptions::new(),
         }
     }
@@ -245,6 +249,13 @@ impl Animate {
     /// Recolor fill and stroke while preserving their opacities.
     pub fn set_color(mut self, color: Color) -> Self {
         self.methods.push(Method::SetColor(color));
+        self
+    }
+
+    /// Animate the object's overall opacity, or the final opacity of an added group.
+    /// For a group, use a separate request for its composite opacity.
+    pub fn set_object_opacity(mut self, opacity: f64) -> Self {
+        self.object_opacity = Some(opacity);
         self
     }
 
@@ -276,6 +287,19 @@ impl Animate {
     ) -> Result<SemanticCompositionRequest, LiveSessionError> {
         let source = match &self.source {
             CompositeEntryHandle::Family(family) => {
+                if let Some(opacity) = self.object_opacity {
+                    live.require_family(family)?;
+                    if !self.methods.is_empty() {
+                        return Err(LiveSessionError::Mobject(
+                            "group animate uses a separate request for composite opacity".into(),
+                        ));
+                    }
+                    return Ok(SemanticCompositionRequest::FamilyObjectOpacity {
+                        source: family.node_id(),
+                        opacity,
+                        options: self.options,
+                    });
+                }
                 return Ok(SemanticCompositionRequest::FamilyMethodTarget {
                     source: family.node_id(),
                     target: Box::new(FamilyMethodTarget::capture(live, family, &self.methods)?),
@@ -292,6 +316,9 @@ impl Animate {
             ));
         }
         let mut target = live.capture_mobject_state(source)?;
+        if let Some(opacity) = self.object_opacity {
+            edit_object_opacity(&mut target.style, opacity)?;
+        }
         let source_rotation = target
             .transform
             .planar_rotation()
