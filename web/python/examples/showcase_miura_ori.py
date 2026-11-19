@@ -222,6 +222,10 @@ def crease_meshes(t, points, index, across, mountain):
     meshes = []
     for color, mask in ((MOUNTAIN, colors), (VALLEY, ~colors)):
         faces = quads[mask]
+        # Keep red and blue at distinct depths where their ribbons cross.
+        # Otherwise coplanar fragments can change order after a replay seek.
+        if color == MOUNTAIN:
+            faces[:, :, 2] += 0.001
         triangles = np.arange(len(faces))[:, None, None]*4 + np.array(FACES)
         meshes.append(Mesh3D.polyhedron(faces.reshape(-1, 3), triangles.reshape(-1, 3),
                                        color=color_from_hex(color)))

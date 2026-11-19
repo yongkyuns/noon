@@ -1,49 +1,51 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "b00a94e2986b1cbaa10d6bd85f01e93f26995f06",
+  "captureRevision": "f3221a62722362f0107ff930378361570c700dfa",
   "backend": "webgpu",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "b00a94e2986b1cbaa10d6bd85f01e93f26995f06",
+    "sourceRevision": "f3221a62722362f0107ff930378361570c700dfa",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "aa4a44b4a9c02ec74a840ffc8dd455c148d49e73da8a1b52d614376dc873a718"
+        "sha256": "ff83dd2b89a8d0064f6c9859a0ea4381e844220f98738bdfb6edb66c2cc23e4b"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "106269ed2a6cb07baea8258bc5823e60540924510a723c040ef1304d0fd22bb2"
+        "sha256": "723b29505c49604239989fb470dee5964f4b9c24fc57977fa0f1f62a7d9d24fc"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "bca5c80feb0d873f37ec5c1816d0c17ef4f8aeec4bbd308219bec4a19331fbca"
+        "sha256": "ab862df967787873d4344f55900533623d02566e5e7dc480baaccf674a325fc8"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
         "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
       }
     },
-    "buildId": "e72ca878723ca103c90bfd88ce3f29720b4acbb8c31afe3ec809497edb816322"
+    "buildId": "bfc66c91be187b073fa6811e7e18075d4192ad9246d45ca058f74308a8dff316"
   },
   "posters": [
     {
       "id": "showcase-vector-cutout",
-      "captureBuildId": "e72ca878723ca103c90bfd88ce3f29720b4acbb8c31afe3ec809497edb816322",
-      "sourceSha256": "d73b60a9b111607783056a82d5b5c722248f19317d21af194440c730317cac75",
-      "thumbnailTime": 13.5,
+      "captureBuildId": "bfc66c91be187b073fa6811e7e18075d4192ad9246d45ca058f74308a8dff316",
+      "sourceSha256": "103d703d30623202e7127e159fbd2c7c45b846ed27757929ff1d4c55107274f2",
+      "thumbnailTime": 9,
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 70553,
-        "pngSha256": "0324b481dbc1efffc15ec80ed5316beedd040658079548804bef52bdcd423040",
-        "pixelSha256": "723c464c4eba4b5ad7b58eb3438bb3d539dcd41808d239fc2a8b9b3682e9b84e"
+        "foregroundPixels": 155364,
+        "pngSha256": "a95d649302d348867392f6579a659187b75ed299e7365b919033145abae31955",
+        "pixelSha256": "817533c674b895e4287ee11c177a01f7b8504ac07062e027ec0c71371f166c3f"
       },
       "sample": {
-        "requestedTime": 13.5,
-        "publishedTime": 13.5,
-        "authoredDuration": null,
-        "completionProbe": false
+        "requestedTime": 9.000000001,
+        "publishedTime": 9,
+        "authoredDuration": 9,
+        "sourceCompleted": true,
+        "sourceState": "completed",
+        "completionProbe": true
       }
     }
   ]
