@@ -7346,6 +7346,24 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = bindSampled)]
+        pub fn bind_sampled(
+            &mut self,
+            object: &crate::WasmAuthoringMobjectHandle,
+            tracker: &WasmValueTrackerHandle,
+            channel: &str,
+            linear: bool,
+            rows: Vec<f32>,
+        ) -> Result<(), JsValue> {
+            object.id_in_store(self.inner.scene.integration_store(), "sampled binding")?;
+            let tracker = tracker.tracker_in(self.inner.scene.integration_store())?;
+            self.inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .bind_sampled(object.semantic_mobject(), tracker, channel, linear, rows)
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = valueTrackerValue)]
         pub fn value_tracker_value(
             &mut self,

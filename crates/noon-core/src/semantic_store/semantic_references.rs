@@ -732,7 +732,8 @@ fn collect_signal_dependencies(
         }
         SemanticSignalExpr::Neg(value)
         | SemanticSignalExpr::Sin(value)
-        | SemanticSignalExpr::Cos(value) => collect_signal_dependencies(value, references),
+        | SemanticSignalExpr::Cos(value)
+        | SemanticSignalExpr::Sample(value, _) => collect_signal_dependencies(value, references),
     }
 }
 

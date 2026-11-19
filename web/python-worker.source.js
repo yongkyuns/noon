@@ -1517,6 +1517,7 @@ async function handleRequest(request) {
       const run = {
         requestId, continuation: null, continuationCallbackSession: null,
         preparedPlayback: request.preparedPlayback === true,
+        loopPlayback: request.loopPlayback !== false,
         diagnosticPreparationTiming: request.diagnosticPreparationTiming === true,
         preparationTimingOrdinal: 0,
         sourceTurnStartedAtMs: null,
@@ -1762,8 +1763,8 @@ async function attachPreparedSemanticExecution(request, entry, continuation, pyo
   if (continuation.preparedAttachmentStarted) throw new Error("prepared source attachment is single-use");
   validatePreparedTransport(request);
   continuation.preparedAttachmentStarted = true;
-  continuation.loopPlayback = request.loopDurationSeconds != null;
   const run = activeAuthoringRun;
+  continuation.loopPlayback = run?.loopPlayback !== false && request.loopDurationSeconds != null;
   const pendingAttachment = { stop() {} };
   entry.endpoints.add(pendingAttachment);
   let endpoint;
@@ -2207,6 +2208,9 @@ function validateRequest(request) {
     if (request.preparationLookaheadSeconds != null &&
         (!Number.isFinite(request.preparationLookaheadSeconds) || request.preparationLookaheadSeconds <= 0)) {
       throw new Error("preparationLookaheadSeconds must be null or positive and finite");
+    }
+    if (request.loopPlayback !== undefined && typeof request.loopPlayback !== "boolean") {
+      throw new Error("loopPlayback must be a boolean");
     }
     return;
   }

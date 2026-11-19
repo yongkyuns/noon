@@ -29,6 +29,8 @@ impl ExecutionSession {
     /// Classify before any headless advance. The original source/continuation
     /// must keep executing through its ordinary callback/input protocol; a host
     /// may not reconstruct it or treat an endpoint-only callback sample as history.
+    /// Numeric text with fixed driver declarations uses the retained scalar
+    /// schedule. Driver changes after the history starts invalidate that scope.
     pub fn source_execution_requirement(&self) -> Option<SourceExecutionRequirement> {
         if !self.callback_schedule.is_empty() {
             Some(SourceExecutionRequirement::HostCallbacks)
@@ -39,9 +41,7 @@ impl ExecutionSession {
             || self.reactive_projection.has_native_input_routes()
         {
             Some(SourceExecutionRequirement::NativeInput)
-        } else if self.runtime.inset_2d_views().next().is_some()
-            || self.runtime.has_numeric_text_drivers()
-        {
+        } else if self.runtime.inset_2d_views().next().is_some() {
             Some(SourceExecutionRequirement::ReplayUnavailable(
                 ReplayError::UnsupportedDomain,
             ))

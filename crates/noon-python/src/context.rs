@@ -1229,6 +1229,22 @@ impl Context {
             .bind_position(&target.handle, &position.value)
             .map_err(engine_error)
     }
+    #[pyo3(name = "bindSampled")]
+    fn bind_sampled(
+        &mut self,
+        target: &MobjectHandle,
+        tracker: &crate::signals::ValueTrackerHandle,
+        channel: &str,
+        linear: bool,
+        rows: Vec<f32>,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        self.scene
+            .bind_sampled(&target.handle, &tracker.value, channel, linear, rows)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "bindRotation")]
     fn bind_tracker_rotation(
         &mut self,

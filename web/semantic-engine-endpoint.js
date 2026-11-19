@@ -584,7 +584,7 @@ export async function attachSemanticEngine(
       diagnosticTerminal = true;
       onExecutionDiagnostic({ stage: "terminal-adopted", ...facts });
     }
-    if (prepared !== null && snapshot.time > 0 && !diagnosticStarted) {
+    if (prepared !== null && snapshot.advancing && snapshot.time > 0 && !diagnosticStarted) {
       diagnosticStarted = true;
       onExecutionDiagnostic({ stage: "playback-started", ...facts });
     }
@@ -1307,6 +1307,11 @@ export async function attachSemanticEngine(
             if (hasAudio) {
               await awaitPresentation(null);
               if (currentPlayerTime() === player.finiteAudioDuration()) {
+                await awaitPresentation(send(player.seekDeltaJson(0)));
+              }
+            } else if (prepared !== null) {
+              const playback = JSON.parse(player.preparedPlaybackStateJson(performance.now()));
+              if (playback.completed && playback.end > 0) {
                 await awaitPresentation(send(player.seekDeltaJson(0)));
               }
             }

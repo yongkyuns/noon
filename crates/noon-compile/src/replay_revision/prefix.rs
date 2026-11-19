@@ -88,16 +88,16 @@ fn camera_owner(object: &CompiledObject) -> bool {
 }
 
 fn world_spatial_owner(object: &CompiledObject) -> bool {
-    object.live
-        && object.spatial.as_deref().is_some_and(|spatial| {
-            spatial.camera_projection.is_none()
-                && spatial.camera_profile.is_none()
-                && spatial.camera_motions.is_none()
-                && spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::World
-                && spatial.spatial_anchor_family.is_none()
-                && spatial.fixed_orientation_center.is_none()
-                && spatial.cairo_path_appearance.is_none()
-        })
+    // A removed row still holds its immutable spatial role for historical seek.
+    object.spatial.as_deref().is_some_and(|spatial| {
+        spatial.camera_projection.is_none()
+            && spatial.camera_profile.is_none()
+            && spatial.camera_motions.is_none()
+            && spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::World
+            && spatial.spatial_anchor_family.is_none()
+            && spatial.fixed_orientation_center.is_none()
+            && spatial.cairo_path_appearance.is_none()
+    })
 }
 
 fn spatial_history_owner(object: &CompiledObject) -> bool {
@@ -595,6 +595,9 @@ mod camera_prefix_tests {
         assert!(world_spatial_owner(&light));
         assert!(local_object(&mesh, &mesh));
         assert!(local_object(&light, &light));
+        let mut removed_mesh = mesh.clone();
+        removed_mesh.live = false;
+        assert!(local_object(&mesh, &removed_mesh));
         let mut changed_material = mesh.clone();
         changed_material.spatial.as_deref_mut().unwrap().material =
             SemanticSpatialMaterial::CairoSurface;

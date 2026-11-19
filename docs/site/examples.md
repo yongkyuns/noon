@@ -58,3 +58,11 @@ feature and compatibility demonstrations, including
 [Your first scene](../../playground.html?catalog=showcase&example=showcase-first-scene),
 [Interference is addition](../../playground.html?catalog=showcase&example=showcase-wave-interference),
 and [Make it move](../../playground.html?catalog=showcase&example=showcase-editorial-cover).
+
+## Ports of Manim gallery scenes
+
+- [A Galton board](../../playground.html?catalog=showcase&example=showcase-galton-board) reproduces Academa’s seeded 480-bead simulation and the normal curve over the final piles. [ManimGX source](https://manimgx.academa.ai/gallery/galton-board/)
+- [Boolean operations on two ellipses](../../playground.html?catalog=showcase&example=showcase-vector-cutout) shows all four operations in the original nine-second sequence. [Manim Community source](https://docs.manim.community/en/stable/examples.html#booleanoperations)
+- [Circles draw π](../../playground.html?catalog=showcase&example=showcase-fourier-epicycles) uses the original 101 terms, π outline, and pen-follow zoom. [ManimGX source](https://manimgx.academa.ai/gallery/fourier-pi/) · [3Blue1Brown Fourier lesson](https://www.3blue1brown.com/lessons/fourier-series)
+- [Miura-ori](../../playground.html?catalog=showcase&example=showcase-miura-ori) uses the original 168-panel sheet, camera orbit, and dimension readouts. [ManimGX source](https://manimgx.academa.ai/gallery/miura-ori/) · [Schenk and Guest’s fold geometry](https://doi.org/10.1073/pnas.1217998110)
+- [Pythagoras by rearrangement](../../playground.html?catalog=showcase&example=showcase-pythagoras) preserves the original colored sides, quarter turns, and three slides. [ManimGX source](https://manimgx.academa.ai/gallery/pythagoras/)

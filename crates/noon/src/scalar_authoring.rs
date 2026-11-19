@@ -238,6 +238,61 @@ impl Scene {
         self.bind_signal(object, position.node, SemanticObjectProperty::Translation)
     }
 
+    /// Drive a planar channel from a finite table of tracker values and poses.
+    /// The original timeline remains the only clock, including when seeking.
+    pub fn bind_sampled(
+        &mut self,
+        object: &Mobject,
+        tracker: &ValueTracker,
+        channel: &str,
+        linear: bool,
+        rows: Vec<f32>,
+    ) -> Result<(), AuthoringError> {
+        use noon_core::{SemanticSignalBindingError, SignalSamples, ValueKind};
+        self.require_signal_setup()?;
+        self.require_object(object)?;
+        tracker.require_store(self.integration_store())?;
+        let (property, kind) = match channel {
+            "position" => (SemanticObjectProperty::Translation, ValueKind::Vec2),
+            "scale" => (SemanticObjectProperty::Scale, ValueKind::Vec2),
+            "rotation" => (SemanticObjectProperty::RotationZ, ValueKind::Scalar),
+            "opacity" => (SemanticObjectProperty::ObjectOpacity, ValueKind::Scalar),
+            "stroke_width" => (SemanticObjectProperty::StrokeWidth, ValueKind::Scalar),
+            _ => {
+                return Err(AuthoringError::InvalidAnimationDeclaration(
+                    "unsupported sampled channel",
+                ))
+            }
+        };
+        let samples = SignalSamples::new(kind, linear, rows).ok_or(
+            AuthoringError::InvalidAnimationDeclaration(
+                "sample rows must be finite with strictly increasing input values",
+            ),
+        )?;
+        let target = object.node_id();
+        let mut store = self.integration_store().borrow_mut();
+        if let Some(existing) = store
+            .semantic_object_state_checked(target)?
+            .signal_bindings()
+            .iter()
+            .find(|binding| binding.property() == property)
+        {
+            return Err(SemanticSignalBindingError::PropertyAlreadyBound {
+                target,
+                property,
+                existing_signal: existing.signal(),
+            }
+            .into());
+        }
+        let expression = SemanticSignalExpr::Sample(
+            Box::new(SemanticSignalExpr::signal(tracker.node_id())),
+            samples,
+        );
+        let signal = store.insert_semantic_derived_signal(expression)?;
+        store.bind_semantic_signal(signal, target, property)?;
+        Ok(())
+    }
+
     /// Set a non-timeline-owned tracker at the current authored or running time.
     pub fn set_value(&mut self, tracker: &ValueTracker, value: f64) -> Result<(), AuthoringError> {
         tracker.require_store(self.integration_store())?;
@@ -352,6 +407,52 @@ mod tests {
         assert_eq!(track.timing().easing, RateFunction::Linear);
         assert_eq!(scene.value_tracker_value(&tracker).unwrap(), 4.0);
         assert!(scene.set_value(&tracker, 1.0).is_err());
+    }
+
+    #[test]
+    fn sampled_fixed_frame_channels_seek_through_the_original_tracker() {
+        let mut scene = Scene::new();
+        let label = scene.circle(0.2).unwrap();
+        scene
+            .add_in_spatial_composition_domain(
+                (&label).into(),
+                noon_core::SemanticSpatialCompositionDomain::FixedFrame,
+            )
+            .unwrap();
+        let clock = scene.value_tracker(0.0).unwrap();
+        scene
+            .bind_sampled(
+                &label,
+                &clock,
+                "position",
+                true,
+                vec![0.0, -1.0, 1.0, 1.0, 1.0, 2.0, 3.0, 5.0, 0.0],
+            )
+            .unwrap();
+        scene
+            .bind_sampled(&label, &clock, "opacity", false, vec![0.0, 0.0, 2.0, 1.0])
+            .unwrap();
+        assert!(scene
+            .bind_sampled(&label, &clock, "position", true, vec![0.0, 0.0, 0.0])
+            .is_err());
+        scene
+            .play_value(&clock, 3.0)
+            .rate_func(RateFunction::Linear)
+            .run_time(3.0)
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        session.seek(2.0).unwrap();
+        assert_eq!(
+            session.frame().objects[0].transform.translation,
+            noon_core::Vec2::new(3.0, 1.0)
+        );
+        assert_eq!(session.frame().objects[0].style.opacity, 1.0);
+        session.seek(0.5).unwrap();
+        assert_eq!(
+            session.frame().objects[0].transform.translation,
+            noon_core::Vec2::new(0.0, 1.5)
+        );
+        assert_eq!(session.frame().objects[0].style.opacity, 0.0);
     }
 
     #[test]

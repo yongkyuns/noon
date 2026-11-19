@@ -81,6 +81,9 @@ test("lessons have unique sources, outcomes, and real-poster destinations", asyn
   for (const entry of gallery.examples) {
     const source = await readFile(new URL(entry.path, import.meta.url), "utf8");
     assert.ok(source.includes("from noon import *"));
+    for (const credit of entry.credits) {
+      assert.ok(source.includes(credit.url), `${entry.id}: credit must also appear in the Python source`);
+    }
     assert.equal(/^\s*assert\b/m.test(source), false, `${entry.id}: no embedded regression assertions`);
   }
   const pointer = gallery.examples.find((entry) => entry.id === "showcase-pointer-selection");
@@ -105,6 +108,8 @@ test("invalid or misleading publication metadata is rejected", () => {
     (value) => { value.entries[0].thumbnail = "https://example.test/invented.svg"; },
     (value) => { value.entries[0].thumbnail_time = 1e9; },
     (value) => { value.entries[0].beats = []; },
+    (value) => { value.entries[0].credits = [{ label: "", url: "https://example.test" }]; },
+    (value) => { value.entries[0].credits = [{ label: "Example", url: "javascript:alert(1)" }]; },
     (value) => { value.entries[0].inspection_zoom = "true"; },
     (value) => { value.entries[0].inspection_zoom = true; value.entries[0].host_setup = ""; },
   ]) {
