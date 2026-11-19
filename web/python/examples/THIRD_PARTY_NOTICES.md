@@ -7,9 +7,8 @@ The BooleanOperations port is based on the
 
 Circle area from one radius is based on
 [Motion Canvas’s `node-signal.tsx`](https://github.com/motion-canvas/motion-canvas/blob/7b91435c301d530351dcf5ebb91dd139c002e405/packages/examples/src/scenes/node-signal.tsx).
-Market Share Race and Drip Fill Gauge are based on
-[RenderComp’s Racing Bar Chart](https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/components/racing-chart/RacingChart.tsx)
-and [Drip Fill Gauge](https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/components/pourover-drip-fill-gauge/PouroverDripFillGauge.tsx).
+Drip Fill Gauge is based on
+[Drip Fill Gauge](https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/components/pourover-drip-fill-gauge/PouroverDripFillGauge.tsx).
 The gauge also draws from RenderComp’s pixel kit at the same revision, including its
 [bitmap glyphs](https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/pixel-kit/font.ts),
 [particle formulas](https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/pixel-kit/particles.ts),
@@ -50,3 +49,27 @@ The vector outline comes from New Computer Modern Math Regular in the bundled
 Typst font assets. See the [GUST Font License notice](https://github.com/typst/typst-assets/blob/v0.15.1/NOTICE)
 and [Grant Sanderson's Fourier series lesson](https://www.3blue1brown.com/lessons/fourier-series),
 which the original ManimGX scene credits.
+
+## D3 Bar Chart Race
+
+The world’s most valuable brands is a port of
+[Mike Bostock’s D3 Bar Chart Race, Observable revision 3087](https://observablehq.com/d/3ff9fa2c6593d814@3087).
+The 21 series used in the port are from the notebook’s pinned
+[Interbrand category-brands.csv attachment](https://static.observableusercontent.com/files/aec3792837253d4c6168f9bbecdf495140a5f9bb1cdb12c7c8113cec26332634a71ad29b446a1e8236e0a45732ea5d0b4e86d9d1568ff5791412f093ec06f4f1).
+The notebook credits [Interbrand](https://interbrand.com/best-global-brands/) for the data.
+
+### ISC License
+
+Copyright 2019–2023 Observable, Inc.
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.

@@ -958,58 +958,57 @@
       ]
     },
     {
-      "id": "showcase-racing-bar-chart",
-      "title": "Market Share Race",
-      "lesson": "Follow five series as their values change and their ranks cross.",
+      "id": "showcase-brand-value-race",
+      "title": "The world’s most valuable brands",
+      "lesson": "Follow the top 12 global brands from 2000 to 2019. Color groups brands by sector, and bar lengths show value in millions of US dollars.",
       "primary_feature": "data-ranked-bars",
       "category": "Data",
-      "path": "python/examples/showcase_racing_bar_chart.py",
+      "path": "python/examples/showcase_brand_value_race.py",
       "loop": false,
       "credits": [
         {
-          "label": "RenderComp Racing Bar Chart",
-          "url": "https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/components/racing-chart/RacingChart.tsx"
+          "label": "Mike Bostock’s D3 Bar Chart Race (revision 3087)",
+          "url": "https://observablehq.com/d/3ff9fa2c6593d814@3087"
+        },
+        {
+          "label": "Interbrand data used by the notebook",
+          "url": "https://static.observableusercontent.com/files/aec3792837253d4c6168f9bbecdf495140a5f9bb1cdb12c7c8113cec26332634a71ad29b446a1e8236e0a45732ea5d0b4e86d9d1568ff5791412f093ec06f4f1"
         }
       ],
       "features": [
-        "sampled scale",
-        "discrete rank changes",
-        "retained labels",
-        "numeric glyphs"
+        "interpolated rank crossings",
+        "animated value labels",
+        "adaptive axis",
+        "year ticker"
       ],
-      "duration": 7,
-      "thumbnail_time": 4.13,
-      "thumbnail": "thumbnails/showcase/showcase-racing-bar-chart.png",
-      "thumbnail_alt": "Five colored horizontal bars rank five series by market share on a navy background.",
+      "duration": 47.75,
+      "thumbnail_time": 33.25,
+      "thumbnail": "thumbnails/showcase/showcase-brand-value-race.png",
+      "thumbnail_alt": "Pastel horizontal bars rank twelve global brands by estimated value, with names and values inside each bar and a large year marker.",
+      "still_intervals": [],
       "beats": [
         {
-          "time": 0.4,
-          "label": "Reveal the original title"
+          "time": 0.25,
+          "label": "Start with Coca-Cola, Microsoft, and IBM"
         },
         {
-          "time": 0.9,
-          "label": "Read the opening ranking"
+          "time": 12.75,
+          "label": "Watch Google enter the ranking"
         },
         {
-          "time": 2.1,
-          "label": "Watch two series change rank"
+          "time": 30.25,
+          "label": "Follow Apple’s climb to the lead"
         },
         {
-          "time": 4.13,
-          "label": "Compare the moving values and scale"
+          "time": 38.25,
+          "label": "Compare the values on the expanded axis"
         },
         {
-          "time": 5.4,
-          "label": "Read the final ranking"
+          "time": 47.75,
+          "label": "Read the final 2019 ranking"
         }
       ],
-      "playback_capability": "deterministic-retained-replay",
-      "still_intervals": [
-        [
-          5.4,
-          7
-        ]
-      ]
+      "playback_capability": "deterministic-retained-replay"
     },
     {
       "id": "showcase-drip-fill-gauge",

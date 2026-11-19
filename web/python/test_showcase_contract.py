@@ -120,9 +120,9 @@ class ShowcaseSourceContract(unittest.TestCase):
                         or any(isinstance(node, ast.Attribute) and node.attr == "animate"
                                for node in ast.walk(scenes[0])),
                         "teach an entrance or ordinary target animation")
-                # The BooleanOperations port ends with its final label. The
-                # Miura-ori and the drip gauge animate through their final holds.
-                if entry["id"] not in {"showcase-vector-cutout", "showcase-miura-ori", "showcase-drip-fill-gauge"}:
+                # These ports preserve the original final beat through motion or an entrance.
+                if entry["id"] not in {"showcase-vector-cutout", "showcase-miura-ori",
+                                       "showcase-drip-fill-gauge", "showcase-brand-value-race"}:
                     self.assertTrue(any(isinstance(node.func, ast.Attribute) and node.func.attr == "wait"
                                         for node in calls), "hold a readable state")
     def _assert_finite_audio_lesson(self, entry, tree):

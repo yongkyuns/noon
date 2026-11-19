@@ -448,19 +448,20 @@ pub fn bundled_native_font_face(family: &str) -> Result<NativeFontFace, TextAuth
     Err(TextAuthoringError::FontUnavailable(Arc::from(family)))
 }
 
-// Share the same immutable assets across native regular/styled text and Typst.
-// The native-only configuration still needs no Typst compiler dependency.
+// Reuse Typst’s bundled assets for native text and add the portable sans faces
+// used by authored charts. Native-only builds do not require the Typst compiler.
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 #[inline(never)]
 fn bundled_native_fonts() -> impl Iterator<Item = &'static [u8]> {
     #[cfg(feature = "typst")]
-    {
-        noon_typst::bundled_fonts()
-    }
+    let base_fonts = noon_typst::bundled_fonts();
     #[cfg(not(feature = "typst"))]
-    {
-        typst_assets::fonts()
-    }
+    let base_fonts = typst_assets::fonts();
+
+    base_fonts.chain([
+        include_bytes!("../assets/arimo/Arimo-Regular.ttf").as_slice(),
+        include_bytes!("../assets/arimo/Arimo-Bold.ttf").as_slice(),
+    ])
 }
 
 #[cfg(all(
@@ -470,11 +471,10 @@ fn bundled_native_fonts() -> impl Iterator<Item = &'static [u8]> {
     feature = "typst"
 ))]
 #[test]
-fn native_and_typst_share_the_complete_immutable_font_set() {
+fn native_text_reuses_all_typst_font_assets() {
     let native: Vec<_> = bundled_native_fonts().collect();
     let typst: Vec<_> = noon_typst::bundled_fonts().collect();
-    assert_eq!(native.len(), 17);
-    assert_eq!(native.len(), typst.len());
+    assert_eq!(native.len(), typst.len() + 2);
     for (native, typst) in native.into_iter().zip(typst) {
         assert!(std::ptr::eq(native, typst));
     }
