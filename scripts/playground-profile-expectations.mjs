@@ -13,6 +13,7 @@ const rows = [
   ['showcase-group-animation','showcase_group_animation.py','8cc6b696ff06f2bacd06ef55b18931ce0d7afa2c0757aa3965f9a031fdaafa86','incremental','ordinary',[], 'looped'],
   ['showcase-dynamic-scene','showcase_dynamic_scene.py','bcc689a8cb5d71eefc2afdf69b187260ebf0df5029cc67cca08db43d01541dca','incremental','ordinary',[], 'looped'],
   ['showcase-group-opacity','showcase_group_opacity.py','b7b570b117f61eaab8cc7610f32299718288f7fb90dde95cefd8b2b9a6ec421c','incremental','ordinary',[], 'looped'],
+  ['showcase-mounted-callout','showcase_mounted_callout.py','d43bc80ea44c4e62a01874468d70abb213a56f6ecf1acb6de35d8049b4a3a803','incremental','ordinary',[], 'looped'],
   ['showcase-background-music','background_music_lesson.py','b5bcced4ffb30c44b4bf476e16ae1416a6fad072d2f0df88edd98346a4711a40','immutable','immutable',['audio','sections'], 'finite-complete'],
   ['showcase-entrances-exits','showcase_entrances_exits.py','55818966017c4643b8abb1fab036164f28fc9c019b2ce3b415e28679c1911f73','incremental','ordinary',[], 'looped'],
   ['showcase-timing','showcase_timing.py','d0fa3d4e2281f066a2aaa35ae1f5b3e1272b5a2f1d202437a80a457c238e7c2b','incremental','ordinary',[], 'looped'],

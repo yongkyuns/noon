@@ -61,6 +61,8 @@ pub mod markup_text;
 #[cfg(feature = "latex")]
 pub mod matrix;
 pub mod mixed_scalar_composition;
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub mod mounted_callout;
 pub mod moving_around;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod moving_zoomed_scene_around;

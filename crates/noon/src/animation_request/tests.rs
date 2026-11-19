@@ -60,6 +60,38 @@ fn group_requests_capture_at_admission_and_share_chained_pivots() {
 }
 
 #[test]
+fn drawn_group_motion_rejects_detached_roots_and_conflicting_member_drivers() {
+    let mut scene = Scene::new();
+    let child = scene.square(1.0).unwrap();
+    let outline = scene.square(2.0).unwrap();
+    let group = scene.family(&[(&child).into()]).unwrap();
+    group
+        .set_points_f64(&outline.path_query().unwrap().points().unwrap())
+        .unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let before = execution.session().frame().clone();
+    assert!(activate(
+        &mut execution.live(),
+        group.animate().shift(UP).into(),
+        linear()
+    )
+    .is_err());
+    assert_eq!(execution.session().frame(), &before);
+
+    execution.scene_mut().add_many(&[(&group).into()]).unwrap();
+    let before = execution.session().frame().clone();
+    let nodes = execution.scene().integration_store().borrow().len();
+    assert!(activate(
+        &mut execution.live(),
+        (group.animate().shift(UP), child.animate().shift(RIGHT)).into(),
+        linear(),
+    )
+    .is_err());
+    assert_eq!(execution.session().frame(), &before);
+    assert_eq!(execution.scene().integration_store().borrow().len(), nodes);
+}
+
+#[test]
 fn mounted_group_motion_preserves_composed_glow_and_members() {
     use crate::effects::{EffectUpdate, Pixels};
 

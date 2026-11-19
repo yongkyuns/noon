@@ -13,6 +13,7 @@ pub(crate) struct FamilyMethodTarget {
     states: BTreeMap<SemanticNodeId, SemanticObjectState>,
     pub(crate) styles: BTreeMap<SemanticNodeId, SemanticStyle>,
     pub(crate) has_composed_effects: bool,
+    pub(crate) has_owned_geometry: bool,
 }
 
 impl FamilyMethodTarget {
@@ -25,12 +26,13 @@ impl FamilyMethodTarget {
         let store = live.integration_store().borrow();
         let unsupported = || {
             LiveSessionError::Mobject(
-                "owned family animate requires groups of planar vector shapes, plain text, or MathTex without content-owning roots, per-object effects, composite opacity, or table/graph metadata".into(),
+                "owned family animate requires groups of planar vector shapes, plain text, or MathTex without per-object effects, composite opacity, or table/graph metadata".into(),
             )
         };
         let mut states = BTreeMap::new();
         let mut styles = BTreeMap::new();
         let mut has_composed_effects = false;
+        let mut has_owned_geometry = false;
         for id in store
             .ordered_authoring_nodes(family.node_id())
             .map_err(AuthoringError::from)?
@@ -41,10 +43,16 @@ impl FamilyMethodTarget {
                     return Err(unsupported());
                 };
                 has_composed_effects |= !node.effect_ids().is_empty();
-                styles.insert(id, style.clone());
-                continue;
-            }
-            if !matches!(node.kind(), SemanticNodeKind::AuthoringObject)
+                if let Some(state) = node.semantic_object_state() {
+                    if !matches!(state.content, SemanticObjectContent::Geometry(_)) {
+                        return Err(unsupported());
+                    }
+                    has_owned_geometry = true;
+                } else {
+                    styles.insert(id, style.clone());
+                    continue;
+                }
+            } else if !matches!(node.kind(), SemanticNodeKind::AuthoringObject)
                 || node.member_count() != 0
                 || !node.effect_ids().is_empty()
             {
@@ -57,13 +65,16 @@ impl FamilyMethodTarget {
             }
             states.insert(id, state);
         }
-        if has_composed_effects
+        if has_owned_geometry && has_composed_effects {
+            return Err(unsupported());
+        }
+        if (has_composed_effects || has_owned_geometry)
             && methods
                 .iter()
                 .any(|method| !matches!(method, Method::Shift(_) | Method::Scale(_)))
         {
             return Err(LiveSessionError::Mobject(
-                "owned family animate supports shift and scale on groups with composed effects"
+                "owned family animate supports shift and scale on groups with composed effects or their own geometry"
                     .into(),
             ));
         }
@@ -155,6 +166,7 @@ impl FamilyMethodTarget {
             states,
             styles,
             has_composed_effects,
+            has_owned_geometry,
         })
     }
 
@@ -199,9 +211,7 @@ fn method_group_style(
 ) -> Option<&SemanticStyle> {
     let node = store.node(id)?;
     let style = node.family_style()?;
-    (node.semantic_object_state().is_none()
-        && (allow_opacity
-            || style.object_opacity == 1.0 && !store.has_family_appearance_target(id))
+    ((allow_opacity || style.object_opacity == 1.0 && !store.has_family_appearance_target(id))
         && node.graph_declaration().is_none()
         && store
             .semantic_table_layout(id)
@@ -253,11 +263,25 @@ pub(crate) fn is_method_family(
     root: SemanticNodeId,
     appearance: MethodFamilyAppearance,
 ) -> bool {
+    supports_method_family(store, root, appearance, false)
+}
+
+fn supports_method_family(
+    store: &SemanticStore,
+    root: SemanticNodeId,
+    appearance: MethodFamilyAppearance,
+    allow_owned_geometry: bool,
+) -> bool {
     store.ordered_authoring_nodes(root).is_ok_and(|nodes| {
         nodes.into_iter().all(|id| {
             let node = store.node(id).expect("validated authoring node");
             if matches!(node.kind(), SemanticNodeKind::Family(_)) {
-                (appearance != MethodFamilyAppearance::Ordinary || node.effect_ids().is_empty())
+                node.semantic_object_state().is_none_or(|state| {
+                    allow_owned_geometry
+                        && matches!(state.content, SemanticObjectContent::Geometry(_))
+                        && is_method_leaf(store, state)
+                }) && (appearance != MethodFamilyAppearance::Ordinary
+                    || node.effect_ids().is_empty())
                     && method_group_style(
                         store,
                         id,
@@ -273,4 +297,60 @@ pub(crate) fn is_method_family(
             }
         })
     })
+}
+
+pub(crate) fn contains_family_geometry(
+    store: &SemanticStore,
+    root: SemanticNodeId,
+) -> Result<bool, AuthoringError> {
+    Ok(store.ordered_authoring_nodes(root)?.into_iter().any(|id| {
+        store.node(id).is_some_and(|node| {
+            matches!(node.kind(), SemanticNodeKind::Family(_))
+                && node.semantic_object_state().is_some()
+        })
+    }))
+}
+
+/// The copied host endpoint must keep the same drawing and member correspondence.
+/// Fixed-topology lowering checks the actual node and alias pairs before publication.
+pub(crate) fn supports_geometry_method_target(
+    store: &SemanticStore,
+    source: SemanticNodeId,
+    target: SemanticNodeId,
+) -> Result<bool, AuthoringError> {
+    if ![source, target]
+        .into_iter()
+        .all(|id| supports_method_family(store, id, MethodFamilyAppearance::Ordinary, true))
+    {
+        return Ok(false);
+    }
+
+    let source_leaves = store.ordered_leaf_nodes(source)?;
+    let target_leaves = store.ordered_leaf_nodes(target)?;
+    if source_leaves.len() != target_leaves.len() {
+        return Ok(false);
+    }
+    for (source, target) in source_leaves.into_iter().zip(target_leaves) {
+        let mut previous = store.semantic_object_state_checked(source)?.clone();
+        let next = store.semantic_object_state_checked(target)?;
+        let old_scale = previous.transform.scale;
+        let new_scale = next.transform.scale;
+        // Check proportional scale without dividing by a potentially zero axis.
+        let x = old_scale.x * new_scale.y;
+        let y = old_scale.y * new_scale.x;
+        if (x - y).abs() > f32::EPSILON as f64 * x.abs().max(y.abs())
+            || (old_scale.x == 0.0 && new_scale.x != 0.0)
+            || (old_scale.y == 0.0 && new_scale.y != 0.0)
+        {
+            return Ok(false);
+        }
+        previous.transform.translation.x = next.transform.translation.x;
+        previous.transform.translation.y = next.transform.translation.y;
+        previous.transform.scale.x = new_scale.x;
+        previous.transform.scale.y = new_scale.y;
+        if !next.matches_authored_state_of(&previous) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }

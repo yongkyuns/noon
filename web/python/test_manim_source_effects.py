@@ -409,7 +409,7 @@ def tokens(value):
             '        imported = SVGMobject.from_string(load_svg())\n',
             # A method alias cannot carry the constructor capability.
             'from noon import *\nmake_svg = SVGMobject.from_string\n',
-            # Imported geometry is immutable; set_points is limited to a fresh local VMobject.
+            # Imported geometry is immutable; set_points can only initialize a fresh owner.
             'from noon import *\nclass Outline(Scene):\n'
             '    def construct(self):\n'
             '        imported = SVGMobject.from_string("<svg/>")\n'
@@ -421,6 +421,17 @@ def tokens(value):
         )
         for candidate in unsafe:
             with self.subTest(source=candidate):
+                self.assertFalse(source_execution_proof(candidate)["admitted"])
+
+    def test_fresh_vgroup_path_allows_prepared_callout_and_rejects_aliases(self):
+        source = Path(__file__).parent.joinpath("examples", "showcase_mounted_callout.py").read_text()
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        for receiver in (
+            "root = VGroup()\n        callout = root.set_points",
+            "VGroup = VMobject\n        callout = VGroup().set_points",
+        ):
+            with self.subTest(receiver=receiver):
+                candidate = source.replace("callout = VGroup().set_points", receiver)
                 self.assertFalse(source_execution_proof(candidate)["admitted"])
 
     def test_full_fourier_source_proves_closed_numpy_dataflow_without_claiming_runtime_replay(self):
