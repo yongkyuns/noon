@@ -2279,12 +2279,18 @@ impl ExecutionSession {
                 target,
                 options,
             } => {
-                self.stage_detached_method_family(
-                    store,
-                    *source,
-                    MethodFamilyAppearance::for_motion(target.has_composed_effects),
-                    admitted,
-                )?;
+                let mode = if target.has_owned_geometry {
+                    self.require_mounted_geometry_motion(*source, *options)?;
+                    SemanticFamilyTransformMode::FixedTopology
+                } else {
+                    self.stage_detached_method_family(
+                        store,
+                        *source,
+                        MethodFamilyAppearance::for_motion(target.has_composed_effects),
+                        admitted,
+                    )?;
+                    SemanticFamilyTransformMode::Structural
+                };
                 let copied = target.stage(store, *source, declaration).map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                 })?;
@@ -2300,7 +2306,8 @@ impl ExecutionSession {
                 }
                 // Keep correspondence, member lag, padding appearance and completion
                 // in the canonical family channel, including local endpoints.
-                Ok(declaration.create_family_transform_animation(*source, copied, *options))
+                Ok(declaration
+                    .create_family_transform_animation_with_mode(*source, copied, mode, *options))
             }
             SemanticCompositionRequest::FamilyObjectOpacity {
                 source,
@@ -2495,6 +2502,34 @@ impl ExecutionSession {
                         *source,
                         *target_state,
                         true,
+                        *options,
+                    ));
+                }
+                let has_owned_geometry = |id| {
+                    crate::animation_request::contains_family_geometry(store, id).map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })
+                };
+                if method_target
+                    && (has_owned_geometry(*source)? || has_owned_geometry(*target_state)?)
+                {
+                    self.require_mounted_geometry_motion(*source, *options)?;
+                    if !crate::animation_request::supports_geometry_method_target(
+                        store,
+                        *source,
+                        *target_state,
+                    )
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })? {
+                        return Err(ExecutionSessionAnimationError::InvalidComposition(
+                            "mounted groups with their own geometry support only shift and uniform scale".into(),
+                        ));
+                    }
+                    return Ok(declaration.create_family_transform_animation_with_mode(
+                        *source,
+                        *target_state,
+                        SemanticFamilyTransformMode::FixedTopology,
                         *options,
                     ));
                 }
@@ -3582,6 +3617,23 @@ impl ExecutionSession {
         Ok(())
     }
 
+    fn require_mounted_geometry_motion(
+        &self,
+        source: SemanticNodeId,
+        options: AnimationOptions,
+    ) -> Result<(), ExecutionSessionAnimationError> {
+        if !self.reachability.is_reachable(source)
+            || options
+                .path_arc
+                .is_some_and(|arc| arc.abs() >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD)
+        {
+            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                "groups with their own geometry require a mounted source and a straight motion path".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn stage_detached_method_family(
         &self,
         store: &SemanticStore,
@@ -4552,7 +4604,7 @@ impl ExecutionSession {
             && schedule
                 .family_transforms()
                 .iter()
-                .any(|family| family.mode != SemanticFamilyTransformMode::Structural)
+                .any(|family| !family.mode.is_structural())
         {
             return Err(ExecutionSessionAnimationError::InvalidComposition(
                 "matching family Transform cannot compose with another family Transform".into(),
@@ -4564,7 +4616,8 @@ impl ExecutionSession {
             schedule.family_transforms().first()
         {
             match &family.mode {
-                SemanticFamilyTransformMode::Structural => {
+                SemanticFamilyTransformMode::Structural
+                | SemanticFamilyTransformMode::FixedTopology => {
                     let activation = prepare_family_transform_activations(
                         &prepared,
                         &self.execution_index,

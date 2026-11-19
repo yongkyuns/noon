@@ -294,12 +294,21 @@ pub enum SemanticFamilyTransformMode {
     /// Preserve authored family order/topology and derive positional correspondence.
     #[default]
     Structural,
+    /// Pair a fixed membership tree, including geometry owned by family roots.
+    FixedTopology,
     /// Match normalized vector-path shape keys at the activation boundary.
     MatchingShapes,
     /// Match ordinary retained text leaves by compiler-authored source identity.
     MatchingSourceKeys,
     /// Pair different retained text keys explicitly, with a moving crossfade.
     MatchingMappedSourceKeys(std::sync::Arc<[(String, String)]>),
+}
+
+impl SemanticFamilyTransformMode {
+    /// Use positional pairing rather than a shape or text matching policy.
+    pub const fn is_structural(&self) -> bool {
+        matches!(self, Self::Structural | Self::FixedTopology)
+    }
 }
 
 /// One authored animation operation before execution scheduling/lowering.

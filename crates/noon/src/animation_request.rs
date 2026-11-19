@@ -14,7 +14,8 @@ use crate::{
 
 mod group;
 pub(crate) use group::{
-    is_method_family, is_ordinary_method_family, FamilyMethodTarget, MethodFamilyAppearance,
+    contains_family_geometry, is_method_family, is_ordinary_method_family,
+    supports_geometry_method_target, FamilyMethodTarget, MethodFamilyAppearance,
 };
 use noon_core::{
     AnimationOptions, Color, SemanticAnimationCompositionKind, SemanticFadeDirection,

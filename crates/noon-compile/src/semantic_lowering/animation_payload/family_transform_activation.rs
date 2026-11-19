@@ -184,7 +184,7 @@ where
         .collect();
 
     for family in schedule.family_transforms() {
-        if family.mode != SemanticFamilyTransformMode::Structural {
+        if !family.mode.is_structural() {
             return Err(PreparedFamilyTransformActivationError::UnsupportedMode {
                 animation: family.animation,
                 mode: family.mode.clone(),
@@ -202,8 +202,8 @@ where
                 "family Transforms share a source group".into(),
             ));
         }
-        let endpoints: Vec<_> = match (family.target_state.existing(), entering) {
-            (Some(target), false) => {
+        let endpoints: Vec<_> = match (family.target_state.existing(), entering, &family.mode) {
+            (Some(target), false, SemanticFamilyTransformMode::Structural) => {
                 if ![source_family, target]
                     .into_iter()
                     .all(|id| is_flat(prepared.store(), id))
@@ -235,6 +235,7 @@ where
                 prepared,
                 source_family,
                 family.target_state,
+                family.mode == SemanticFamilyTransformMode::FixedTopology,
                 register_group,
             )
             .map_err(topology_error)?
@@ -337,13 +338,18 @@ fn fixed_family_leaf_pairs(
     prepared: &PreparedSemanticMutationTransaction<'_>,
     root: SemanticNodeId,
     target: SemanticTransactionNodeRef,
+    allow_owned_geometry: bool,
     mut register_group: impl FnMut(SemanticNodeId) -> bool,
 ) -> Result<Vec<(SemanticNodeId, SemanticTransactionNodeRef)>, String> {
-    let mut pending = vec![(root, target)];
+    let mut pending = vec![(root, target, false)];
     let mut sources = HashMap::new();
     let mut targets = HashSet::new();
     let mut leaves = Vec::new();
-    while let Some((source, target)) = pending.pop() {
+    while let Some((source, target, emit)) = pending.pop() {
+        if emit {
+            leaves.push((source, target));
+            continue;
+        }
         if sources.get(&source) == Some(&target) {
             continue;
         }
@@ -364,14 +370,19 @@ fn fixed_family_leaf_pairs(
             if source != root && !register_group(source) {
                 return Err("family Transforms share a source group".into());
             }
-            if prepared.object_state(source).is_ok() || prepared.object_state(target).is_ok() {
-                return Err("content-owning groups are unsupported".into());
+            let source_draws = prepared.object_state(source).is_ok();
+            let target_draws = prepared.object_state(target).is_ok();
+            if source_draws != target_draws || (source_draws && !allow_owned_geometry) {
+                return Err("family geometry must match at both endpoints".into());
+            }
+            if source_draws {
+                pending.push((source, target, true));
             }
             for (source_member, target_member) in source_members.into_iter().zip(target_members) {
                 let source_member = source_member
                     .existing()
                     .ok_or("source members must be existing nodes")?;
-                pending.push((source_member, target_member));
+                pending.push((source_member, target_member, false));
             }
         } else {
             prepared.object_state(source).map_err(read_error)?;

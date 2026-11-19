@@ -19,6 +19,7 @@ class NativePythonTests(unittest.TestCase):
         for name in ("ordinary_affine_play", "ordinary_composition_play",
                      "ordinary_text_write", "ordinary_fade_play", "shared_text", "raster_image",
                      "showcase_code_blocks", "showcase_group_animation", "showcase_group_opacity",
+                     "showcase_mounted_callout",
                      "glow_pulse", "ordered_effects", "composed_effects", "effect_restore",
                      "noise_dissolve",
                      "linear_gradient", "radial_gradient", "noise_paint", "hatch_paint",
@@ -467,6 +468,23 @@ class Demo(Scene):
                 self.assertLess(blue(pixels, 201), blue(pixels, 211))
             self.assertEqual(middle, view.capture(time=1.2, width=320, height=180))
             self.assertEqual(before, view.capture(time=0.3, width=320, height=180))
+        finally:
+            view.close()
+
+    def test_native_callout_rewinds_outline_and_label_together(self):
+        path = ROOT / "web/python/examples/showcase_mounted_callout.py"
+        scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
+        callout = scene.mobjects[-1]
+        self.assertEqual(callout.get_num_points(), 36)
+        self.assertEqual(tuple(callout.get_center()), (2.25, 0.625, 0.0))
+        self.assertEqual(tuple(callout.submobjects[0].get_center()), (2.25, 0.859375, 0.0))
+        view = prepare_view(scene)
+        try:
+            times = (0.0, 1.0, 1.75, 2.5, view.duration)
+            frames = [view.capture(time=t, width=320, height=180) for t in times]
+            self.assertEqual(len(set(frames)), len(frames))
+            for time, pixels in reversed(tuple(zip(times[:-1], frames[:-1]))):
+                self.assertEqual(view.capture(time=time, width=320, height=180), pixels)
         finally:
             view.close()
 

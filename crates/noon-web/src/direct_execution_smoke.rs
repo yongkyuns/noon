@@ -1023,6 +1023,15 @@ pub async fn create_direct_group_animation_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Direct Rust/WASM host for the paired mounted callout.
+#[wasm_bindgen(js_name = createDirectMountedCalloutSmokeRenderer)]
+pub async fn create_direct_mounted_callout_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::mounted_callout::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct host for shared ordinary-vector Write / DrawBorderThenFill semantics.
 #[wasm_bindgen(js_name = createDirectDrawBorderThenFillSmokeRenderer)]
 pub async fn create_direct_draw_border_then_fill_smoke_renderer(
