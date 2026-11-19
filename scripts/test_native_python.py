@@ -87,6 +87,16 @@ class GlowEdit(Scene):
         with self.assertRaisesRegex(NoonError, "detached family animate must preserve its composed effects"):
             asyncio.run(run_source(source))
 
+    def test_entering_group_opacity_rejects_a_combined_motion_edit(self):
+        source = """from noon import *
+class MoveFade(Scene):
+    def construct(self):
+        group = VGroup(Circle(), Square().shift(RIGHT)).set_object_opacity(0)
+        self.play(group.animate.shift(UP).set_object_opacity(1))
+"""
+        with self.assertRaisesRegex(NoonError, "separate request for composite opacity"):
+            asyncio.run(run_source(source))
+
     def test_nested_group_keeps_existing_mixed_play_compositions(self):
         source = """from noon import *
 class Mixed(Scene):
@@ -435,6 +445,28 @@ class Demo(Scene):
             self.assertNotEqual(source, view.capture(time=4.2, width=320, height=180))
             self.assertNotEqual(source, view.capture(time=view.duration, width=320, height=180))
             self.assertEqual(source, view.capture(time=2.0, width=320, height=180))
+        finally:
+            view.close()
+
+    def test_native_overlay_fades_in_as_one_layer_and_seeks_back(self):
+        path = ROOT / "web/python/examples/showcase_group_opacity.py"
+        scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
+        view = prepare_view(scene)
+        try:
+            before, middle, hold, end = [view.capture(time=time, width=320, height=180)
+                                         for time in (0.3, 1.2, 2.4, view.duration)]
+
+            def blue(frame, x):
+                return frame[(94 * 320 + x) * 4 + 2]
+
+            self.assertLess(blue(before, 109), blue(middle, 109))
+            self.assertLess(blue(middle, 109), blue(hold, 109))
+            self.assertLess(blue(hold, 109), blue(end, 109))
+            for pixels in (middle, hold):
+                self.assertEqual(blue(pixels, 99), blue(pixels, 109))
+                self.assertLess(blue(pixels, 201), blue(pixels, 211))
+            self.assertEqual(middle, view.capture(time=1.2, width=320, height=180))
+            self.assertEqual(before, view.capture(time=0.3, width=320, height=180))
         finally:
             view.close()
 

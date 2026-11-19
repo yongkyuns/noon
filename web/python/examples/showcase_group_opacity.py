@@ -1,4 +1,4 @@
-"""Fade overlapping tutorial highlights as one layer or as separate shapes."""
+"""Bring in overlapping tutorial highlights as one layer or as separate shapes."""
 from noon import *
 
 
@@ -8,12 +8,14 @@ class OverlayFade(Scene):
             return Circle(radius=0.82, fill=BLUE, fill_opacity=1, stroke=None).shift(
                 x * RIGHT + 0.2 * DOWN)
 
-        combined = VGroup(spot(-2.7), spot(-1.8))
+        combined = VGroup(spot(-2.7), spot(-1.8)).set_object_opacity(0)
         first, second = spot(1.8), spot(2.7)
+        first.set_object_opacity(0)
+        second.set_object_opacity(0)
         self.add(
             Text("As a group", font_size=34).shift(2.25 * LEFT + 1.27 * UP),
             Text("Per shape", font_size=34).shift(2.25 * RIGHT + 1.27 * UP),
-            combined, first, second,
+            first, second,
         )
         self.wait(0.6)
         self.play(combined.animate.set_object_opacity(0.42),

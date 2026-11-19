@@ -60,6 +60,7 @@ use noon_runtime::SignalTimelineSchedule;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use crate::animation_request::MethodFamilyAppearance;
 use crate::execution_segment::{
     ExecutionSegment, ExecutionSegmentError, ExecutionSegmentSequence, ExecutionSegmentToken,
     PendingSegmentCompletion, PendingSegmentCompletionKind, ScalarSegmentCompletionEntry,
@@ -2281,7 +2282,7 @@ impl ExecutionSession {
                 self.stage_detached_method_family(
                     store,
                     *source,
-                    target.has_composed_effects,
+                    MethodFamilyAppearance::for_motion(target.has_composed_effects),
                     admitted,
                 )?;
                 let copied = target.stage(store, *source, declaration).map_err(|error| {
@@ -2305,14 +2306,22 @@ impl ExecutionSession {
                 source,
                 opacity,
                 options,
-            } => family_effect_target::stage_owned_opacity(
-                self,
-                store,
-                *source,
-                *opacity,
-                *options,
-                declaration,
-            ),
+            } => {
+                self.stage_detached_method_family(
+                    store,
+                    *source,
+                    MethodFamilyAppearance::RootOpacity,
+                    admitted,
+                )?;
+                family_effect_target::stage_owned_opacity(
+                    self,
+                    store,
+                    *source,
+                    *opacity,
+                    *options,
+                    declaration,
+                )
+            }
             SemanticCompositionRequest::MoveAlongPath {
                 target,
                 path,
@@ -2467,12 +2476,31 @@ impl ExecutionSession {
                 target_state,
                 options,
             } => {
-                let family_effects =
-                    family_effect_target::has_effects(store, *source, *target_state)?;
                 let method_target = matches!(
                     request,
                     SemanticCompositionRequest::FamilyMethodTargetTo { .. }
                 );
+                if method_target
+                    && !self.reachability.is_reachable(*source)
+                    && family_effect_target::is_opacity_copy(store, *source, *target_state)
+                {
+                    self.stage_detached_method_family(
+                        store,
+                        *source,
+                        MethodFamilyAppearance::RootOpacity,
+                        admitted,
+                    )?;
+                    family_effect_target::validate_entering_opacity(store, *source, *target_state)?;
+                    return Ok(declaration.create_effect_target_animation(
+                        *source,
+                        *target_state,
+                        true,
+                        *options,
+                    ));
+                }
+                let family_effects =
+                    family_effect_target::has_effects(store, *source, *target_state)?;
+                let appearance = MethodFamilyAppearance::for_motion(family_effects);
                 let is_flat_family = |family: SemanticNodeId| {
                     store
                         .semantic_family_members_checked(family)
@@ -2491,18 +2519,13 @@ impl ExecutionSession {
                 let curved = path_arc.abs() >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD;
                 let flat = is_flat_family(*source) && is_flat_family(*target_state);
                 let entering = method_target
-                    && self.stage_detached_method_family(
-                        store,
-                        *source,
-                        family_effects,
-                        admitted,
-                    )?;
+                    && self.stage_detached_method_family(store, *source, appearance, admitted)?;
                 if entering
                     && (curved
                         || !crate::animation_request::is_method_family(
                             store,
                             *target_state,
-                            family_effects,
+                            appearance,
                         ))
                 {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
@@ -3563,7 +3586,7 @@ impl ExecutionSession {
         &self,
         store: &SemanticStore,
         source: SemanticNodeId,
-        has_composed_effects: bool,
+        appearance: MethodFamilyAppearance,
         admitted: &mut AnimationAdmissions,
     ) -> Result<bool, ExecutionSessionAnimationError> {
         if self.reachability.is_reachable(source) {
@@ -3580,14 +3603,14 @@ impl ExecutionSession {
             .iter()
             .all(|&leaf| self.reachability.is_object_reachable(leaf))
         {
-            if has_composed_effects {
+            if appearance != MethodFamilyAppearance::Ordinary {
                 return Err(invalid(
                     "family animate requires the entire entering group to be detached",
                 ));
             }
             return Ok(false);
         }
-        if !crate::animation_request::is_method_family(store, source, has_composed_effects) {
+        if !crate::animation_request::is_method_family(store, source, appearance) {
             return Err(invalid(
                 "detached family animate requires a group of planar vector shapes, plain text, or MathTex",
             ));

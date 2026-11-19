@@ -13,7 +13,9 @@ use crate::{
 };
 
 mod group;
-pub(crate) use group::{is_method_family, is_ordinary_method_family, FamilyMethodTarget};
+pub(crate) use group::{
+    is_method_family, is_ordinary_method_family, FamilyMethodTarget, MethodFamilyAppearance,
+};
 use noon_core::{
     AnimationOptions, Color, SemanticAnimationCompositionKind, SemanticFadeDirection,
     SemanticFadeEndpoint, SemanticOrientation, SemanticTransformInterpolation, Vec2,
@@ -252,7 +254,7 @@ impl Animate {
         self
     }
 
-    /// Animate the object's overall opacity, or the final opacity of an added group.
+    /// Animate an object's overall opacity, or a group's final composited opacity.
     /// For a group, use a separate request for its composite opacity.
     pub fn set_object_opacity(mut self, opacity: f64) -> Self {
         self.object_opacity = Some(opacity);

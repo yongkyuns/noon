@@ -235,8 +235,6 @@ fn detached_group_motion_admits_its_nested_scope_in_the_same_play() {
 fn owned_group_opacity_admits_one_scope_and_leaves_member_paint_unchanged() {
     let (mut scene, family, left, right) = group_scene();
     scene.set_object_opacity(&right, 0.5).unwrap();
-    let detached_leaf = scene.circle(0.25).unwrap();
-    let detached = scene.family(&[(&detached_leaf).into()]).unwrap();
     let mut execution = scene.into_execution().unwrap();
     let before = execution.session().frame().clone();
     let context = execution.session().publication_context();
@@ -246,10 +244,6 @@ fn owned_group_opacity_admits_one_scope_and_leaves_member_paint_unchanged() {
     );
 
     for invalid in [
-        detached
-            .animate()
-            .set_object_opacity(0.25)
-            .into_animation_request(),
         family
             .animate()
             .set_object_opacity(f64::NAN)
@@ -324,6 +318,98 @@ fn owned_group_opacity_admits_one_scope_and_leaves_member_paint_unchanged() {
             .node_id(),
         glow.node_id()
     );
+}
+
+#[test]
+fn detached_group_fade_admits_the_original_effect_at_authored_opacity() {
+    use crate::effects::{EffectUpdate, Pixels};
+
+    let mut scene = Scene::new();
+    let marker = scene.circle(0.25).unwrap();
+    scene.add(&marker).unwrap();
+    let leaf = scene.square(1.0).unwrap();
+    scene.set_object_opacity(&leaf, 0.5).unwrap();
+    let inner = scene.family(&[(&leaf).into()]).unwrap();
+    scene.set_family_object_opacity(&inner, 0.75).unwrap();
+    let group = scene.family(&[(&inner).into()]).unwrap();
+    scene.set_family_object_opacity(&group, 0.0).unwrap();
+    scene
+        .set_glow(&group, EffectUpdate::default().radius(Pixels(8.0)))
+        .unwrap();
+    let attachment = scene.get_effect(&group, "glow").unwrap().node_id();
+    let alias = scene.family(&[(&marker).into(), (&leaf).into()]).unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let before = execution.session().frame().clone();
+    let context = execution.session().publication_context();
+    let count = execution.scene().integration_store().borrow().len();
+    for invalid in [
+        group
+            .animate()
+            .set_object_opacity(f64::NAN)
+            .into_animation_request(),
+        alias
+            .animate()
+            .set_object_opacity(0.5)
+            .into_animation_request(),
+        (
+            group.animate().set_object_opacity(1.0),
+            group.animate().set_object_opacity(0.5),
+        )
+            .into_animation_request(),
+    ] {
+        assert!(activate(&mut execution.live(), invalid, linear()).is_err());
+        assert_eq!(execution.session().publication_context(), context);
+        assert_eq!(execution.session().frame(), &before);
+        assert_eq!(execution.scene().integration_store().borrow().len(), count);
+        assert_eq!(
+            execution.scene().root_member_ids().unwrap(),
+            [marker.node_id()]
+        );
+    }
+
+    let segment = activate(
+        &mut execution.live(),
+        group.animate().set_object_opacity(1.0).into(),
+        linear(),
+    )
+    .unwrap();
+    assert_eq!(
+        execution.scene().root_member_ids().unwrap(),
+        [marker.node_id(), group.node_id()]
+    );
+    let scope = execution
+        .session()
+        .execution_object_id(group.node_id())
+        .unwrap();
+    let member = execution
+        .session()
+        .execution_object_id(leaf.node_id())
+        .unwrap();
+    let nested_scope = execution
+        .session()
+        .execution_object_id(inner.node_id())
+        .unwrap();
+    for time in [0.0, 0.5, 1.0] {
+        execution.live().advance_segment_to(segment, time).unwrap();
+        let frame = execution.session().frame();
+        let scope = frame.objects.iter().find(|row| row.id == scope).unwrap();
+        assert_eq!(scope.style.opacity, time as f32);
+        assert_eq!(scope.content.composed_source().unwrap().members(), [member]);
+        assert_eq!(scope.effects.as_ref().unwrap().attachments(), [attachment]);
+        assert_eq!(
+            frame
+                .objects
+                .iter()
+                .find(|row| row.id == nested_scope)
+                .unwrap()
+                .style
+                .opacity,
+            0.75
+        );
+    }
+    execution.live().complete_segment(segment).unwrap();
+    assert_eq!(leaf.state().unwrap().style.object_opacity, 0.5);
+    assert_eq!(group.own_style().unwrap().object_opacity, 1.0);
 }
 
 #[test]

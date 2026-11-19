@@ -177,9 +177,67 @@ impl LiveContinuation for FamilyOpacity {
     }
 }
 
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+pub struct OverlayComparison {
+    group: MobjectFamily,
+    first: crate::Mobject,
+    second: crate::Mobject,
+    stage: u8,
+}
+
+#[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+impl LiveContinuation for OverlayComparison {
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
+    type Error = crate::ScriptError;
+
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let mut live = scene.live();
+        let segment = match self.stage {
+            0 => live.wait_segment(0.6)?,
+            1 | 3 => {
+                let (opacity, duration) = if self.stage == 1 {
+                    (0.42, 1.2)
+                } else {
+                    (1.0, 1.0)
+                };
+                let options = AnimationOptions::new()
+                    .run_time(duration)
+                    .rate_func(RateFunction::Linear);
+                crate::animation_request::activate(
+                    &mut live,
+                    (
+                        self.group
+                            .animate()
+                            .set_object_opacity(opacity)
+                            .with_options(options),
+                        self.first
+                            .animate()
+                            .set_object_opacity(opacity)
+                            .with_options(options),
+                        self.second
+                            .animate()
+                            .set_object_opacity(opacity)
+                            .with_options(options),
+                    )
+                        .into_animation_request(),
+                    AnimationOptions::new(),
+                )?
+            }
+            2 => live.wait_segment(1.2)?,
+            4 => live.wait_segment(0.8)?,
+            _ => return Ok(ContinuationStep::Finished),
+        };
+        self.stage += 1;
+        Ok(ContinuationStep::Await(segment))
+    }
+}
+
 /// Paired with the gallery's comparison of group and per-shape fades.
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
-pub fn comparison_program() -> Result<LiveProgram<crate::SceneScript>, crate::ScriptError> {
+pub fn comparison_program() -> Result<LiveProgram<OverlayComparison>, crate::ScriptError> {
     use crate::{Color, Text, Vec2};
 
     let mut scene = Scene::new();
@@ -200,26 +258,74 @@ pub fn comparison_program() -> Result<LiveProgram<crate::SceneScript>, crate::Sc
     let first = spot(1.8)?;
     let second = spot(2.7)?;
     let group = scene.family(&[(&left).into(), (&right).into()])?;
-    scene.add_many(&[(&group).into(), (&first).into(), (&second).into()])?;
-    scene.into_script(move |scene| async move {
-        scene.wait(0.6).await?;
-        for (opacity, duration, hold) in [(0.42, 1.2, 1.2), (1.0, 1.0, 0.8)] {
-            scene
-                .play_with(
-                    (
-                        group.animate().set_object_opacity(opacity),
-                        first.animate().set_object_opacity(opacity),
-                        second.animate().set_object_opacity(opacity),
-                    ),
-                    AnimationOptions::new()
-                        .run_time(duration)
-                        .rate_func(RateFunction::Linear),
-                )
-                .await?;
-            scene.wait(hold).await?;
+    scene.set_family_object_opacity(&group, 0.0)?;
+    scene.set_object_opacity(&first, 0.0)?;
+    scene.set_object_opacity(&second, 0.0)?;
+    scene.add_many(&[(&first).into(), (&second).into()])?;
+    Ok(scene.into_live_program(OverlayComparison {
+        group,
+        first,
+        second,
+        stage: 0,
+    })?)
+}
+
+#[cfg(all(
+    test,
+    feature = "native-text",
+    feature = "bundled-fonts",
+    feature = "prepared-prefix"
+))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comparison_seeks_across_the_first_play_that_admits_the_overlay() {
+        let mut player = comparison_program().unwrap().into_playback().unwrap();
+        let mut callbacks = crate::RustHostCallbackTable::new();
+        let painted = |session: &crate::ExecutionSession| {
+            session
+                .painter_order()
+                .iter()
+                .map(|&index| session.frame().objects[index as usize].clone())
+                .collect::<Vec<_>>()
+        };
+        let mut played = Vec::new();
+        for (time, opacity) in [
+            (0.3, None),
+            (0.6, Some(0.0)),
+            (0.9, Some(0.105)),
+            (1.2, Some(0.21)),
+            (2.4, Some(0.42)),
+            (4.8, Some(1.0)),
+        ] {
+            for _ in 0..8 {
+                player.prepare_ready(&mut callbacks).unwrap();
+                player.advance_to(&mut callbacks, time).unwrap();
+                if !player.buffering() {
+                    break;
+                }
+            }
+            assert!(!player.buffering());
+            let session = player.session().unwrap();
+            assert_eq!(session.frame().time, time);
+            let objects = painted(session);
+            let actual = objects
+                .iter()
+                .find(|row| row.content.composed_source().is_some())
+                .map(|row| row.style.opacity);
+            assert_eq!(actual, opacity);
+            played.push((time, objects));
         }
-        Ok(())
-    })
+        for (time, objects) in played.into_iter().rev().skip(1) {
+            player.seek(time).unwrap();
+            assert_eq!(
+                painted(player.session().unwrap()),
+                objects,
+                "seek to {time}"
+            );
+        }
+    }
 }
 
 pub fn program() -> Result<LiveProgram<FamilyOpacity>, String> {
