@@ -757,11 +757,11 @@
         }
       ],
       "features": ["sampled positions", "held visibility keys", "LaggedStart", "FunctionGraph", "MathTex", "sections"],
-      "duration": 17.174345642096952,
+      "duration": 17.174345642,
       "thumbnail_time": 16.3,
       "thumbnail": "thumbnails/showcase/showcase-galton-board.png",
       "thumbnail_alt": "Ten rows of pegs and 480 beads piled beneath a yellow normal-distribution curve.",
-      "still_intervals": [[15.174345642096952, 17.174345642096952]],
+      "still_intervals": [[15.174345642, 17.174345642]],
       "beats": [
         {"time": 1.25, "label": "Release the first bead"},
         {"time": 4.0, "label": "Follow three single-file drops"},

@@ -4765,7 +4765,7 @@ _SCENE_CALLS = frozenset({
     "play", "wait", "audio", "add", "remove", "clear", "on_click", "set_drag_targets",
     "add_foreground_mobject", "add_foreground_mobjects",
     "activate_zooming", "get_zoomed_display_pop_out_animation",
-    "bring_to_front", "bring_to_back", "replace", "next_section",
+    "bring_to_front", "bring_to_back", "replace", "replace_content", "next_section",
 }) | PORTABLE_REACTIVE_METHODS | PORTABLE_SPATIAL_METHODS | PORTABLE_VECTOR_METHODS
 
 

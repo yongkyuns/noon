@@ -49,10 +49,10 @@ const rows = [
   ['showcase-channel-flow','showcase_channel_flow.py','bbd3f3734b0e9870b27ddc1b638911938ad5aabc46d6a93295c6500084cbeb73','observed','observed-replay',['sections'], 'observed-complete'],
   ['showcase-neon-glow','showcase_neon_glow.py','8afc4e03ec664f0faeaa71735f3ed13bf9da7da95a814dd225350f2319f0701c','incremental','ordinary',['sections'], 'looped'],
   ['showcase-riemann-sums','showcase_riemann_sums.py','38a09733491041836e83ad709d9b268c6ffaa51c978e50f2001721e126b482a1','observed','observed-replay',['sections'], 'observed-complete'],
-  ['showcase-galton-board','showcase_galton_board.py','d2dff9032f16665f0c52830ae8ed0184796fd56eab19c75c5df99d9c07efb4c4','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-galton-board','showcase_galton_board.py','9f0d47ce72dabbbaaabcf8af17edee793d25652b689a6809dd7c3f90eb0eab00','observed','observed-replay',['sections'], 'observed-complete'],
   ['showcase-vector-cutout','showcase_vector_cutout.py','103d703d30623202e7127e159fbd2c7c45b846ed27757929ff1d4c55107274f2','observed','observed-replay',[], 'observed-complete'],
   ['showcase-fourier-epicycles','showcase_fourier_epicycles.py','ef9a3063bda15693e30b9fc7ec49ae1e175e3a218a4b602122554198e38a6fff','observed','observed-replay',['sections'], 'observed-complete'],
-  ['showcase-miura-ori','showcase_miura_ori.py','8eb5fdb7b7d0e4a9cb9b2aa3b9cee4228558dac488a15fd072e17886e8c4b41a','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-miura-ori','showcase_miura_ori.py','710a6421680d0c462aa623c354772a1b50079ecc2f2ff68a1f440593086fb6a6','observed','observed-replay',['sections'], 'observed-complete'],
   ['showcase-pythagoras','showcase_pythagoras.py','4edad3a16aea8128e967259f45046b2dc1fc2da8401169a1605da309ca60934e','observed','observed-replay',['sections'], 'observed-complete'],
 ];
 

@@ -130,6 +130,7 @@ FACES = ((0, 1, 2), (0, 2, 3))
 FOCAL_DISTANCE = 20
 SPOT = np.array([2.5, -0.3])
 WIDTH, LENGTH = "#8ecae6", "#ffb703"
+FONT = "NewComputerModern"
 
 
 def pose(points):
@@ -209,15 +210,23 @@ def mesh(vert, color, *, point_lit=True):
     return Mesh3D.polyhedron(vert, FACES, color=color_from_hex(color), point_lit=point_lit)
 
 
-def ribbon_poses(t, points, index, across):
+def crease_meshes(t, points, index, across, mountain):
     fade = 1 - np.clip(3*(t-5.3)/8.5, 0, 1)
     sweep = ease(t, 1, 2.8)
     width = 0.03 * fade * np.clip((1.3*sweep-across)/0.3, 0, 1)
-    for corners in ribbons(points, index, np.maximum(width, 0.00001)).reshape(-1, 4, 3):
-        # Both halves retain upward-facing normals.
-        if np.cross(corners[1]-corners[0], corners[3]-corners[0])[2] < 0:
-            corners = corners[[1, 0, 3, 2]]
-        yield pose(corners)
+    quads = ribbons(points, index, np.maximum(width, 0.00001)).reshape(-1, 4, 3)
+    normal_z = np.cross(quads[:, 1]-quads[:, 0], quads[:, 3]-quads[:, 0])[:, 2]
+    reversed_quads = normal_z < 0
+    quads[reversed_quads] = quads[reversed_quads][:, [1, 0, 3, 2]]
+    colors = np.repeat(mountain, 2)
+    meshes = []
+    for color, mask in ((MOUNTAIN, colors), (VALLEY, ~colors)):
+        faces = quads[mask]
+        triangles = np.arange(len(faces))[:, None, None]*4 + np.array(FACES)
+        meshes.append(Mesh3D.polyhedron(faces.reshape(-1, 3), triangles.reshape(-1, 3),
+                                       color=color_from_hex(color)))
+    return meshes
+
 
 class MiuraOri(ThreeDScene):
     def clock_fade(self, mob, clock, keys):
@@ -270,17 +279,15 @@ class MiuraOri(ThreeDScene):
         flat = grid[0].reshape(-1, 3)
         across = (flat[index[:, 0], :2] + flat[index[:, 1], :2]).sum(axis=1)
         across = (across-across.min())/(across.max()-across.min())
-        ribbons_by_color = {c: mesh([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], c, point_lit=False)
-                            for c in (MOUNTAIN, VALLEY)}
-        strips = [ribbons_by_color[MOUNTAIN if mountain[k] else VALLEY].copy()
-                  for k in range(len(index)) for _ in range(2)]
+        # All crease ribbons of one color share a mesh revision. This
+        # preserves the drawn sweep and the folds without giving every strip
+        # its own world-pose history.
+        strips = crease_meshes(0, grid[0], index, across, mountain)
         self.add_world_mobjects(*strips)
+        strip_frames = {i: crease_meshes(t, grid[i], index, across, mountain)
+                        for i, t in enumerate(times) if 1 < t <= 2.8 or 5.3 < t < 8.1333333333}
 
-
-        for strip, (position, rotation, width, height) in zip(strips, ribbon_poses(0, grid[0], index, across)):
-            self.set_world_transform(strip, translation=position, rotation=rotation, scale=(width, height, 1))
-
-        title = Text("Miura-ori", font_size=40).to_corner(UL)
+        title = Text("Miura-ori", font_size=40, font=FONT).to_corner(UL)
         self.add_fixed_in_frame_mobjects(title)
         subtitles = (
             ("a sheet creased into identical parallelograms", [(0, 0), (1, 1), (4.6, 1), (4.9, 0)]),
@@ -288,11 +295,11 @@ class MiuraOri(ThreeDScene):
             ("pull it apart one way: it opens the other way too", [(0, 0), (15.1, 0), (15.7, 1)]),
         )
         for text, keys in subtitles:
-            subtitle = Text(text, font_size=24, color=GREY_B).next_to(title, DOWN, aligned_edge=LEFT, buff=0.15)
+            subtitle = Text(text, font_size=24, color=GREY_B, font=FONT).next_to(title, DOWN, aligned_edge=LEFT, buff=0.15)
             self.clock_fade(subtitle, clock, keys)
 
         legend = VGroup(*(VGroup(Line(ORIGIN, 0.5*RIGHT, stroke_width=6, color=color_from_hex(color)),
-                                 Text(name, font_size=22)).arrange(RIGHT, buff=0.2)
+                                 Text(name, font_size=22, font=FONT)).arrange(RIGHT, buff=0.2)
                           for name, color in (("mountain fold", MOUNTAIN), ("valley fold", VALLEY))))
         legend.arrange(DOWN, aligned_edge=LEFT, buff=0.2).move_to((-6.7, 2.15, 0), aligned_edge=LEFT)
         self.clock_fade(legend, clock, [(0, 0), (1, 0), (2.8, 1), (5.3, 1), (13.8, 0)])
@@ -308,7 +315,7 @@ class MiuraOri(ThreeDScene):
         for k, (name, color) in enumerate((("width", WIDTH), ("length", LENGTH))):
             y = 0.45 - 0.55*k
             paint = color_from_hex(color)
-            word = left_at(Text(name, font_size=22), -6.7, y)
+            word = left_at(Text(name, font_size=22, font=FONT), -6.7, y)
             bar = Rectangle(width=2.2, height=0.22, color=paint, fill_opacity=0.9, stroke_width=0)
             number = Variable(100, "", num_decimal_places=0, unit=r"\%", font_size=22)
             self.clock_fade(VGroup(word, bar, number.value), clock, panel_fade)
@@ -337,8 +344,8 @@ class MiuraOri(ThreeDScene):
         note = MathTex(rf"\text{{rigid: edges and flatness exact to }} {mantissa} \times 10^{{{int(power)}}}",
                        font_size=24, color=GREY_B)
         left_at(note, -6.7, -2.45)
-        closing = VGroup(Text("Koryo Miura's fold opens", font_size=28),
-                         Text("a solar array with one pull", font_size=28))
+        closing = VGroup(Text("Koryo Miura's fold opens", font_size=28, font=FONT),
+                         Text("a solar array with one pull", font_size=28, font=FONT))
         closing.arrange(DOWN, aligned_edge=LEFT, buff=0.12).move_to((-6.7, -3.3, 0), aligned_edge=LEFT)
         self.clock_fade(VGroup(note, closing), clock, [(0, 0), (22.8, 0), (25.8, 1)])
 
@@ -383,9 +390,9 @@ class MiuraOri(ThreeDScene):
                 motions.extend((angle_number.tracker.animate.set_value(angle[i]),
                                 nu_number.tracker.animate.set_value(float(-np.tan(GAMMA)**2*np.cos(np.radians(angle[i]))**2)),
                                 *(tracker.animate.set_value(100*ratio) for tracker, ratio in zip(meters, values[i]))))
-            if strips and (1 < t <= 2.8 or t > 5.3):
-                for strip, (position, rotation, w, h) in zip(strips, ribbon_poses(t, grid[i], index, across)):
-                    motions.append(WorldTransformTo(strip, translation=position, rotation=rotation, scale=(w, h, 1)))
+            if i in strip_frames:
+                for strip, keyframe in zip(strips, strip_frames[i]):
+                    self.replace_content(strip, keyframe)
             phi, theta, zoom, _, center = views[i]
             self.move_camera(phi=phi, theta=theta, zoom=zoom, frame_center=center,
                              added_anims=motions, run_time=t-previous, rate_func=linear)

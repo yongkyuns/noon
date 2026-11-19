@@ -146,7 +146,7 @@ class GaltonBoard(Scene):
         board_time = np.concatenate(
             [[0], np.cumsum((speed[1:] + speed[:-1]) / 2 * np.diff(film))]
         )
-        seconds = float(np.interp(end, board_time, film))
+        seconds = round(float(np.interp(end, board_time, film)), 9)
         clock = self.value_tracker(0)
 
         self.next_section("Build the board")

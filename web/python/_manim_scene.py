@@ -3534,6 +3534,8 @@ def _canonical_bind_sampled(self, mobject, tracker, channel, samples, linear):
         row = tuple(sample)
         if len(row) != width:
             raise ValueError(f"{channel} samples require {width} components")
+        if channel == "stroke_width":
+            row = (row[0], _compat._manim_stroke_width(row[1]))
         packed.extend(row)
     engine_call(context.bindSampled, handle, tracker_handle, channel, bool(linear),
                 array_value(memoryview(packed)), operation="Scene.bind_sampled")
