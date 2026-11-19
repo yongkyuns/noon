@@ -475,6 +475,18 @@ impl SceneInstance {
         )
     }
 
+    fn refresh_path_motion_plan(&mut self, track_id: noon_core::TrackId) {
+        if let Some(plan) = self
+            .compiled
+            .track(track_id)
+            .and_then(prepare_path_motion_plan)
+        {
+            self.path_motion_plans.insert(track_id, plan);
+        } else {
+            self.path_motion_plans.remove(&track_id);
+        }
+    }
+
     /// Logical heap held by the prepared path-motion cache. Plans shared by
     /// tracks with the same activation snapshot are counted once.
     pub fn path_motion_plan_retained_bytes(&self) -> usize {
@@ -1184,12 +1196,7 @@ impl SceneInstance {
             _ => None,
         };
         if let Some(track_id) = changed_path_track {
-            self.path_motion_plans.remove(&track_id);
-            if let Some(track) = self.compiled.track(track_id) {
-                if let Some(plan) = prepare_path_motion_plan(track) {
-                    self.path_motion_plans.insert(track_id, plan);
-                }
-            }
+            self.refresh_path_motion_plan(track_id);
         }
         let new_channel = match patch {
             ExecutionPatch::AddTrack(track) | ExecutionPatch::ReplaceTrack(track) => {

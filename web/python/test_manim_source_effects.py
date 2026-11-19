@@ -211,8 +211,11 @@ def tokens(value):
         examples = Path(__file__).with_name("examples")
         bloom = (examples / "showcase_bloom_emission.py").read_text()
         self.assertEqual(source_execution_proof(bloom), {"admitted": True, "reason": None})
-        camera_callbacks = (examples / "showcase_camera_follows_path.py").read_text()
-        self.assertFalse(source_execution_proof(camera_callbacks)["admitted"])
+        camera = (examples / "showcase_camera_follows_path.py").read_text()
+        self.assertTrue(source_is_scene_only(camera))
+        callback = camera.replace("        self.wait(0.4)",
+                                  "        camera_frame.add_updater(lambda frame: print(frame))\n        self.wait(0.4)")
+        self.assertFalse(source_is_scene_only(callback))
         self.assertTrue(source_is_scene_only(
             'from noon import MovingCameraScene\n'
             'class Example(MovingCameraScene):\n'
@@ -258,7 +261,7 @@ def tokens(value):
 
     def test_spatial_showcases_use_the_closed_three_d_scene_wrappers(self):
         examples = Path(__file__).with_name("examples")
-        for filename in ("showcase_three_d_axes.py", "showcase_spatial_scene.py"):
+        for filename in ("showcase_three_d_axes.py", "showcase_spatial_scene.py", "showcase_channel_flow.py"):
             with self.subTest(filename=filename):
                 self.assertEqual(source_execution_proof((examples / filename).read_text()),
                                  {"admitted": True, "reason": None})

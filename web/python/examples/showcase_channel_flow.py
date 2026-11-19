@@ -33,13 +33,8 @@ def text(value, size, x, y, color=INK):
     return Text(value, font_size=size, color=color).move_to((x, y, 0))
 
 
-def channel_surface(function, color):
-    return Mesh3D.parametric(function, u_range=(-4.55, 4.55), v_range=(0, 1),
-                            resolution=(48, 2), color=color, point_lit=True)
-
-
 class ChannelFlow(ThreeDScene):
-    def reveal_labels(self, *labels):
+    def reveal_labels(self, labels):
         # Attach to the screen before the fade so the text stays fixed as the camera turns.
         for label in labels:
             label.set_opacity(0)
@@ -53,8 +48,8 @@ class ChannelFlow(ThreeDScene):
         length = end[axis] - start[axis]
         initial_scale = [1, 1, 1]
         initial_scale[axis] = 0.02
-        initial_center = list(start)
-        initial_center[axis] += 0.01
+        initial_center = tuple(value + 0.01 if index == axis else value
+                               for index, value in enumerate(start))
         self.add_world_mobjects(guide)
         self.set_world_transform(guide, translation=initial_center, scale=initial_scale)
         final_scale = [1, 1, 1]
@@ -76,12 +71,19 @@ class ChannelFlow(ThreeDScene):
         if not 1.35 <= THROAT_WIDTH < INLET_WIDTH:
             raise ValueError("Choose a throat width from 1.35 up to, but below, 4 meters.")
         self.set_camera_orientation(phi=0.85, theta=-1.34, focal_distance=10, zoom=0.91)
-        bed = channel_surface(lambda x, v: (x, (v - 0.5) * channel_width(x), 0), BED)
+        bed = Mesh3D.parametric(
+            lambda x, v: (x, (v - 0.5) * channel_width(x), 0),
+            u_range=(-4.55, 4.55), v_range=(0, 1), resolution=(48, 2), color=BED, point_lit=True,
+        )
         self.add_world_mobjects(bed)
         for side in (-1, 1):
-            wall = channel_surface(lambda x, z: (x, side * channel_width(x) / 2, z), BANK)
-            coping = channel_surface(
-                lambda x, y: (x, side * (channel_width(x) / 2 + 0.28 * y), DEPTH), RIM
+            wall = Mesh3D.parametric(
+                lambda x, z: (x, side * channel_width(x) / 2, z),
+                u_range=(-4.55, 4.55), v_range=(0, 1), resolution=(48, 2), color=BANK, point_lit=True,
+            )
+            coping = Mesh3D.parametric(
+                lambda x, y: (x, side * (channel_width(x) / 2 + 0.28 * y), DEPTH),
+                u_range=(-4.55, 4.55), v_range=(0, 1), resolution=(48, 2), color=RIM, point_lit=True,
             )
             self.add_world_mobjects(wall, coping)
         self.add_world_mobjects(
@@ -122,13 +124,13 @@ class ChannelFlow(ThreeDScene):
         caption = text("Both sections are 1 m deep", 29, 0, -3.23, MUTED)
         inlet_x, throat_x = -3.23, 1.58
         self.move_camera(phi=0.30, theta=-1.57, focal_distance=10, zoom=0.97, run_time=1.6,
-                         added_anims=tuple(self.reveal_labels(heading, caption)))
+                         added_anims=tuple(self.reveal_labels((heading, caption))))
         wide = text(f"Inlet · {INLET_WIDTH:g} m", 30, -3.34, 2.54, UPSTREAM)
         narrow = text(f"Throat · {THROAT_WIDTH:g} m", 30, 2.64, 2.54, THROAT)
         self.play(*self.section_frame(inlet_x, INLET_WIDTH, UPSTREAM),
-                  *self.reveal_labels(wide), run_time=0.6)
+                  *self.reveal_labels((wide,)), run_time=0.6)
         self.play(*self.section_frame(throat_x, THROAT_WIDTH, THROAT),
-                  *self.reveal_labels(narrow), run_time=0.6)
+                  *self.reveal_labels((narrow,)), run_time=0.6)
         self.wait(1.8)
 
         self.next_section("Measure one second")
@@ -136,7 +138,7 @@ class ChannelFlow(ThreeDScene):
         heading = text("How much water passes in one second?", 40, 0, 3.11)
         caption = text("In steady flow, water does not build up here", 30, 0, -3.23, MUTED)
         self.move_camera(phi=1.07, theta=-1.27, focal_distance=10, zoom=0.91, run_time=1.4,
-                         added_anims=tuple(self.reveal_labels(heading, caption)))
+                         added_anims=tuple(self.reveal_labels((heading, caption))))
         sweeps = []
         for x, width, color in ((inlet_x, INLET_WIDTH, UPSTREAM), (throat_x, THROAT_WIDTH, THROAT)):
             distance = FLOW / (width * DEPTH)
@@ -157,7 +159,7 @@ class ChannelFlow(ThreeDScene):
         narrow = text(f"{THROAT_WIDTH:g} × 1 × {throat_distance:.2f} {relation} {FLOW:g} m³",
                       31, 3.53, -2.62, THROAT)
         factors = text("Width × depth × distance", 29, 0, -3.27, MUTED)
-        self.play(*self.reveal_labels(wide, narrow, factors), run_time=0.7)
+        self.play(*self.reveal_labels((wide, narrow, factors)), run_time=0.7)
         self.wait(2.4)
 
         self.next_section("Explain the stretch")
@@ -168,6 +170,6 @@ class ChannelFlow(ThreeDScene):
         self.play(
             self.draw_guide((inlet_x, 0, z), (inlet_x + inlet_distance, 0, z), 0, INK),
             self.draw_guide((throat_x, 0, z), (throat_x + throat_distance, 0, z), 0, INK),
-            *self.reveal_labels(takeaway), run_time=0.8,
+            *self.reveal_labels((takeaway,)), run_time=0.8,
         )
         self.wait(4.4)

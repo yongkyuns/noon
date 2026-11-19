@@ -93,7 +93,7 @@ def sum_formula():
 
 
 class RiemannSums(Scene):
-    def fade_track(self, *formulae):
+    def fade_track(self, formulae):
         """Fade each TeX part through the retained opacity binding."""
         opacity = self.value_tracker(0)
         self.add(*formulae)
@@ -102,9 +102,9 @@ class RiemannSums(Scene):
                 self.bind_opacity(part, opacity)
         return opacity
 
-    def width_label(self, dx, *, initial=False):
-        number = left_at(MathTex(f"{dx:g}", font_size=49), -5.14, 3.30)
-        opacity = self.fade_track(number)
+    def width_label(self, number, *, initial=False):
+        left_at(number, -5.14, 3.30)
+        opacity = self.fade_track((number,))
         slide = self.value_tracker(1 if initial else 0)
         for part in number:
             x, y, z = part.get_center()
@@ -116,13 +116,15 @@ class RiemannSums(Scene):
             raise ValueError("Choose an upper limit from 2 to 4.75.")
         axes = Axes([0, 5, 1], [0, 5, 1], x_length=10.5, y_length=5.2,
                     tips=False, color=GRAY_B).move_to((0.2, -0.75, 0))
-        curve = axes.plot(f, [0.05, 4.95, 0.025], color=YELLOW, stroke_width=6.7)
+        curve = axes.plot(lambda x: f(x), [0.05, 4.95, 0.025], color=YELLOW, stroke_width=6.7)
         curve.set_z_index(2)
         endpoint = axes.c2p(4.95, f(4.95))
         curve_name = left_at(MathTex("f(x)", color=YELLOW, font_size=48),
                              endpoint[0] + 0.2, endpoint[1])
-        ends = [MathTex(name, font_size=44).move_to(axes.c2p(x, -0.32))
-                for name, x in (("a", A), ("b", B))]
+        ends = (
+            MathTex("a", font_size=44).move_to(axes.c2p(A, -0.32)),
+            MathTex("b", font_size=44).move_to(axes.c2p(B, -0.32)),
+        )
         gradient = LinearGradient([(0, BLUE), (1, GREEN)])
 
         width_eq = left_at(MathTex(r"\Delta x =", font_size=50), -6.6, 3.30)
@@ -133,7 +135,7 @@ class RiemannSums(Scene):
             if part.tex_string.strip() in ("f(", "x", ")"):
                 part.set_color(YELLOW)
         truth = antiderivative(B) - antiderivative(A)
-        goal = MathTex(rf"\to {truth:.2f}", font_size=51, color=GRAY_B).move_to((5.60, 3.39, 0))
+        goal = MathTex(rf"\to {antiderivative(B) - antiderivative(A):.2f}", font_size=51, color=GRAY_B).move_to((5.60, 3.39, 0))
 
         travel = self.value_tracker(0)
         self.add(axes)
@@ -147,10 +149,11 @@ class RiemannSums(Scene):
         self.bind_position(number, travel, direction=(dx, -0.16, 0), offset=tuple(number.get_center()))
         self.bind_opacity(number, readout_fade)
 
-        annotations = self.fade_track(curve_name, *ends)
-        width_fade = self.fade_track(width_eq)
-        goal_fade = self.fade_track(goal)
-        widths = [self.width_label((B - A) / (4 * 2**level), initial=level == 0)
+        annotations = self.fade_track((curve_name, *ends))
+        width_fade = self.fade_track((width_eq,))
+        goal_fade = self.fade_track((goal,))
+        widths = [self.width_label(MathTex(f"{(B - A) / (4 * 2**level):g}", font_size=49),
+                                   initial=level == 0)
                   for level in range(REFINEMENTS + 1)]
         width_opacity, width_slide = widths[0]
 

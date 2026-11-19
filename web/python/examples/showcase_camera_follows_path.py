@@ -13,8 +13,8 @@ class CameraFollowsPath(MovingCameraScene):
             x_length=10, y_length=3.6, color=GRAY,
         )
         path = axes.plot(lambda x: 0.9 * sin(0.85 * x), [0, 9], color=BLUE)
-        start_point = axes.i2gp(path.t_min, path)
-        end_point = axes.i2gp(path.t_max, path)
+        start_point = path.point_from_proportion(0)
+        end_point = path.point_from_proportion(1)
         start_marker = Dot(start_point, radius=0.11, color=TEAL)
         end_marker = Dot(end_point, radius=0.11, color=RED)
         moving_dot = Dot(start_point, radius=0.09, color=YELLOW)
@@ -39,12 +39,10 @@ class CameraFollowsPath(MovingCameraScene):
             run_time=0.7, rate_func=smooth,
         )
 
-        def follow_point(frame):
-            frame.move_to(moving_dot.get_center())
-
-        camera_frame.add_updater(follow_point)
-        self.play(MoveAlongPath(moving_dot, path, rate_func=linear), run_time=3.2)
-        camera_frame.remove_updater(follow_point)
+        self.play(
+            MoveAlongPath(moving_dot, path), MoveAlongPath(camera_frame, path),
+            run_time=3.2, rate_func=linear,
+        )
         self.wait(0.4)
 
         self.play(Restore(camera_frame), run_time=1.0, rate_func=smooth)

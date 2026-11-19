@@ -152,31 +152,18 @@ test("playback capability is finite and all nonreplayable capabilities require a
   delete reactive.playback_limitation;
   assert.throws(() => normalizeShowcaseManifest(missingExplanation), /requires a user-facing limitation/);
 
-  const gallery = normalizeShowcaseManifest(manifest);
-  const normalizedReactive = gallery.examples.find((entry) => entry.id === "showcase-reactive-relationships");
+  reactive.playback_limitation = "Use Run to repeat this scene.";
+  const fixture = normalizeShowcaseManifest(missingExplanation);
+  const normalizedReactive = fixture.examples.find((entry) => entry.id === reactive.id);
   assert.equal(normalizedReactive.playbackCapability, "nonreplayable-host-callbacks");
-  assert.match(normalizedReactive.summary, /cannot be retained for deterministic replay/);
-  const redraw = gallery.examples.find((entry) => entry.id === "showcase-always-redraw");
-  assert.equal(redraw.playbackCapability, "nonreplayable-host-callbacks");
-  assert.match(redraw.summary, /always_redraw callbacks/);
-  const camera = gallery.examples.find((entry) => entry.id === "showcase-camera-follows-path");
-  assert.equal(camera.playbackCapability, "nonreplayable-host-callbacks");
-  assert.match(camera.playbackLimitation, /Run/);
-  const nativeDrag = gallery.examples.find((entry) => entry.id === "showcase-translation-drag");
-  assert.equal(nativeDrag.playbackCapability, "nonreplayable-native-input");
-  assert.equal(nativeDrag.playbackLimitation, "Dragging changes this scene. Use Run to reset; seeking and restart are unavailable.");
-  assert.ok(gallery.examples.filter((entry) => ![normalizedReactive.id, redraw.id, camera.id, nativeDrag.id].includes(entry.id))
-    .every((entry) => entry.playbackCapability === "deterministic-retained-replay"));
+  assert.match(normalizedReactive.summary, /Use Run to repeat/);
 });
 
-test("the checked-in catalog declares callback and native-input lessons nonreplayable", () => {
+test("the checked-in catalog reserves nonreplayable playback for the drag lesson", () => {
   assert.deepEqual(
     manifest.entries.filter((entry) => entry.playback_capability?.startsWith("nonreplayable-"))
       .map((entry) => [entry.id, entry.playback_capability]),
-    [["showcase-reactive-relationships", "nonreplayable-host-callbacks"],
-      ["showcase-camera-follows-path", "nonreplayable-host-callbacks"],
-      ["showcase-always-redraw", "nonreplayable-host-callbacks"],
-      ["showcase-translation-drag", "nonreplayable-native-input"]],
+    [["showcase-translation-drag", "nonreplayable-native-input"]],
   );
 });
 

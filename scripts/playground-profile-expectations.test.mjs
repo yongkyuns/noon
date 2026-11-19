@@ -20,6 +20,27 @@ const manifestPath = path.join(root, 'web/python/examples/noon_showcase_manifest
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 const readSource = relative => readFileSync(path.join(root, 'web', relative));
 
+const callbackExpectation = {
+  ...SHOWCASE_PROFILE_EXPECTATIONS[0],
+  attachedProfile: 'observed',
+  completionPolicy: 'observed-nonreplayable',
+  dispositionKind: 'callback',
+  transitions: ['observed'],
+  disposition: 'observed-complete',
+  seekRangePolicy: 'unavailable',
+  capabilities: { attachedCommands: ['play', 'pause'], dispositionCommands: [],
+    replayAtDisposition: false, audio: false, sections: false },
+};
+
+const observedReplayExpectation = {
+  ...callbackExpectation,
+  completionPolicy: 'observed-then-replay',
+  dispositionKind: 'observed-replay',
+  seekRangePolicy: 'closed-on-completion',
+  capabilities: { ...callbackExpectation.capabilities,
+    dispositionCommands: ['play', 'pause', 'seek', 'restart', 'loop'], replayAtDisposition: true },
+};
+
 function diagnosticsFor(expected) {
   const contextId = `context:${expected.id}`;
   const attachedCapabilities = { commands: [...expected.capabilities.attachedCommands], replay: false,
@@ -53,11 +74,11 @@ function diagnosticsFor(expected) {
 }
 
 test('inventory binds all showcase IDs, paths and exact source bytes', () => {
-  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'ordinary').length, 41);
-  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'observed-replay').length, 4);
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'ordinary').length, 48);
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'observed-replay').length, 0);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.attachedProfile === 'immutable').length, 1);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'callback' ||
-    row.dispositionKind === 'input-handoff').length, 4);
+    row.dispositionKind === 'input-handoff').length, 1);
   assert.ok(SHOWCASE_PROFILE_EXPECTATIONS.every(row => row.owner && row.seekRangePolicy && row.audioPolicy && row.inputPolicy));
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-background-music').audioPolicy, 'authored-audio');
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-pointer-selection').inputPolicy, 'selection-inspection');
@@ -136,7 +157,7 @@ test('diagnostics accept actual profile attachment and required capabilities', (
 });
 
 test('callback reasons may refine at a later barrier of the same observed source', () => {
-  const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-camera-follows-path');
+  const expected = callbackExpectation;
   const diagnostics = diagnosticsFor(expected);
   const attachment = diagnostics.events[0];
   attachment.reason = { code: 'host_effects' };
@@ -241,7 +262,7 @@ test('authored audio gesture requires actual attachment capability and paused en
 });
 
 test('completed callback dispositions expose no transport commands', () => {
-  const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.dispositionKind === 'callback');
+  const expected = callbackExpectation;
   const diagnostics = diagnosticsFor(expected);
   diagnostics.events.at(-1).capabilities.commands = ['seek', 'restart'];
   assert.throws(() => validateShowcaseDiagnostics(expected, diagnostics), /nonreplayable disposition/);
@@ -252,7 +273,7 @@ test('completed callback dispositions expose no transport commands', () => {
 });
 
 test('observed first passes must acquire retained replay on completion', () => {
-  const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.dispositionKind === 'observed-replay');
+  const expected = observedReplayExpectation;
   const diagnostics = diagnosticsFor(expected);
   assert.equal(validateShowcaseDiagnostics(expected, diagnostics).disposition, 'observed-complete');
   diagnostics.events.at(-1).capabilities.replay = false;

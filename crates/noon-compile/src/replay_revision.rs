@@ -66,6 +66,10 @@ impl CompiledReplayRevision {
     pub fn channels(&self) -> impl Iterator<Item = CompiledChannelKey> + '_ {
         self.channels.iter().copied()
     }
+    pub fn track_ids(&self) -> impl Iterator<Item = TrackId> + '_ {
+        self.tracks.iter().map(|(id, _)| *id)
+    }
+
     /// Reserve each affected track or inset relation even when its saved side is
     /// absent. Exchanges therefore cannot grow beyond the admitted scope budget.
     pub fn retention_cost(&self) -> usize {

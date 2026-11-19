@@ -70,9 +70,7 @@ pub(super) fn local_effect_stack(stack: &CompiledEffectStack) -> bool {
 }
 
 fn local_track(track: Option<&CompiledTrack>) -> bool {
-    track.is_none_or(|track| {
-        local_property(track.property) && super::path_motion_command_count(&track.values) == 0
-    })
+    track.is_none_or(|track| local_property(track.property))
 }
 
 fn camera_owner(object: &CompiledObject) -> bool {
@@ -100,6 +98,25 @@ fn world_spatial_owner(object: &CompiledObject) -> bool {
     })
 }
 
+fn fixed_frame_planar_owner(object: &CompiledObject) -> bool {
+    object.spatial.as_deref().is_some_and(|spatial| {
+        spatial.composition_domain == noon_core::SemanticSpatialCompositionDomain::FixedFrame
+            && spatial.draw_kind == crate::CompiledSpatialDrawKind::Planar
+            && spatial.camera_projection.is_none()
+            && spatial.camera_profile.is_none()
+            && spatial.camera_motions.is_none()
+            && !spatial.point_light
+            && spatial.spatial_anchor_family.is_none()
+            && spatial.fixed_orientation_center.is_none()
+            && spatial.cairo_path_appearance.is_none()
+    })
+}
+
+fn same_planar_owner(before: &CompiledObject, after: &CompiledObject) -> bool {
+    (before.spatial.is_none() && after.spatial.is_none())
+        || (fixed_frame_planar_owner(before) && before.spatial == after.spatial)
+}
+
 fn spatial_history_owner(object: &CompiledObject) -> bool {
     camera_owner(object) || world_spatial_owner(object)
 }
@@ -125,7 +142,7 @@ fn local_channel_for_objects(
 ) -> bool {
     match property {
         Property::EffectThreshold => authored_bloom_owner(before) && authored_bloom_owner(after),
-        property if local_property(property) => before.spatial.is_none() && after.spatial.is_none(),
+        property if local_property(property) => same_planar_owner(before, after),
         Property::WorldTransform => {
             (camera_owner(before) && camera_owner(after)) || same_world_spatial_owner(before, after)
         }
@@ -162,11 +179,13 @@ fn local_track_for_object(track: Option<&CompiledTrack>, object: Option<&Compile
             ) => from.camera(*near, *far).is_some() && to.camera(*near, *far).is_some(),
             _ => false,
         };
-        (if object.is_some_and(|object| object.spatial.is_some()) {
+        if object
+            .is_some_and(|object| object.spatial.is_some() && !fixed_frame_planar_owner(object))
+        {
             typed_spatial_track
         } else {
             local_property(track.property)
-        }) && super::path_motion_command_count(&track.values) == 0
+        }
     })
 }
 
@@ -308,7 +327,7 @@ fn local_effect_stack_for_object(object: &CompiledObject, stack: &CompiledEffect
 fn local_object(object: &CompiledObject, physical: &CompiledObject) -> bool {
     object.live
         && object.id == physical.id
-        && ((object.spatial.is_none() && physical.spatial.is_none())
+        && (same_planar_owner(object, physical)
             || (camera_owner(object) && camera_owner(physical))
             || same_world_spatial_owner(object, physical))
         && object
@@ -320,7 +339,6 @@ fn local_object(object: &CompiledObject, physical: &CompiledObject) -> bool {
 impl CompiledReplayRevision {
     fn local_prefix_metadata(&self) -> bool {
         self.inset_2d_view.is_none()
-            && self.path_motion_commands == 0
             && self.rows.iter().filter(|row| row.order.is_some()).count() <= 1
     }
 
@@ -397,8 +415,8 @@ impl CompiledScene {
     ///
     /// Ordinary 2D lifecycle/content/property changes and typed profile history
     /// for camera and World-domain spatial owners are admitted. Family transforms,
-    /// path-motion, anchored composition and Cairo path bounds require separate
-    /// qualification.
+    /// anchored composition and Cairo path bounds require separate qualification.
+    /// Path-based position tracks retain their validated immutable path snapshots.
     /// Append-only glyph plans travel through the existing immutable plan table.
     /// Validated 2D transform/morph plans retain their existing immutable geometry.
     /// Rows may carry the bounded ordered Blur/Glow profile with optional
@@ -518,7 +536,7 @@ impl CompiledScene {
                 tracks,
                 channels: old.channels.clone(),
                 camera_motion_payloads: old.camera_motion_payloads,
-                path_motion_commands: 0,
+                path_motion_commands: old.path_motion_commands,
                 geometry_payload_bytes: old.geometry_payload_bytes,
                 effect_payload_bytes: old.effect_payload_bytes,
                 composed_payload_bytes: old.composed_payload_bytes,
@@ -580,6 +598,31 @@ mod camera_prefix_tests {
             cairo_path_appearance: None,
         }));
         object
+    }
+
+    #[test]
+    fn fixed_frame_planar_tracks_preserve_the_spatial_role() {
+        use noon_core::SemanticSpatialCompositionDomain;
+
+        let mut caption = object(false, false);
+        caption.spatial.as_mut().unwrap().composition_domain =
+            SemanticSpatialCompositionDomain::FixedFrame;
+        assert!(local_object(&caption, &caption));
+        assert!(local_channel_for_objects(
+            Property::Opacity,
+            &caption,
+            &caption,
+        ));
+
+        let mut world = caption.clone();
+        world.spatial.as_mut().unwrap().composition_domain =
+            SemanticSpatialCompositionDomain::World;
+        assert!(!local_object(&caption, &world));
+        assert!(!local_channel_for_objects(
+            Property::Opacity,
+            &caption,
+            &world
+        ));
     }
 
     #[test]
