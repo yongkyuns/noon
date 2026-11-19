@@ -52,7 +52,7 @@ const rows = [
   ['showcase-galton-board','showcase_galton_board.py','9f0d47ce72dabbbaaabcf8af17edee793d25652b689a6809dd7c3f90eb0eab00','observed','observed-replay',['sections'], 'observed-complete'],
   ['showcase-vector-cutout','showcase_vector_cutout.py','103d703d30623202e7127e159fbd2c7c45b846ed27757929ff1d4c55107274f2','observed','observed-replay',[], 'observed-complete'],
   ['showcase-fourier-epicycles','showcase_fourier_epicycles.py','ef9a3063bda15693e30b9fc7ec49ae1e175e3a218a4b602122554198e38a6fff','observed','observed-replay',['sections'], 'observed-complete'],
-  ['showcase-miura-ori','showcase_miura_ori.py','6108bc07d7dca6556831a46e4d3b3d506bcf63b4867cb20298a796aacf45910b','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-miura-ori','showcase_miura_ori.py','8d88bd595c69a41d82b6801799a8441f44bf228890f5788d11ea46a71e572dba','observed','observed-replay',['sections'], 'observed-complete'],
   ['showcase-pythagoras','showcase_pythagoras.py','4edad3a16aea8128e967259f45046b2dc1fc2da8401169a1605da309ca60934e','observed','observed-replay',['sections'], 'observed-complete'],
 ];
 
