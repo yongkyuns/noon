@@ -248,5 +248,6 @@ fi
 npm ci --prefix tools/python-editor --include=dev --ignore-scripts --no-audit --no-fund
 node scripts/build-python-editor.mjs
 
+cp crates/noon/assets/arimo/OFL.txt web/pkg/arimo-OFL.txt
 node scripts/build-runtime-identity.mjs
 node scripts/check-web-package.mjs
