@@ -1633,6 +1633,17 @@ class Scene:
     ) -> Scene:
         return _scene_operations()._canonical_bind_position(self, mobject, tracker, direction, offset)
 
+    def bind_sampled(self, mobject: object, tracker: object, channel: str,
+                     samples: Iterable[Iterable[float]], *, linear: bool = True) -> Scene:
+        """Bind a channel to keyframes indexed by a ValueTracker.
+
+        Rows contain the tracker value and one scalar or two planar components.
+        Translation, scale, and rotation are absolute authored poses.
+        """
+        return _scene_operations()._canonical_bind_sampled(
+            self, mobject, tracker, channel, samples, linear,
+        )
+
     def on_click(self, target: Mobject, animation: object) -> Scene:
         """Bind Indicate(target), GlowPulse(target), or None to a primary click.
 

@@ -4670,7 +4670,7 @@ RESOURCE_BARRIER_METHODS = frozenset({
     "add_world_mobjects", "add_fixed_in_frame_mobjects", "add_fixed_orientation_mobjects",
 })
 
-PORTABLE_REACTIVE_METHODS = frozenset({"value_tracker", "bind_position", "bind_opacity"})
+PORTABLE_REACTIVE_METHODS = frozenset({"value_tracker", "bind_position", "bind_opacity", "bind_sampled"})
 PORTABLE_VECTOR_METHODS = frozenset({"add_vector", "apply_matrix"})
 CONSTRUCT_SCENE_BARRIERS = frozenset({"play", "wait", "move_camera"}) | PORTABLE_VECTOR_METHODS
 PORTABLE_SPATIAL_METHODS = frozenset({
