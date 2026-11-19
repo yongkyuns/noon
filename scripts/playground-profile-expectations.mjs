@@ -49,6 +49,11 @@ const rows = [
   ['showcase-channel-flow','showcase_channel_flow.py','bbd3f3734b0e9870b27ddc1b638911938ad5aabc46d6a93295c6500084cbeb73','observed','observed-replay',['sections'], 'observed-complete'],
   ['showcase-neon-glow','showcase_neon_glow.py','8afc4e03ec664f0faeaa71735f3ed13bf9da7da95a814dd225350f2319f0701c','incremental','ordinary',['sections'], 'looped'],
   ['showcase-riemann-sums','showcase_riemann_sums.py','38a09733491041836e83ad709d9b268c6ffaa51c978e50f2001721e126b482a1','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-galton-board','showcase_galton_board.py','7fe0051cbdb692214133f2bb9533f46ed0523ad1f8a9e9398611da3956ada9f0','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-vector-cutout','showcase_vector_cutout.py','d73b60a9b111607783056a82d5b5c722248f19317d21af194440c730317cac75','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-fourier-epicycles','showcase_fourier_epicycles.py','2d08742a2030f553f6bae5c3a491595b23da7cfc1df1a1ba9d7485367b0d0960','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-miura-ori','showcase_miura_ori.py','8d06ade3d3af97e3326860b2998ad9cb2b317b470f35f28ba889f4ed36b99f96','observed','observed-replay',['sections'], 'observed-complete'],
+  ['showcase-pythagoras','showcase_pythagoras.py','a49554a95a4e00b3b43f48ffcd29fc7b7184fbf49fbe2636421988a6e840dfde','observed','observed-replay',['sections'], 'observed-complete'],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(

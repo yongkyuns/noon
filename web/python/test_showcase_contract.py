@@ -50,7 +50,7 @@ class ShowcaseSourceContract(unittest.TestCase):
                 self.assertEqual(len(scenes), 1)
                 is_surface = entry["id"] == "showcase-spatial-scene"
                 is_axes = entry["id"] == "showcase-three-d-axes"
-                is_spatial = is_surface or is_axes or entry["id"] == "showcase-channel-flow"
+                is_spatial = is_surface or is_axes or entry["id"] in {"showcase-channel-flow", "showcase-miura-ori"}
                 is_linear = entry["id"] == "showcase-linear-algebra"
                 is_camera = entry["id"] == "showcase-camera-follows-path"
                 scene_bases = {base.id for base in scenes[0].bases if isinstance(base, ast.Name)}

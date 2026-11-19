@@ -43,6 +43,16 @@ export function normalizeShowcaseManifest(manifest) {
     if (entry.interaction != null && (typeof entry.host_setup !== "string" || !entry.host_setup.trim())) throw new Error(`${entry.id}: interactive scenes must disclose their host setup`);
     if (entry.inspection_zoom != null && typeof entry.inspection_zoom !== "boolean") throw new Error(`${entry.id}: inspection_zoom must be a boolean`);
     if (entry.inspection_zoom === true && (typeof entry.host_setup !== "string" || !entry.host_setup.trim())) throw new Error(`${entry.id}: inspection zoom must disclose its host setup`);
+    const credits = entry.credits ?? [];
+    if (!Array.isArray(credits) || credits.some((credit) => {
+      if (typeof credit?.label !== "string" || !credit.label.trim() || typeof credit.url !== "string") return true;
+      try {
+        const url = new URL(credit.url);
+        return url.protocol !== "https:" || Boolean(url.username || url.password);
+      } catch {
+        return true;
+      }
+    })) throw new Error(`${entry.id}: source credits require a label and a public HTTPS URL`);
     const playbackCapability = entry.playback_capability ?? REPLAYABLE_SHOWCASE;
     if (![REPLAYABLE_SHOWCASE, ...NONREPLAYABLE_SHOWCASE_CAPABILITIES].includes(playbackCapability)) {
       throw new Error(`${entry.id}: unsupported playback capability ${playbackCapability}`);
@@ -65,6 +75,7 @@ export function normalizeShowcaseManifest(manifest) {
       path: `./${entry.path}`,
       category: entry.category,
       features: [...entry.features],
+      credits: credits.map(({ label, url }) => ({ label, url })),
       upstream: null,
       reuse: "noon-authored-showcase",
       parityStatus: "noon-showcase",

@@ -742,6 +742,158 @@
         {"time": 17.3, "label": "The integral gives the limiting area"}
       ],
       "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-galton-board",
+      "title": "Why beads pile up in the middle",
+      "lesson": "Follow one bead, count the eight routes through three pegs, and compare predicted bin shares with a sample.",
+      "primary_feature": "galton-board-route-counts",
+      "category": "Probability",
+      "path": "python/examples/showcase_galton_board.py",
+      "credits": [
+        {
+          "label": "Academa’s ManimGX Galton board",
+          "url": "https://manimgx.academa.ai/gallery/galton-board/"
+        },
+        {
+          "label": "3Blue1Brown’s Central Limit Theorem lesson",
+          "url": "https://www.3blue1brown.com/lessons/clt/"
+        }
+      ],
+      "features": ["MoveAlongPath", "LaggedStart", "Create", "histogram transforms", "Variable", "sections"],
+      "duration": 21.2,
+      "thumbnail_time": 19.8,
+      "thumbnail": "thumbnails/showcase/showcase-galton-board.png",
+      "thumbnail_alt": "A three-row peg board beside a mint histogram with gold markers for the predicted shares.",
+      "still_intervals": [[3.85, 4.55], [7.4, 8.4], [19.2, 21.2]],
+      "beats": [
+        {"time": 2.4, "label": "Follow one bead past three pegs"},
+        {"time": 7.8, "label": "Count routes that share a bin"},
+        {"time": 11.0, "label": "Drop the first batch"},
+        {"time": 17.9, "label": "Compare sample shares with the prediction"},
+        {"time": 19.8, "label": "The middle bins have more routes"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-vector-cutout",
+      "title": "How a vector editor cuts a hole",
+      "lesson": "Layer two overlapping cutters over a gasket, join their paths, and subtract every cutter from the stock.",
+      "primary_feature": "boolean-vector-cutout",
+      "category": "Geometry",
+      "path": "python/examples/showcase_vector_cutout.py",
+      "credits": [
+        {
+          "label": "Manim Community’s BooleanOperations example",
+          "url": "https://docs.manim.community/en/stable/examples.html#booleanoperations"
+        }
+      ],
+      "features": ["Union", "Intersection", "Difference", "Create", "layer ordering", "sections"],
+      "duration": 14.75,
+      "thumbnail_time": 13.5,
+      "thumbnail": "thumbnails/showcase/showcase-vector-cutout.png",
+      "thumbnail_alt": "A mint gasket with a wide central opening and four small bolt holes. A gold line passes behind the gasket.",
+      "still_intervals": [[1.75, 2.4], [3.7, 4.55], [5.2, 6.4], [7.25, 8.25], [8.95, 9.5], [10.75, 11.65], [12.85, 14.75]],
+      "beats": [
+        {"time": 2.0, "label": "Start with the stock outline"},
+        {"time": 4.1, "label": "Place overlapping cutters"},
+        {"time": 5.9, "label": "Find the shared lens"},
+        {"time": 7.8, "label": "Unite the cutter paths"},
+        {"time": 11.1, "label": "Subtract the cutters"},
+        {"time": 13.5, "label": "See through the finished opening"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-fourier-epicycles",
+      "title": "How spinning arrows draw an outline",
+      "lesson": "Start with one rotation, add a faster backward rotation, then combine four terms to trace a custom outline.",
+      "primary_feature": "fourier-epicycle-chain",
+      "category": "Periodic motion",
+      "path": "python/examples/showcase_fourier_epicycles.py",
+      "credits": [
+        {
+          "label": "Grant Sanderson’s 3Blue1Brown Fourier scenes",
+          "url": "https://github.com/3b1b/videos/blob/master/_2019/diffyq/part4/fourier_series_scenes.py"
+        },
+        {
+          "label": "Retained playback experiment in Noon #2358",
+          "url": "https://github.com/yongkyuns/noon/issues/2358"
+        }
+      ],
+      "features": ["Succession", "retained affine transforms", "Create", "synchronized path reveal", "sections"],
+      "duration": 22.3,
+      "thumbnail_time": 17.6,
+      "thumbnail": "thumbnails/showcase/showcase-fourier-epicycles.png",
+      "thumbnail_alt": "A mint outline follows the tip of four connected gold vectors beside the gray target.",
+      "still_intervals": [[1.2, 1.95], [6.65, 7.4], [12.4, 13.15], [18.15, 18.9], [20.3, 22.3]],
+      "beats": [
+        {"time": 3.8, "label": "A single arrow traces a circle"},
+        {"time": 10.3, "label": "The faster arrow rides on the first tip"},
+        {"time": 17.6, "label": "Four frequencies draw the fine bends"},
+        {"time": 21.0, "label": "Overlay the trace on the target"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-miura-ori",
+      "title": "How one pull opens a folded solar array",
+      "lesson": "Follow a rigid panel as a single fold angle opens an entire sheet, then turn the camera to see the linked creases.",
+      "primary_feature": "miura-ori-rigid-folding",
+      "category": "Three dimensions",
+      "path": "python/examples/showcase_miura_ori.py",
+      "credits": [
+        {
+          "label": "Academa’s ManimGX Miura-ori",
+          "url": "https://manimgx.academa.ai/gallery/miura-ori/"
+        },
+        {
+          "label": "Schenk and Guest’s Miura-fold geometry",
+          "url": "https://doi.org/10.1073/pnas.1217998110"
+        }
+      ],
+      "features": ["ThreeDScene", "Mesh3D", "WorldTransformTo", "finite camera movement", "fixed-frame labels", "sections"],
+      "duration": 18.6,
+      "thumbnail_time": 7.9,
+      "thumbnail": "thumbnails/showcase/showcase-miura-ori.png",
+      "thumbnail_alt": "A gold parallelogram highlights one rigid tile in a partly opened blue Miura-ori sheet.",
+      "still_intervals": [[0.8, 2.05], [5.55, 6.55], [11.6, 12.6], [16.8, 18.6]],
+      "beats": [
+        {"time": 1.5, "label": "Inspect the folded array"},
+        {"time": 4.6, "label": "Track the gold panel and its neighbors"},
+        {"time": 7.9, "label": "Open the shared creases"},
+        {"time": 12.1, "label": "Compare the unfolded footprint"},
+        {"time": 15.4, "label": "Reverse the fold"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-pythagoras",
+      "title": "Prove Pythagoras by moving four triangles",
+      "lesson": "Slide four identical right triangles inside one outer square and equate the uncovered areas in the two arrangements.",
+      "primary_feature": "pythagoras-area-rearrangement",
+      "category": "Geometry",
+      "path": "python/examples/showcase_pythagoras.py",
+      "credits": [
+        {
+          "label": "Academa’s ManimGX Pythagoras by rearrangement",
+          "url": "https://manimgx.academa.ai/gallery/pythagoras/"
+        }
+      ],
+      "features": ["Polygon", "MathTex", "LaggedStart", "retained translations", "sections"],
+      "duration": 14.55,
+      "thumbnail_time": 13.1,
+      "thumbnail": "thumbnails/showcase/showcase-pythagoras.png",
+      "thumbnail_alt": "The same four right triangles leave a small gold square and a large gold square, labeled a squared and b squared.",
+      "still_intervals": [[2.05, 2.9], [5.05, 6.55], [9.25, 9.9], [10.8, 11.6], [12.55, 14.55]],
+      "beats": [
+        {"time": 2.45, "label": "Label the three sides of one triangle"},
+        {"time": 5.7, "label": "Identify the square bounded by the hypotenuses"},
+        {"time": 8.3, "label": "Slide the same triangles inside the outer square"},
+        {"time": 11.15, "label": "Read the two remaining square areas"},
+        {"time": 13.1, "label": "Equate the uncovered areas"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
     }
   ]
 }

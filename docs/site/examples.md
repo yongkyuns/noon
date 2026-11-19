@@ -58,3 +58,11 @@ feature and compatibility demonstrations, including
 [Your first scene](../../playground.html?catalog=showcase&example=showcase-first-scene),
 [Interference is addition](../../playground.html?catalog=showcase&example=showcase-wave-interference),
 and [Make it move](../../playground.html?catalog=showcase&example=showcase-editorial-cover).
+
+## Lessons adapted from Manim examples
+
+- [Why beads pile up in the middle](../../playground.html?catalog=showcase&example=showcase-galton-board) counts the possible routes, then follows a sample of falling beads. Inspired by [Academa’s ManimGX Galton board](https://manimgx.academa.ai/gallery/galton-board/) and [3Blue1Brown’s Central Limit Theorem lesson](https://www.3blue1brown.com/lessons/clt/).
+- [How a vector editor cuts a hole](../../playground.html?catalog=showcase&example=showcase-vector-cutout) uses boolean paths to cut a gasket. Based on [Manim Community’s BooleanOperations example](https://docs.manim.community/en/stable/examples.html#booleanoperations).
+- [How spinning arrows draw an outline](../../playground.html?catalog=showcase&example=showcase-fourier-epicycles) traces an outline with four rotating vectors. Inspired by [Grant Sanderson’s 3Blue1Brown Fourier scenes](https://github.com/3b1b/videos/blob/master/_2019/diffyq/part4/fourier_series_scenes.py) and built on [Noon’s retained playback experiment](https://github.com/yongkyuns/noon/issues/2358).
+- [How one pull opens a folded solar array](../../playground.html?catalog=showcase&example=showcase-miura-ori) folds a sheet of rigid panels in 3D. Adapted from [Academa’s ManimGX Miura-ori](https://manimgx.academa.ai/gallery/miura-ori/) with [Schenk and Guest’s fold geometry](https://doi.org/10.1073/pnas.1217998110).
+- [Prove Pythagoras by moving four triangles](../../playground.html?catalog=showcase&example=showcase-pythagoras) compares the uncovered areas in two arrangements. Inspired by [Academa’s ManimGX rearrangement proof](https://manimgx.academa.ai/gallery/pythagoras/).
