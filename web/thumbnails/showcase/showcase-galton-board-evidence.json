@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "9472354777de188906790f7bb5b18961c62feb85",
+  "backend": "webgpu",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "9472354777de188906790f7bb5b18961c62feb85",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "aa4a44b4a9c02ec74a840ffc8dd455c148d49e73da8a1b52d614376dc873a718"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "106269ed2a6cb07baea8258bc5823e60540924510a723c040ef1304d0fd22bb2"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "bca5c80feb0d873f37ec5c1816d0c17ef4f8aeec4bbd308219bec4a19331fbca"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
+      }
+    },
+    "buildId": "514b9d8ab22db8a1605e91b5c9e9de0ce5208208bddf3b1ae78ebf72159761e7"
+  },
+  "posters": [
+    {
+      "id": "showcase-galton-board",
+      "captureBuildId": "514b9d8ab22db8a1605e91b5c9e9de0ce5208208bddf3b1ae78ebf72159761e7",
+      "sourceSha256": "2d35ecb028c37758dd3b26f22caeb9ed13fcfb5e5c851c555ca4c69cdfaa0396",
+      "thumbnailTime": 19.8,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 33490,
+        "pngSha256": "36a16ec9a23fac886f87448e9366d6f414b4491763561bed7b32e982266e92cf",
+        "pixelSha256": "df4c431dc3ab7c8552155e57c06c0750a8bfea80404f2817445d71f4d5ab9907"
+      },
+      "sample": {
+        "requestedTime": 19.8,
+        "publishedTime": 19.8,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}
