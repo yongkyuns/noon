@@ -2278,12 +2278,12 @@ impl ExecutionSession {
                 target,
                 options,
             } => {
-                if target.has_composed_effects && !self.reachability.is_reachable(*source) {
-                    return Err(ExecutionSessionAnimationError::InvalidComposition(
-                        "owned family animate requires groups with composed effects to be added first".into(),
-                    ));
-                }
-                self.stage_detached_method_family(store, *source, admitted)?;
+                self.stage_detached_method_family(
+                    store,
+                    *source,
+                    target.has_composed_effects,
+                    admitted,
+                )?;
                 let copied = target.stage(store, *source, declaration).map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                 })?;
@@ -2467,7 +2467,8 @@ impl ExecutionSession {
                 target_state,
                 options,
             } => {
-                let family_effects = family_effect_target::validate(store, *source, *target_state)?;
+                let family_effects =
+                    family_effect_target::has_effects(store, *source, *target_state)?;
                 let method_target = matches!(
                     request,
                     SemanticCompositionRequest::FamilyMethodTargetTo { .. }
@@ -2489,18 +2490,27 @@ impl ExecutionSession {
                 let path_arc = options.path_arc.unwrap_or(0.0);
                 let curved = path_arc.abs() >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD;
                 let flat = is_flat_family(*source) && is_flat_family(*target_state);
-                let entering =
-                    method_target && self.stage_detached_method_family(store, *source, admitted)?;
+                let entering = method_target
+                    && self.stage_detached_method_family(
+                        store,
+                        *source,
+                        family_effects,
+                        admitted,
+                    )?;
                 if entering
                     && (curved
-                        || !crate::animation_request::is_ordinary_method_family(
+                        || !crate::animation_request::is_method_family(
                             store,
                             *target_state,
+                            family_effects,
                         ))
                 {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
                         "detached family animate requires vector shapes, plain text, or MathTex and a straight path".into(),
                     ));
+                }
+                if family_effects {
+                    family_effect_target::validate(store, *source, *target_state, entering)?;
                 }
                 if curved && !flat {
                     return Err(ExecutionSessionAnimationError::InvalidComposition(
@@ -3553,6 +3563,7 @@ impl ExecutionSession {
         &self,
         store: &SemanticStore,
         source: SemanticNodeId,
+        has_composed_effects: bool,
         admitted: &mut AnimationAdmissions,
     ) -> Result<bool, ExecutionSessionAnimationError> {
         if self.reachability.is_reachable(source) {
@@ -3569,9 +3580,14 @@ impl ExecutionSession {
             .iter()
             .all(|&leaf| self.reachability.is_object_reachable(leaf))
         {
+            if has_composed_effects {
+                return Err(invalid(
+                    "family animate requires the entire entering group to be detached",
+                ));
+            }
             return Ok(false);
         }
-        if !crate::animation_request::is_ordinary_method_family(store, source) {
+        if !crate::animation_request::is_method_family(store, source, has_composed_effects) {
             return Err(invalid(
                 "detached family animate requires a group of planar vector shapes, plain text, or MathTex",
             ));

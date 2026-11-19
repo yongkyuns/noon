@@ -224,18 +224,27 @@ fn is_method_leaf(store: &SemanticStore, state: &SemanticObjectState) -> bool {
 }
 
 pub(crate) fn is_ordinary_method_family(store: &SemanticStore, root: SemanticNodeId) -> bool {
+    is_method_family(store, root, false)
+}
+
+pub(crate) fn is_method_family(
+    store: &SemanticStore,
+    root: SemanticNodeId,
+    allow_composed_effects: bool,
+) -> bool {
     store.ordered_authoring_nodes(root).is_ok_and(|nodes| {
         nodes.into_iter().all(|id| {
             let node = store.node(id).expect("validated authoring node");
-            node.effect_ids().is_empty()
-                && if matches!(node.kind(), SemanticNodeKind::Family(_)) {
-                    method_group_style(store, id).is_some()
-                } else {
-                    node.member_count() == 0
-                        && node
-                            .semantic_object_state()
-                            .is_some_and(|state| is_method_leaf(store, state))
-                }
+            if matches!(node.kind(), SemanticNodeKind::Family(_)) {
+                (allow_composed_effects || node.effect_ids().is_empty())
+                    && method_group_style(store, id).is_some()
+            } else {
+                node.effect_ids().is_empty()
+                    && node.member_count() == 0
+                    && node
+                        .semantic_object_state()
+                        .is_some_and(|state| is_method_leaf(store, state))
+            }
         })
     })
 }

@@ -13,7 +13,7 @@ use crate::{
 };
 
 mod group;
-pub(crate) use group::{is_ordinary_method_family, FamilyMethodTarget};
+pub(crate) use group::{is_method_family, is_ordinary_method_family, FamilyMethodTarget};
 use noon_core::{
     AnimationOptions, Color, SemanticAnimationCompositionKind, SemanticFadeDirection,
     SemanticFadeEndpoint, SemanticOrientation, SemanticTransformInterpolation, Vec2,
@@ -222,7 +222,7 @@ impl MobjectFamily {
     /// The source state is captured at play admission.
     /// Members retain their semantic identity and share scale/rotation pivots.
     /// A fully detached family enters the scene when the play is admitted.
-    /// A family already in the scene can shift or scale with its composed effects.
+    /// Shift and uniform scale preserve composed effects, including on entry.
     pub fn animate(&self) -> Animate {
         Animate {
             source: CompositeEntryHandle::Family(self.clone()),

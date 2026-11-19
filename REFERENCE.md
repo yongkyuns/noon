@@ -247,7 +247,8 @@ scene.arrange_family_in_grid_with_options(
 Import `FamilyArrangeOptions` and `FamilyGridOptions` from `noon` for this example.
 Owned group animation supports fixed-membership planar groups with shared
 scale and rotation pivots. Several independent groups and objects can animate in
-one play. An added group with a composed effect supports shift and uniform scale.
+one play. A group with a composed effect can enter through a shift or uniform
+scale on its first `play`, with its original effect following the members.
 `group.animate().set_object_opacity(0.42)` fades an added group as one layer.
 The paired [Rust](crates/noon/src/example_scenes/group_animation.rs) and
 [Python](web/python/examples/showcase_group_animation.py) lesson **Move the whole
