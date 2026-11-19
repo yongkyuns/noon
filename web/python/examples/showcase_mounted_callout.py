@@ -15,19 +15,18 @@ class MountedCallout(Scene):
             self.add(marker, text)
 
         label = Text("Inspect", font_size=40, color=ink).shift(0.8125 * UP)
-        callout = VGroup(label, color=ink)
-        callout.set_fill(color_from_hex("#183846"), opacity=1, family=False)
-        callout.set_stroke(ink, width=6, family=False)
         corners = [
             (-1.5, 0.25, 0), (-1.5, 1.25, 0), (-1.375, 1.375, 0), (1.375, 1.375, 0),
             (1.5, 1.25, 0), (1.5, 0.25, 0), (0.25, 0.25, 0), (0, -0.125, 0),
             (-0.25, 0.25, 0), (-1.5, 0.25, 0),
         ]
-        callout.set_points([
+        callout = VGroup().set_points([
             [(1 - t) * a + t * b for a, b in zip(start, end)]
             for start, end in zip(corners, corners[1:])
             for t in (0, 1 / 3, 2 / 3, 1)
-        ])
+        ]).add(label)
+        callout.set_fill(color_from_hex("#183846"), opacity=1, family=False)
+        callout.set_stroke(ink, width=6, family=False)
         callout.shift(2.25 * LEFT)
         self.add(callout)
         self.wait(0.5)

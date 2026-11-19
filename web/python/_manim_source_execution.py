@@ -3262,8 +3262,9 @@ class _SceneOnlySource(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute) and node.func.attr == "set_points":
             receiver = node.func.value
             if (not isinstance(receiver, ast.Call) or not isinstance(receiver.func, ast.Name)
-                    or receiver.func.id != "VMobject" or receiver.args or receiver.keywords
-                    or len(node.args) != 1 or node.keywords):
+                    or receiver.args or receiver.keywords or len(node.args) != 1 or node.keywords
+                    or not (receiver.func.id == "VMobject"
+                            or receiver.func.id == "VGroup" and self._trusted_noon_binding("VGroup"))):
                 raise _OpaqueSource(node, "unproven_svg_path_write")
         if isinstance(node.func, ast.Name) and node.func.id == "LaggedStartMap":
             shadowed = "LaggedStartMap" in self.module_bindings or any(
