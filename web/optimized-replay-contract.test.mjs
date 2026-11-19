@@ -67,6 +67,11 @@ async function buildArguments(env) {
   try {
     await mkdir(path.join(temp, "scripts"));
     await mkdir(path.join(temp, "bin"));
+    const noticePath = "crates/noon/assets/arimo/OFL.txt";
+    const notice = await readFile(path.join(root, noticePath));
+    await mkdir(path.dirname(path.join(temp, noticePath)), { recursive: true });
+    await writeFile(path.join(temp, noticePath), notice);
+    await mkdir(path.join(temp, "web/pkg"), { recursive: true });
     await writeFile(path.join(temp, "scripts/build-web-demo.sh"), await source("scripts/build-web-demo.sh"));
     await writeFile(path.join(temp, "bin/node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     await writeFile(path.join(temp, "bin/npm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
@@ -88,6 +93,7 @@ async function buildArguments(env) {
         "a stale dependency lock must fail before wasm-pack can rewrite it");
       return null;
     }
+    assert.deepEqual(await readFile(path.join(temp, "web/pkg/arimo-OFL.txt")), notice);
     const args = (await readFile(argsFile, "utf8")).trim().split("\n");
     assert.equal(args.at(-1), "--locked");
     assert.ok(!args.includes("--"),
