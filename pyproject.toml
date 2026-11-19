@@ -13,6 +13,7 @@ requires-python = ">=3.11"
 license = "MIT"
 license-files = [
   "LICENSE",
+  "crates/noon/assets/arimo/OFL.txt",
   "crates/noon/src/code_display/THIRD_PARTY_NOTICES.md",
   "licenses/typst-assets-0.15.1/LICENSE",
   "licenses/typst-assets-0.15.1/NOTICE",

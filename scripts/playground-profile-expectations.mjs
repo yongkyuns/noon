@@ -55,6 +55,9 @@ const rows = [
   ['showcase-fourier-epicycles','showcase_fourier_epicycles.py','44085edde6cf80f56c71152131aed2c665359561dfbaa5f250a27f51a7ee5439','incremental','ordinary',['sections'], 'finite-complete', true],
   ['showcase-miura-ori','showcase_miura_ori.py','4fbd478fc05fe003540121dcb3b8e33e0a6e61d5033023cee0ef8dd82a8f4253','incremental','ordinary',['sections'], 'finite-complete', true],
   ['showcase-pythagoras','showcase_pythagoras.py','63d34f23d78383eddf4bcda7c7bbeefaccf58479c8aaaeada4a8db0b34c69c09','incremental','ordinary',['sections'], 'finite-complete', true],
+  ['showcase-circle-area-signals','showcase_circle_area_signals.py','90a0780f39059407ae4d36b3c976e6ef995ae6697c2888c1618fe51fbad0c435','incremental','ordinary',[], 'finite-complete', true],
+  ['showcase-brand-value-race','showcase_brand_value_race.py','da5efec1c0e9ed12dbc5919de7e35936c79f2a2cd27c512efbcc6f045967b30d','incremental','ordinary',[], 'finite-complete', true],
+  ['showcase-drip-fill-gauge','showcase_drip_fill_gauge.py','6e1582c8432dc9fd88de0df2e54e4f1bf07131f20dae93def3393938abbb76e8','incremental','ordinary',[], 'finite-complete', true],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
