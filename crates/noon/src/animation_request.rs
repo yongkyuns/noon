@@ -13,7 +13,7 @@ use crate::{
 };
 
 mod group;
-pub(crate) use group::{is_ordinary_method_family, FamilyMethodTarget};
+pub(crate) use group::{is_method_family, is_ordinary_method_family, FamilyMethodTarget};
 use noon_core::{
     AnimationOptions, Color, SemanticAnimationCompositionKind, SemanticFadeDirection,
     SemanticFadeEndpoint, SemanticOrientation, SemanticTransformInterpolation, Vec2,

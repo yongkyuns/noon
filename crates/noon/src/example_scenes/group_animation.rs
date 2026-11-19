@@ -1,4 +1,4 @@
-//! A nested diagram with text labels enters on its first play.
+//! A nested diagram and a glowing underline enter on their first play.
 //! Paired with `showcase_group_animation.py`, also available in the demo gallery.
 use crate::{
     effects::{EffectUpdate, Pixels},
@@ -10,7 +10,7 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
     let beam = scene.rectangle(0.72, 0.12)?;
     let tip = scene.circle(0.12)?;
     for (part, x, color) in [(&beam, -1.56, Color::ORANGE), (&tip, -1.24, Color::YELLOW)] {
-        scene.shift(part, Vec2::new(x, -0.24))?;
+        scene.shift(part, Vec2::new(x, -0.49))?;
         scene.set_fill(part, color, 1.0)?;
         scene.disable_stroke(part)?;
     }
@@ -22,7 +22,6 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
             .intensity(1.4)
             .color(Color::ORANGE),
     )?;
-    scene.add_many(&[(&callout).into()])?;
     scene.into_script(move |scene| async move {
         let lines = |segments: &[([f32; 2], [f32; 2])]| -> Result<Vec<_>, ScriptError> {
             segments
@@ -68,7 +67,7 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
         scene.set_fill_opacity(&marker, 1.0)?;
         scene.add(&marker)?;
         scene.wait(0.75).await?;
-        // The diagram enters at the start of its first animation.
+        // The diagram and the glowing underline enter at the start of play.
         let timing = AnimationOptions::new().run_time(1.25);
         scene
             .play_with(
@@ -80,6 +79,7 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
                         .with_options(AnimationOptions::new().lag_ratio(0.08)),
                     rail.animate().scale(0.8),
                     marker.animate().shift(Vec2::new(1.76, 0.0)),
+                    callout.animate().shift(Vec2::new(0.0, 0.25)),
                 ),
                 timing,
             )
@@ -143,7 +143,7 @@ mod tests {
                 program.admit_publication(publication).unwrap();
             }
             assert_eq!(program.session().runtime_identity(), identity);
-            let object_count = if end == 0.75 { 9 } else { 16 };
+            let object_count = if end == 0.75 { 6 } else { 16 };
             assert_eq!(program.session().frame().objects.len(), object_count);
         }
         assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);

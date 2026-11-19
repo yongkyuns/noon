@@ -64,13 +64,9 @@ fn mounted_group_motion_preserves_composed_glow_and_members() {
     use crate::effects::{EffectUpdate, Pixels};
 
     let (mut scene, family, left, right) = group_scene();
-    let leaf = scene.circle(0.25).unwrap();
-    let detached = scene.family(&[(&leaf).into()]).unwrap();
-    for target in [&family, &detached] {
-        scene
-            .set_glow(target, EffectUpdate::default().radius(Pixels(8.0)))
-            .unwrap();
-    }
+    scene
+        .set_glow(&family, EffectUpdate::default().radius(Pixels(8.0)))
+        .unwrap();
     let attachment = scene.get_effect(&family, "glow").unwrap().node_id();
     let mut execution = scene.into_execution().unwrap();
     let before = execution.session().frame().clone();
@@ -89,7 +85,6 @@ fn mounted_group_motion_preserves_composed_glow_and_members() {
     assert_eq!(original.content.composed_source().unwrap().members(), ids);
 
     for invalid in [
-        detached.animate().shift(UP).into_animation_request(),
         family.animate().rotate(0.5).into_animation_request(),
         (family.animate().shift(UP), left.animate().shift(RIGHT)).into_animation_request(),
     ] {
@@ -134,6 +129,106 @@ fn mounted_group_motion_preserves_composed_glow_and_members() {
         let end = frame.objects.iter().find(|row| row.id == id).unwrap();
         assert_eq!(end.transform.translation, Vec2::new(x, 1.0));
     }
+}
+
+#[test]
+fn detached_group_motion_admits_its_nested_scope_in_the_same_play() {
+    use crate::effects::{EffectUpdate, Pixels};
+
+    let mut scene = Scene::new();
+    let marker = scene.circle(0.25).unwrap();
+    scene.add(&marker).unwrap();
+    let left = scene.square(1.0).unwrap();
+    let right = scene.square(1.0).unwrap();
+    scene.shift(&left, -2.0 * RIGHT).unwrap();
+    scene.shift(&right, 2.0 * RIGHT).unwrap();
+    let glow = EffectUpdate::default().radius(Pixels(8.0));
+    let inner = scene.family(&[(&left).into(), (&right).into()]).unwrap();
+    scene.set_glow(&inner, glow.clone()).unwrap();
+    let group = scene.family(&[(&inner).into()]).unwrap();
+    let alias = scene.family(&[(&marker).into()]).unwrap();
+    scene.set_glow(&alias, glow).unwrap();
+    let attachment = scene.get_effect(&inner, "glow").unwrap().node_id();
+    let mut execution = scene.into_execution().unwrap();
+    let before = execution.session().frame().clone();
+    let context = execution.session().publication_context();
+    let nodes = execution.scene().integration_store().borrow().len();
+
+    for invalid in [
+        alias.animate().shift(UP).into_animation_request(),
+        (group.animate().shift(UP), left.animate().shift(RIGHT)).into_animation_request(),
+    ] {
+        assert!(activate(&mut execution.live(), invalid, linear()).is_err());
+        assert_eq!(execution.session().publication_context(), context);
+        assert_eq!(execution.session().frame(), &before);
+        assert_eq!(execution.scene().integration_store().borrow().len(), nodes);
+        assert_eq!(
+            execution.scene().root_member_ids().unwrap(),
+            [marker.node_id()]
+        );
+    }
+
+    let segment = activate(
+        &mut execution.live(),
+        (
+            group.animate().shift(UP).scale(0.5),
+            marker.animate().shift(RIGHT),
+        )
+            .into(),
+        linear(),
+    )
+    .unwrap();
+    assert_eq!(
+        execution.scene().root_member_ids().unwrap(),
+        [marker.node_id(), group.node_id()]
+    );
+    let scope_id = execution
+        .session()
+        .execution_object_id(inner.node_id())
+        .unwrap();
+    let member_ids = [&left, &right].map(|leaf| {
+        execution
+            .session()
+            .execution_object_id(leaf.node_id())
+            .unwrap()
+    });
+    let scope = |frame: &noon_runtime::FrameState| {
+        frame
+            .objects
+            .iter()
+            .find(|row| row.id == scope_id)
+            .unwrap()
+            .clone()
+    };
+    let initial = scope(execution.session().frame());
+    assert_eq!(
+        initial.content.composed_source().unwrap().members(),
+        member_ids
+    );
+    assert_eq!(
+        initial.effects.as_ref().unwrap().attachments(),
+        [attachment]
+    );
+    execution.live().advance_segment_to(segment, 0.5).unwrap();
+    for (leaf, x) in [(&left, -1.5), (&right, 1.5)] {
+        let midpoint = execution.scene().effective(leaf).unwrap();
+        assert_eq!(midpoint.transform.translation, Vec2::new(x, 0.5));
+        assert_eq!(midpoint.transform.scale, Vec2::new(0.75, 0.75));
+    }
+    finish(&mut execution.live(), segment);
+    let end = scope(execution.session().frame());
+    assert_eq!(end.content, initial.content);
+    assert_eq!(end.effects, initial.effects);
+    assert_eq!(
+        execution
+            .scene()
+            .get_effect(&inner, "glow")
+            .unwrap()
+            .node_id(),
+        attachment
+    );
+    let end = right.state().unwrap().transform.translation;
+    assert_eq!((end.x, end.y), (1.0, 1.0));
 }
 
 #[test]

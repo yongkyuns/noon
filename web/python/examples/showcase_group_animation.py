@@ -1,4 +1,4 @@
-"""Introduce a nested diagram, then move a glowing underline between its steps.
+"""Introduce a nested diagram and glowing underline, then move the underline between steps.
 
 The paired Rust example uses the same families and shared animation compiler.
 """
@@ -17,11 +17,10 @@ class GroupAnimation(Scene):
             return VGroup(card, number)
 
         beam = Rectangle(width=0.72, height=0.12, fill=ORANGE, fill_opacity=1,
-                         stroke=None).shift(1.56 * LEFT + 0.24 * DOWN)
+                         stroke=None).shift(1.56 * LEFT + 0.49 * DOWN)
         tip = Circle(radius=0.12, fill=YELLOW, fill_opacity=1,
-                     stroke=None).shift(1.24 * LEFT + 0.24 * DOWN)
+                     stroke=None).shift(1.24 * LEFT + 0.49 * DOWN)
         callout = VGroup(beam, tip).set_glow(radius=Pixels(10), intensity=1.4, color=ORANGE)
-        self.add(callout)
 
         first = step(-1.8, "1")
         second = step(1.8, "2")
@@ -39,10 +38,11 @@ class GroupAnimation(Scene):
             2.4 * LEFT + 1.4 * DOWN)
         self.add(rail, marker)
         self.wait(0.75)
-        # The diagram enters at the start of its first animation.
+        # The diagram and the glowing underline enter at the start of play.
         self.play(diagram.animate(lag_ratio=0.08).shift(0.5 * UP).scale(0.8),
                   rail.animate.scale(0.8),
-                  marker.animate.shift(1.76 * RIGHT), run_time=1.25)
+                  marker.animate.shift(1.76 * RIGHT),
+                  callout.animate.shift(0.25 * UP), run_time=1.25)
         self.wait(0.5)
         self.play(diagram.animate.rotate(-0.25),
                   rail.animate.shift(0.25 * DOWN),

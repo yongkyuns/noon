@@ -30,7 +30,7 @@ pub(super) fn stage_owned_opacity(
     Ok(declaration.create_effect_target_animation(owner, target, true, options))
 }
 
-fn has_effects(
+pub(super) fn has_effects(
     store: &SemanticStore,
     source: SemanticNodeId,
     target: SemanticNodeId,
@@ -81,17 +81,32 @@ pub(super) fn validate(
     store: &SemanticStore,
     source: SemanticNodeId,
     target: SemanticNodeId,
-) -> Result<bool, ExecutionSessionAnimationError> {
-    let effects = has_effects(store, source, target)?;
-    if effects {
-        store
-            .ordered_family_root_pairs(source, target)
-            .map_err(error)?;
+    entering: bool,
+) -> Result<(), ExecutionSessionAnimationError> {
+    let pairs = store
+        .ordered_family_root_pairs(source, target)
+        .map_err(error)?;
+    if !entering {
         store
             .ordered_family_leaf_pairs(source, target)
             .map_err(error)?;
+        return Ok(());
     }
-    Ok(effects)
+    // The entering geometry uses the original scopes without appearance tracks.
+    for (source, target) in pairs {
+        let source = store.animation_effect_snapshot(source).map_err(error)?;
+        let target = store.animation_effect_snapshot(target).map_err(error)?;
+        if source
+            .iter()
+            .map(|item| (&item.name, &item.definition))
+            .ne(target.iter().map(|item| (&item.name, &item.definition)))
+        {
+            return Err(error(
+                "detached family animate must preserve its composed effects",
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn has_scope_effects(

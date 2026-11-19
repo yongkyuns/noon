@@ -76,6 +76,16 @@ class NativePythonTests(unittest.TestCase):
         self.assertNotIn("js", sys.modules)
         self.assertNotIn("pyodide", sys.modules)
 
+    def test_entering_group_cannot_silently_discard_an_effect_edit(self):
+        source = """from noon import *
+class GlowEdit(Scene):
+    def construct(self):
+        group = VGroup(Circle(), Square().shift(RIGHT)).set_glow(radius=Pixels(8))
+        self.play(group.animate.shift(UP).set_glow(radius=Pixels(12)))
+"""
+        with self.assertRaisesRegex(RuntimeError, "detached family animate must preserve its composed effects"):
+            asyncio.run(run_source(source))
+
     def test_nested_group_keeps_existing_mixed_play_compositions(self):
         source = """from noon import *
 class Mixed(Scene):
