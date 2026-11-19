@@ -248,6 +248,7 @@ Import `FamilyArrangeOptions` and `FamilyGridOptions` from `noon` for this examp
 Owned group animation supports fixed-membership planar groups with shared
 scale and rotation pivots. Several independent groups and objects can animate in
 one play. An added group with a composed effect supports shift and uniform scale.
+`group.animate().set_object_opacity(0.42)` fades an added group as one layer.
 The paired [Rust](crates/noon/src/example_scenes/group_animation.rs) and
 [Python](web/python/examples/showcase_group_animation.py) lesson **Move the whole
 diagram** demonstrates this with a glowing underline. Run the native lesson with

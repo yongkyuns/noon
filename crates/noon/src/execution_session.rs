@@ -212,6 +212,11 @@ pub(crate) enum SemanticCompositionRequest {
         target: Box<crate::animation_request::FamilyMethodTarget>,
         options: AnimationOptions,
     },
+    FamilyObjectOpacity {
+        source: SemanticNodeId,
+        opacity: f64,
+        options: AnimationOptions,
+    },
     MoveAlongPath {
         target: SemanticNodeId,
         path: SemanticNodeId,
@@ -394,6 +399,7 @@ impl SemanticCompositionRequest {
             Self::TransformTo { source, .. }
             | Self::MethodTarget { source, .. }
             | Self::FamilyMethodTarget { source, .. }
+            | Self::FamilyObjectOpacity { source, .. }
             | Self::WorldTransform { target: source, .. }
             | Self::CameraProfile { target: source, .. }
             | Self::FamilyTransformTo { source, .. }
@@ -2295,6 +2301,18 @@ impl ExecutionSession {
                 // in the canonical family channel, including local endpoints.
                 Ok(declaration.create_family_transform_animation(*source, copied, *options))
             }
+            SemanticCompositionRequest::FamilyObjectOpacity {
+                source,
+                opacity,
+                options,
+            } => family_effect_target::stage_owned_opacity(
+                self,
+                store,
+                *source,
+                *opacity,
+                *options,
+                declaration,
+            ),
             SemanticCompositionRequest::MoveAlongPath {
                 target,
                 path,
