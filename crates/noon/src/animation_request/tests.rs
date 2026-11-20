@@ -136,7 +136,10 @@ fn mounted_group_motion_preserves_composed_glow_and_members() {
     assert_eq!(original.content.composed_source().unwrap().members(), ids);
 
     for invalid in [
-        family.animate().rotate(0.5).into_animation_request(),
+        family
+            .animate()
+            .set_color(Color::BLUE)
+            .into_animation_request(),
         (family.animate().shift(UP), left.animate().shift(RIGHT)).into_animation_request(),
     ] {
         assert!(activate(&mut execution.live(), invalid, linear()).is_err());
@@ -183,7 +186,7 @@ fn mounted_group_motion_preserves_composed_glow_and_members() {
 }
 
 #[test]
-fn detached_group_motion_admits_its_nested_scope_in_the_same_play() {
+fn group_rotation_admits_and_replays_its_nested_glow_scope() {
     use crate::effects::{EffectUpdate, Pixels};
 
     let mut scene = Scene::new();
@@ -201,7 +204,12 @@ fn detached_group_motion_admits_its_nested_scope_in_the_same_play() {
     scene.set_glow(&alias, glow).unwrap();
     let attachment = scene.get_effect(&inner, "glow").unwrap().node_id();
     let mut execution = scene.into_execution().unwrap();
+    execution
+        .session_mut()
+        .begin_replay_retention(noon_runtime::ReplayLimits::default())
+        .unwrap();
     let before = execution.session().frame().clone();
+    let before_order = execution.session().painter_order().to_vec();
     let context = execution.session().publication_context();
     let nodes = execution.scene().integration_store().borrow().len();
 
@@ -219,10 +227,13 @@ fn detached_group_motion_admits_its_nested_scope_in_the_same_play() {
         );
     }
 
+    let hold = execution.live().wait_segment(0.25).unwrap();
+    finish(&mut execution.live(), hold);
+    let angle = std::f64::consts::FRAC_PI_2;
     let segment = activate(
         &mut execution.live(),
         (
-            group.animate().shift(UP).scale(0.5),
+            group.animate().shift(UP).scale(0.5).rotate(angle),
             marker.animate().shift(RIGHT),
         )
             .into(),
@@ -260,16 +271,32 @@ fn detached_group_motion_admits_its_nested_scope_in_the_same_play() {
         initial.effects.as_ref().unwrap().attachments(),
         [attachment]
     );
-    execution.live().advance_segment_to(segment, 0.5).unwrap();
-    for (leaf, x) in [(&left, -1.5), (&right, 1.5)] {
+    execution.live().advance_segment_to(segment, 0.75).unwrap();
+    let entering = execution.session().frame().objects.clone();
+    assert_eq!(scope(execution.session().frame()), initial);
+    for (leaf, x, y) in [(&left, -1.0, 0.0), (&right, 1.0, 1.0)] {
         let midpoint = execution.scene().effective(leaf).unwrap();
-        assert_eq!(midpoint.transform.translation, Vec2::new(x, 0.5));
+        assert_eq!(midpoint.transform.translation, Vec2::new(x, y));
+        assert_eq!(midpoint.transform.rotation, std::f32::consts::FRAC_PI_4);
         assert_eq!(midpoint.transform.scale, Vec2::new(0.75, 0.75));
     }
     finish(&mut execution.live(), segment);
-    let end = scope(execution.session().frame());
-    assert_eq!(end.content, initial.content);
-    assert_eq!(end.effects, initial.effects);
+    let segment = activate(
+        &mut execution.live(),
+        group.animate().rotate(-angle).into(),
+        linear(),
+    )
+    .unwrap();
+    execution.live().advance_segment_to(segment, 1.75).unwrap();
+    let mounted = execution.session().frame().objects.clone();
+    assert_eq!(scope(execution.session().frame()), initial);
+    for (leaf, x, y) in [(&left, -0.5, 0.5), (&right, 0.5, 1.5)] {
+        let midpoint = execution.scene().effective(leaf).unwrap();
+        assert_eq!(midpoint.transform.translation, Vec2::new(x, y));
+        assert_eq!(midpoint.transform.rotation, std::f32::consts::FRAC_PI_4);
+    }
+    finish(&mut execution.live(), segment);
+    assert_eq!(scope(execution.session().frame()), initial);
     assert_eq!(
         execution
             .scene()
@@ -280,6 +307,12 @@ fn detached_group_motion_admits_its_nested_scope_in_the_same_play() {
     );
     let end = right.state().unwrap().transform.translation;
     assert_eq!((end.x, end.y), (1.0, 1.0));
+    execution.session_mut().seal_replay().unwrap();
+    execution.seek(0.125).unwrap();
+    assert_eq!(execution.session().painter_order(), before_order);
+    for (time, expected) in [(1.75, &mounted), (0.75, &entering), (1.75, &mounted)] {
+        assert_eq!(&execution.seek(time).unwrap().objects, expected);
+    }
 }
 
 #[test]

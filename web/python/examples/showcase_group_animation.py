@@ -1,4 +1,4 @@
-"""Introduce a nested diagram and glowing underline, then move the underline between steps.
+"""Introduce a nested diagram and glowing underline, then turn it toward the next step.
 
 The paired Rust example uses the same families and shared animation compiler.
 """
@@ -42,7 +42,7 @@ class GroupAnimation(Scene):
         self.play(diagram.animate(lag_ratio=0.08).shift(0.5 * UP).scale(0.8),
                   rail.animate.scale(0.8),
                   marker.animate.shift(1.76 * RIGHT),
-                  callout.animate.shift(0.25 * UP), run_time=1.25)
+                  callout.animate.shift(0.25 * UP).rotate(-0.25), run_time=1.25)
         self.wait(0.5)
         self.play(diagram.animate.rotate(-0.25),
                   rail.animate.shift(0.25 * DOWN),
@@ -51,7 +51,7 @@ class GroupAnimation(Scene):
         self.play(diagram.animate.rotate(0.25).scale(1.25)
                   .shift(0.5 * DOWN).set_color(ORANGE),
                   rail.animate.scale(1.25).shift(0.25 * UP),
-                  callout.animate.shift(3.32 * RIGHT + 0.58 * DOWN).scale(1.2),
+                  callout.animate.shift(3.32 * RIGHT + 0.58 * DOWN).scale(1.2).rotate(0.65),
                   marker.animate.shift(1.76 * RIGHT + 0.25 * UP).set_color(BLUE),
                   run_time=1.25)
         self.wait(1.0)

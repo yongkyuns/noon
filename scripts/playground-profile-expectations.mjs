@@ -10,7 +10,7 @@ const audioCommands = Object.freeze([...replayCommands, "sections"]);
 const initialObservedCommands = Object.freeze(["play", "pause"]);
 const rows = [
   ['showcase-first-scene','showcase_first_scene.py','1a6ba47220c25148f6c24d1fc82733e728690c7548ab1183e8f9905d0396f7e8','incremental','ordinary',[], 'looped'],
-  ['showcase-group-animation','showcase_group_animation.py','8cc6b696ff06f2bacd06ef55b18931ce0d7afa2c0757aa3965f9a031fdaafa86','incremental','ordinary',[], 'looped'],
+  ['showcase-group-animation','showcase_group_animation.py','30d9a8033386e99d88a7ad1a314f63b864712fc675ce996e5f92f4c76640f9f0','incremental','ordinary',[], 'looped'],
   ['showcase-dynamic-scene','showcase_dynamic_scene.py','bcc689a8cb5d71eefc2afdf69b187260ebf0df5029cc67cca08db43d01541dca','incremental','ordinary',[], 'looped'],
   ['showcase-group-opacity','showcase_group_opacity.py','b7b570b117f61eaab8cc7610f32299718288f7fb90dde95cefd8b2b9a6ec421c','incremental','ordinary',[], 'looped'],
   ['showcase-mounted-callout','showcase_mounted_callout.py','a44f44093c25e72b21937f038f25d6b9220c03a1adcfb617e95a69e7488d5b14','incremental','ordinary',[], 'looped'],

@@ -1,4 +1,4 @@
-//! A nested diagram and a glowing underline enter on their first play.
+//! A nested diagram enters with a glowing underline that turns toward the next step.
 //! Paired with `showcase_group_animation.py`, also available in the demo gallery.
 use crate::{
     effects::{EffectUpdate, Pixels},
@@ -79,7 +79,7 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
                         .with_options(AnimationOptions::new().lag_ratio(0.08)),
                     rail.animate().scale(0.8),
                     marker.animate().shift(Vec2::new(1.76, 0.0)),
-                    callout.animate().shift(Vec2::new(0.0, 0.25)),
+                    callout.animate().shift(Vec2::new(0.0, 0.25)).rotate(-0.25),
                 ),
                 timing,
             )
@@ -106,7 +106,11 @@ pub fn program() -> Result<LiveProgram<SceneScript>, ScriptError> {
                         .shift(Vec2::new(0.0, -0.5))
                         .set_color(Color::ORANGE),
                     rail.animate().scale(1.25).shift(Vec2::new(0.0, 0.25)),
-                    callout.animate().shift(Vec2::new(3.32, -0.58)).scale(1.2),
+                    callout
+                        .animate()
+                        .shift(Vec2::new(3.32, -0.58))
+                        .scale(1.2)
+                        .rotate(0.65),
                     marker
                         .animate()
                         .shift(Vec2::new(1.76, 0.25))
