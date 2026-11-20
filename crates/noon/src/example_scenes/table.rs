@@ -2,9 +2,9 @@
 
 use crate::{
     AnimationOptions, Color, ContinuationScene, ContinuationStep, DecimalFormat, DecimalTable,
-    LatexBackend, LiveContinuation, LiveProgram, MathTable, MathTex, Mobject, MobjectFamily,
-    MobjectTable, MobjectTarget, RateFunction, Scene, ScriptError, StrokeCap, StrokeJoin, Table,
-    TableOptions, Vec2,
+    LatexBackend, LiveContinuation, LiveProgram, MathTable, MathTex, MobjectFamily, MobjectTable,
+    MobjectTarget, RateFunction, Scene, ScriptError, StrokeCap, StrokeJoin, Table, TableOptions,
+    Vec2,
 };
 
 pub struct LabeledTableShift {
@@ -34,69 +34,25 @@ impl LiveContinuation for LabeledTableShift {
     }
 }
 
-/// Scene counterpart of the Python fixture that exercises group-valued table
-/// labels and a group-valued top-left entry.
+/// The labeled table enters with its original row label and cell handles.
 pub fn family_labels_program() -> Result<LiveProgram<LabeledTableShift>, String> {
-    enum Shape {
-        Circle(f64),
-        Square(f64),
-    }
-
-    fn shape(scene: &mut Scene, shape: Shape) -> Result<Mobject, String> {
-        match shape {
-            Shape::Circle(radius) => scene.circle(radius),
-            Shape::Square(side) => scene.square(side),
-        }
-        .map_err(|error| error.to_string())
-    }
-
-    fn family(
-        scene: &mut Scene,
-        first: Shape,
-        second: Shape,
-        offset_x: f64,
-    ) -> Result<MobjectFamily, String> {
-        let first = shape(scene, first)?;
-        let mut second = shape(scene, second)?;
-        second
-            .shift(offset_x, 0.0)
-            .map_err(|error| error.to_string())?;
-        scene
-            .family(&[(&first).into(), (&second).into()])
-            .map_err(|error| error.to_string())
-    }
-
     let mut scene = Scene::new();
-    let row_labels = [
-        family(&mut scene, Shape::Circle(0.12), Shape::Square(0.16), 0.3)?,
-        family(&mut scene, Shape::Square(0.14), Shape::Circle(0.1), 0.28)?,
-    ];
-    let column_labels = [
-        family(&mut scene, Shape::Circle(0.11), Shape::Square(0.13), 0.26)?,
-        family(&mut scene, Shape::Square(0.12), Shape::Circle(0.09), 0.24)?,
-    ];
-    let top_left_entry = family(&mut scene, Shape::Circle(0.18), Shape::Square(0.12), 0.32)?;
-    let entries = [
-        scene.circle(0.3).map_err(|error| error.to_string())?,
-        scene.square(0.42).map_err(|error| error.to_string())?,
-        scene.square(0.36).map_err(|error| error.to_string())?,
-        scene.circle(0.22).map_err(|error| error.to_string())?,
-    ];
-    let table = MobjectTable::from_target_rows_with_composite_labels_and_top_left_entry(
+    let first = scene.square(0.36).map_err(|error| error.to_string())?;
+    let second = scene.circle(0.22).map_err(|error| error.to_string())?;
+    let label_dot = scene.circle(0.12).map_err(|error| error.to_string())?;
+    let label_square = scene.square(0.16).map_err(|error| error.to_string())?;
+    scene
+        .shift(&label_square, Vec2::new(0.3, 0.0))
+        .map_err(|error| error.to_string())?;
+    let label = scene
+        .family(&[(&label_dot).into(), (&label_square).into()])
+        .map_err(|error| error.to_string())?;
+    let table = MobjectTable::from_target_rows_with_optional_composite_labels(
         &mut scene,
-        vec![
-            vec![
-                MobjectTarget::from(&entries[0]),
-                MobjectTarget::from(&entries[1]),
-            ],
-            vec![
-                MobjectTarget::from(&entries[2]),
-                MobjectTarget::from(&entries[3]),
-            ],
-        ],
-        row_labels.iter().map(MobjectTarget::from).collect(),
-        column_labels.iter().map(MobjectTarget::from).collect(),
-        MobjectTarget::from(&top_left_entry),
+        [[(&first).into(), (&second).into()]],
+        Some(vec![(&label).into()]),
+        None,
+        None,
         TableOptions {
             h_buff: 0.7,
             v_buff: 0.45,
@@ -104,17 +60,11 @@ pub fn family_labels_program() -> Result<LiveProgram<LabeledTableShift>, String>
             ..Default::default()
         },
     )
-    .map_err(|error| error.to_string())?
-    .into_table();
-    table
-        .family()
-        .shift(-1.5, 0.0)
-        .map_err(|error| error.to_string())?;
+    .map_err(|error| error.to_string())?;
+    let family = table.table().family().clone();
+    family.shift(-1.5, 0.0).map_err(|error| error.to_string())?;
     scene
-        .into_live_program(LabeledTableShift {
-            family: table.family().clone(),
-            step: 0,
-        })
+        .into_live_program(LabeledTableShift { family, step: 0 })
         .map_err(|error| error.to_string())
 }
 

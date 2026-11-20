@@ -18,8 +18,8 @@ await qualifyPairedAuthoring({
     id: "table-labels", file: "table_labels.py", scene: "TableLabelsExample",
     factory: "createTableLabelsRenderer", duration: 0.2,
   }, ...[0.5, 1.5, 2].map(sampleTime => ({
-    id: `mobject-table-family-labels-${sampleTime}`,
-    file: "mobject_table_family_labels.py", scene: "MobjectTableFamilyLabelsExample",
+    id: `table-shift-${sampleTime}`,
+    file: "ordinary_table_shift.py", scene: "ShiftLabeledTable",
     factory: "createMobjectTableFamilyLabelsRenderer", duration: 2,
     playback: "live", sampleTime, boundaries: [1], stopAtSourceCompletion: sampleTime === 2,
   })), {

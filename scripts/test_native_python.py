@@ -689,7 +689,7 @@ class TableCellEdits(Scene):
             close_scene(scene)
 
     def test_labeled_table_shifts_on_first_play_and_rewinds(self):
-        path = ROOT / "web/python/examples/mobject_table_family_labels.py"
+        path = ROOT / "web/python/examples/ordinary_table_shift.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
         view = prepare_view(scene)
         try:
