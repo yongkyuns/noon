@@ -121,6 +121,30 @@ class Mixed(Scene):
 """
         close_scene(asyncio.run(run_source(source, retain_history=True)))
 
+    def test_unequal_transform_shares_a_play_with_disjoint_object_and_tracker(self):
+        source = """from noon import *
+class Mixed(Scene):
+    def construct(self):
+        left, right = Dot(LEFT * 2), Dot(RIGHT * 2)
+        family = VGroup(left, right)
+        target = VGroup(Dot(LEFT + UP), Dot(UP), Dot(RIGHT + UP))
+        marker = Square(0.4, fill=BLUE, fill_opacity=1).shift(DOWN * 2)
+        tracker = ValueTracker(0)
+        self.add(family, marker)
+        self.play(Transform(family, target), marker.animate.shift(RIGHT),
+                  tracker.animate.set_value(1), run_time=1, rate_func=linear)
+        assert len(family) == 3 and family[0] is left and family[2] is right
+        assert tuple(marker.get_center())[:2] == (1, -2)
+        assert tracker.get_value() == 1
+"""
+        view = prepare_view(asyncio.run(run_source(source, retain_history=True)))
+        try:
+            first = view.capture(time=0.25, width=320, height=180)
+            self.assertNotEqual(first, view.capture(time=0.75, width=320, height=180))
+            self.assertEqual(first, view.capture(time=0.25, width=320, height=180))
+        finally:
+            view.close()
+
     def test_detached_group_enters_and_keeps_its_members_on_first_play(self):
         source = """from noon import *
 class Demo(Scene):

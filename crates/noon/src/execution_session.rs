@@ -4655,19 +4655,16 @@ impl ExecutionSession {
                     .map_err(|error| {
                         ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                     })?;
-                    // Both existing and candidate-local fixed-topology targets
-                    // can share ordinary tracks. Padding still needs exclusive
-                    // structural completion; use the compiler's correspondence.
-                    let mixed = multiple_families
-                        || !schedule.leaves().is_empty()
-                        || !schedule.scalar_leaves().is_empty();
-                    if mixed
+                    // Only one family can publish a padding plan and reconcile
+                    // its structure. Disjoint object and scalar tracks use the
+                    // same completion without adding another structural plan.
+                    if multiple_families
                         && activation.occurrences().iter().any(|occurrence| {
                             occurrence.source_padding || occurrence.target_padding
                         })
                     {
                         return Err(ExecutionSessionAnimationError::InvalidComposition(
-                            "unequal-family Transform requires an exclusive structural activation"
+                            "unequal-family Transform cannot share a play with another family Transform"
                                 .into(),
                         ));
                     }
