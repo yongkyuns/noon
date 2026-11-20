@@ -136,11 +136,13 @@ impl ExecutionSession {
             .map_err(ExecutionSessionInputError::Interaction)
     }
 
+    #[cfg(feature = "prepared-prefix")]
     pub(super) fn can_undo_viewer_drag(&self) -> bool {
         let viewer = self.translation_drag.viewer;
         viewer.active.is_none() && viewer.undo.is_some()
     }
 
+    #[cfg(feature = "prepared-prefix")]
     pub(super) fn undo_viewer_drag(&mut self) -> Result<bool, ExecutionSessionInputError> {
         if !self.can_undo_viewer_drag() {
             return Ok(false);
