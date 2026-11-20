@@ -166,6 +166,8 @@ export function attachBrowserPointerInput(canvas, {
     const initialButtons = selected?.id === event.pointerId ? selected.buttons : 0;
     const samples = coalescedSamples(event, initialButtons, maxSamples);
     if (samples.length === 0) {
+      // The dispatched event can still be used when the sample list cannot
+      // establish an ordered button history. Ordinary admission validates it.
       receive(type, event);
       return;
     }
@@ -257,6 +259,7 @@ function coalescedSamples(event, initialButtons, capacity) {
   const samples = [];
   let previousTime = 0;
   let buttons = initialButtons;
+  let reliableButtons = true;
   for (let i = 0; i < count; i += 1) {
     const value = events[i];
     if (!value || value.pointerId !== event.pointerId || value.pointerType !== event.pointerType ||
@@ -277,7 +280,7 @@ function coalescedSamples(event, initialButtons, capacity) {
     const changed = buttons ^ nextButtons;
     const button = changed === 0 ? -1 : BUTTON_BITS.indexOf(changed);
     if (changed !== 0 && (button === -1 || value.button !== button)) {
-      throw new TypeError("ambiguous DOM coalesced button transition");
+      reliableButtons = false;
     }
     samples.push({
       pointerId: event.pointerId, pointerType: event.pointerType, isPrimary: event.isPrimary,
@@ -288,6 +291,7 @@ function coalescedSamples(event, initialButtons, capacity) {
     buttons = nextButtons;
     previousTime = timeStamp;
   }
-  if (buttons !== event.buttons) throw new TypeError("DOM coalesced final button state differs from parent");
-  return samples;
+  // Deliver either the complete history or the dispatched event. If the
+  // history disagrees about buttons, no partial prefix or inferred edge escapes.
+  return reliableButtons && buttons === event.buttons ? samples : [];
 }
