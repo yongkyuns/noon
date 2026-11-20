@@ -16,14 +16,14 @@
     },
     {
       "id": "showcase-group-animation", "title": "Move the whole diagram",
-      "lesson": "Bring in a labeled diagram and a glowing underline on their first play. Move the underline to the next step as the diagram and progress rail animate.",
+      "lesson": "Bring in a labeled diagram and a glowing underline on their first play. Turn and move the underline toward the next step as the diagram and progress rail animate.",
       "primary_feature": "group-animation", "category": "Visual design",
       "path": "python/examples/showcase_group_animation.py", "features": ["VGroup", "Text", "animate", "shared pivot", "composed Glow"],
       "duration": 6.5, "thumbnail_time": 6.5,
       "thumbnail": "thumbnails/showcase/showcase-group-animation.png",
-      "thumbnail_alt": "Two orange outlined steps above a blue progress rail, with a glowing underline beneath step 2",
+      "thumbnail_alt": "Two orange outlined steps above a blue progress rail, with a glowing underline angled toward step 2",
       "still_intervals": [[0, 0.75], [2, 2.5], [3.75, 4.25], [5.5, 6.5]],
-      "beats": [{"time": 1.375, "label": "Bring in the diagram and glow"}, {"time": 3.125, "label": "Rotate together"}, {"time": 4.875, "label": "Move the glowing underline"}]
+      "beats": [{"time": 1.375, "label": "Bring in the diagram and glow"}, {"time": 3.125, "label": "Rotate together"}, {"time": 4.875, "label": "Turn the glow toward step 2"}]
     },
     {
       "id": "showcase-dynamic-scene", "title": "A field in motion",

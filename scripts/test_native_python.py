@@ -449,6 +449,34 @@ class Demo(Scene):
         finally:
             view.close()
 
+    def test_native_diagram_glow_follows_rotation_and_rewind(self):
+        path = ROOT / "web/python/examples/showcase_group_animation.py"
+        source = path.read_text()
+        times = (0.375, 1.375, 4.875, 6.5)
+
+        def capture(text, rewind=False):
+            scene = asyncio.run(run_source(text, filename=str(path), retain_history=True))
+            view = prepare_view(scene)
+            try:
+                def frame(time):
+                    return view.capture(time=time, width=320, height=180)
+
+                forward = [frame(time) for time in times]
+                if rewind:
+                    self.assertEqual([frame(time) for time in reversed(times)], forward[::-1])
+                return forward
+            finally:
+                view.close()
+
+        glowing = capture(source, rewind=True)
+        plain = capture(source.replace(".set_glow(radius=Pixels(10), intensity=1.4, color=ORANGE)", ""))
+        self.assertEqual(glowing[0], plain[0])
+        for time, glow, base in zip(times[1:], glowing[1:], plain[1:]):
+            with self.subTest(time=time):
+                halo_pixels = sum(glow[i] >= 24 and base[i:i + 3] == b"\0\0\0"
+                                  for i in range(0, len(glow), 4))
+                self.assertGreater(halo_pixels, 50)
+
     def test_native_overlay_fades_in_as_one_layer_and_seeks_back(self):
         path = ROOT / "web/python/examples/showcase_group_opacity.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
