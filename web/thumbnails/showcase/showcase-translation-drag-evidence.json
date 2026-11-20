@@ -1,0 +1,188 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "ed955380aa1885eaad1010deb07564ae17795312",
+  "backend": "webgpu",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "ed955380aa1885eaad1010deb07564ae17795312",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "4d99bee77eb3a5f97e2dd612d2291667655e48601d3b051351f1bd4554df64df"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "d7c58ca6118a9f9b755834cc0a3d1a2644d1e8426ccb14f664642ac30ff15448"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "7f62fc8bd40c2da139350485d9e281db35bc3b3a8626efbbbf31ea21fac800b9"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
+      }
+    },
+    "buildId": "f498f18e3fb9e5adb2aa92789647a7276c727454f3dca6375ef82992129410fa"
+  },
+  "posters": [
+    {
+      "id": "showcase-translation-drag",
+      "captureBuildId": "f498f18e3fb9e5adb2aa92789647a7276c727454f3dca6375ef82992129410fa",
+      "sourceSha256": "d6120f1a6cc3117d50661a5320a012b511c3ec0b5cef9ccfa6971b040cbbd612",
+      "thumbnailTime": 2.6,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 39528,
+        "pngSha256": "3b1eb7382c1b155a0939f8421f044001f1b99eff0333a5b29f1dfc7a5117d8ba",
+        "pixelSha256": "c91b160832c390baec275ede58d36e62dceeaa575bdd021a6282bb61dbce9587"
+      },
+      "sample": {
+        "requestedTime": 2.600000001,
+        "publishedTime": 2.5999999999999996,
+        "authoredDuration": 2.5999999999999996,
+        "sourceCompleted": true,
+        "sourceState": "completed",
+        "completionProbe": true
+      },
+      "interaction": {
+        "recipe": "completed introduction -> click blue circle -> automatic restoration -> drag green rectangle with pointer -> undo -> drag again -> restart and seek",
+        "requestedTime": 2.5999999999999996,
+        "publishedTime": 2.5999999999999996,
+        "rendererBackend": "WebGPU",
+        "automaticRestore": true,
+        "backgroundNoOp": true,
+        "pointerDrag": true,
+        "undoRestoresBase": true,
+        "changedPixels": 30885,
+        "delayedPointerAcknowledgements": 8,
+        "changedPixelsOutsideRightSideRoi": 0,
+        "restartRestoresBase": true,
+        "baseMetrics": {
+          "channel": "noon.render",
+          "protocolVersion": 1,
+          "requestId": 4,
+          "type": "metrics",
+          "metrics": {
+            "ready": true,
+            "mode": "retained",
+            "retained": true,
+            "mixed": true,
+            "transportMode": "transferable",
+            "presentedFrames": 8,
+            "presentationIntervalMs": null,
+            "presentationIntervalSamples": 0,
+            "lastDeltaApplyMs": 1.3000001907348633,
+            "lastRendererCallMs": 2.5999999046325684,
+            "modeSwitches": 0,
+            "rendererRebuilds": 0,
+            "sampledAtMs": 3459.9000000953674,
+            "performanceTimeOriginMs": 1795149176474.5,
+            "rendererReadyAtMs": 2510.800000190735,
+            "firstPresentedAtMs": 2594.5,
+            "presentedSession": 1,
+            "firstPresentedSessionAtMs": 2594.5999999046326,
+            "latestPresentationSample": {
+              "session": 1,
+              "sequence": 7,
+              "time": 2.5999999999999996,
+              "presentedAtMs": 3057.0999999046326
+            },
+            "transitionMode": null,
+            "lastFrameTimestamp": 2945,
+            "bufferedDeltas": 0,
+            "needsPresent": false,
+            "backend": "WebGPU",
+            "gpuGeneration": 1,
+            "time": 2.5999999999999996,
+            "objectCount": 4,
+            "drawCalls": 4,
+            "instancesDrawn": 53,
+            "bytesUploaded": 3236,
+            "geometryCacheMisses": 0,
+            "outlineCacheMisses": "0",
+            "resourceBundlePending": false,
+            "preloadedGeometryCount": 0,
+            "preloadBytesUploaded": 0
+          },
+          "engineMetrics": {
+            "host": {
+              "enabled": false,
+              "missedDeadlines": 0,
+              "droppedLateResults": 0
+            },
+            "preparedPlayback": {
+              "observation": {
+                "time": 2.5999999999999996,
+                "frontier": 2.5999999999999996,
+                "end": 2.5999999999999996,
+                "seekRange": {
+                  "start": 0,
+                  "end": 2.5999999999999996
+                },
+                "playing": false,
+                "buffering": false,
+                "preparing": false,
+                "completed": true,
+                "advancing": false,
+                "loopDuration": null,
+                "loopCount": 0,
+                "loopError": null,
+                "interactions": false
+              },
+              "observedTime": 2.5999999999999996
+            },
+            "preparedRetention": {
+              "extracted": null,
+              "pending": {
+                "batches": 0,
+                "historyPayloadBytes": 0,
+                "resourceBytes": 0
+              },
+              "reader": {
+                "historyPayloadBudgetBytes": 67108864,
+                "historyPayloadBytes": 8280,
+                "payloads": 26,
+                "resourceBudgetBytes": 67108864,
+                "resourceBytes": 346967,
+                "revisions": 12
+              }
+            }
+          },
+          "renderHost": "worker",
+          "executionMode": "semantic"
+        },
+        "baseImage": {
+          "width": 960,
+          "height": 540,
+          "foregroundPixels": 34292,
+          "pngSha256": "4aea4403b37119db183bfdf71868bf865e11ba29650c8d03945666336895b200",
+          "pixelSha256": "7fe1a2154911ae9790bec48a007d1ac522d7278ad86409fe605a8b89dab6be52"
+        },
+        "selectedImage": {
+          "width": 960,
+          "height": 540,
+          "foregroundPixels": 39528,
+          "pngSha256": "3b1eb7382c1b155a0939f8421f044001f1b99eff0333a5b29f1dfc7a5117d8ba",
+          "pixelSha256": "c91b160832c390baec275ede58d36e62dceeaa575bdd021a6282bb61dbce9587"
+        },
+        "restoredImage": {
+          "width": 960,
+          "height": 540,
+          "foregroundPixels": 34292,
+          "pngSha256": "4aea4403b37119db183bfdf71868bf865e11ba29650c8d03945666336895b200",
+          "pixelSha256": "7fe1a2154911ae9790bec48a007d1ac522d7278ad86409fe605a8b89dab6be52"
+        },
+        "draggedImage": {
+          "width": 960,
+          "height": 540,
+          "foregroundPixels": 34185,
+          "pngSha256": "742f8293e2f97445bdce41ae5b5842a300c570b35ee3b2eaa6f461aecc82d665",
+          "pixelSha256": "f4b133167409a305da895242e98f790451a2b7fbe16230384c2f3d6328edcc18"
+        }
+      }
+    }
+  ]
+}
