@@ -62,6 +62,13 @@ impl PrefixReader {
         displayed: &PointerFrameSnapshot,
         view: PointerFrameView,
     ) -> Result<(), PointerFrameError> {
+        if !self.translation_drag_active() {
+            return Err(PointerFrameError::Input(
+                ExecutionSessionInputError::Interaction(
+                    "prepared playback has no captured viewer drag".into(),
+                ),
+            ));
+        }
         displayed.validate_captured_gesture(&self.session, view)
     }
     pub fn pick_native_pointer_fill(
