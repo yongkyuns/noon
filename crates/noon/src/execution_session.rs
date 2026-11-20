@@ -2284,7 +2284,7 @@ impl ExecutionSession {
             } => {
                 let mode = if matches!(
                     target.appearance,
-                    MethodFamilyAppearance::Table | MethodFamilyAppearance::OwnedGeometry
+                    MethodFamilyAppearance::FixedLayout | MethodFamilyAppearance::OwnedGeometry
                 ) {
                     self.stage_fixed_method_family(
                         store,
@@ -2540,9 +2540,9 @@ impl ExecutionSession {
                             .map_err(invalid)
                     };
                     if let Some(appearance) = appearance(*source)?.or(appearance(*target_state)?) {
-                        let table = appearance == MethodFamilyAppearance::Table;
-                        let supported = if table {
-                            crate::animation_request::supports_table_shift_target(
+                        let layout = appearance == MethodFamilyAppearance::FixedLayout;
+                        let supported = if layout {
+                            crate::animation_request::supports_layout_shift_target(
                                 store,
                                 *source,
                                 *target_state,
@@ -2566,9 +2566,20 @@ impl ExecutionSession {
                                 *options,
                             ));
                         }
-                        if !table || !self.reachability.is_reachable(*source) {
-                            let message = if table {
-                                "detached table family animate requires planar shift with unchanged layout"
+                        // Mounted tables retain their existing method target path for
+                        // other operations. Graph targets require fixed vertex bindings.
+                        let has_graph = |root| {
+                            store.ordered_authoring_nodes(root).is_ok_and(|nodes| {
+                                crate::animation_request::has_graph_members(store, &nodes)
+                            })
+                        };
+                        if !layout
+                            || !self.reachability.is_reachable(*source)
+                            || has_graph(*source)
+                            || has_graph(*target_state)
+                        {
+                            let message = if layout {
+                                "graph and detached table animations require planar shift with unchanged layout"
                             } else {
                                 "groups with their own geometry support only shift, uniform scale, and planar rotation"
                             };
@@ -3675,7 +3686,8 @@ impl ExecutionSession {
             .is_some_and(|arc| arc.abs() >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD)
         {
             return Err(ExecutionSessionAnimationError::InvalidComposition(
-                "table and owned-geometry method targets require a straight motion path".into(),
+                "table, graph, and owned-geometry method targets require a straight motion path"
+                    .into(),
             ));
         }
         self.stage_detached_method_family(store, source, appearance, admitted)?;

@@ -484,7 +484,7 @@ pub(crate) fn stage_semantic_copy<E: From<AuthoringError>>(
     Ok(copied)
 }
 
-fn graph_dependency_copy_rows<E: From<AuthoringError>>(
+pub(crate) fn graph_dependency_copy_rows<E: From<AuthoringError>>(
     store: &SemanticStore,
     roots: &[SemanticNodeId],
     omitted_root: Option<SemanticNodeId>,

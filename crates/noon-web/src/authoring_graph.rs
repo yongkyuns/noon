@@ -104,7 +104,7 @@ fn graph_color(red: f64, green: f64, blue: f64, alpha: f64) -> Result<noon::Colo
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub struct WasmGraphHandle {
-    inner: HostGraph,
+    pub(crate) inner: HostGraph,
 }
 
 #[cfg(target_arch = "wasm32")]

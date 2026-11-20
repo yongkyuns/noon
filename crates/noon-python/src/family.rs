@@ -1542,6 +1542,14 @@ pub struct FamilyCopy {
 }
 #[pymethods]
 impl FamilyCopy {
+    #[pyo3(name = "graphFor")]
+    fn graph_for(&self, source: &crate::graph::GraphHandle) -> PyResult<crate::graph::GraphHandle> {
+        source
+            .inner
+            .rebind_copy(&self.copied)
+            .map(|inner| crate::graph::GraphHandle { inner })
+            .map_err(engine_error)
+    }
     #[pyo3(name = "arrowFor")]
     fn arrow_for(&self, source: &crate::arrow::ArrowHandle) -> PyResult<crate::arrow::ArrowHandle> {
         self.copied

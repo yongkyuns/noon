@@ -2919,13 +2919,17 @@ def _attach_shared_family(wrapper, handle, context=None, leaf_type=None):
                 member = object.__new__(_compat.Group)
             _attach_shared_family(member, member_handle, context, leaf_type)
         else:
-            member_handle = engine_call(handle.memberMobject, index, operation="family.members")
             member = old_members.get(key)
             if not isinstance(member, _base.Mobject):
                 member = object.__new__(leaf_type)
-            _attach_shared_handle(member, member_handle)
-            if context is not None:
-                member._canonical_live_target_context = context
+            # Refreshing the same member must keep its Scene and host binding.
+            if (context is None
+                    or getattr(member, "_canonical_live_target_context", None) is not context
+                    or getattr(member, "_semantic_handle", None) is None):
+                member_handle = engine_call(handle.memberMobject, index, operation="family.members")
+                _attach_shared_handle(member, member_handle)
+                if context is not None:
+                    member._canonical_live_target_context = context
         members[key] = member
     wrapper._semantic_family_handle = handle
     wrapper._semantic_member_wrappers = members
@@ -3467,6 +3471,7 @@ def _group_copy_operation(
             "_table_query_wrappers",
             "_sample_space_handle", "_brace_label_handle", "_matrix_handle", "_table_handle", "_code_handle",
             "_bar_chart_handle", "_bar_chart_context", "_semantic_latex_handle", "_numeric_handle",
+            "_graph_handle",
             # Copying rebuilds the Arrow capability from the copied family and leaves.
             "_semantic_arrow_handle",
             "_noon_updater_registrations", "_noon_updater_registration_history",
@@ -3524,6 +3529,9 @@ def _group_copy_operation(
         aggregate = getattr(source, "_semantic_arrow_handle", None)
         if aggregate is not None:
             target._semantic_arrow_handle = engine_call(copied.arrowFor, aggregate)
+        graph = getattr(source, "_graph_handle", None)
+        if graph is not None:
+            target._graph_handle = engine_call(copied.graphFor, graph)
     for source, target in pairs:
         if _is_shared_family(source):
             rehydrate = getattr(target, "_rehydrate_semantic_family_handle", None)

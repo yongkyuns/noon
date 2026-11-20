@@ -1177,6 +1177,18 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = graphFor)]
+        pub fn graph_for(
+            &self,
+            source: &crate::authoring_graph::WasmGraphHandle,
+        ) -> Result<crate::authoring_graph::WasmGraphHandle, JsValue> {
+            source
+                .inner
+                .rebind_copy(&self.copied)
+                .map(|inner| crate::authoring_graph::WasmGraphHandle { inner })
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = arrowFor)]
         pub fn arrow_for(
             &self,

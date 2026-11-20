@@ -14,9 +14,9 @@ use crate::{
 
 mod group;
 pub(crate) use group::{
-    fixed_family_method_appearance, is_method_family, is_ordinary_method_family,
+    fixed_family_method_appearance, has_graph_members, is_method_family, is_ordinary_method_family,
     matching_method_family_paint, paired_planar_shift, supports_geometry_method_target,
-    supports_table_shift_target, FamilyMethodTarget, MethodFamilyAppearance,
+    supports_layout_shift_target, FamilyMethodTarget, MethodFamilyAppearance,
 };
 use noon_core::{
     AnimationOptions, Color, SemanticAnimationCompositionKind, SemanticFadeDirection,
@@ -331,7 +331,7 @@ impl Animate {
                     .into(),
             ));
         }
-        let mut target = live.capture_mobject_state(source)?;
+        let mut target = live.capture_mobject_state(source, false)?;
         if let Some(opacity) = self.object_opacity {
             edit_object_opacity(&mut target.style, opacity)?;
         }

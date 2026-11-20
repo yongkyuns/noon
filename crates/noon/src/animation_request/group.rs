@@ -26,27 +26,29 @@ impl FamilyMethodTarget {
         let store = live.integration_store().borrow();
         let unsupported = || {
             LiveSessionError::Mobject(
-                "owned family animate requires groups of planar vector shapes, plain text, or MathTex without per-object effects, composite opacity, or graph metadata".into(),
+                "owned family animate requires planar vector shapes, plain text, or MathTex with supported appearance".into(),
             )
         };
         let mut states = BTreeMap::new();
         let mut styles = BTreeMap::new();
         let mut has_composed_effects = false;
         let mut has_owned_geometry = false;
-        let mut has_table_layout = false;
-        for id in store
+        let mut has_retained_layout = false;
+        let nodes = store
             .ordered_authoring_nodes(family.node_id())
-            .map_err(AuthoringError::from)?
-        {
+            .map_err(AuthoringError::from)?;
+        let graph_rows = graph_component_rows(&store, family.node_id(), &nodes)?;
+        for id in nodes {
             let node = store.node(id).expect("validated member");
             if matches!(node.kind(), SemanticNodeKind::Family(_)) {
                 let Some(style) = method_group_style(&store, id, composite_opacity, true) else {
                     return Err(unsupported());
                 };
-                has_table_layout |= store
-                    .semantic_table_layout(id)
-                    .map_err(AuthoringError::from)?
-                    .is_some();
+                has_retained_layout |= node.graph_declaration().is_some()
+                    || store
+                        .semantic_table_layout(id)
+                        .map_err(AuthoringError::from)?
+                        .is_some();
                 has_composed_effects |= !node.effect_ids().is_empty();
                 if let Some(state) = node.semantic_object_state() {
                     if !matches!(state.content, SemanticObjectContent::Geometry(_)) {
@@ -64,8 +66,9 @@ impl FamilyMethodTarget {
                 return Err(unsupported());
             }
             let object = Mobject::from_node(Rc::clone(live.integration_store()), id)?;
-            let state = live.capture_mobject_state(&object)?;
-            if !is_method_leaf(&store, &state) {
+            let graph_component = graph_rows.contains(&id);
+            let state = live.capture_mobject_state(&object, graph_component)?;
+            if !is_method_leaf(&store, &state, graph_component) {
                 return Err(unsupported());
             }
             states.insert(id, state);
@@ -73,7 +76,7 @@ impl FamilyMethodTarget {
         if has_owned_geometry && (has_composed_effects || composite_opacity) {
             return Err(unsupported());
         }
-        if has_table_layout
+        if has_retained_layout
             && (has_owned_geometry
                 || has_composed_effects
                 || composite_opacity
@@ -82,7 +85,8 @@ impl FamilyMethodTarget {
                     .any(|method| !matches!(method, Method::Shift(_))))
         {
             return Err(LiveSessionError::Mobject(
-                "table family animate supports planar shift with unchanged layout".into(),
+                "table and graph family animation supports planar shift with unchanged layout"
+                    .into(),
             ));
         }
         if (has_composed_effects || has_owned_geometry)
@@ -184,8 +188,8 @@ impl FamilyMethodTarget {
             styles,
             appearance: if has_owned_geometry {
                 MethodFamilyAppearance::OwnedGeometry
-            } else if has_table_layout {
-                MethodFamilyAppearance::Table
+            } else if has_retained_layout {
+                MethodFamilyAppearance::FixedLayout
             } else {
                 MethodFamilyAppearance::for_motion(has_composed_effects)
             },
@@ -207,7 +211,7 @@ impl FamilyMethodTarget {
             |id, _| {
                 if let Some(state) = self.states.get(&id) {
                     Ok(state.clone())
-                } else if self.appearance == MethodFamilyAppearance::Table {
+                } else if self.appearance == MethodFamilyAppearance::FixedLayout {
                     // A Table copy also carries query-only references outside its painted family.
                     Ok(store.semantic_object_state_checked(id)?.clone())
                 } else {
@@ -217,7 +221,7 @@ impl FamilyMethodTarget {
             |_, id, style| {
                 if let Some(prepared) = self.styles.get(&id) {
                     *style = prepared.clone();
-                } else if self.appearance != MethodFamilyAppearance::Table {
+                } else if self.appearance != MethodFamilyAppearance::FixedLayout {
                     return Err(AuthoringError::MissingCopySource(id));
                 }
                 Ok(())
@@ -234,21 +238,53 @@ fn method_group_style(
     store: &SemanticStore,
     id: SemanticNodeId,
     allow_opacity: bool,
-    allow_table: bool,
+    allow_layout: bool,
 ) -> Option<&SemanticStyle> {
     let node = store.node(id)?;
     let style = node.family_style()?;
     ((allow_opacity || style.object_opacity == 1.0 && !store.has_family_appearance_target(id))
-        && node.graph_declaration().is_none()
-        && (allow_table
-            || store
-                .semantic_table_layout(id)
-                .is_ok_and(|layout| layout.is_none())))
+        && (allow_layout
+            || node.graph_declaration().is_none()
+                && store
+                    .semantic_table_layout(id)
+                    .is_ok_and(|layout| layout.is_none())))
     .then_some(style)
 }
 
-fn is_method_leaf(store: &SemanticStore, state: &SemanticObjectState) -> bool {
-    state.role() == SemanticObjectRole::Ordinary
+fn graph_component_rows(
+    store: &SemanticStore,
+    root: SemanticNodeId,
+    nodes: &[SemanticNodeId],
+) -> Result<std::collections::HashSet<SemanticNodeId>, AuthoringError> {
+    if has_graph_members(store, nodes) {
+        crate::family_copy::graph_dependency_copy_rows(store, &[root], None)
+    } else {
+        Ok(std::collections::HashSet::new())
+    }
+}
+
+pub(crate) fn has_graph_members(store: &SemanticStore, nodes: &[SemanticNodeId]) -> bool {
+    nodes.iter().any(|&node| {
+        store
+            .node(node)
+            .and_then(SemanticNode::graph_declaration)
+            .is_some()
+    })
+}
+
+fn is_method_leaf(
+    store: &SemanticStore,
+    state: &SemanticObjectState,
+    graph_component: bool,
+) -> bool {
+    (state.role() == SemanticObjectRole::Ordinary
+        || (graph_component
+            && matches!(
+                state.role(),
+                SemanticObjectRole::ArrowShaft(_)
+                    | SemanticObjectRole::ArrowStartTip
+                    | SemanticObjectRole::ArrowEndTip
+            )))
         && state.spatial_properties().is_none()
         && state.transform.as_planar().is_some()
         && match state.content {
@@ -275,7 +311,7 @@ pub(crate) enum MethodFamilyAppearance {
     ComposedEffects,
     RootOpacity,
     OwnedGeometry,
-    Table,
+    FixedLayout,
 }
 
 impl MethodFamilyAppearance {
@@ -293,35 +329,43 @@ pub(crate) fn is_method_family(
     root: SemanticNodeId,
     appearance: MethodFamilyAppearance,
 ) -> bool {
-    store.ordered_authoring_nodes(root).is_ok_and(|nodes| {
-        nodes.into_iter().all(|id| {
-            let node = store.node(id).expect("validated authoring node");
-            if matches!(node.kind(), SemanticNodeKind::Family(_)) {
-                node.semantic_object_state().is_none_or(|state| {
-                    appearance == MethodFamilyAppearance::OwnedGeometry
-                        && matches!(state.content, SemanticObjectContent::Geometry(_))
-                        && is_method_leaf(store, state)
-                }) && (node.effect_ids().is_empty()
-                    || matches!(
-                        appearance,
-                        MethodFamilyAppearance::ComposedEffects
-                            | MethodFamilyAppearance::RootOpacity
-                    ))
-                    && method_group_style(
-                        store,
-                        id,
-                        appearance == MethodFamilyAppearance::RootOpacity,
-                        appearance == MethodFamilyAppearance::Table,
-                    )
-                    .is_some()
-            } else {
-                node.effect_ids().is_empty()
-                    && node.member_count() == 0
-                    && node
-                        .semantic_object_state()
-                        .is_some_and(|state| is_method_leaf(store, state))
-            }
-        })
+    let Ok(nodes) = store.ordered_authoring_nodes(root) else {
+        return false;
+    };
+    let graph_rows = if appearance == MethodFamilyAppearance::FixedLayout {
+        let Ok(rows) = graph_component_rows(store, root, &nodes) else {
+            return false;
+        };
+        rows
+    } else {
+        std::collections::HashSet::new()
+    };
+    nodes.into_iter().all(|id| {
+        let node = store.node(id).expect("validated authoring node");
+        if matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            node.semantic_object_state().is_none_or(|state| {
+                appearance == MethodFamilyAppearance::OwnedGeometry
+                    && matches!(state.content, SemanticObjectContent::Geometry(_))
+                    && is_method_leaf(store, state, graph_rows.contains(&id))
+            }) && (node.effect_ids().is_empty()
+                || matches!(
+                    appearance,
+                    MethodFamilyAppearance::ComposedEffects | MethodFamilyAppearance::RootOpacity
+                ))
+                && method_group_style(
+                    store,
+                    id,
+                    appearance == MethodFamilyAppearance::RootOpacity,
+                    appearance == MethodFamilyAppearance::FixedLayout,
+                )
+                .is_some()
+        } else {
+            node.effect_ids().is_empty()
+                && node.member_count() == 0
+                && node
+                    .semantic_object_state()
+                    .is_some_and(|state| is_method_leaf(store, state, graph_rows.contains(&id)))
+        }
     })
 }
 
@@ -333,12 +377,13 @@ pub(crate) fn fixed_family_method_appearance(
     for id in store.ordered_authoring_nodes(root)? {
         let node = store.node(id).expect("validated authoring node");
         if matches!(node.kind(), SemanticNodeKind::Family(_)) {
-            if store
-                .semantic_table_layout(id)
-                .map_err(AuthoringError::from)?
-                .is_some()
+            if node.graph_declaration().is_some()
+                || store
+                    .semantic_table_layout(id)
+                    .map_err(AuthoringError::from)?
+                    .is_some()
             {
-                return Ok(Some(MethodFamilyAppearance::Table));
+                return Ok(Some(MethodFamilyAppearance::FixedLayout));
             }
             if node.semantic_object_state().is_some() {
                 appearance = Some(MethodFamilyAppearance::OwnedGeometry);
@@ -393,14 +438,14 @@ pub(crate) fn supports_geometry_method_target(
     Ok(true)
 }
 
-pub(crate) fn supports_table_shift_target(
+pub(crate) fn supports_layout_shift_target(
     store: &SemanticStore,
     source: SemanticNodeId,
     target: SemanticNodeId,
 ) -> Result<bool, AuthoringError> {
     if ![source, target]
         .into_iter()
-        .all(|id| is_method_family(store, id, MethodFamilyAppearance::Table))
+        .all(|id| is_method_family(store, id, MethodFamilyAppearance::FixedLayout))
     {
         return Ok(false);
     }
@@ -418,7 +463,10 @@ pub(crate) fn supports_table_shift_target(
         }
         let source = store.node(source).expect("validated family pair");
         let target = store.node(target).expect("validated family pair");
-        if !matching_method_family_paint(source, target, false) {
+        if source.graph_declaration().map(|graph| graph.topology())
+            != target.graph_declaration().map(|graph| graph.topology())
+            || !matching_method_family_paint(source, target, false)
+        {
             return Ok(false);
         }
     }
