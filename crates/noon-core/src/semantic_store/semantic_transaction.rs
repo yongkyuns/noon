@@ -108,6 +108,10 @@ pub enum SemanticMutation {
         transform: SemanticTransform,
     },
     /// Replace or clear one object-owned click action declaration.
+    SetViewerDraggable {
+        object: SemanticTransactionNodeRef,
+        enabled: bool,
+    },
     SetClickAction {
         object: SemanticTransactionNodeRef,
         binding: Option<SemanticClickAction>,
@@ -293,6 +297,7 @@ impl SemanticMutation {
             | Self::SetObjectTransform { object, .. }
             | Self::SetCameraProfile { object, .. }
             | Self::SetCameraMotions { object, .. }
+            | Self::SetViewerDraggable { object, .. }
             | Self::SetClickAction { object, .. }
             | Self::SetViewColorProfile { object, .. }
             | Self::ReplaceContent { object, .. }
@@ -390,6 +395,7 @@ impl SemanticMutation {
             | Self::SetDrawEnabled { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
+            | Self::SetViewerDraggable { object, .. }
             | Self::SetClickAction { object, .. }
             | Self::SetViewColorProfile { object, .. }
             | Self::ReplaceContent { object, .. }
@@ -434,6 +440,9 @@ impl SemanticMutation {
             }),
             Self::SetObjectTransform { object, .. } => {
                 Some(SemanticMutationKey::ObjectTransform(*object))
+            }
+            Self::SetViewerDraggable { object, .. } => {
+                Some(SemanticMutationKey::ViewerDraggable(*object))
             }
             Self::SetClickAction { object, .. } => Some(SemanticMutationKey::ClickAction(*object)),
             Self::ReplaceContent { object, .. } => {
@@ -522,6 +531,7 @@ pub(super) enum SemanticMutationKey {
     CameraMotions(SemanticTransactionNodeRef),
     ObjectContent(SemanticTransactionNodeRef),
     ClickAction(SemanticTransactionNodeRef),
+    ViewerDraggable(SemanticTransactionNodeRef),
     ObjectBarMetadata(SemanticTransactionNodeRef),
     ObjectRole(SemanticTransactionNodeRef),
     ViewColorProfile(SemanticTransactionNodeRef),
@@ -606,6 +616,9 @@ pub enum SemanticMutationImpact {
         object: SemanticNodeId,
     },
     ObjectContent {
+        object: SemanticNodeId,
+    },
+    ViewerDraggable {
         object: SemanticNodeId,
     },
     ClickAction {
@@ -986,6 +999,18 @@ impl SemanticMutationTransaction {
     }
 
     /// Author a restoring indication through the common click-action mutation.
+    pub fn set_viewer_draggable(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        enabled: bool,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetViewerDraggable {
+            object: object.into(),
+            enabled,
+        });
+        self
+    }
+
     pub fn set_click_indicate(
         &mut self,
         object: impl Into<SemanticTransactionNodeRef>,
@@ -2925,6 +2950,17 @@ impl SemanticMutationTransaction {
                     if did_change {
                         state.set_transform(*transform);
                     }
+                    changed.push(did_change);
+                }
+                SemanticMutation::SetViewerDraggable { object, enabled } => {
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    let did_change = state.viewer_draggable() != *enabled;
+                    state.set_viewer_draggable(*enabled);
                     changed.push(did_change);
                 }
                 SemanticMutation::SetClickAction { object, binding } => {

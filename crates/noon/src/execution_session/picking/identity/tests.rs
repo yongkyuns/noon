@@ -142,7 +142,7 @@ fn submit(
 ) -> NativePointerInputPublication {
     let token = session.native_pointer_input_token().unwrap();
     session
-        .submit_prepared_pointer_presentation(&token, input(&token, sequence, press))
+        .submit_prepared_pointer_presentation(&token, input(&token, sequence, press), false)
         .unwrap()
 }
 
@@ -286,7 +286,7 @@ fn historical_pointer_identity_seek_cancels_gestures_and_stale_input_is_atomic()
     let context = session.publication_context();
     let history = session.replay_stats();
     assert!(matches!(
-        session.submit_prepared_pointer_presentation(&stale, input(&stale, 1, false)),
+        session.submit_prepared_pointer_presentation(&stale, input(&stale, 1, false), false),
         Err(ExecutionSessionInputError::StalePointerPublication { .. })
     ));
     assert_eq!(session.frame(), &baseline);

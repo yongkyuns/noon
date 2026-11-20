@@ -797,7 +797,8 @@ impl SceneInstance {
         since: f64,
         attachment: Option<SemanticNodeId>,
     ) -> bool {
-        if self.effective_driver_rows.contains(&index)
+        if self.translation_drag_rows.contains_key(&index)
+            || self.effective_driver_rows.contains(&index)
             || self.numeric_text.has_object_driver(index)
             || !self.active_family_animation_indices.is_empty()
             || (since != self.frame.time && !self.compiled.family_animations().is_empty())

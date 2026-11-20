@@ -14,6 +14,8 @@ mod matching_foreground_tests;
 mod translation_drag;
 #[cfg(test)]
 mod translation_drag_tests;
+#[cfg(any(feature = "prepared-prefix", test))]
+mod viewer_drag;
 pub use input::{
     ExecutionSessionInputError, NativePointerInputPublication, NativePointerInputToken,
     PointerFrameError, PointerFrameSnapshot, PointerFrameView,

@@ -159,11 +159,11 @@ test("playback capability is finite and all nonreplayable capabilities require a
   assert.match(normalizedReactive.summary, /Use Run to repeat/);
 });
 
-test("the checked-in catalog reserves nonreplayable playback for the drag lesson", () => {
+test("the checked-in showcase has no nonreplayable entries", () => {
   assert.deepEqual(
     manifest.entries.filter((entry) => entry.playback_capability?.startsWith("nonreplayable-"))
       .map((entry) => [entry.id, entry.playback_capability]),
-    [["showcase-translation-drag", "nonreplayable-native-input"]],
+    [],
   );
 });
 

@@ -99,6 +99,10 @@ pub enum ExecutionPatch {
     },
     /// Replace one authored click action without changing renderer-facing values.
     /// The ordinary reversible row history retains its time-qualified declaration.
+    SetViewerDraggable {
+        object: ObjectId,
+        enabled: bool,
+    },
     SetClickIndicate {
         object: ObjectId,
         binding: Option<SemanticClickIndicate>,

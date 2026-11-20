@@ -729,7 +729,7 @@ impl SceneInstance {
         self.preflight_raw_interaction_seek(time)?;
         self.select_replay_revision(time);
         let previous_time = self.frame.time;
-        let had_interaction = self.interactions_active();
+        let had_interaction = self.interactions_active() || !self.translation_drag_rows.is_empty();
         self.seek_unchecked(time);
         if self.frame.time != previous_time || had_interaction {
             self.publish_effective_change();
@@ -887,7 +887,10 @@ impl SceneInstance {
         patch: &ExecutionPatch,
     ) -> Result<&FrameState, CompilePatchError> {
         self.last_patch_stats = RuntimePatchStats::default();
-        if matches!(patch, ExecutionPatch::SetClickIndicate { .. }) {
+        if matches!(
+            patch,
+            ExecutionPatch::SetClickIndicate { .. } | ExecutionPatch::SetViewerDraggable { .. }
+        ) {
             // Authored action metadata participates in ordinary execution history,
             // but changing a binding does not change any rendered frame property.
             self.compiled.apply_execution_patch(patch)?;

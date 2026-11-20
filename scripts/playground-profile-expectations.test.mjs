@@ -74,15 +74,15 @@ function diagnosticsFor(expected) {
 }
 
 test('inventory binds all showcase IDs, paths and exact source bytes', () => {
-  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'ordinary').length, 48);
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'ordinary').length, 49);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'observed-replay').length, 0);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.attachedProfile === 'immutable').length, 1);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'callback' ||
-    row.dispositionKind === 'input-handoff').length, 1);
+    row.dispositionKind === 'input-handoff').length, 0);
   assert.ok(SHOWCASE_PROFILE_EXPECTATIONS.every(row => row.owner && row.seekRangePolicy && row.audioPolicy && row.inputPolicy));
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-background-music').audioPolicy, 'authored-audio');
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-pointer-selection').inputPolicy, 'selection-inspection');
-  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-translation-drag').inputPolicy, 'native-input-handoff');
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-translation-drag').inputPolicy, 'viewer-drag');
   validateShowcaseInventory(manifest.entries, readSource);
   const cueSources = SHOWCASE_PROFILE_EXPECTATIONS.filter(row =>
     /^\s*(?:self|result)\.next_section\(/m.test(readSource(row.path).toString()));
@@ -284,7 +284,13 @@ test('observed first passes must acquire retained replay on completion', () => {
 });
 
 test('translation drag requires the original native-input transition', () => {
-  const expected = SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-translation-drag');
+  const expected = {
+    ...SHOWCASE_PROFILE_EXPECTATIONS.find(row => row.id === 'showcase-translation-drag'),
+    dispositionKind: 'input-handoff', disposition: 'input-handoff',
+    requireInitialSeek: false, transitions: ['incremental', 'observed'],
+    capabilities: { attachedCommands: ['play', 'pause', 'seek', 'restart', 'loop'],
+      dispositionCommands: [], replayAtDisposition: false, audio: false, sections: false },
+  };
   const diagnostics = diagnosticsFor(expected);
   diagnostics.events[1].reason.code = 'host_callbacks';
   assert.throws(() => validateShowcaseDiagnostics(expected, diagnostics), /native-input handoff/);

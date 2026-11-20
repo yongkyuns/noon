@@ -426,7 +426,6 @@ try {
       }
       for (const [catalog, galleryExample] of [
         ["reference", "parity-moving-dots"],
-        ["showcase", "showcase-translation-drag"],
       ]) {
       const entry = { backend, transportMode, arm: `original-${galleryExample}-gallery`, status: "running" };
       report.cases.push(entry);

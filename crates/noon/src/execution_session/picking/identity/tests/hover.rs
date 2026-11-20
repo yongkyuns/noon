@@ -61,7 +61,7 @@ fn historical_pointer_identity_stationary_hover_tracks_deletion_and_reused_slot(
         NativePointerInputKind::Move(displayed.position(Vec2::new(100.0, 100.0)).unwrap()),
     );
     session
-        .submit_prepared_pointer_presentation(&token, motion)
+        .submit_prepared_pointer_presentation(&token, motion, false)
         .unwrap();
     // Capture after admission, as a host does for the publication it presents.
     // This tests the shared observation contract, not GPU presentation itself.

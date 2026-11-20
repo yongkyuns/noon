@@ -393,13 +393,15 @@ impl ExecutionSession {
         &mut self,
         token: &NativePointerInputToken,
         input: NativePointerInput,
+        allow_viewer_drag: bool,
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
-        let effective = self
-            .runtime
-            .prepare_effective_property_batch(&[])
-            .expect("an empty effective-property batch is always valid");
-        let prepared =
-            self.prepare_native_pointer_input_with_effective(token, input, effective, false)?;
+        let drag = self.prepare_viewer_drag(token, input, allow_viewer_drag)?;
+        let prepared = self.prepare_native_pointer_input_with_effective(
+            token,
+            input,
+            self.empty_effective_batch(),
+            drag.is_some(),
+        )?;
         let (frame, effective, timeline, metadata) = prepared.into_parts();
         if frame.is_some()
             || effective.is_some()
@@ -415,6 +417,9 @@ impl ExecutionSession {
             return Err(ExecutionSessionInputError::Interaction(
                 "prepared pointer input does not admit causal or semantic mutation".into(),
             ));
+        }
+        if let Some(drag) = drag {
+            self.commit_viewer_drag(drag)?;
         }
         self.commit_prepared_native_pointer_metadata(None, metadata)
     }

@@ -29,6 +29,7 @@ impl PreparedComposedSource {
             fill_paint: None,
             effects: self.effects,
             click_indicate: None,
+            viewer_draggable: false,
             base_transform: Transform2D::IDENTITY,
             base_style: Style {
                 fill: None,

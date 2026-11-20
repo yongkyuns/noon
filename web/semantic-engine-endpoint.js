@@ -32,7 +32,7 @@ const FINITE_EXPORT_CONTROLS = new Set([
 ]);
 const PREPARED_PLAYBACK_CONTROLS = new Set([
   "pause", "resume", "seek", "seek_section", "restart_playback", "set_loop_duration", "browser_pointer_input",
-  "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
+  "browser_pointer_view", "pointer_fill_selection", "inspection_scroll", "undo_translation_drag",
 ]);
 
 function normalizeReplayUnavailableReason(error) {
@@ -511,7 +511,7 @@ export async function attachSemanticEngine(
         heldPresentation: preparedClockAdmitted ? observation.heldPresentation ?? null : null,
         ...(presentationReceipt === null ? {} : { presentationReceipt }),
         replaySupported: true, replayUnavailable: null,
-        canUndoTranslationDrag: false, nextPatchSequence: "0",
+        canUndoTranslationDrag: player.canUndoTranslationDrag === true, nextPatchSequence: "0",
       };
     }
     if (player === null) {

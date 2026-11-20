@@ -149,6 +149,7 @@ pub struct CompiledObject {
     /// Authored native click action, retained with this time-qualified execution row.
     /// Ordinary rows allocate no binding payload.
     pub click_indicate: Option<Arc<SemanticClickIndicate>>,
+    pub viewer_draggable: bool,
     /// Persistent leaf glow in the execution projection; ordinary objects allocate none.
     pub effects: Option<Arc<CompiledEffectStack>>,
     pub id: ObjectId,
@@ -310,6 +311,7 @@ impl CompiledObject {
             fill_paint: None,
             draw_enabled: true,
             click_indicate: None,
+            viewer_draggable: false,
             id,
             content: content.into(),
             text_bounds: None,
@@ -1125,6 +1127,7 @@ pub struct CompiledScene {
     live_object_count: usize,
     /// Derived interest aggregate; the binding itself belongs to its compiled row.
     click_indicate_count: usize,
+    viewer_drag_target_count: usize,
     /// Tracks are segmented by stable execution channel. Mutating one channel never
     /// relocates payloads belonging to another channel. Each channel vector remains
     /// sorted by start time and TrackId for deterministic evaluation.
@@ -1732,6 +1735,10 @@ impl CompiledScene {
         }
 
         let live_object_count = objects.len();
+        let viewer_drag_target_count = objects
+            .iter()
+            .filter(|object| object.live && object.viewer_draggable)
+            .count();
         let click_indicate_count = objects
             .iter()
             .filter(|object| object.click_indicate.is_some())
@@ -1764,6 +1771,7 @@ impl CompiledScene {
             objects,
             live_object_count,
             click_indicate_count,
+            viewer_drag_target_count,
             tracks: tracks_by_channel,
             track_count,
             object_indices,
@@ -1817,6 +1825,15 @@ impl CompiledScene {
 
     /// Resolve the authored click action in the currently selected execution revision.
     /// Retired rows are excluded; visibility and driver admission remain runtime policy.
+    pub fn viewer_draggable(&self, object: ObjectId) -> bool {
+        self.object_index(object)
+            .is_some_and(|index| self.objects[index as usize].viewer_draggable)
+    }
+
+    pub const fn has_viewer_drag_targets(&self) -> bool {
+        self.viewer_drag_target_count != 0
+    }
+
     pub fn click_indicate_binding(&self, object: ObjectId) -> Option<SemanticClickIndicate> {
         self.objects[self.object_index(object)? as usize]
             .click_indicate
@@ -2217,6 +2234,9 @@ impl CompiledScene {
             ExecutionPatch::SetDrawEnabled { object, enabled } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].draw_enabled != *enabled),
+            ExecutionPatch::SetViewerDraggable { object, enabled } => self
+                .object_index(*object)
+                .is_none_or(|index| self.objects[index as usize].viewer_draggable != *enabled),
             ExecutionPatch::SetClickIndicate { object, binding } => {
                 self.object_index(*object).is_none_or(|index| {
                     self.objects[index as usize]
@@ -2368,6 +2388,7 @@ impl CompiledScene {
                 object.live = true;
                 if let Some(index) = self.retired_object_indices.remove(&object.id) {
                     self.click_indicate_count += usize::from(object.click_indicate.is_some());
+                    self.viewer_drag_target_count += usize::from(object.viewer_draggable);
                     self.objects[index as usize] = object;
                     let spatial = self.objects[index as usize].spatial.as_deref().cloned();
                     self.update_spatial_anchor_group(index, None, spatial.as_ref());
@@ -2386,6 +2407,7 @@ impl CompiledScene {
                 let index = u32::try_from(self.objects.len())
                     .map_err(|_| CompilePatchError::TooManyObjects(self.objects.len()))?;
                 self.click_indicate_count += usize::from(object.click_indicate.is_some());
+                self.viewer_drag_target_count += usize::from(object.viewer_draggable);
                 self.object_indices.insert(object.id, index);
                 self.objects.push(object);
                 let spatial = self.objects[index as usize].spatial.as_deref().cloned();
@@ -2423,6 +2445,7 @@ impl CompiledScene {
                 let object = &mut self.objects[index as usize];
                 debug_assert!(object.live);
                 self.click_indicate_count -= usize::from(object.click_indicate.is_some());
+                self.viewer_drag_target_count -= usize::from(object.viewer_draggable);
                 object.live = false;
                 object.dynamic = DynamicProperties::default();
                 self.refresh_cairo_path_control_points(index);
@@ -2487,6 +2510,16 @@ impl CompiledScene {
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 self.objects[index as usize].draw_enabled = *enabled;
+            }
+            ExecutionPatch::SetViewerDraggable { object, enabled } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?
+                    as usize;
+                let row = &mut self.objects[index];
+                self.viewer_drag_target_count -= usize::from(row.viewer_draggable);
+                self.viewer_drag_target_count += usize::from(*enabled);
+                row.viewer_draggable = *enabled;
             }
             ExecutionPatch::SetClickIndicate { object, binding } => {
                 let index = self

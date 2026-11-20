@@ -114,6 +114,7 @@ impl SemanticExecutionIndex {
                 | SemanticMutationImpact::ObjectContent { .. }
                 | SemanticMutationImpact::BarMetadata { .. }
                 | SemanticMutationImpact::ObjectRole { .. }
+                | SemanticMutationImpact::ViewerDraggable { .. }
                 | SemanticMutationImpact::ClickAction { .. }
                 | SemanticMutationImpact::DecimalNumber { .. }
                 | SemanticMutationImpact::TextPresentationBaseline { .. }
@@ -368,6 +369,7 @@ impl SemanticExecutionIndex {
                 semantic_id,
                 effects: state.effects,
                 click_indicate: state.click_indicate,
+                viewer_draggable: state.viewer_draggable,
                 execution_id: self.ensure_object(semantic_id),
                 content: SemanticExecutionContent::Object(state.content),
                 base_transform: state.base_transform,
@@ -474,6 +476,7 @@ pub struct SemanticExecutionObject {
     /// Same immutable definition and generational attachment as the compiled row.
     pub effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
     /// Authored native action lowered with the object's time-qualified values.
+    pub viewer_draggable: bool,
     pub click_indicate: Option<std::sync::Arc<noon_core::SemanticClickIndicate>>,
     /// Authoritative scene-global semantic identity.
     pub semantic_id: SemanticNodeId,
@@ -922,6 +925,7 @@ pub(super) struct LoweredObjectState {
     pub view_color_profile: Option<noon_core::ViewColorProfile>,
     pub(super) fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     pub(super) effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
+    pub(super) viewer_draggable: bool,
     pub(super) click_indicate: Option<std::sync::Arc<noon_core::SemanticClickIndicate>>,
     content: SemanticObjectContent,
     pub(super) base_transform: Transform2D,
@@ -1162,6 +1166,7 @@ pub(super) fn lower_object_state(
             .then_some(state.view_color_profile()),
         fill_paint: super::paint::lower_fill(semantic_id, state, store)?,
         effects: None,
+        viewer_draggable: state.viewer_draggable(),
         click_indicate: click_indicate_binding(state).map(std::sync::Arc::new),
         content: state.content,
         base_transform,

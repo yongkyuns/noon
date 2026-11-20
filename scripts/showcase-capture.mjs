@@ -192,8 +192,8 @@ async function captureSelection(context, entry, result) {
   const errors = [];
   const sourceDeclaredClick = entry.features.includes("on_click");
   const legacyOverlay = Boolean(entry.interaction) && !sourceDeclaredClick;
-  const nativeInput = entry.playback_capability === "nonreplayable-native-input";
-  if (nativeInput) await page.addInitScript(() => {
+  const viewerDrag = entry.features.includes("set_viewer_draggable");
+  if (viewerDrag) await page.addInitScript(() => {
     // Test-only delivery delay after the engine acknowledges a real presented
     // frame. Keep input, Rust admission and rendering on the production path.
     // Independent pointer/render channels must tolerate this acknowledgement
@@ -238,13 +238,9 @@ async function captureSelection(context, entry, result) {
     stage = "run authored introduction";
     await page.evaluate(() => window.__noonExampleGallery.run());
     await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
-    if (nativeInput) await page.waitForFunction((duration) => {
-      const controls = document.querySelector(".playback-controls")?.dataset;
-      return controls?.playing === "false" && Number(controls.elapsedSeconds) >= duration - 1e-7;
-    }, entry.duration);
     await replayViewport(canvas, report.viewport);
-    stage = nativeInput ? "verify completed native-input introduction" : "pause and seek to the authored endpoint";
-    const requestedTime = nativeInput ? entry.duration : await seekPausedGallery(page, entry.duration);
+    stage = "pause and seek to the authored endpoint";
+    const requestedTime = await seekPausedGallery(page, entry.duration);
     assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied");
     const metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
     const actualBackend = await page.locator("#status").getAttribute("data-renderer-backend");
@@ -303,7 +299,7 @@ async function captureSelection(context, entry, result) {
       await page.waitForTimeout(100);
       assert.ok(samePixels(before, await canvas.screenshot()), "background click changed the restored base pixels");
     }
-    if (nativeInput) {
+    if (viewerDrag) {
       stage = "drag the green rectangle with real pointer input";
       const dragStart = { x: bounds.x + bounds.width * 0.68, y: bounds.y + bounds.height * 0.5 };
       const dragEnd = { x: bounds.x + bounds.width * 0.82, y: bounds.y + bounds.height * 0.5 };
@@ -347,26 +343,40 @@ async function captureSelection(context, entry, result) {
       assert.ok(changed > 0, "rectangle drag produced no pixel changes");
       assert.equal(outsideExpectedRoi, 0, "drag changed pixels outside the rectangle's right-side region");
       await writeFile(path.join(output, `${entry.id}-dragged.png`), dragged);
-      stage = "Run to restore the authored scene";
+      stage = "undo the released drag";
+      const undo = page.getByRole("button", { name: "Undo the most recent drag", exact: true });
+      await undo.click();
+      let undone;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        undone = await canvas.screenshot();
+        if (samePixels(before, undone)) break;
+        await page.waitForTimeout(50);
+      }
+      await writeFile(path.join(output, `${entry.id}-undone.png`), undone);
+      assert.ok(samePixels(before, undone), "drag undo did not restore the exact image");
+
+      stage = "restart to restore the authored scene";
+      await page.mouse.move(dragStart.x, dragStart.y);
+      await page.mouse.down();
+      await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 4 });
+      await page.mouse.up();
+      await page.waitForFunction(async () => (await window.__noonExampleGallery.executionState()).canUndoTranslationDrag);
       await canvas.evaluate((element) => element.style.setProperty("pointer-events", "none", "important"));
-      await page.getByRole("button", { name: "Run", exact: true }).click();
-      await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" && !window.__noonExampleGallery.runInFlight);
-      await page.waitForFunction((duration) => {
-        const controls = document.querySelector(".playback-controls")?.dataset;
-        return controls?.playing === "false" && Number(controls.elapsedSeconds) >= duration - 1e-7;
-      }, entry.duration);
+      await page.getByRole("button", { name: "Restart animation from the beginning", exact: true }).click();
+      await seekPausedGallery(page, entry.duration);
+      await replayViewport(canvas, report.viewport);
       const resetMetrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
       assertCaptureTime(entry, { requestedTime: entry.duration, publishedTime: resetMetrics.metrics.time }, entry.duration);
       const reset = await canvas.screenshot();
-      await writeFile(path.join(output, `${entry.id}-run-reset.png`), reset);
-      assert.ok(samePixels(before, reset), "public Run did not restore the original scene pixels");
+      await writeFile(path.join(output, `${entry.id}-restarted.png`), reset);
+      assert.ok(samePixels(before, reset), "restart did not restore the original scene pixels");
       assert.deepEqual(errors, []);
       result.interaction = {
-        recipe: "completed introduction -> click blue circle -> automatic restoration -> drag green rectangle with pointer -> public Run",
+        recipe: "completed introduction -> click blue circle -> automatic restoration -> drag green rectangle with pointer -> undo -> drag again -> restart and seek",
         requestedTime, publishedTime: metrics.metrics.time, rendererBackend: actualBackend,
-        automaticRestore: true, backgroundNoOp: true, pointerDrag: true, changedPixels: changed,
+        automaticRestore: true, backgroundNoOp: true, pointerDrag: true, undoRestoresBase: true, changedPixels: changed,
         delayedPointerAcknowledgements,
-        changedPixelsOutsideRightSideRoi: outsideExpectedRoi, runRestoresBase: true,
+        changedPixelsOutsideRightSideRoi: outsideExpectedRoi, restartRestoresBase: true,
         baseMetrics: metrics, baseImage,
         selectedImage: validateImage(selected, `${entry.id}: selected`),
         restoredImage: validateImage(restored, `${entry.id}: restored`),

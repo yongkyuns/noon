@@ -5,12 +5,13 @@ import { createHash } from "node:crypto";
 import { assertCaptureTime, assertCompletedCapture, captureSchedule } from "./showcase-capture-checks.mjs";
 
 function assertInteractionEvidence(entry, interaction, image) {
-  if (entry.playback_capability === "nonreplayable-native-input") {
+  if (entry.features.includes("set_viewer_draggable")) {
     assert.equal(interaction?.automaticRestore, true, `${entry.id}: automaticRestore evidence is missing`);
     assert.equal(interaction?.backgroundNoOp, true, `${entry.id}: backgroundNoOp evidence is missing`);
     assert.equal(interaction?.pointerDrag, true, `${entry.id}: pointerDrag evidence is missing`);
+    assert.equal(interaction?.undoRestoresBase, true, `${entry.id}: undoRestoresBase evidence is missing`);
     assert.equal(interaction?.changedPixelsOutsideRightSideRoi, 0, `${entry.id}: ROI confinement evidence is missing`);
-    assert.equal(interaction?.runRestoresBase, true, `${entry.id}: runRestoresBase evidence is missing`);
+    assert.equal(interaction?.restartRestoresBase, true, `${entry.id}: restartRestoresBase evidence is missing`);
   } else if (entry.features.includes("on_click")) {
     assert.equal(interaction?.automaticRestore, true);
     assert.equal(interaction?.backgroundNoOp, true);

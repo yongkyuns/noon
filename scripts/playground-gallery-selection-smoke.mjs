@@ -9,7 +9,7 @@ import { disableAuthoringJspi, playgroundLaunchOptions, waitForBrowserObservatio
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 import { captureAttemptedPage, createBrowserFailureTrace } from "./playground-browser-failure-evidence.mjs";
 import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
-import { assertNonreplayableShowcase, readLiveState } from "./showcase-live-review.mjs";
+import { assertFirstPass, assertReplayAvailable, readLiveState } from "./showcase-live-review.mjs";
 import { seekPausedGallery } from "./showcase-playback.mjs";
 import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
 import { serveRepository } from "./browser-test-server.mjs";
@@ -381,7 +381,7 @@ try {
   captures.zoomReset = await waitForExactPixels(authoredCanvas, authoredBaseline, "inverse gallery zoom");
   await assertSettled(page, "inverse gallery zoom");
 
-  if (browserName === "webkit" && profileName === "mobile-dpr2") {
+  if (browserName === "webkit" && profileName === "mobile-dpr2" && playbackProfile === "default") {
     const rawManifest = await fetch(new URL("python/examples/noon_showcase_manifest.json", base)).then(response => response.json());
     const normalizedEntry = normalizeShowcaseManifest(rawManifest).examples.find(entry => entry.id === "showcase-translation-drag");
     const declaredEntry = rawManifest.entries.find(entry => entry.id === "showcase-translation-drag");
@@ -389,7 +389,7 @@ try {
       ? { ...normalizedEntry, duration: declaredEntry.duration }
       : null;
     assert.ok(nativeInputEntry, "native-input drag lesson is missing from the curated showcase");
-    assert.equal(nativeInputEntry.playbackCapability, "nonreplayable-native-input");
+    assert.equal(nativeInputEntry.playbackCapability, "deterministic-retained-replay");
     await page.goto(`${base}?catalog=showcase&example=${nativeInputEntry.id}`, { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
     assert.equal(await page.evaluate(() => window.__noonExampleGallery.selectedExampleId), nativeInputEntry.id);
@@ -406,7 +406,8 @@ try {
     const nativeBackend = await page.locator("#status").getAttribute("data-renderer-backend");
     assert.ok(["WebGL2", "WebGPU"].includes(nativeBackend), "native drag did not use a real renderer backend");
     const firstPassState = await readLiveState(page);
-    assertNonreplayableShowcase(nativeInputEntry, firstPassState, nativeBackend);
+    assertFirstPass(nativeInputEntry, firstPassState, nativeBackend);
+    assertReplayAvailable(firstPassState);
     const dragBox = await dragCanvas.boundingBox();
     assert.ok(dragBox && dragBox.width > 0 && dragBox.height > 0, "native drag canvas is not drawable");
     const nativeBaseline = await dragCanvas.screenshot();
@@ -526,13 +527,12 @@ try {
       const controls = document.querySelector(".playback-controls")?.dataset;
       return Number(controls?.elapsedSeconds) >= duration - 1e-7;
     }, nativeInputEntry.duration, { timeout: 30000 });
-    assertNonreplayableShowcase(nativeInputEntry, await readLiveState(page), nativeBackend);
+    assertReplayAvailable(await readLiveState(page));
     const nativeReset = await waitForExactPixels(dragCanvas, nativeBaseline, "public Run after touch drag/cancel");
     captures.nativeDragRunReset = nativeReset;
     report.nativeInputDrag = {
       ...report.nativeInputDrag,
-      capability: nativeInputEntry.playbackCapability,
-      limitation: nativeInputEntry.playbackLimitation,
+      replayAvailable: true,
       backend: nativeBackend,
       deviceScaleFactor: profile.deviceScaleFactor,
       pointerSamples: samples,

@@ -408,6 +408,7 @@ pub struct SemanticObjectState {
     /// invocation; this declaration is only the language-neutral trigger/action.
     /// Unbound objects pay one pointer, with allocation only for declared actions.
     click_action: Option<Arc<SemanticClickAction>>,
+    viewer_draggable: bool,
     /// Camera projection, non-default material, and non-default composition
     /// domain share one optional immutable payload. Ordinary 2D objects keep no
     /// spatial metadata allocation.
@@ -567,6 +568,7 @@ impl SemanticObjectState {
             bar_metadata: None,
             signal_bindings: Vec::new(),
             click_action: None,
+            viewer_draggable: false,
             spatial_properties: None,
         }
     }
@@ -595,6 +597,7 @@ impl SemanticObjectState {
             bar_metadata: self.bar_metadata.clone(),
             signal_bindings: self.signal_bindings.clone(),
             click_action: self.click_action.clone(),
+            viewer_draggable: self.viewer_draggable,
             spatial_properties: self.spatial_properties.clone(),
         };
         // Visual copy may replace a camera pose, so retain its projection
@@ -603,6 +606,14 @@ impl SemanticObjectState {
             copied.set_transform(target.transform);
         }
         copied
+    }
+
+    pub const fn viewer_draggable(&self) -> bool {
+        self.viewer_draggable
+    }
+
+    pub(crate) fn set_viewer_draggable(&mut self, enabled: bool) {
+        self.viewer_draggable = enabled;
     }
 
     pub const fn presentation(&self) -> SemanticPresentation {
