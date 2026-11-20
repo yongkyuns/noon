@@ -442,6 +442,7 @@ impl SceneInstance {
         }
         let mut rows = BTreeSet::new();
         let mut channels = BTreeSet::new();
+        let mut tracks = BTreeSet::new();
         while history.applied != target {
             let backward = history.applied > target;
             let index = if backward {
@@ -452,6 +453,7 @@ impl SceneInstance {
             if let Some(revision) = &mut history.revisions[index].inverse {
                 rows.extend(revision.object_indices());
                 channels.extend(revision.channels());
+                tracks.extend(revision.track_ids());
                 self.compiled.exchange_replay_revision(revision);
             }
             if backward {
@@ -460,7 +462,9 @@ impl SceneInstance {
                 history.applied += 1;
             }
         }
-        self.path_motion_plans = crate::prepare_path_motion_plans(&self.compiled);
+        for track in tracks {
+            self.refresh_path_motion_plan(track);
+        }
         history.stats.objects_restored = rows.len();
         history.stats.channels_restored = channels.len();
         for channel in channels {

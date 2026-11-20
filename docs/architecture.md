@@ -763,9 +763,12 @@ indices and the shared scheduler. Their logical headers, member data and time
 maps join resource-byte admission before cloning; spare capacity and scheduler
 metadata remain outside that charge. An explicit storage reservation precedes
 adoption, which neither evaluates future glyphs nor changes the displayed frame.
-Family transforms, path-motion/spatial plans, ordered effects/other effect
-animation, reactive/causal native input and host callbacks
-remain outside suffix admission. The opt-in cooperative `PreparedSource` may consume an
+Planar path motion retains immutable path snapshots and charges both sides of
+each revision by command count. History exchange refreshes only affected path
+plans. Planar fixed-in-frame content uses normal 2D track admission when its
+spatial role stays unchanged. Inset views, spatial anchors that require derived
+state, reactive/causal native input, and host callbacks remain outside suffix
+admission. The opt-in cooperative `PreparedSource` may consume an
 ordinary Rust `LiveContinuation` through its existing `LiveProgram`. Each preparation
 call invokes at most one continuation and completes its actual admitted segment
 headlessly using the shared evaluator/completion path. One pending reader/batch

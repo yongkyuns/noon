@@ -63,75 +63,77 @@ def selection(word, x, y, color=INK):
                      stroke=color, stroke_width=3).move_to((x, y, 0))
 
 
-class Traversal:
-    def __init__(self, x, order):
-        self.reads = cache_reads(order)
-        self.word = 0.59
-        self.grid_x = x - 1.59
-        self.slot_x = x + 1.23
-        self.slot_y = -1.04
-        self.resident = None
-        self.result = None
-        self.last_miss = None
-        self.misses = 0
-        self.cursor = selection(self.word, *self.position(0, 0))
-        self.cursor.set_stroke(opacity=0)
-        self.counter = Integer(0, font_size=46, color=INK)
-        self.counter.move_to((self.slot_x, -2.18, 0))
-        title = "By row" if order == "row" else "By column"
-        # Show the first four addresses so viewers can predict which lines they need.
-        addresses = " → ".join(str(row * SIDE + col) for row, col, _, _ in self.reads[:SIDE])
-        self.objects = [
-            box(6.58, 4.45, x, -1.01),
-            label(title, 35, x, 0.68),
-            label(addresses, 24, x, 0.17, MUTED),
-            label("Cache · 1 slot", 24, self.slot_x, -0.47, MUTED),
-            box(SIDE * self.word + 0.14, self.word + 0.1, self.slot_x, self.slot_y),
-            self.counter, label("misses", 24, self.slot_x, -2.76, MUTED),
-        ]
-        for row in range(SIDE):
-            self.objects.append(
-                line_words(row, self.grid_x, self.position(row, 0)[1], self.word, 23)
-            )
-        self.objects.append(self.cursor)
+def traversal(x, order):
+    panel = {}
+    panel["reads"] = cache_reads(order)
+    panel["word"] = 0.59
+    panel["grid_x"] = x - 1.59
+    panel["slot_x"] = x + 1.23
+    panel["slot_y"] = -1.04
+    panel["cursor"] = selection(panel["word"], *traversal_position(panel, 0, 0))
+    panel["cursor"].set_stroke(opacity=0)
+    panel["counter"] = Integer(0, font_size=46, color=INK)
+    panel["counter"].move_to((panel["slot_x"], -2.18, 0))
+    title = "By row" if order == "row" else "By column"
+    # Show the first four addresses so viewers can predict which lines they need.
+    addresses = " → ".join(str(row * SIDE + col) for row, col, _, _ in panel["reads"][:SIDE])
+    panel["objects"] = [
+        box(6.58, 4.45, x, -1.01),
+        label(title, 35, x, 0.68),
+        label(addresses, 24, x, 0.17, MUTED),
+        label("Cache · 1 slot", 24, panel["slot_x"], -0.47, MUTED),
+        box(SIDE * panel["word"] + 0.14, panel["word"] + 0.1, panel["slot_x"], panel["slot_y"]),
+        panel["counter"], label("misses", 24, panel["slot_x"], -2.76, MUTED),
+    ]
+    for row in range(SIDE):
+        panel["objects"].append(
+            line_words(row, panel["grid_x"], traversal_position(panel, row, 0)[1], panel["word"], 23)
+        )
+    panel["objects"].append(panel["cursor"])
+    return panel
 
-    def position(self, row, column):
-        return word_x(self.grid_x, column, self.word), -0.38 - row * self.word
 
-    def approach(self, index):
-        row, column, _, _ = self.reads[index]
-        old_row, old_column = self.reads[index - 1][:2] if index else (row, column)
-        cursor = self.cursor.animate.set_stroke(INK, width=2, opacity=0.85)
-        if abs(row - old_row) + abs(column - old_column) > 1:
-            return cursor.set_stroke(opacity=0)
-        return cursor.move_to((*self.position(row, column), 0))
+def traversal_position(panel, row, column):
+    return word_x(panel["grid_x"], column, panel["word"]), -0.38 - row * panel["word"]
 
-    def retire(self, index):
-        row, column, _, misses = self.reads[index]
-        miss = misses != self.misses
-        self.cursor.move_to((*self.position(row, column), 0))
-        animations = [self.cursor.animate.set_stroke(INK, width=2, opacity=1)]
-        if miss and self.resident is not None:
-            animations.append(FadeOut(self.resident))
-        if miss != self.last_miss and self.result is not None:
-            animations.append(FadeOut(self.result))
-        return animations
 
-    def resolve(self, index):
-        _, _, line, misses = self.reads[index]
-        miss = misses != self.misses
-        color = MISS if miss else HIT
-        animations = [self.cursor.animate.set_stroke(color, width=3, opacity=1)]
-        if miss:
-            self.resident = line_words(line, self.slot_x, self.slot_y, self.word, 23)
-            animations.append(FadeIn(self.resident))
-            self.counter.set_value(misses).move_to((self.slot_x, -2.18, 0))
-        if miss != self.last_miss:
-            self.result = label("MISS" if miss else "HIT", 25, self.slot_x, -1.61, color)
-            animations.append(FadeIn(self.result))
-            self.last_miss = miss
-        self.misses = misses
-        return animations
+def approach(panel, index):
+    row, column, _, _ = panel["reads"][index]
+    old_row, old_column = panel["reads"][index - 1][:2] if index else (row, column)
+    cursor = panel["cursor"].animate.set_stroke(INK, width=2, opacity=0.85)
+    if abs(row - old_row) + abs(column - old_column) > 1:
+        return cursor.set_stroke(opacity=0)
+    return cursor.move_to((*traversal_position(panel, row, column), 0))
+
+
+def retire(panel, state, index):
+    resident, result, last_miss, previous_misses = state
+    row, column, _, misses = panel["reads"][index]
+    miss = misses != previous_misses
+    panel["cursor"].move_to((*traversal_position(panel, row, column), 0))
+    animations = [panel["cursor"].animate.set_stroke(INK, width=2, opacity=1)]
+    if miss and resident is not None:
+        animations.append(FadeOut(resident))
+    if miss != last_miss and result is not None:
+        animations.append(FadeOut(result))
+    return animations
+
+
+def resolve(panel, state, index):
+    resident, result, last_miss, previous_misses = state
+    _, _, line, misses = panel["reads"][index]
+    miss = misses != previous_misses
+    color = MISS if miss else HIT
+    animations = [panel["cursor"].animate.set_stroke(color, width=3, opacity=1)]
+    if miss:
+        resident = line_words(line, panel["slot_x"], panel["slot_y"], panel["word"], 23)
+        animations.append(FadeIn(resident))
+        panel["counter"].set_value(misses).move_to((panel["slot_x"], -2.18, 0))
+    if miss != last_miss:
+        result = label("MISS" if miss else "HIT", 25, panel["slot_x"], -1.61, color)
+        animations.append(FadeIn(result))
+        last_miss = miss
+    return animations, (resident, result, last_miss, misses)
 
 
 class CacheLocality(Scene):
@@ -218,26 +220,31 @@ class CacheLocality(Scene):
         self.wait(1.6)
 
         self.next_section("Compare both loop orders")
-        left = Traversal(-3.50, "row")
-        right = Traversal(3.50, RIGHT_ORDER)
+        left = traversal(-3.50, "row")
+        right = traversal(3.50, RIGHT_ORDER)
         compare = label("Which loop reuses its cache line?", 42, 0, 2.95)
         self.play(
             *(row.animate.shift((0, 0.65, 0)) for row in rows),
             *(FadeOut(item) for item in [jump_read, replace, memory, cache, slot, requested, second_line]),
             run_time=0.7,
         )
-        self.play(FadeIn(compare), *(FadeIn(item) for item in left.objects + right.objects),
+        self.play(FadeIn(compare), *(FadeIn(item) for item in left["objects"] + right["objects"]),
                   run_time=0.8)
         self.wait(2)
-        for index in range(len(left.reads)):
+        # Carry the resident line, result label, previous hit/miss, and miss count.
+        left_state = right_state = (None, None, None, 0)
+        for index in range(len(left["reads"])):
             # Keep the first divergence readable, then accelerate the repeated reads.
             step = max(0.6, 1.25 - 0.15 * max(0, index - 3))
-            self.play(left.approach(index), right.approach(index), run_time=step * 0.45)
-            self.play(*left.retire(index), *right.retire(index), run_time=step * 0.18)
-            self.play(*left.resolve(index), *right.resolve(index), run_time=step * 0.37)
-        same_order = left.misses == right.misses
-        result_title = (f"{left.misses} misses in each loop" if same_order
-                        else f"{left.misses} vs {right.misses} cache misses")
+            self.play(approach(left, index), approach(right, index), run_time=step * 0.45)
+            self.play(*retire(left, left_state, index), *retire(right, right_state, index), run_time=step * 0.18)
+            left_animations, left_state = resolve(left, left_state, index)
+            right_animations, right_state = resolve(right, right_state, index)
+            self.play(*left_animations, *right_animations, run_time=step * 0.37)
+        left_misses, right_misses = left_state[3], right_state[3]
+        same_order = left_misses == right_misses
+        result_title = (f"{left_misses} misses in each loop" if same_order
+                        else f"{left_misses} vs {right_misses} cache misses")
         takeaway = ("Both loops get four reads from each line." if same_order
                     else "Rows finish a line. Columns jump between lines.")
         self.play(FadeOut(compare), run_time=0.3)

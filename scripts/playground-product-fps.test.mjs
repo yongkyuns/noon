@@ -324,13 +324,13 @@ test("camera measurement isolates following from setup, restoration, and endpoin
   assert.throws(() => productMeasurement("unqualified-scene"), /unsupported product measurement/);
 });
 
-test("the camera measurement window follows the curated source's authored beats", async () => {
-  const source = await readFile(new URL("../web/python/examples/showcase_camera_follows_path.py", import.meta.url), "utf8");
+test("the camera measurement window follows the preserved callback fixture's authored beats", async () => {
+  const protocol = productMeasurement("showcase-camera-follows-path");
+  const source = await readFile(new URL(`../web/${protocol.sourcePath}`, import.meta.url), "utf8");
   const [setup, following] = source.split("camera_frame.add_updater(follow_point)");
   assert.ok(following, "the measured camera lesson must use its required Python updater");
   const duration = section => [...section.matchAll(/run_time=([0-9.]+)|self\.wait\(([0-9.]+)\)/g)]
     .reduce((total, match) => total + Number(match[1] ?? match[2]), 0);
-  const protocol = productMeasurement("showcase-camera-follows-path");
   assert.ok(Math.abs(duration(setup) - protocol.windowStartSeconds) < 0.001);
   assert.ok(Math.abs(duration(setup) + duration(following.split("camera_frame.remove_updater")[0]) -
     protocol.windowEndSeconds) < 0.001);

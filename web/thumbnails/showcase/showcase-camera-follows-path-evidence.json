@@ -1,36 +1,36 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "d971e1d7abd960ff37a4e9f8450cffac42b57a8a",
+  "captureRevision": "4f9f60ab31429b5befbb8c52475bed0c5daf3609",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "d971e1d7abd960ff37a4e9f8450cffac42b57a8a",
+    "sourceRevision": "4f9f60ab31429b5befbb8c52475bed0c5daf3609",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "6faf38f05de5a5afe03ec6cb629340de9c7b93ca0409269f0b4d7190632e689f"
+        "sha256": "0272bfc54ad3fa3f56c1380ec0407dd23b8df3c7021933f94409677c2bd32f85"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "db9471d31e4d6a55d81d1f38aebc06d3b07a34dfa76c7a97c8e639ba5d63dcfd"
+        "sha256": "72b4833c3b49c70e943486c77957f776ae659b3a24dfe79808158ec547461511"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "41336601b71d1300814d5e3058aef79eae006411be7c961c8f413d752bbe04c2"
+        "sha256": "f12acde4bfc4682e450f186f28980d1bee295a0843a09732ef5519074a18801b"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
-        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
       }
     },
-    "buildId": "b94b3a88a00e48e606252c62115d98d1b92b37e749d6c19eec1f1843e725d097"
+    "buildId": "68c0686aa0aa8b2020a493f4470bb0f6d0573214b0a07775e9acd1c42e57c55c"
   },
   "posters": [
     {
       "id": "showcase-camera-follows-path",
-      "captureBuildId": "b94b3a88a00e48e606252c62115d98d1b92b37e749d6c19eec1f1843e725d097",
-      "sourceSha256": "aafc4a18eb8cf4dfacc9abb39ba5c643ac77d94b4d7b44d9e4d41339e779f87a",
+      "captureBuildId": "68c0686aa0aa8b2020a493f4470bb0f6d0573214b0a07775e9acd1c42e57c55c",
+      "sourceSha256": "efc127e9152ef0748cbaa44e5adcc994233ae8f1af89c99e3b088dc6825e9fb9",
       "thumbnailTime": 7.1,
       "image": {
         "width": 960,

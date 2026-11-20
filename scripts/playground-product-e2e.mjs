@@ -31,12 +31,14 @@ const allowLegacyBaseline = label === "baseline";
 const exampleId = process.env.NOON_PRODUCT_EXAMPLE ?? "parity-square-and-circle";
 const measurement = productMeasurement(exampleId);
 const profileExpectation = SHOWCASE_PROFILE_EXPECTATIONS.find(entry => entry.id === exampleId);
-const completionExpectation = { attachedProfile: profileExpectation?.attachedProfile ?? "incremental",
+const completionExpectation = measurement.sourceDisposition ?? { attachedProfile: profileExpectation?.attachedProfile ?? "incremental",
   disposition: profileExpectation?.disposition ?? "looped" };
 const showcaseEntry = JSON.parse(await readFile(path.join(repoRoot,
   "web/python/examples/noon_showcase_manifest.json"), "utf8")).entries.find(entry => entry.id === exampleId) ?? null;
 if (showcaseEntry !== null) {
-  assert.equal(showcaseEntry.path, measurement.sourcePath, "product source differs from its declared lesson");
+  if (!measurement.sourceDisposition) {
+    assert.equal(showcaseEntry.path, measurement.sourcePath, "product source differs from its declared lesson");
+  }
   assert.equal(showcaseEntry.duration, measurement.sourceEndSeconds, "product endpoint differs from its declared lesson");
 }
 

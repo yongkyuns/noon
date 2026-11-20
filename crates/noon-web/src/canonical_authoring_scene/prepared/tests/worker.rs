@@ -224,10 +224,19 @@ fn interpreter_worker_late_source_handoff_waits_for_demand_and_keeps_original_pl
         )
         .unwrap();
     context.bind_mobject(ObjectId::new(1), &path).unwrap();
+    let inset = context
+        .create_zoomed_view(
+            ObjectId::new(2),
+            ObjectId::new(3),
+            noon::ZoomedSceneOptions::default(),
+        )
+        .unwrap();
     context.begin_ordinary_wait(1.0).unwrap();
     context.prepare_live_segment().unwrap();
     let mut player = PreparedExecutionPlayer::from_completed_source(&mut context, 901).unwrap();
     player.seek_delta_json(0.5).unwrap();
+    // An inset still requires observed execution after the prepared interval.
+    context.activate_zooming(&inset).unwrap();
     context
         .begin_ordinary_mixed_composition(
             noon_core::SemanticAnimationCompositionKind::Parallel,

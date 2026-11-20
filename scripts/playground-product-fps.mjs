@@ -53,7 +53,9 @@ export function productMeasurement(exampleId) {
         windowStartSeconds: 1, windowEndSeconds: 4,
         endpointHoldSeconds: 0.5, sourceEndSeconds: 4.5, gapClock: null };
     case "showcase-camera-follows-path":
-      return { ...common, sourcePath: "python/examples/showcase_camera_follows_path.py",
+      // Keep measuring the same host-callback workload across the gallery cutover.
+      return { ...common, sourcePath: "python/examples/perf_camera_follow_updater.py",
+        sourceDisposition: { attachedProfile: "observed", disposition: "observed-complete" },
         windowStartSeconds: 3.7, windowEndSeconds: 6.9,
         endpointHoldSeconds: 0.4, sourceEndSeconds: 9.8,
         gapClock: "renderer-publication-submission" };

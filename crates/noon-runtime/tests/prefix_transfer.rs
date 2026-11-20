@@ -4,7 +4,7 @@ mod prefix_support;
 use noon_compile::{CompiledObject, CompiledScene, ExecutionMutationTransaction, ExecutionPatch};
 use noon_core::{
     CompositionTimeMap, GeometryRef, ObjectId, Property, RateFunction, Style, TrackDefinition,
-    TrackId, TrackTiming, TrackValues, Transform2D, Vec2,
+    TrackId, TrackTiming, TrackValues, Transform2D, Vec2, VectorPath,
 };
 use noon_runtime::{PrefixError, ReplayError, ReplayLimits, SceneInstance};
 
@@ -157,6 +157,47 @@ fn ordinary_added_and_reconciled_position_track_uses_existing_replay_evaluator()
         reader.seek(0.5).unwrap().objects[0].transform.translation.x,
         0.0
     );
+}
+
+#[test]
+fn appended_path_motion_seeks_in_both_directions() {
+    let mut source = source(1, limits());
+    let (mut publisher, mut reader) = prefix_support::bootstrap(&source).unwrap();
+    let path = VectorPath::new()
+        .move_to(Vec2::ZERO)
+        .line_to(Vec2::new(4.0, 0.0))
+        .line_to(Vec2::new(4.0, 2.0));
+    source
+        .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+            id: TrackId::new(1),
+            object: ObjectId::new(0),
+            property: Property::Position,
+            values: TrackValues::PathVec2 {
+                path: path.into(),
+                path_transform: Transform2D::IDENTITY,
+                target_center_offset: Vec2::ZERO,
+            },
+            timing: TrackTiming::new(1.0, 2.0, RateFunction::Linear),
+            time_map: CompositionTimeMap::identity(),
+        }))
+        .unwrap();
+    source.advance_to(2.5).unwrap();
+    let forward = source.frame().clone();
+    assert_eq!(
+        forward.objects[0].transform.translation,
+        Vec2::new(4.0, 0.5)
+    );
+    source.advance_to(3.0).unwrap();
+    reader
+        .append(source.prepare_prefix_update(&mut publisher).unwrap())
+        .unwrap();
+    for _ in 0..2 {
+        assert_eq!(reader.seek(2.5).unwrap(), &forward);
+        assert_eq!(
+            reader.seek(0.5).unwrap().objects[0].transform.translation,
+            Vec2::ZERO
+        );
+    }
 }
 
 #[test]

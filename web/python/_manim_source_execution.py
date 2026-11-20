@@ -46,7 +46,7 @@ Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform AudioS
 ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes ThreeDScene MovingCameraScene LinearTransformationScene
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
-TransformMatchingShapes Rotate
+TransformMatchingShapes TransformMatchingTex Rotate MoveAlongPath Restore GrowArrow
 ShowIncreasingSubsets ShowSubmobjectsOneByOne
 ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur Bloom GlowPulse Dissolve SVGMobject
 """.split())
@@ -64,7 +64,7 @@ _SOURCE_TYPED_PAINT_CONSTRUCTORS = frozenset({"LinearGradient"})
 _SOURCE_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
 GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
-PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GREY_A GREY_B GREY_C GRAY GOLD TEAL MAROON
+PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GREY_A GREY_B GREY_C GRAY GRAY_B GOLD TEAL MAROON
 UP DOWN LEFT RIGHT IN OUT ORIGIN UL UR DL DR PI TAU DEGREES
 """.split())
 _SOURCE_BUILTINS = frozenset("""
@@ -75,7 +75,7 @@ sum tuple type zip ValueError RuntimeError
 _SOURCE_MEMBERS = frozenset("""
 add remove clear play wait audio on_click set_drag_targets next_section
 add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace replace_content
-value_tracker bind_sampled
+value_tracker bind_position bind_opacity bind_sampled
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
 set_fill set_stroke set_color set_opacity set_emission set_object_opacity set_z_index set_glow remove_glow set_effect
 add_effect remove_effect get_center get_x get_y get_width get_height get_value get_left get_right
@@ -83,14 +83,14 @@ set_fill_image_mapping set_value increment_value copy become add_updater remove_
 plot plot_samples
 start_new_path add_line_to add_cubic_bezier_curve_to close_path set_points_as_corners
 set_points set_object_opacity family_members_with_points get_subpaths get_arc_length
-point_from_proportion from_string
+point_from_proportion from_string save_state set_color_by_tex tex_string c2p get_area
 animate id width height radius red green blue append extend insert pop count index get keys values tracker value
 items update union intersection difference join split strip lstrip rstrip lower upper replace bit_length
 startswith endswith encode decode hex fromhex tobytes reverse sort small_discovery
 """.split())
 _SOURCE_SPATIAL_MEMBERS = frozenset("""
 set_camera_orientation move_camera point_light add_world_mobjects set_world_transform
-add_fixed_in_frame_mobjects add_fixed_orientation_mobjects parametric sphere c2p
+add_fixed_in_frame_mobjects add_fixed_orientation_mobjects parametric prism sphere
 """.split())
 _SOURCE_MOVING_CAMERA_MEMBERS = frozenset("camera frame set_view_color_profile".split())
 _CANONICAL_SCENE_FIELDS = frozenset("""
@@ -103,7 +103,7 @@ _SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Dot3D Mesh3D ThreeDAxes Typst WorldTra
 _SOURCE_COLOR_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
 GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
-PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GREY_A GREY_B GREY_C GRAY GOLD TEAL MAROON
+PURPLE PURPLE_A PURPLE_B PURPLE_C PURPLE_D PURPLE_E GREY GREY_A GREY_B GREY_C GRAY GRAY_B GOLD TEAL MAROON
 """.split())
 _SOURCE_MODULES = {
     "bisect": frozenset({"bisect_right"}),
@@ -3335,11 +3335,13 @@ class _SceneOnlySource(ast.NodeVisitor):
                 elif (isinstance(part, ast.FormattedValue) and part.conversion == -1
                       and isinstance(part.format_spec, ast.JoinedStr) and len(part.format_spec.values) == 1
                       and isinstance(part.format_spec.values[0], ast.Constant)
-                      and part.format_spec.values[0].value == "g"
-                      and _numpy_numeric_expression(part.value, self.numpy_array_names[-1],
-                          self.numpy_safe_containers[-1], self.module_numpy_literals,
-                          self.numpy_scalar_names[-1])):
-                    length += 32  # Fixed general-format precision for a numeric value.
+                      and part.format_spec.values[0].value in {"g", ".2f"}
+                      and (self._closed_scalar(part.value, self.numpy_scalar_names[-1])
+                           or _numpy_numeric_expression(part.value, self.numpy_array_names[-1],
+                               self.numpy_safe_containers[-1], self.module_numpy_literals,
+                               self.numpy_scalar_names[-1]))):
+                    # Fixed-point binary64 needs at most 309 integer digits.
+                    length += 32 if part.format_spec.values[0].value == "g" else 313
                 else:
                     break
             else:
@@ -3378,10 +3380,9 @@ class _SceneOnlySource(ast.NodeVisitor):
     def _spatial_constructor_call(node):
         return (isinstance(node.func, ast.Name) and node.func.id in _SOURCE_SPATIAL_CONSTRUCTORS
                 or isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "Mesh3D" and node.func.attr in {"sphere", "parametric"})
+                and node.func.value.id == "Mesh3D" and node.func.attr in {"sphere", "prism", "parametric"})
 
-    @classmethod
-    def _valid_spatial_constructor_call(cls, node):
+    def _valid_spatial_constructor_call(self, node):
         if any(isinstance(arg, ast.Starred) for arg in node.args) or any(k.arg is None for k in node.keywords):
             return False
         if isinstance(node.func, ast.Name):
@@ -3399,43 +3400,46 @@ class _SceneOnlySource(ast.NodeVisitor):
                         and isinstance(point, ast.Call) and isinstance(point.func, ast.Attribute)
                         and point.func.attr == "c2p" and isinstance(point.func.value, ast.Name)
                         and len(point.args) == 3 and not point.keywords
-                        and all(cls._finite_number(arg) for arg in point.args)
-                        and "radius" in values and cls._finite_number(values["radius"])
-                        and "color" in values and cls._color_literal(values["color"])
-                        and ("stroke_width" not in values or cls._finite_number(values["stroke_width"]))
+                        and all(self._finite_number(arg) for arg in point.args)
+                        and "radius" in values and self._finite_number(values["radius"])
+                        and "color" in values and self._spatial_color(values["color"])
+                        and ("stroke_width" not in values or self._finite_number(values["stroke_width"]))
                         and ("shade_in_3d" not in values or isinstance(values["shade_in_3d"], ast.Constant)
                              and type(values["shade_in_3d"].value) is bool))
             if node.func.id == "WorldTransformTo":
                 return (len(node.args) == 1 and isinstance(node.args[0], ast.Name)
                         and set(values) <= {"translation", "rotation", "scale"}
                         and all(isinstance(value, ast.Name)
-                                or cls._finite_tuple(value, 4 if name == "rotation" else 3)
+                                or isinstance(value, ast.Tuple) and len(value.elts) == (4 if name == "rotation" else 3)
                                 for name, value in values.items()))
             return False
         values = {keyword.arg: keyword.value for keyword in node.keywords}
         if len(values) != len(node.keywords):
             return False
+        if node.func.attr == "prism":
+            return not node.args and set(values) <= {"dimensions", "color", "point_lit"}
         if node.func.attr == "sphere":
             return (not node.args and set(values) <= {"radius", "resolution", "color"}
-                    and ("radius" not in values or cls._finite_number(values["radius"]))
-                    and ("resolution" not in values or cls._finite_tuple(values["resolution"], 2, integers=True))
-                    and ("color" not in values or cls._color_literal(values["color"])))
+                    and ("radius" not in values or self._finite_number(values["radius"]))
+                    and ("resolution" not in values or self._finite_tuple(values["resolution"], 2, integers=True))
+                    and ("color" not in values or self._spatial_color(values["color"])))
         if node.func.attr == "parametric":
             function = node.args[0] if node.args else None
             expected = {"u_range", "v_range", "resolution", "color", "point_lit"}
             if (len(node.args) != 1 or not isinstance(function, ast.Lambda) or len(function.args.args) != 2
                     or function.args.posonlyargs or function.args.kwonlyargs or function.args.defaults
                     or function.args.vararg or function.args.kwarg or set(values) != expected
-                    or not cls._finite_tuple(values["u_range"], 2)
-                    or not cls._finite_tuple(values["v_range"], 2)
-                    or not cls._finite_tuple(values["resolution"], 2, integers=True)
-                    or not cls._color_literal(values["color"])
+                    or not self._finite_tuple(values["u_range"], 2)
+                    or not self._finite_tuple(values["v_range"], 2)
+                    or not self._finite_tuple(values["resolution"], 2, integers=True)
+                    or not self._spatial_color(values["color"])
                     or not isinstance(values["point_lit"], ast.Constant)
                     or type(values["point_lit"].value) is not bool):
                 return False
             parameters = {argument.arg for argument in function.args.args}
             return (isinstance(function.body, ast.Tuple) and len(function.body.elts) == 3
-                    and all(cls._numeric_expression(item, parameters) for item in function.body.elts))
+                    and all(self._closed_scalar(item, parameters | self.numpy_scalar_names[-1])
+                            for item in function.body.elts))
         return False
 
     @staticmethod
@@ -3462,6 +3466,64 @@ class _SceneOnlySource(ast.NodeVisitor):
                 or isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                 and node.func.id == "Color" and not node.keywords and len(node.args) in {3, 4}
                 and all(cls._finite_number(value) for value in node.args))
+
+    def _spatial_color(self, node):
+        if self._color_literal(node):
+            return True
+        if not isinstance(node, ast.Name) or any(node.id in scope for scope in self.scopes[1:]):
+            return False
+        binding = self.module_binding_locations.get(node.id)
+        if self.module_binding_counts.get(node.id) != 1:
+            return False
+        value = next((statement.value for statement in self.tree.body
+                      if isinstance(statement, ast.Assign) and statement.targets == [binding]), None)
+        return (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                and value.func.id == "color_from_hex" and self._trusted_noon_binding("color_from_hex")
+                and not value.keywords and len(value.args) == 1
+                and isinstance(value.args[0], ast.Constant) and type(value.args[0].value) is str)
+
+    def _closed_scalar(self, node, names, *, helpers=True):
+        """Numeric arguments sampled during authoring, with no scene or host calls."""
+        if self._finite_number(node):
+            return True
+        if isinstance(node, ast.Name):
+            return node.id in names or (node.id in self.module_numpy_literals
+                    and not any(node.id in scope for scope in self.scopes[1:])
+                    and self._finite_number(self.module_numpy_literals[node.id]))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            return self._closed_scalar(node.operand, names, helpers=helpers)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow)):
+            return all(self._closed_scalar(operand, names, helpers=helpers) for operand in (node.left, node.right))
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.keywords:
+            return False
+        name = node.func.id
+        if name in names or any(name in scope for scope in self.scopes[1:]):
+            return False
+        if name in {"min", "max"} and name not in self.module_bindings:
+            return len(node.args) >= 2 and all(self._closed_scalar(arg, names, helpers=helpers) for arg in node.args)
+        if (self.module_binding_counts.get(name) == 1
+                and self.module_import_functions.get(name, (None,))[0] == "math"):
+            return all(self._closed_scalar(arg, names, helpers=helpers) for arg in node.args)
+        function = self.module_functions.get(name)
+        if (not helpers or name not in self.numpy_module_functions or not isinstance(function, ast.FunctionDef)
+                or function.decorator_list or not self._simple_scalar_signature(function)
+                or len(node.args) != len(function.args.args)
+                or not all(self._closed_scalar(arg, names, helpers=helpers) for arg in node.args)):
+            return False
+        parameters = {argument.arg for argument in function.args.args}
+        for statement in function.body[:-1]:
+            if (not isinstance(statement, ast.Assign) or len(statement.targets) != 1
+                    or not isinstance(statement.targets[0], ast.Name)
+                    or not self._closed_scalar(statement.value, parameters, helpers=False)):
+                return False
+            parameters.add(statement.targets[0].id)
+        last = function.body[-1]
+        return isinstance(last, ast.Return) and self._closed_scalar(last.value, parameters, helpers=False)
+
+    @staticmethod
+    def _simple_scalar_signature(function):
+        args = function.args
+        return not (args.posonlyargs or args.defaults or args.kwonlyargs or args.vararg or args.kwarg)
 
     @classmethod
     def _numeric_expression(cls, node, names):
@@ -3590,7 +3652,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                     and all(scalar(arg) for arg in value.args))
             return False
 
-        return scalar(node.body)
+        return scalar(node.body) or self._closed_scalar(node.body, {parameter})
 
     def _canonical_numpy_import(self, node):
         return (isinstance(node, ast.Import) and len(node.names) == 1

@@ -1,43 +1,43 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "5adaf31f033849d7d09097ebb178ca8d24a8ad58",
-  "backend": "webgpu",
+  "captureRevision": "4f9f60ab31429b5befbb8c52475bed0c5daf3609",
+  "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "5adaf31f033849d7d09097ebb178ca8d24a8ad58",
+    "sourceRevision": "4f9f60ab31429b5befbb8c52475bed0c5daf3609",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "aa4a44b4a9c02ec74a840ffc8dd455c148d49e73da8a1b52d614376dc873a718"
+        "sha256": "0272bfc54ad3fa3f56c1380ec0407dd23b8df3c7021933f94409677c2bd32f85"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "ae8100b4a2a91a1fa980229eb463851a095fdeb72672bdb98445ec7ee0e006f9"
+        "sha256": "72b4833c3b49c70e943486c77957f776ae659b3a24dfe79808158ec547461511"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "4325a36f97abae84c89f411927b8e84832b3131e765ddae9ba876a9526ce6cea"
+        "sha256": "f12acde4bfc4682e450f186f28980d1bee295a0843a09732ef5519074a18801b"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
         "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
       }
     },
-    "buildId": "07c081c8f39cb8d5321f474afd3deecca2afbcb6dc667f2432781b611d872df6"
+    "buildId": "68c0686aa0aa8b2020a493f4470bb0f6d0573214b0a07775e9acd1c42e57c55c"
   },
   "posters": [
     {
       "id": "showcase-riemann-sums",
-      "captureBuildId": "07c081c8f39cb8d5321f474afd3deecca2afbcb6dc667f2432781b611d872df6",
-      "sourceSha256": "38a09733491041836e83ad709d9b268c6ffaa51c978e50f2001721e126b482a1",
+      "captureBuildId": "68c0686aa0aa8b2020a493f4470bb0f6d0573214b0a07775e9acd1c42e57c55c",
+      "sourceSha256": "1ae88bcdd5dcd8ae6bf2fa54e71e705e0c4e0d1e549b18ff67f2ac77fd9c9611",
       "thumbnailTime": 5.3,
       "image": {
         "width": 960,
         "height": 540,
         "foregroundPixels": 100028,
-        "pngSha256": "4cf5c2daa973b00e83cefb21631ec50a9954b97fb8d8ddd5935203837b52a491",
-        "pixelSha256": "1d0342a4a2da17e8a26b916da32ec994066a459d365bda921ec8b6697215bb40"
+        "pngSha256": "e5d414d917e803776ff9aad462fad239d7bb69a3579ed0de77d75db91b6aa23a",
+        "pixelSha256": "e21eff3a5137c73c89b77df6e823df88a075f9bd34b980d2a15ddf46fb5af273"
       },
       "sample": {
         "requestedTime": 5.3,

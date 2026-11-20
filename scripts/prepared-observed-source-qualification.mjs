@@ -95,7 +95,7 @@ const report = {
   causalReferenceSha256: hash(causalReference),
   heldSourceSha256: hash(heldSource), heldReferenceSha256: hash(heldReference),
   harnessSha256: hash(await readFile(fileURLToPath(import.meta.url))),
-  gallerySourceSha256: hash(await readFile(path.join(root, "web/python/examples/showcase_always_redraw.py"))),
+  gallerySourceSha256: hash(await readFile(path.join(root, "web/python/examples/manim_gallery_moving_dots.py"))),
   terminalGallerySourceSha256: hash(await readFile(path.join(root, "web/python/examples/showcase_translation_drag.py"))),
 };
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
@@ -424,7 +424,10 @@ try {
         assert.equal(image.width, expected.width); assert.equal(image.height, expected.height);
         assert.ok(image.data.equals(expected.data), `${backend}/${transportMode}/${actual} final pixels must equal the static reference`);
       }
-      for (const galleryExample of ["showcase-always-redraw", "showcase-translation-drag"]) {
+      for (const [catalog, galleryExample] of [
+        ["reference", "parity-moving-dots"],
+        ["showcase", "showcase-translation-drag"],
+      ]) {
       const entry = { backend, transportMode, arm: `original-${galleryExample}-gallery`, status: "running" };
       report.cases.push(entry);
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1 });
@@ -435,7 +438,7 @@ try {
           globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = { authoringRunOptions: () => ({ preparedPlayback: true }) };
         });
         const galleryServer = transportMode === "shared" ? server : unisolatedServer;
-        await page.goto(`${galleryServer.baseUrl}/web/index.html?example=${galleryExample}&catalog=showcase`);
+        await page.goto(`${galleryServer.baseUrl}/web/index.html?example=${galleryExample}&catalog=${catalog}`);
         const deadline = Date.now() + 180_000;
         let observed;
         while (Date.now() < deadline) {
