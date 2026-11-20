@@ -4,6 +4,7 @@ use crate::{LiveProgramStatus, RustHostCallbackTable};
 struct FollowPath {
     target: Mobject,
     path: Mobject,
+    inset: Option<crate::ZoomedView>,
     stage: usize,
     calls: Rc<Cell<usize>>,
 }
@@ -14,21 +15,25 @@ impl LiveContinuation for FollowPath {
         &mut self,
         scene: &mut crate::ContinuationScene,
     ) -> Result<ContinuationStep, Self::Error> {
-        let live = &mut scene.live();
         let step = self.stage;
         self.stage += 1;
         self.calls.set(self.calls.get() + 1);
         Ok(match step {
-            0 => ContinuationStep::Await(live.wait_segment(1.0)?),
-            1 => ContinuationStep::Await(
-                live.declare_and_activate_move_along_path(
-                    &self.target,
-                    &self.path,
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Linear),
-                )?,
-            ),
+            0 => ContinuationStep::Await(scene.live().wait_segment(1.0)?),
+            1 => {
+                if let Some(inset) = &self.inset {
+                    scene.activate_zooming(inset)?;
+                }
+                ContinuationStep::Await(
+                    scene.live().declare_and_activate_move_along_path(
+                        &self.target,
+                        &self.path,
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    )?,
+                )
+            }
             2 => {
                 assert_eq!(
                     scene.effective(&self.target)?.transform.translation,
@@ -55,12 +60,18 @@ fn unsupported_suffix_is_detected_before_headless_drive_and_runs_once_after_tran
         .unwrap();
     scene.add(&target).unwrap();
     scene.add(&path).unwrap();
+    // The inset relation requires the original execution owner even though
+    // the path track itself now has prepared-prefix support.
+    let inset = scene
+        .zoomed_view(crate::ZoomedSceneOptions::default())
+        .unwrap();
     let calls = Rc::new(Cell::new(0));
     let mut source = scene
         .into_prepared_source(
             FollowPath {
                 target,
                 path,
+                inset: Some(inset),
                 stage: 0,
                 calls: calls.clone(),
             },
@@ -204,7 +215,7 @@ fn staged_source_resources_resume_on_the_same_prepared_owner() {
 }
 
 #[test]
-fn bootstrap_profile_does_not_poison_later_local_suffixes() {
+fn path_motion_can_bootstrap_and_seal_prepared_playback() {
     let mut scene = Scene::new();
     let target = scene.circle(0.5).unwrap();
     let path = scene
@@ -223,6 +234,7 @@ fn bootstrap_profile_does_not_poison_later_local_suffixes() {
             FollowPath {
                 target,
                 path,
+                inset: None,
                 stage: 1,
                 calls: calls.clone(),
             },
