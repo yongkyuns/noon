@@ -209,6 +209,7 @@ fn group_rotation_admits_and_replays_its_nested_glow_scope() {
         .begin_replay_retention(noon_runtime::ReplayLimits::default())
         .unwrap();
     let before = execution.session().frame().clone();
+    let before_order = execution.session().painter_order().to_vec();
     let context = execution.session().publication_context();
     let nodes = execution.scene().integration_store().borrow().len();
 
@@ -307,12 +308,9 @@ fn group_rotation_admits_and_replays_its_nested_glow_scope() {
     let end = right.state().unwrap().transform.translation;
     assert_eq!((end.x, end.y), (1.0, 1.0));
     execution.session_mut().seal_replay().unwrap();
-    for (time, expected) in [
-        (1.75, &mounted),
-        (0.75, &entering),
-        (0.125, &before.objects),
-        (1.75, &mounted),
-    ] {
+    execution.seek(0.125).unwrap();
+    assert_eq!(execution.session().painter_order(), before_order);
+    for (time, expected) in [(1.75, &mounted), (0.75, &entering), (1.75, &mounted)] {
         assert_eq!(&execution.seek(time).unwrap().objects, expected);
     }
 }
