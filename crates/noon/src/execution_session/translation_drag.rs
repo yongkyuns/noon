@@ -38,6 +38,8 @@ pub(super) struct PreparedTranslationDragCancellation {
 pub(super) struct TranslationDragState {
     targets: Arc<BTreeSet<SemanticNodeId>>,
     active: Option<ActiveDrag>,
+    #[cfg(any(feature = "prepared-prefix", test))]
+    pub(super) viewer: super::viewer_drag::ViewerDragState,
 }
 
 impl TranslationDragState {
@@ -170,6 +172,10 @@ impl ExecutionSession {
     }
 
     pub fn translation_drag_active(&self) -> bool {
+        #[cfg(any(feature = "prepared-prefix", test))]
+        if self.translation_drag.viewer.is_active() {
+            return true;
+        }
         self.translation_drag.active.is_some()
     }
 
@@ -489,7 +495,7 @@ impl ExecutionSession {
             .map_err(TranslationDragError::Publication)
     }
 
-    fn empty_effective_batch(&self) -> PreparedEffectivePropertyBatch {
+    pub(super) fn empty_effective_batch(&self) -> PreparedEffectivePropertyBatch {
         self.runtime
             .prepare_effective_property_batch(&[])
             .expect("an empty effective-property batch is always valid")

@@ -672,6 +672,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 | SemanticMutation::SetFamilyStyle { node: object, .. }
                 | SemanticMutation::SetProperty { object, .. }
                 | SemanticMutation::SetObjectTransform { object, .. }
+                | SemanticMutation::SetViewerDraggable { object, .. }
                 | SemanticMutation::SetClickAction { object, .. }
                 | SemanticMutation::SetSpatialCompositionDomain { object, .. }
                 | SemanticMutation::SetCameraProfile { object, .. }
@@ -1688,6 +1689,17 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     {
                         impacts.push(SemanticMutationImpact::SpatialAnchorChanged { object });
                     }
+                }
+                SemanticMutation::SetViewerDraggable { object, enabled } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .expect("preflighted semantic object")
+                        .semantic_object_state_mut()
+                        .expect("preflighted semantic object state")
+                        .set_viewer_draggable(enabled);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::ViewerDraggable { object });
                 }
                 SemanticMutation::SetClickAction { object, binding } => {
                     let object = resolve_node_ref(object, &committed_nodes);

@@ -442,7 +442,7 @@ export class PlaygroundPlaybackControls {
   };
 
   #handleUndoDrag = () => {
-    if (!this.#undoDragSupported || this.#preparedFrontier !== null) return;
+    if (!this.#undoDragSupported || !this.#canUndoTranslationDrag) return;
     void this.#runCommand(async (generation) => {
       const result = await this.#player.undoTranslationDrag();
       if (!this.#destroyed && generation === this.#controlGeneration) this.sync(result);
@@ -690,7 +690,8 @@ export class PlaygroundPlaybackControls {
     this.#liveStatus.hidden = this.#controllable &&
       !(this.#preparedFrontier !== null && this.#durationSeconds === null);
     this.#renderStatus();
-    this.#undoDragButton.hidden = !this.#undoDragSupported || this.#preparedFrontier !== null;
+    this.#undoDragButton.hidden = !this.#undoDragSupported ||
+      (this.#preparedFrontier !== null && !this.#canUndoTranslationDrag);
     this.#root.dataset.undoSupport = String(!this.#undoDragButton.hidden);
     this.#root.dataset.buffering = String(this.#buffering);
     this.#root.dataset.preparing = String(this.#preparing);
@@ -788,7 +789,7 @@ export class PlaygroundPlaybackControls {
     this.#playButton.disabled = this.#externalBusy || (!this.#controllable && !this.#forwardPlayback) ||
       (this.#controllable && this.#durationSeconds === 0);
     this.#restartButton.disabled = blockCommands;
-    this.#undoDragButton.disabled = blockCommands || this.#preparedFrontier !== null || !this.#canUndoTranslationDrag;
+    this.#undoDragButton.disabled = blockCommands || !this.#canUndoTranslationDrag;
     const range = this.#currentSeekRange();
     this.#scrubber.disabled = !this.#controllable || this.#externalBusy || this.#commandPending ||
       range === null || range.end < range.start ||

@@ -97,6 +97,11 @@ pub enum ExecutionPatch {
         object: ObjectId,
         enabled: bool,
     },
+    /// Set viewer drag eligibility for this retained object revision.
+    SetViewerDraggable {
+        object: ObjectId,
+        enabled: bool,
+    },
     /// Replace one authored click action without changing renderer-facing values.
     /// The ordinary reversible row history retains its time-qualified declaration.
     SetClickIndicate {

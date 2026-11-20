@@ -845,6 +845,7 @@ pub(super) fn duplicate_mutation_error(
         SemanticMutationKey::ObjectProperty { object, .. }
         | SemanticMutationKey::ObjectTransform(object)
         | SemanticMutationKey::ObjectContent(object)
+        | SemanticMutationKey::ViewerDraggable(object)
         | SemanticMutationKey::ClickAction(object)
         | SemanticMutationKey::ObjectBarMetadata(object)
         | SemanticMutationKey::ObjectRole(object)

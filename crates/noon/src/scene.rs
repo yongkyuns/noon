@@ -841,6 +841,19 @@ impl Scene {
         object.validate()
     }
 
+    /// Allow a retained viewer to translate this object while paused.
+    /// The drag is a presentation edit cleared when playback resumes or seeks.
+    pub fn set_viewer_draggable(
+        &mut self,
+        target: &Mobject,
+        enabled: bool,
+    ) -> Result<(), AuthoringError> {
+        self.require_object(target)?;
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.set_viewer_draggable(target.node_id(), enabled);
+        self.apply_semantic_transaction(transaction).map(|_| ())
+    }
+
     /// Author one restoring `click -> Indicate` declaration for an analytic
     /// Circle or Rectangle. Runtime invocation remains an execution-session
     /// concern; this only publishes language-neutral semantic intent.

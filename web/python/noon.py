@@ -1656,6 +1656,10 @@ class Scene:
         """
         return _scene_operations()._on_click(self, target, animation)
 
+    def set_viewer_draggable(self, mobject: Mobject, enabled: bool = True) -> Scene:
+        """Allow a paused retained viewer to drag this shape until playback resumes or seeks."""
+        return _scene_operations()._set_viewer_draggable(self, mobject, enabled)
+
     def set_drag_targets(self, *mobjects: Mobject) -> Scene:
         """Allow primary native translation dragging for these bound Mobjects.
 

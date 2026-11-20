@@ -734,10 +734,25 @@ impl PreparedExecutionPlayer {
         )
     }
 
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = canUndoTranslationDrag))]
+    pub fn can_undo_translation_drag(&self) -> bool {
+        self.playback.reader.can_undo_translation_drag()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = undoTranslationDrag))]
+    pub fn undo_translation_drag(&mut self) -> Result<bool, String> {
+        self.playback
+            .reader
+            .undo_translation_drag()
+            .map_err(|error| error.to_string())
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = submitBrowserPointerInputJson))]
     pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<bool, String> {
         let envelope: WorkerPointerInput = serde_json::from_str(json)
             .map_err(|error| format!("invalid browser pointer input: {error}"))?;
+        let allow_drag = !self.playback.playing();
+        self.playback.reader.set_viewer_drag_enabled(allow_drag);
         self.pointer.submit(
             &mut self.playback.reader,
             &mut self.binding,

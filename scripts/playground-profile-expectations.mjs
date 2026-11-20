@@ -39,7 +39,7 @@ const rows = [
   ['showcase-always-redraw','showcase_always_redraw.py','ba4bb6ea213b2aa3253f11ced91c2f0e61722a48bd158a93abdabe81fb0a8d00','incremental','ordinary',[], 'finite-complete', true],
   ['showcase-raster-images','showcase_raster_images.py','7901ef5acf95d33125c853c7aef65f6b12e8cc659441c13d4a7c26b6c507492d','incremental','ordinary',[], 'looped'],
   ['showcase-pointer-selection','showcase_pointer_selection.py','98b599c22c9871165bcae52e2cbbbed192eb61dd86b30c2de660058e7ff2a15c','incremental','ordinary',['native-input'], 'looped'],
-  ['showcase-translation-drag','showcase_translation_drag.py','263b7762e09151e244f377bfd345302141c91ff65235dbc308487f75acde8817','incremental','input-handoff',['native-input'], 'input-handoff'],
+  ['showcase-translation-drag','showcase_translation_drag.py','d6120f1a6cc3117d50661a5320a012b511c3ec0b5cef9ccfa6971b040cbbd612','incremental','ordinary',['native-input'], 'finite-complete', true],
   ['showcase-triangle-light','showcase_triangle_light.py','242698c9d9e6063dfc920be09af25b1112c615e3528507b920c3b1e1e062eaa7','incremental','ordinary',[], 'looped'],
   ['showcase-cuda-transpose','cuda_transpose_banks.py','5e6d349cd193bc158d335789e290ff5a2b0df16628b745467aa9d65623f80b5e','incremental','ordinary',[], 'looped'],
   ['showcase-shader-material','showcase_shader_material.py','cfe0de84b5e1ae00e010ec40155267ad14cdf6066d4209f82149978910348689','incremental','ordinary',[], 'looped'],
@@ -82,7 +82,7 @@ export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
           : dispositionKind === 'input-handoff' ? 'open-exclusive-to-unavailable'
             : 'open-exclusive-to-closed-inclusive',
     audioPolicy: requiredDomains.includes('audio') ? 'authored-audio' : 'none',
-    inputPolicy: id === 'showcase-translation-drag' ? 'native-input-handoff'
+    inputPolicy: id === 'showcase-translation-drag' ? 'viewer-drag'
       : id === 'showcase-pointer-selection' ? 'selection-inspection' : 'none',
     capabilities: Object.freeze({
       attachedCommands: profile === 'observed' ? initialObservedCommands

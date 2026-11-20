@@ -10008,6 +10008,23 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setViewerDraggable)]
+        pub fn set_viewer_draggable(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            enabled: bool,
+        ) -> Result<(), JsValue> {
+            target.id_in_store(self.inner.scene.integration_store(), "viewer drag binding")?;
+            let running = !self.inner.player_ownership.is_unstarted();
+            self.inner
+                .local_authoring_scene()
+                .map_err(typed_js_error)?
+                .set_viewer_draggable(target.semantic_mobject(), enabled)
+                .map_err(|error| {
+                    typed_js_error(AuthoringFailure::from_scene_mutation(error, running))
+                })
+        }
+
         #[wasm_bindgen(js_name = bindClickIndicate)]
         #[allow(clippy::too_many_arguments)]
         pub fn bind_click_indicate(

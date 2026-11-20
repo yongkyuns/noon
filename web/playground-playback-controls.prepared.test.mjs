@@ -355,13 +355,19 @@ test("prepared controls do not accept an independent updateTime clock or lose re
   assert.equal(f.output.value, "0.50 / 2.00+ s");
 });
 
-test("prepared profile does not expose unsupported drag undo just because the client has that method", async () => {
-  const f = fixture(prepared({ canUndoTranslationDrag: true }));
+test("prepared drag undo follows the current reader capability", async () => {
+  const f = fixture();
   const undo = f.preview.querySelector(".playback-undo-drag");
-  assert.equal(undo.hidden, true); assert.equal(undo.disabled, true);
-  assert.equal(f.controls.element.dataset.undoSupport, "false");
+  assert.equal(undo.hidden, true);
   undo.dispatchEvent(new Event("click")); await flush();
   assert.deepEqual(f.calls, []);
+  f.controls.observe(prepared({ canUndoTranslationDrag: true }));
+  assert.equal(undo.hidden, false);
+  assert.equal(undo.disabled, false);
+  undo.dispatchEvent(new Event("click")); await flush();
+  assert.deepEqual(f.calls, [["undoTranslationDrag", undefined]]);
+  f.controls.observe(prepared());
+  assert.equal(undo.hidden, true);
 });
 
 test("failed prepared seeks restore confirmed time and surface the actual rejection", async () => {

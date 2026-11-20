@@ -379,3 +379,123 @@ impl ExecutionSession {
             .prepare_prefix_finish_with_scalar_timeline(publisher, &self.signal_timeline)
     }
 }
+
+#[cfg(test)]
+#[test]
+fn paused_viewer_drag_follows_retained_binding_and_same_time_seek_restores_authored_frame() {
+    use crate::Scene;
+    use noon_core::{
+        NativeInputModifiers, NativePointerCancellation, NativePointerId, NativePointerInput,
+        NativePointerInputKind, NativePointerPosition, SemanticMutationTransaction, Vec2,
+    };
+    use noon_runtime::ReplayLimits;
+
+    let mut scene = Scene::new();
+    let mut shape = scene.circle(1.0).unwrap();
+    shape.set_fill(0.0, 1.0, 0.0, 1.0).unwrap();
+    scene.add(&shape).unwrap();
+    let mut source = scene.execution_session().unwrap();
+    source
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let intro = source.wait_segment(1.0).unwrap();
+    source.advance_to(intro.end_time()).unwrap();
+    scene.live(&mut source).complete_segment(intro).unwrap();
+    let (mut publisher, mut reader) = source.create_prepared_prefix(intro).unwrap();
+
+    let mut declaration = SemanticMutationTransaction::new();
+    declaration.set_viewer_draggable(shape.node_id(), true);
+    crate::integration::scene_execution::publish_at_root(
+        scene.integration_store(),
+        scene.root(),
+        &mut source,
+        declaration,
+    )
+    .unwrap();
+    let hold = source.wait_segment(1.0).unwrap();
+    source.advance_to(hold.end_time()).unwrap();
+    scene.live(&mut source).complete_segment(hold).unwrap();
+    let batch = source
+        .publish_prepared_prefix(hold, &mut publisher)
+        .unwrap();
+    reader.reserve_append_capacity(&batch).unwrap();
+    reader.append(batch).unwrap();
+    let authored_revision = scene.integration_store().borrow().scene_revision();
+
+    let pointer = NativePointerId {
+        source: 7,
+        pointer: 1,
+    };
+    let mut sequence = 0;
+    let mut send = |reader: &mut PrefixReader, kind| {
+        sequence += 1;
+        let token = reader.native_pointer_input_token().unwrap();
+        let event = NativePointerInput::new(
+            sequence,
+            pointer,
+            token.context(),
+            NativeInputModifiers::default(),
+            kind,
+        );
+        reader.submit_native_pointer_input(&token, event).unwrap();
+    };
+    let position =
+        |x| NativePointerPosition::new(Vec2::new(x, 0.0), Vec2::new(x * 10.0, 100.0)).unwrap();
+    let down = |x| NativePointerInputKind::Press {
+        position: position(x),
+        button: 0,
+    };
+    let up = |x| NativePointerInputKind::Release {
+        position: position(x),
+        button: 0,
+    };
+
+    reader.configure_native_pointer_input(pointer, 1).unwrap();
+    reader.seek(0.5).unwrap();
+    send(&mut reader, down(0.0));
+    assert!(!reader.translation_drag_active());
+    send(&mut reader, up(0.0));
+
+    reader.seek(1.5).unwrap();
+    let authored = reader.frame().clone();
+    send(&mut reader, down(0.0));
+    assert!(reader.translation_drag_active());
+    send(&mut reader, NativePointerInputKind::Move(position(2.0)));
+    assert_eq!(
+        reader.frame().objects[0].transform.translation,
+        Vec2::new(2.0, 0.0)
+    );
+    send(
+        &mut reader,
+        NativePointerInputKind::Cancel(NativePointerCancellation::Cancelled),
+    );
+    assert_eq!(reader.frame(), &authored);
+    assert!(!reader.can_undo_translation_drag());
+
+    send(&mut reader, down(0.0));
+    send(&mut reader, up(2.0));
+    assert!(reader.can_undo_translation_drag());
+    assert!(reader.undo_translation_drag().unwrap());
+    assert_eq!(reader.frame(), &authored);
+
+    send(&mut reader, down(0.0));
+    send(&mut reader, up(1.0));
+    assert!(reader.seek(2.0).is_err(), "open frontier remains exclusive");
+    assert!(reader.can_undo_translation_drag());
+    let publication = reader.publication_context();
+    reader.seek(1.5).unwrap();
+    assert_ne!(reader.publication_context(), publication);
+    assert_eq!(reader.frame(), &authored);
+    assert!(!reader.can_undo_translation_drag());
+
+    send(&mut reader, down(0.0));
+    send(&mut reader, up(1.0));
+    reader.advance_to(1.75).unwrap();
+    assert_eq!(reader.frame().objects[0].transform.translation, Vec2::ZERO);
+    assert!(!reader.can_undo_translation_drag());
+    assert_eq!(
+        scene.integration_store().borrow().scene_revision(),
+        authored_revision
+    );
+    assert_eq!(source.frame().objects[0].transform.translation, Vec2::ZERO);
+}

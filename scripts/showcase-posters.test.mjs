@@ -76,9 +76,9 @@ test("a poster copied from another build cannot inherit the global capture ident
   assert.throws(() => assertPoster(entry, missingIdentity, source, png));
 });
 
-test("native-input posters require drag, background no-op, reset, and current source evidence", async () => {
-  const entry = manifest.entries.find(item => item.playback_capability === "nonreplayable-native-input");
-  assert.ok(entry, "native-input lesson is in the showcase manifest");
+test("viewer drag posters require drag, background no-op, reset, and current source evidence", async () => {
+  const entry = manifest.entries.find(item => item.features.includes("set_viewer_draggable"));
+  assert.ok(entry, "viewer drag lesson is in the showcase manifest");
   const source = await read(entry.path);
   // Use an independent showcase PNG to isolate the metadata admission contract.
   const png = await read(manifest.entries[0].thumbnail);
@@ -92,17 +92,18 @@ test("native-input posters require drag, background no-op, reset, and current so
     image: { pngSha256: posterHash, width: png.readUInt32BE(16), height: png.readUInt32BE(20) },
     sample: { requestedTime: entry.thumbnail_time, publishedTime: entry.thumbnail_time },
     interaction: {
-      recipe: "click, drag, then Run",
+      recipe: "click, drag, then restart",
       automaticRestore: true,
       backgroundNoOp: true,
       pointerDrag: true,
+      undoRestoresBase: true,
       changedPixelsOutsideRightSideRoi: 0,
-      runRestoresBase: true,
+      restartRestoresBase: true,
       selectedImage: { pngSha256: posterHash },
     },
   };
   assertPoster(entry, record, source, png);
-  for (const field of ["automaticRestore", "pointerDrag", "backgroundNoOp", "runRestoresBase"]) {
+  for (const field of ["automaticRestore", "pointerDrag", "undoRestoresBase", "backgroundNoOp", "restartRestoresBase"]) {
     const interaction = { ...record.interaction };
     delete interaction[field];
     assert.throws(() => assertPoster(entry, { ...record, interaction }, source, png),

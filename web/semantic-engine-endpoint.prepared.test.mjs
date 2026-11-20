@@ -14,6 +14,7 @@ function fixture(mode = "transferable", options = {}) {
   let sequence = 0, requestId = 0, endpoint, reader;
   let time = 0, frontier = 4, end, playing = !options.initiallyPaused,
     buffering = options.initialBuffering === true, bufferOnTick = false;
+  let canUndoDrag = options.canUndoDrag === true;
   let observation = null, pendingDelta = false, tickDelta = false, tickFailure = null, payloadPadding;
   function changed() {
     for (const waiter of [...waiters]) {
@@ -92,6 +93,14 @@ function fixture(mode = "transferable", options = {}) {
     executionWake(wallTime) {
       record("wake", wallTime);
       return { cadence: playing && !buffering ? "animation_frame" : "idle", timerAfterMilliseconds: null };
+    },
+    get canUndoTranslationDrag() { return canUndoDrag; },
+    undoTranslationDrag() {
+      record("undo-drag");
+      if (!canUndoDrag) return false;
+      canUndoDrag = false;
+      pendingDelta = true;
+      return true;
     },
     setBrowserPointerViewJson(value) { record("view", JSON.parse(value)); },
     setPointerFillSelection(value) { record("selection", value); },
@@ -628,7 +637,7 @@ test("prepared pause commits Rust's static-wait sample and unsupported controls 
     assert.equal(loop.playing, false, "loop configuration preserves Pause");
     const mutations = f.calls.length;
     for (const type of ["advance_to", "sample_to_authored_time",
-      "native_state_input", "native_event", "undo_translation_drag", "debug_frame"]) {
+      "native_state_input", "native_event", "debug_frame"]) {
       const result = await f.request(type, { time: 2, loopDurationSeconds: 8 });
       assert.equal(result.type, "error"); assert.match(result.message, /prepared playback does not support/);
     }
@@ -636,6 +645,27 @@ test("prepared pause commits Rust's static-wait sample and unsupported controls 
     const rejected = await f.request("seek", { time: 4 });
     assert.equal(rejected.type, "error"); assert.match(rejected.message, /unavailable/);
     assert.equal((await f.request("resume")).playing, true);
+  } finally { f.close(); }
+});
+
+test("prepared drag undo acknowledges the restored presentation at the same playhead", { timeout: 3000 }, async () => {
+  const f = fixture("transferable", { initiallyPaused: true, canUndoDrag: true });
+  try {
+    await f.attach();
+    f.acknowledge();
+    await f.present();
+    assert.equal((await f.request("state")).canUndoTranslationDrag, true);
+    let settled = false;
+    const undo = f.request("undo_translation_drag").then(result => { settled = true; return result; });
+    await f.when(() => f.deltas.length === 2);
+    assert.equal(f.deltas[1].time, 0);
+    assert.equal(settled, false);
+    f.acknowledge(f.deltas[1]);
+    await f.present(f.deltas[1]);
+    const result = await undo;
+    assert.equal(result.type, "undo_translation_drag");
+    assert.equal(result.canUndoTranslationDrag, false);
+    assert.equal(result.time, 0);
   } finally { f.close(); }
 });
 

@@ -536,16 +536,18 @@ class Outline(Scene):
         finally:
             view.close()
 
-    def test_translation_drag_gallery_prepares_its_authored_endpoint(self):
+    def test_viewer_drag_gallery_seeks_between_its_authored_frames(self):
         path = ROOT / "web/python/examples/showcase_translation_drag.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
         view = prepare_view(scene)
         try:
             self.assertAlmostEqual(view.duration, 2.6)
-            with self.assertRaisesRegex(RuntimeError, "authored endpoint"):
-                view.capture(time=0.0, width=320, height=180)
-            pixels = view.capture(time=2.6, width=320, height=180)
-            self.assertGreater(len(set(pixels)), 16)
+            initial = view.capture(time=0.0, width=320, height=180)
+            terminal = view.capture(time=view.duration, width=320, height=180)
+            self.assertNotEqual(initial, terminal)
+            self.assertGreater(len(set(terminal)), 16)
+            self.assertEqual(view.capture(time=0.0, width=320, height=180), initial)
+            self.assertEqual(view.capture(time=view.duration, width=320, height=180), terminal)
         finally:
             view.close()
 

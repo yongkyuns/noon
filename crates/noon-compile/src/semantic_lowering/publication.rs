@@ -665,6 +665,7 @@ fn validate_mutations(
                 | SemanticMutation::RemoveUpdater { .. }
                 | SemanticMutation::ClearUpdaters { .. }
                 | SemanticMutation::SetUpdatingSuspended { .. }
+                | SemanticMutation::SetViewerDraggable { .. }
                 | SemanticMutation::SetClickAction { .. }
                 | SemanticMutation::ReplaceDecimalNumber { .. }
                 | SemanticMutation::ReplaceTextPresentationBaseline { .. }
@@ -1478,6 +1479,7 @@ fn lower_prepared_entry(
     compiled.base_z_index = state.z_index();
     compiled.draw_enabled = state.draw_enabled();
     compiled.click_indicate = lowered.click_indicate;
+    compiled.viewer_draggable = lowered.viewer_draggable;
     let numeric_text = lower_numeric_text_driver(&state, prepared.store(), resource_additions)?;
     let inset_view = inset_updates
         .get(&object)
@@ -1506,6 +1508,7 @@ struct PublicationDomains {
     z_index: bool,
     draw_enabled: bool,
     click_indicate: bool,
+    viewer_draggable: bool,
     numeric: bool,
     semantic_transform: bool,
     spatial_state: bool,
@@ -1584,6 +1587,11 @@ fn lower_semantic_publication(
                     domains.entry(object).or_default().draw_enabled = true;
                 }
             }
+            SemanticMutation::SetViewerDraggable { object, .. } => {
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().viewer_draggable = true;
+                }
+            }
             SemanticMutation::SetClickAction { object, .. } => {
                 if let Some(object) = object.existing() {
                     domains.entry(object).or_default().click_indicate = true;
@@ -1659,6 +1667,12 @@ fn lower_semantic_publication(
                     prepared.store(),
                     &mut resource_additions,
                 )?,
+            });
+        }
+        if flags.viewer_draggable {
+            mutations.push(ExecutionPatch::SetViewerDraggable {
+                object,
+                enabled: state.viewer_draggable(),
             });
         }
         if flags.draw_enabled {

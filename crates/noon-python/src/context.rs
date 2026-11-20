@@ -2664,6 +2664,15 @@ impl Context {
             .map_err(crate::arrow::scale_error)
     }
 
+    #[pyo3(name = "setViewerDraggable")]
+    fn set_viewer_draggable(&mut self, target: &MobjectHandle, enabled: bool) -> PyResult<()> {
+        self.available()?;
+        let running = self.has_execution();
+        self.scene
+            .set_viewer_draggable(&target.handle, enabled)
+            .map_err(|error| engine_error(AuthoringFailure::from_scene_mutation(error, running)))
+    }
+
     #[pyo3(name = "bindClickIndicate")]
     #[allow(clippy::too_many_arguments)]
     fn bind_click_indicate(

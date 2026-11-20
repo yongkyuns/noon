@@ -96,7 +96,6 @@ const report = {
   heldSourceSha256: hash(heldSource), heldReferenceSha256: hash(heldReference),
   harnessSha256: hash(await readFile(fileURLToPath(import.meta.url))),
   gallerySourceSha256: hash(await readFile(path.join(root, "web/python/examples/manim_gallery_moving_dots.py"))),
-  terminalGallerySourceSha256: hash(await readFile(path.join(root, "web/python/examples/showcase_translation_drag.py"))),
 };
 const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
 let server, unisolatedServer, browser;
@@ -426,7 +425,6 @@ try {
       }
       for (const [catalog, galleryExample] of [
         ["reference", "parity-moving-dots"],
-        ["showcase", "showcase-translation-drag"],
       ]) {
       const entry = { backend, transportMode, arm: `original-${galleryExample}-gallery`, status: "running" };
       report.cases.push(entry);

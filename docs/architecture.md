@@ -648,6 +648,15 @@ The drag entry remains the ordinary pointer publication lane: misses and non-cap
 
 Python authoring declares the same source policy with `scene.set_drag_targets(circle)`. It passes the original typed Mobject handles through the inert canonical membership batch; the browser never picks a drag target or calculates a translation. Rebinding or invalidating a browser view cancels an active capture through that same Rust ingress before its receipt is retired. A successful current-presentation press pins one constant-size mapping for its acquired drag. Captured moves and primary release keep their collection-time receipt and use that mapping even when newer motion acknowledgements overtake delivery on the independent worker channel. Receipts must remain within the acquired-to-latest acknowledged session/view interval; runtime, source, view and camera must still match. This retains no frame history, performs no new pick and never relabels a receipt. A fresh press and ordinary picking retain exact current-presentation admission. Configured unrecorded drag input rejects replay explicitly; Run recreates the authored scene.
 
+A retained viewer can also translate a paused shape declared with `Scene.set_viewer_draggable`.
+The declaration belongs to the object and follows its retained revisions. The
+shared pointer lane acquires the Position lease on the displayed frame. Release
+keeps the effective translation in the reader and enables one undo. Cancellation
+restores the position at press. Seek, restart, or forward advancement discard
+viewer translations without revising the authored source. Targets with other
+Position drivers and gestures during active family animations defer to authored
+motion. Inspection navigation waits until the gesture releases its view mapping.
+
 Replay classification applies to all externally supplied behavior that can affect results, including pointer/keyboard input, editor manipulation, host callbacks, async/network results and other external data. Recorded native input/event streams may be replayable even though their original occurrence was nondeterministic.
 
 ### Historical execution and object lifetime

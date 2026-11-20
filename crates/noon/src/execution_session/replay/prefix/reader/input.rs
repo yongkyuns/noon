@@ -12,7 +12,8 @@ use noon_runtime::SpatialIndexUpdateStats;
 
 impl PrefixReader {
     pub fn has_native_pointer_subscribers(&self) -> bool {
-        self.session.has_native_pointer_subscribers()
+        self.session.runtime.has_viewer_drag_targets()
+            || self.session.has_native_pointer_subscribers()
     }
     pub fn enable_pointer_fill_selection(
         &mut self,
@@ -42,7 +43,33 @@ impl PrefixReader {
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
         self.session
-            .submit_prepared_pointer_presentation(token, input)
+            .submit_prepared_pointer_presentation(token, input, self.viewer_drag_enabled)
+    }
+    pub fn set_viewer_drag_enabled(&mut self, enabled: bool) {
+        self.viewer_drag_enabled = enabled;
+    }
+    pub fn translation_drag_active(&self) -> bool {
+        self.session.translation_drag_active()
+    }
+    pub fn can_undo_translation_drag(&self) -> bool {
+        self.session.can_undo_viewer_drag()
+    }
+    pub fn undo_translation_drag(&mut self) -> Result<bool, ExecutionSessionInputError> {
+        self.session.undo_viewer_drag()
+    }
+    pub fn validate_captured_gesture(
+        &self,
+        displayed: &PointerFrameSnapshot,
+        view: PointerFrameView,
+    ) -> Result<(), PointerFrameError> {
+        if !self.translation_drag_active() {
+            return Err(PointerFrameError::Input(
+                ExecutionSessionInputError::Interaction(
+                    "prepared playback has no captured viewer drag".into(),
+                ),
+            ));
+        }
+        displayed.validate_captured_gesture(&self.session, view)
     }
     pub fn pick_native_pointer_fill(
         &mut self,
@@ -124,6 +151,9 @@ impl PrefixReader {
         surface: Vec2,
         factor: f64,
     ) -> Result<bool, InspectionNavigationError> {
+        if self.translation_drag_active() {
+            return Ok(false);
+        }
         self.session
             .zoom_inspection_view(displayed, view, surface, factor)
     }
@@ -134,10 +164,16 @@ impl PrefixReader {
         surface: Vec2,
         delta_pixels: f64,
     ) -> Result<bool, InspectionNavigationError> {
+        if self.translation_drag_active() {
+            return Ok(false);
+        }
         self.session
             .scroll_inspection_view(displayed, view, surface, delta_pixels)
     }
     pub fn reset_inspection_view(&mut self) -> Result<bool, InspectionNavigationError> {
+        if self.translation_drag_active() {
+            return Ok(false);
+        }
         self.session.reset_inspection_view()
     }
     pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {

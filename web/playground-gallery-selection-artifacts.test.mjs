@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { waitForBrowserObservation } from "../scripts/playground-browser-support.mjs";
-import { assertNonreplayableShowcase, readLiveState } from "../scripts/showcase-live-review.mjs";
+import { assertFirstPass, assertReplayAvailable, readLiveState } from "../scripts/showcase-live-review.mjs";
 import { normalizeShowcaseManifest } from "./showcase-gallery.js";
 import test from "node:test";
 import { captureAttemptedPage, createBrowserFailureTrace } from "../scripts/playground-browser-failure-evidence.mjs";
@@ -60,8 +60,8 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
   };
   const browserDocument = { querySelector: (selector) => {
     if (selector === ".playback-controls") return {
-      dataset: { busy: "false", elapsedSeconds: "2.6", controllable: String(replayable), playing: "false" },
-      title: "Replay unavailable: UnsupportedDomain",
+      dataset: { busy: "false", elapsedSeconds: "2.6", controllable: String(replayable || gallery.selectedExampleId === "showcase-translation-drag"), playing: "false" },
+      title: gallery.selectedExampleId === "showcase-translation-drag" ? "" : "Replay unavailable: UnsupportedDomain",
       querySelector: () => ({ getAttribute: () => "Play animation", disabled: true }),
     };
     if ([".playback-toggle", ".playback-restart", ".playback-scrubber"].includes(selector)) return { disabled: true };
@@ -196,7 +196,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
   try {
     await vm.runInNewContext(`(async () => {${source}\n})()`, {
       assert, path, fileURLToPath, sourceUrl, URL,
-      assertNonreplayableShowcase, readLiveState, normalizeShowcaseManifest,
+      assertFirstPass, assertReplayAvailable, readLiveState, normalizeShowcaseManifest,
       seekPausedGallery: async (_page, duration) => {
         assert.equal(duration, 2.6);
         endpointRequested = true;
@@ -330,7 +330,7 @@ for (const browser of ["chromium", "webkit"]) test(`${browser} mobile profile us
   assert.equal(result.layoutSizes.length, browser === "webkit" ? 3 : 2);
   assert.deepEqual(report.browserErrors, []);
   if (browser === "webkit") {
-    assert.equal(report.nativeInputDrag.capability, "nonreplayable-native-input");
+    assert.equal(report.nativeInputDrag.replayAvailable, true);
     assert.equal(report.nativeInputDrag.backend, "WebGL2");
     assert.equal(report.nativeInputDrag.deviceScaleFactor, 2);
     assert.ok(report.nativeInputDrag.pointerSamples.some(sample => sample.type === "pointercancel" && sample.pointerType === "touch"));

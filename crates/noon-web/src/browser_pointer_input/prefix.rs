@@ -8,8 +8,7 @@ impl BrowserPointerTarget for PrefixReader {
         PrefixReader::has_native_pointer_subscribers(self)
     }
     fn translation_drag_active(&self) -> bool {
-        // Causal mutation/dragging has not been admitted for prepared history.
-        false
+        PrefixReader::translation_drag_active(self)
     }
     fn inspection_camera(&self) -> Result<noon_core::Camera2DState, PointerFrameError> {
         PrefixReader::inspection_camera(self)
@@ -33,11 +32,7 @@ impl BrowserPointerTarget for PrefixReader {
             PointerFrameValidation::Presentation => {
                 PrefixReader::validate_pointer_presentation(self, frame, view)
             }
-            PointerFrameValidation::CapturedGesture => Err(PointerFrameError::Input(
-                ExecutionSessionInputError::Interaction(
-                    "prepared playback does not admit causal captured gestures".into(),
-                ),
-            )),
+            PointerFrameValidation::CapturedGesture => self.validate_captured_gesture(frame, view),
         }
     }
     fn pointer_input_token_for_frame(

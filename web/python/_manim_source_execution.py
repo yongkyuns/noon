@@ -73,7 +73,7 @@ isinstance len list map max min next range reversed round set slice sorted str
 sum tuple type zip ValueError RuntimeError
 """.split())
 _SOURCE_MEMBERS = frozenset("""
-add remove clear play wait audio on_click set_drag_targets next_section
+add remove clear play wait audio on_click set_drag_targets set_viewer_draggable next_section
 add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace replace_content
 value_tracker bind_position bind_opacity bind_sampled
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
@@ -4935,7 +4935,7 @@ async def await_source_checkpoint(value=None, *, condition=False):
 # Known Scene calls, with suspension handled only at the explicit barriers above.
 # Unknown methods (including super().construct()) keep their original host path.
 _SCENE_CALLS = frozenset({
-    "play", "wait", "audio", "add", "remove", "clear", "on_click", "set_drag_targets",
+    "play", "wait", "audio", "add", "remove", "clear", "on_click", "set_drag_targets", "set_viewer_draggable",
     "add_foreground_mobject", "add_foreground_mobjects",
     "activate_zooming", "get_zoomed_display_pop_out_animation",
     "bring_to_front", "bring_to_back", "replace", "replace_content", "next_section",

@@ -147,6 +147,23 @@ def _bind_mobject(self: _base.Mobject, scene: _base.Scene, *, key=None):
     return _commit_typed_binding(self, scene, reservation, handle)
 
 
+def _set_viewer_draggable(
+    scene: _base.Scene, mobject: _base.Mobject, enabled: bool
+) -> _base.Scene:
+    if not isinstance(mobject, _base.Mobject):
+        raise TypeError("Scene.set_viewer_draggable expects a Mobject")
+    if mobject._scene is not scene:
+        raise ValueError("viewer drag target must belong to this Scene")
+    handle = getattr(mobject, "_semantic_handle", None)
+    if handle is None or not bool(getattr(mobject, "_semantic_handle_fresh", False)):
+        raise RuntimeError("viewer drag target requires a current semantic handle")
+    engine_call(
+        _context(scene).setViewerDraggable, handle, bool(enabled),
+        operation="Scene.set_viewer_draggable",
+    )
+    return scene
+
+
 def _set_translation_drag_targets(
     scene: _base.Scene, *mobjects: _base.Mobject
 ) -> _base.Scene:
@@ -910,6 +927,7 @@ def _portable_scene_methods(scene: _base.Scene, used_names=()) -> dict[str, obje
         "add_foreground_mobjects": _base.Scene.add_foreground_mobjects,
         "on_click": _base.Scene.on_click,
         "set_drag_targets": _base.Scene.set_drag_targets,
+        "set_viewer_draggable": _base.Scene.set_viewer_draggable,
         "next_section": _base.Scene.next_section,
     }
     for name in PORTABLE_REACTIVE_METHODS.intersection(used_names):

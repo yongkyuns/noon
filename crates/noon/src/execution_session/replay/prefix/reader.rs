@@ -18,6 +18,7 @@ mod presentation;
 pub struct PrefixReader {
     session: ExecutionSession,
     receiver: PrefixReceiver,
+    viewer_drag_enabled: bool,
 }
 
 impl PrefixReader {
@@ -25,7 +26,11 @@ impl PrefixReader {
         self.receiver.matches_publisher(publisher)
     }
     pub(super) fn new(session: ExecutionSession, receiver: PrefixReceiver) -> Self {
-        Self { session, receiver }
+        Self {
+            session,
+            receiver,
+            viewer_drag_enabled: true,
+        }
     }
 
     pub(crate) fn session(&self) -> &ExecutionSession {
@@ -115,6 +120,7 @@ impl PrefixReader {
         self.receiver
             .prepare_seek(&mut self.session.runtime, time)?;
         self.session.seek(time)?;
+        self.session.translation_drag.viewer = Default::default();
         Ok(self.session.frame())
     }
 
@@ -123,6 +129,13 @@ impl PrefixReader {
     pub fn advance_to(&mut self, time: f64) -> Result<&FrameState, PrefixError> {
         self.receiver
             .prepare_advance(&mut self.session.runtime, time)?;
+        if time > self.session.frame().time {
+            self.session
+                .runtime
+                .clear_viewer_translations()
+                .map_err(PrefixError::Interaction)?;
+            self.session.translation_drag.viewer = Default::default();
+        }
         self.session.advance_to(time)?;
         Ok(self.session.frame())
     }
