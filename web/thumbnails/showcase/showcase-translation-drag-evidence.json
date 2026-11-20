@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "ed955380aa1885eaad1010deb07564ae17795312",
+  "captureRevision": "3b897b669d76059ea66c82055a7d679933f4abd1",
   "backend": "webgpu",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "ed955380aa1885eaad1010deb07564ae17795312",
+    "sourceRevision": "3b897b669d76059ea66c82055a7d679933f4abd1",
     "files": {
       "worker": {
         "path": "./python-worker.js",
@@ -13,7 +13,7 @@
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "d7c58ca6118a9f9b755834cc0a3d1a2644d1e8426ccb14f664642ac30ff15448"
+        "sha256": "c72fb562219bcee5bf629381c27b5e1ad8aa910c8e76f82f897f0a56f376ed97"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
@@ -24,20 +24,20 @@
         "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
       }
     },
-    "buildId": "f498f18e3fb9e5adb2aa92789647a7276c727454f3dca6375ef82992129410fa"
+    "buildId": "64c27c9fa007d8149f3104e15bdbb1f190ca45f8081f61c17c3ac48be5a6f2b1"
   },
   "posters": [
     {
       "id": "showcase-translation-drag",
-      "captureBuildId": "f498f18e3fb9e5adb2aa92789647a7276c727454f3dca6375ef82992129410fa",
+      "captureBuildId": "64c27c9fa007d8149f3104e15bdbb1f190ca45f8081f61c17c3ac48be5a6f2b1",
       "sourceSha256": "d6120f1a6cc3117d50661a5320a012b511c3ec0b5cef9ccfa6971b040cbbd612",
       "thumbnailTime": 2.6,
       "image": {
         "width": 960,
         "height": 540,
         "foregroundPixels": 39528,
-        "pngSha256": "3b1eb7382c1b155a0939f8421f044001f1b99eff0333a5b29f1dfc7a5117d8ba",
-        "pixelSha256": "c91b160832c390baec275ede58d36e62dceeaa575bdd021a6282bb61dbce9587"
+        "pngSha256": "43686cf1f0dd0107299dcd6c9a786cafe8b9424c04ef2254f00c50b27c997dd0",
+        "pixelSha256": "27ed16c015bdc04b7fb41ffe12eb7f084777c09a85b038c52eddc45b98f0d067"
       },
       "sample": {
         "requestedTime": 2.600000001,
@@ -71,27 +71,27 @@
             "retained": true,
             "mixed": true,
             "transportMode": "transferable",
-            "presentedFrames": 8,
+            "presentedFrames": 6,
             "presentationIntervalMs": null,
             "presentationIntervalSamples": 0,
-            "lastDeltaApplyMs": 1.3000001907348633,
-            "lastRendererCallMs": 2.5999999046325684,
+            "lastDeltaApplyMs": 1.1999998092651367,
+            "lastRendererCallMs": 1.8000001907348633,
             "modeSwitches": 0,
             "rendererRebuilds": 0,
-            "sampledAtMs": 3459.9000000953674,
-            "performanceTimeOriginMs": 1795149176474.5,
-            "rendererReadyAtMs": 2510.800000190735,
-            "firstPresentedAtMs": 2594.5,
+            "sampledAtMs": 2485.199999809265,
+            "performanceTimeOriginMs": 1795149350904,
+            "rendererReadyAtMs": 1920.5999999046326,
+            "firstPresentedAtMs": 1981.3999996185303,
             "presentedSession": 1,
-            "firstPresentedSessionAtMs": 2594.5999999046326,
+            "firstPresentedSessionAtMs": 1981.5999999046326,
             "latestPresentationSample": {
               "session": 1,
-              "sequence": 7,
+              "sequence": 5,
               "time": 2.5999999999999996,
-              "presentedAtMs": 3057.0999999046326
+              "presentedAtMs": 2247.0999999046326
             },
             "transitionMode": null,
-            "lastFrameTimestamp": 2945,
+            "lastFrameTimestamp": 2177.1,
             "bufferedDeltas": 0,
             "needsPresent": false,
             "backend": "WebGPU",
@@ -165,8 +165,8 @@
           "width": 960,
           "height": 540,
           "foregroundPixels": 39528,
-          "pngSha256": "3b1eb7382c1b155a0939f8421f044001f1b99eff0333a5b29f1dfc7a5117d8ba",
-          "pixelSha256": "c91b160832c390baec275ede58d36e62dceeaa575bdd021a6282bb61dbce9587"
+          "pngSha256": "43686cf1f0dd0107299dcd6c9a786cafe8b9424c04ef2254f00c50b27c997dd0",
+          "pixelSha256": "27ed16c015bdc04b7fb41ffe12eb7f084777c09a85b038c52eddc45b98f0d067"
         },
         "restoredImage": {
           "width": 960,
