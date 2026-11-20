@@ -1,9 +1,11 @@
-//! A label enters with the outline drawn by its own group.
+//! A callout rotates its outline and label around a shared center.
 //! Paired with `showcase_mounted_callout.py`.
 use crate::{
     AnimationOptions, Color, ContinuationScene, ContinuationStep, LiveContinuation, LiveProgram,
     MobjectFamily, RateFunction, Scene, ScriptError, StyleUpdate, Text, Vec2,
 };
+
+const TILT: f64 = std::f64::consts::PI / 12.0;
 
 pub struct MountedCallout {
     callout: MobjectFamily,
@@ -21,9 +23,12 @@ impl LiveContinuation for MountedCallout {
             4 => live.wait_segment(1.0)?,
             1 | 3 => {
                 let target = if self.stage == 1 {
-                    self.callout.animate().shift(Vec2::new(11.25, 0.0))
+                    self.callout
+                        .animate()
+                        .shift(Vec2::new(11.25, 0.0))
+                        .rotate(TILT)
                 } else {
-                    self.callout.animate().scale(1.25)
+                    self.callout.animate().scale(1.25).rotate(-2.0 * TILT)
                 };
                 crate::animation_request::activate(
                     &mut live,
@@ -95,7 +100,7 @@ mod tests {
     use noon_core::ObjectContentRef;
 
     #[test]
-    fn callout_rewinds_across_its_first_play() {
+    fn callout_rewinds_across_its_first_and_mounted_rotation() {
         let mut player = program().unwrap().into_playback().unwrap();
         let mut callbacks = crate::RustHostCallbackTable::new();
         let snapshot = |player: &crate::PlaybackProgram<MountedCallout>| {
@@ -119,14 +124,29 @@ mod tests {
         };
         let mut checkpoints = Vec::new();
         let mut original_ids = None;
-        let mut label_scale = None;
+        let mut initial_label_scale = None;
+        let tilt = TILT as f32;
+        let entering_x = 2.25 + 0.625 * tilt.sin();
+        let label_offset = Vec2::new(0.0, 0.8125);
+        let entered_offset = label_offset.rotate(tilt);
+        let final_offset = label_offset.rotate(-tilt) * 1.25;
+        let entering_motion = entered_offset - label_offset;
         for (time, expected) in [
             (0.25, None),
-            (0.75, Some((-6.1875, 1.0))),
-            (1.0, Some((-3.375, 1.0))),
-            (1.75, Some((2.25, 1.0))),
-            (2.5, Some((2.25, 1.125))),
-            (4.0, Some((2.25, 1.25))),
+            (
+                0.75,
+                Some((tilt * 0.25, 1.0, label_offset + entering_motion * 0.25)),
+            ),
+            (
+                1.0,
+                Some((tilt * 0.5, 1.0, label_offset + entering_motion * 0.5)),
+            ),
+            (1.75, Some((tilt, 1.0, entered_offset))),
+            (
+                2.5,
+                Some((0.0, 1.125, (entered_offset + final_offset) * 0.5)),
+            ),
+            (4.0, Some((-tilt, 1.25, final_offset))),
         ] {
             for _ in 0..8 {
                 player.prepare_ready(&mut callbacks).unwrap();
@@ -138,22 +158,23 @@ mod tests {
             assert!(!player.buffering());
             assert_eq!(player.session().unwrap().frame().time, time);
             let rows = snapshot(&player);
-            if let Some((x, scale)) = expected {
+            if let Some((angle, scale, offset)) = expected {
                 let [outline, label] = rows.as_ref().expect("callout is present");
-                assert_eq!(outline.transform.translation.x, x);
-                assert_eq!(label.transform.translation.x, x);
-                assert_eq!(outline.transform.scale, Vec2::new(scale, scale));
-                let initial_label_scale = *label_scale.get_or_insert(label.transform.scale.x);
-                for axis in [label.transform.scale.x, label.transform.scale.y] {
-                    assert!((axis - initial_label_scale * scale).abs() < 1e-6);
+                if time < 2.0 {
+                    let alpha = ((time - 0.5) as f32).min(1.0);
+                    let x = -9.0 + (entering_x + 9.0) * alpha;
+                    assert!((outline.transform.translation.x - x).abs() < 1e-6);
                 }
-                assert!(
-                    (label.transform.translation.y
-                        - outline.transform.translation.y
-                        - 0.8125 * scale)
-                        .abs()
-                        < 1e-6
-                );
+                assert!((outline.transform.rotation - angle).abs() < 1e-6);
+                assert!((label.transform.rotation - angle).abs() < 1e-6);
+                assert_eq!(outline.transform.scale, Vec2::new(scale, scale));
+                let label_scale = *initial_label_scale.get_or_insert(label.transform.scale.x);
+                for axis in [label.transform.scale.x, label.transform.scale.y] {
+                    assert!((axis - label_scale * scale).abs() < 1e-6);
+                }
+                let actual_offset = label.transform.translation - outline.transform.translation;
+                assert!((actual_offset.x - offset.x).abs() < 1e-6);
+                assert!((actual_offset.y - offset.y).abs() < 1e-6);
                 let ids = [outline.id, label.id];
                 assert_eq!(ids, *original_ids.get_or_insert(ids));
             } else {

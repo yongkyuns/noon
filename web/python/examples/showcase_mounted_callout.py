@@ -1,4 +1,4 @@
-"""Animate a callout that draws its outline and owns the label inside it."""
+"""Rotate a callout's outline and label around their shared center."""
 from noon import *
 
 
@@ -28,8 +28,9 @@ class MountedCallout(Scene):
         callout.set_fill(color_from_hex("#183846"), opacity=1, family=False)
         callout.set_stroke(ink, width=6, family=False)
         callout.shift(9 * LEFT)
+        tilt = PI / 12
         self.wait(0.5)
-        self.play(callout.animate.shift(11.25 * RIGHT), run_time=1, rate_func=linear)
+        self.play(callout.animate.shift(11.25 * RIGHT).rotate(tilt), run_time=1, rate_func=linear)
         self.wait(0.5)
-        self.play(callout.animate.scale(1.25), run_time=1, rate_func=linear)
+        self.play(callout.animate.scale(1.25).rotate(-2 * tilt), run_time=1, rate_func=linear)
         self.wait(1.0)
