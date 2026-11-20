@@ -60,35 +60,54 @@ fn group_requests_capture_at_admission_and_share_chained_pivots() {
 }
 
 #[test]
-fn drawn_group_motion_rejects_detached_roots_and_conflicting_member_drivers() {
+fn drawn_group_enters_on_scale_after_rejecting_aliases_and_conflicts() {
     let mut scene = Scene::new();
     let child = scene.square(1.0).unwrap();
-    let outline = scene.square(2.0).unwrap();
-    let group = scene.family(&[(&child).into()]).unwrap();
-    group
-        .set_points_f64(&outline.path_query().unwrap().points().unwrap())
+    let marker = scene.circle(0.2).unwrap();
+    scene.add(&marker).unwrap();
+    let outline = scene
+        .square(2.0)
+        .unwrap()
+        .path_query()
+        .unwrap()
+        .points()
         .unwrap();
+    let group = scene.family(&[(&child).into()]).unwrap();
+    let mixed = scene.family(&[(&marker).into(), (&child).into()]).unwrap();
+    for family in [&group, &mixed] {
+        family.set_points_f64(&outline).unwrap();
+    }
     let mut execution = scene.into_execution().unwrap();
     let before = execution.session().frame().clone();
-    assert!(activate(
-        &mut execution.live(),
-        group.animate().shift(UP).into(),
-        linear()
-    )
-    .is_err());
-    assert_eq!(execution.session().frame(), &before);
-
-    execution.scene_mut().add_many(&[(&group).into()]).unwrap();
-    let before = execution.session().frame().clone();
+    let context = execution.session().publication_context();
     let nodes = execution.scene().integration_store().borrow().len();
-    assert!(activate(
-        &mut execution.live(),
-        (group.animate().shift(UP), child.animate().shift(RIGHT)).into(),
-        linear(),
-    )
-    .is_err());
-    assert_eq!(execution.session().frame(), &before);
-    assert_eq!(execution.scene().integration_store().borrow().len(), nodes);
+    for request in [
+        mixed.animate().shift(UP).into_animation_request(),
+        (group.animate().shift(UP), child.animate().shift(RIGHT)).into_animation_request(),
+    ] {
+        assert!(activate(&mut execution.live(), request, linear()).is_err());
+        assert_eq!(execution.session().frame(), &before);
+        assert_eq!(execution.session().publication_context(), context);
+        assert_eq!(execution.scene().integration_store().borrow().len(), nodes);
+        assert_eq!(
+            execution.scene().root_member_ids().unwrap(),
+            [marker.node_id()]
+        );
+    }
+    let mut live = execution.live();
+    let segment = activate(&mut live, group.animate().scale(0.5).into(), linear()).unwrap();
+    finish(&mut live, segment);
+    let outline = group.own_object().unwrap().unwrap();
+    for object in [&outline, &child] {
+        assert_eq!(
+            live.effective(object).unwrap().transform.scale,
+            Vec2::new(0.5, 0.5)
+        );
+    }
+    assert_eq!(
+        execution.scene().root_member_ids().unwrap(),
+        [marker.node_id(), group.node_id()]
+    );
 }
 
 #[test]

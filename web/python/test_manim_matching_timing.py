@@ -82,7 +82,7 @@ class MatchingTimingScopeTests(unittest.TestCase):
         leaf = matching_class(**(constructor or {})) if matching else (AlignedGroup(**(constructor or {})) if method_target else NS(anim_args=constructor or {}))
         source, target = (NS(_semantic_family_handle=object()) for _ in range(2))
         parent, completed = Builder(), []
-        namespace["route"](context, parent, (source, target, leaf, []), play or {}, completed)
+        namespace["route"](context, parent, (source, target, leaf, None), play or {}, completed)
         return parent, completed
 
     def test_ordinary_and_method_family_targets_choose_distinct_completion_contracts(self):

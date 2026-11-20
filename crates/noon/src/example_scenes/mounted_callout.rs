@@ -1,4 +1,4 @@
-//! A label follows the outline drawn by its own group.
+//! A label enters with the outline drawn by its own group.
 //! Paired with `showcase_mounted_callout.py`.
 use crate::{
     AnimationOptions, Color, ContinuationScene, ContinuationStep, LiveContinuation, LiveProgram,
@@ -21,7 +21,7 @@ impl LiveContinuation for MountedCallout {
             4 => live.wait_segment(1.0)?,
             1 | 3 => {
                 let target = if self.stage == 1 {
-                    self.callout.animate().shift(Vec2::new(4.5, 0.0))
+                    self.callout.animate().shift(Vec2::new(11.25, 0.0))
                 } else {
                     self.callout.animate().scale(1.25)
                 };
@@ -85,8 +85,7 @@ pub fn program() -> Result<LiveProgram<MountedCallout>, ScriptError> {
             ..Default::default()
         },
     )?;
-    scene.shift_family(&callout, -2.25, 0.0)?;
-    scene.add_many(&[(&callout).into()])?;
+    scene.shift_family(&callout, -9.0, 0.0)?;
     Ok(scene.into_live_program(MountedCallout { callout, stage: 0 })?)
 }
 
@@ -96,35 +95,38 @@ mod tests {
     use noon_core::ObjectContentRef;
 
     #[test]
-    fn mounted_callout_rewinds_the_same_outline_and_label() {
+    fn callout_rewinds_across_its_first_play() {
         let mut player = program().unwrap().into_playback().unwrap();
         let mut callbacks = crate::RustHostCallbackTable::new();
         let snapshot = |player: &crate::PlaybackProgram<MountedCallout>| {
-            let frame = player.session().unwrap().frame();
-            let outline = frame
-                .objects
-                .iter()
-                .find(|row| row.style.fill == Some(Color::from_hex(0x183846)))
-                .unwrap();
-            let label = frame
-                .objects
-                .iter()
-                .find(|row| {
-                    matches!(row.content, ObjectContentRef::Text(_))
-                        && row.transform.translation.y > 0.0
-                })
-                .unwrap();
-            [outline.clone(), label.clone()]
+            let session = player.session().unwrap();
+            let drawn = || {
+                session
+                    .painter_order()
+                    .iter()
+                    .map(|&index| &session.frame().objects[index as usize])
+            };
+            let outline = drawn().find(|row| row.style.fill == Some(Color::from_hex(0x183846)));
+            let label = drawn().find(|row| {
+                matches!(row.content, ObjectContentRef::Text(_))
+                    && row.transform.translation.y > 0.0
+            });
+            match (outline, label) {
+                (Some(outline), Some(label)) => Some([outline.clone(), label.clone()]),
+                (None, None) => None,
+                _ => panic!("the outline and label must enter together"),
+            }
         };
         let mut checkpoints = Vec::new();
         let mut original_ids = None;
         let mut label_scale = None;
-        for (time, x, scale) in [
-            (0.0, -2.25, 1.0),
-            (1.0, 0.0, 1.0),
-            (1.75, 2.25, 1.0),
-            (2.5, 2.25, 1.125),
-            (4.0, 2.25, 1.25),
+        for (time, expected) in [
+            (0.25, None),
+            (0.75, Some((-6.1875, 1.0))),
+            (1.0, Some((-3.375, 1.0))),
+            (1.75, Some((2.25, 1.0))),
+            (2.5, Some((2.25, 1.125))),
+            (4.0, Some((2.25, 1.25))),
         ] {
             for _ in 0..8 {
                 player.prepare_ready(&mut callbacks).unwrap();
@@ -136,24 +138,35 @@ mod tests {
             assert!(!player.buffering());
             assert_eq!(player.session().unwrap().frame().time, time);
             let rows = snapshot(&player);
-            for row in &rows {
-                assert_eq!(row.transform.translation.x, x);
+            if let Some((x, scale)) = expected {
+                let [outline, label] = rows.as_ref().expect("callout is present");
+                assert_eq!(outline.transform.translation.x, x);
+                assert_eq!(label.transform.translation.x, x);
+                assert_eq!(outline.transform.scale, Vec2::new(scale, scale));
+                let initial_label_scale = *label_scale.get_or_insert(label.transform.scale.x);
+                for axis in [label.transform.scale.x, label.transform.scale.y] {
+                    assert!((axis - initial_label_scale * scale).abs() < 1e-6);
+                }
+                assert!(
+                    (label.transform.translation.y
+                        - outline.transform.translation.y
+                        - 0.8125 * scale)
+                        .abs()
+                        < 1e-6
+                );
+                let ids = [outline.id, label.id];
+                assert_eq!(ids, *original_ids.get_or_insert(ids));
+            } else {
+                assert!(rows.is_none());
             }
-            assert_eq!(rows[0].transform.scale, Vec2::new(scale, scale));
-            let initial_label_scale = *label_scale.get_or_insert(rows[1].transform.scale.x);
-            let expected_label_scale = initial_label_scale * scale;
-            for axis in [rows[1].transform.scale.x, rows[1].transform.scale.y] {
-                assert!((axis - expected_label_scale).abs() < 1e-6);
-            }
-            let y = |index: usize| rows[index].transform.translation.y;
-            assert!((y(1) - y(0) - 0.8125 * scale).abs() < 1e-6);
-            let ids = [rows[0].id, rows[1].id];
-            assert_eq!(ids, *original_ids.get_or_insert(ids));
             checkpoints.push((time, rows));
         }
-        for (time, rows) in checkpoints.into_iter().rev().skip(1) {
-            player.seek(time).unwrap();
-            assert_eq!(snapshot(&player), rows);
+        for (time, rows) in checkpoints.iter().rev().skip(1) {
+            player.seek(*time).unwrap();
+            assert_eq!(snapshot(&player), *rows);
         }
+        let (time, rows) = &checkpoints[2];
+        player.seek(*time).unwrap();
+        assert_eq!(snapshot(&player), *rows);
     }
 }

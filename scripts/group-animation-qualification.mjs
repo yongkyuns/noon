@@ -10,11 +10,10 @@ await qualifyPairedAuthoring({
     stopAtSourceCompletion: sampleTime === 6.5,
   })), ...[0, 1, 1.75, 2.5, 4].map(sampleTime => ({
     id: `mounted-callout-${sampleTime}`, file: "showcase_mounted_callout.py",
-    factory: "createDirectMountedCalloutSmokeRenderer", objectCount: 7,
+    factory: "createDirectMountedCalloutSmokeRenderer", objectCount: sampleTime < 0.5 ? 5 : 7,
     duration: 4, sampleTime, playback: "live",
     boundaries: [0.5, 1.5, 2, 3],
     directHeldSampleTime: sampleTime === 1.75 ? 1.5 : undefined,
-
     stopAtSourceCompletion: sampleTime === 4,
   }))],
   artifactDirectory: "browser-smoke-artifacts/group-animation",
