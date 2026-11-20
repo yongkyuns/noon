@@ -24,5 +24,9 @@ class MobjectTableFamilyLabelsExample(Scene):
             v_buff=0.45,
             include_outer_lines=True,
         )
-        self.add(table)
-        self.wait(0.2)
+        table.shift(LEFT * 1.5)
+        entry = table.get_entries((2, 2))
+        self.play(table.animate.shift(RIGHT * 1.5), run_time=1, rate_func=linear)
+        self.play(table.animate.shift(UP), run_time=1, rate_func=linear)
+        assert table.get_entries((2, 2)) is entry
+        assert table.get_row_labels().submobjects == row_labels

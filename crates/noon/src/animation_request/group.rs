@@ -2,9 +2,9 @@
 use super::*;
 use crate::{family_affine::FamilyAffine, AuthoringError, ManimRotationPivot, StyleUpdate};
 use noon_core::{
-    SemanticLocalNodeToken, SemanticMutationTransaction, SemanticNodeId, SemanticNodeKind,
-    SemanticObjectContent, SemanticObjectRole, SemanticObjectState, SemanticStore, SemanticStyle,
-    TextSourceKind,
+    SemanticLocalNodeToken, SemanticMutationTransaction, SemanticNode, SemanticNodeId,
+    SemanticNodeKind, SemanticObjectContent, SemanticObjectRole, SemanticObjectState,
+    SemanticStore, SemanticStyle, TextSourceKind,
 };
 use std::{collections::BTreeMap, rc::Rc};
 
@@ -12,8 +12,7 @@ use std::{collections::BTreeMap, rc::Rc};
 pub(crate) struct FamilyMethodTarget {
     states: BTreeMap<SemanticNodeId, SemanticObjectState>,
     pub(crate) styles: BTreeMap<SemanticNodeId, SemanticStyle>,
-    pub(crate) has_composed_effects: bool,
-    pub(crate) has_owned_geometry: bool,
+    pub(crate) appearance: MethodFamilyAppearance,
 }
 
 impl FamilyMethodTarget {
@@ -27,22 +26,27 @@ impl FamilyMethodTarget {
         let store = live.integration_store().borrow();
         let unsupported = || {
             LiveSessionError::Mobject(
-                "owned family animate requires groups of planar vector shapes, plain text, or MathTex without per-object effects, composite opacity, or table/graph metadata".into(),
+                "owned family animate requires groups of planar vector shapes, plain text, or MathTex without per-object effects, composite opacity, or graph metadata".into(),
             )
         };
         let mut states = BTreeMap::new();
         let mut styles = BTreeMap::new();
         let mut has_composed_effects = false;
         let mut has_owned_geometry = false;
+        let mut has_table_layout = false;
         for id in store
             .ordered_authoring_nodes(family.node_id())
             .map_err(AuthoringError::from)?
         {
             let node = store.node(id).expect("validated member");
             if matches!(node.kind(), SemanticNodeKind::Family(_)) {
-                let Some(style) = method_group_style(&store, id, composite_opacity) else {
+                let Some(style) = method_group_style(&store, id, composite_opacity, true) else {
                     return Err(unsupported());
                 };
+                has_table_layout |= store
+                    .semantic_table_layout(id)
+                    .map_err(AuthoringError::from)?
+                    .is_some();
                 has_composed_effects |= !node.effect_ids().is_empty();
                 if let Some(state) = node.semantic_object_state() {
                     if !matches!(state.content, SemanticObjectContent::Geometry(_)) {
@@ -68,6 +72,18 @@ impl FamilyMethodTarget {
         }
         if has_owned_geometry && (has_composed_effects || composite_opacity) {
             return Err(unsupported());
+        }
+        if has_table_layout
+            && (has_owned_geometry
+                || has_composed_effects
+                || composite_opacity
+                || methods
+                    .iter()
+                    .any(|method| !matches!(method, Method::Shift(_))))
+        {
+            return Err(LiveSessionError::Mobject(
+                "table family animate supports planar shift with unchanged layout".into(),
+            ));
         }
         if (has_composed_effects || has_owned_geometry)
             && methods
@@ -166,8 +182,13 @@ impl FamilyMethodTarget {
         Ok(Self {
             states,
             styles,
-            has_composed_effects,
-            has_owned_geometry,
+            appearance: if has_owned_geometry {
+                MethodFamilyAppearance::OwnedGeometry
+            } else if has_table_layout {
+                MethodFamilyAppearance::Table
+            } else {
+                MethodFamilyAppearance::for_motion(has_composed_effects)
+            },
         })
     }
 
@@ -184,17 +205,21 @@ impl FamilyMethodTarget {
             crate::family_copy::CopyRootMembership::Preserve,
             transaction,
             |id, _| {
-                self.states
-                    .get(&id)
-                    .cloned()
-                    .ok_or(AuthoringError::MissingCopySource(id))
+                if let Some(state) = self.states.get(&id) {
+                    Ok(state.clone())
+                } else if self.appearance == MethodFamilyAppearance::Table {
+                    // A Table copy also carries query-only references outside its painted family.
+                    Ok(store.semantic_object_state_checked(id)?.clone())
+                } else {
+                    Err(AuthoringError::MissingCopySource(id))
+                }
             },
             |_, id, style| {
-                *style = self
-                    .styles
-                    .get(&id)
-                    .cloned()
-                    .ok_or(AuthoringError::MissingCopySource(id))?;
+                if let Some(prepared) = self.styles.get(&id) {
+                    *style = prepared.clone();
+                } else if self.appearance != MethodFamilyAppearance::Table {
+                    return Err(AuthoringError::MissingCopySource(id));
+                }
                 Ok(())
             },
             // Motion drives only the original drawable leaves. Their composed
@@ -209,14 +234,16 @@ fn method_group_style(
     store: &SemanticStore,
     id: SemanticNodeId,
     allow_opacity: bool,
+    allow_table: bool,
 ) -> Option<&SemanticStyle> {
     let node = store.node(id)?;
     let style = node.family_style()?;
     ((allow_opacity || style.object_opacity == 1.0 && !store.has_family_appearance_target(id))
         && node.graph_declaration().is_none()
-        && store
-            .semantic_table_layout(id)
-            .is_ok_and(|layout| layout.is_none()))
+        && (allow_table
+            || store
+                .semantic_table_layout(id)
+                .is_ok_and(|layout| layout.is_none())))
     .then_some(style)
 }
 
@@ -242,12 +269,13 @@ pub(crate) fn is_ordinary_method_family(store: &SemanticStore, root: SemanticNod
     is_method_family(store, root, MethodFamilyAppearance::Ordinary)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MethodFamilyAppearance {
     Ordinary,
     ComposedEffects,
     RootOpacity,
     OwnedGeometry,
+    Table,
 }
 
 impl MethodFamilyAppearance {
@@ -283,6 +311,7 @@ pub(crate) fn is_method_family(
                         store,
                         id,
                         appearance == MethodFamilyAppearance::RootOpacity,
+                        appearance == MethodFamilyAppearance::Table,
                     )
                     .is_some()
             } else {
@@ -296,16 +325,27 @@ pub(crate) fn is_method_family(
     })
 }
 
-pub(crate) fn contains_family_geometry(
+pub(crate) fn fixed_family_method_appearance(
     store: &SemanticStore,
     root: SemanticNodeId,
-) -> Result<bool, AuthoringError> {
-    Ok(store.ordered_authoring_nodes(root)?.into_iter().any(|id| {
-        store.node(id).is_some_and(|node| {
-            matches!(node.kind(), SemanticNodeKind::Family(_))
-                && node.semantic_object_state().is_some()
-        })
-    }))
+) -> Result<Option<MethodFamilyAppearance>, AuthoringError> {
+    let mut appearance = None;
+    for id in store.ordered_authoring_nodes(root)? {
+        let node = store.node(id).expect("validated authoring node");
+        if matches!(node.kind(), SemanticNodeKind::Family(_)) {
+            if store
+                .semantic_table_layout(id)
+                .map_err(AuthoringError::from)?
+                .is_some()
+            {
+                return Ok(Some(MethodFamilyAppearance::Table));
+            }
+            if node.semantic_object_state().is_some() {
+                appearance = Some(MethodFamilyAppearance::OwnedGeometry);
+            }
+        }
+    }
+    Ok(appearance)
 }
 
 /// The copied host endpoint must keep the same drawing and member correspondence.
@@ -351,4 +391,100 @@ pub(crate) fn supports_geometry_method_target(
         }
     }
     Ok(true)
+}
+
+pub(crate) fn supports_table_shift_target(
+    store: &SemanticStore,
+    source: SemanticNodeId,
+    target: SemanticNodeId,
+) -> Result<bool, AuthoringError> {
+    if ![source, target]
+        .into_iter()
+        .all(|id| is_method_family(store, id, MethodFamilyAppearance::Table))
+    {
+        return Ok(false);
+    }
+    for (source, target) in store.ordered_family_root_pairs(source, target)? {
+        let layout = |id| {
+            store.semantic_table_layout(id).map(|layout| {
+                // The original table keeps its own view and entry identities.
+                layout.map(|layout| layout.with_structure(None))
+            })
+        };
+        if layout(source).map_err(AuthoringError::from)?
+            != layout(target).map_err(AuthoringError::from)?
+        {
+            return Ok(false);
+        }
+        let source = store.node(source).expect("validated family pair");
+        let target = store.node(target).expect("validated family pair");
+        if !matching_method_family_paint(source, target, false) {
+            return Ok(false);
+        }
+    }
+    Ok(paired_planar_shift(store, source, target)?.is_some())
+}
+
+pub(crate) fn matching_method_family_paint(
+    source: &SemanticNode,
+    target: &SemanticNode,
+    allow_opacity_change: bool,
+) -> bool {
+    let mut style = source
+        .family_style()
+        .expect("validated family style")
+        .clone();
+    let target_style = target.family_style().expect("validated family style");
+    if allow_opacity_change {
+        style.object_opacity = target_style.object_opacity;
+    }
+    let paint = |node: &SemanticNode| {
+        node.presentation()
+            .map(|value| (value.draw_enabled, value.z_index))
+    };
+    style == *target_style
+        && paint(source) == paint(target)
+        && source.family_fallback_color() == target.family_fallback_color()
+        && source.family_background_stroke_color() == target.family_background_stroke_color()
+        && source.family_background_stroke_width() == target.family_background_stroke_width()
+        && source.family_background_stroke_opacity() == target.family_background_stroke_opacity()
+        && source.sheen_direction() == target.sheen_direction()
+}
+
+/// Return whether an unchanged family endpoint moves or stays in place.
+pub(crate) fn paired_planar_shift(
+    store: &SemanticStore,
+    source: SemanticNodeId,
+    target: SemanticNodeId,
+) -> Result<Option<bool>, AuthoringError> {
+    let mut shifted = false;
+    let mut shared_shift = [(f64::NEG_INFINITY, f64::INFINITY); 2];
+    for (source, target) in store.ordered_family_leaf_pairs(source, target)? {
+        let mut original = store.semantic_object_state_checked(source)?.clone();
+        let copied = store.semantic_object_state_checked(target)?;
+        let from = original.transform.translation;
+        let to = copied.transform.translation;
+        for (range, (start, end)) in shared_shift
+            .iter_mut()
+            .zip([(from.x, to.x), (from.y, to.y)])
+        {
+            let shift = end - start;
+            // Copied endpoints round the same shift independently at each member's position.
+            let tolerance = 4.0 * f64::EPSILON * (start.abs() + end.abs());
+            *range = (
+                range.0.max(shift - tolerance),
+                range.1.min(shift + tolerance),
+            );
+            if range.0 > range.1 {
+                return Ok(None);
+            }
+            shifted |= start != end;
+        }
+        original.transform.translation.x = to.x;
+        original.transform.translation.y = to.y;
+        if !copied.matches_authored_state_of(&original) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(shifted))
 }

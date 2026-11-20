@@ -103,69 +103,17 @@ pub(super) fn validate_entering_opacity(
         require_preserved_effects(store, source, target)?;
         let original = store.node(source).expect("validated family pair");
         let copied = store.node(target).expect("validated family pair");
-        let mut style = original
-            .family_style()
-            .expect("validated family style")
-            .clone();
-        let target_style = copied.family_style().expect("validated family style");
-        if source == owner {
-            style.object_opacity = target_style.object_opacity;
-        }
-        let original_paint = original
-            .presentation()
-            .expect("validated family presentation");
-        let copied_paint = copied
-            .presentation()
-            .expect("validated family presentation");
-        if style != *target_style
-            || original_paint.draw_enabled != copied_paint.draw_enabled
-            || original_paint.z_index != copied_paint.z_index
-            || original.family_fallback_color() != copied.family_fallback_color()
-            || original.family_background_stroke_color() != copied.family_background_stroke_color()
-            || original.family_background_stroke_width() != copied.family_background_stroke_width()
-            || original.family_background_stroke_opacity()
-                != copied.family_background_stroke_opacity()
-            || original.sheen_direction() != copied.sheen_direction()
-        {
+        if !crate::animation_request::matching_method_family_paint(
+            original,
+            copied,
+            source == owner,
+        ) {
             return Err(unsupported());
         }
     }
-    let mut shifted = false;
-    let mut shared_shift = [(f64::NEG_INFINITY, f64::INFINITY); 2];
-    for (source, target) in store
-        .ordered_family_leaf_pairs(owner, target)
+    crate::animation_request::paired_planar_shift(store, owner, target)
         .map_err(error)?
-    {
-        let mut original = store
-            .semantic_object_state_checked(source)
-            .map_err(error)?
-            .clone();
-        let copied = store.semantic_object_state_checked(target).map_err(error)?;
-        let from = original.transform.translation;
-        let to = copied.transform.translation;
-        for (range, (start, end)) in shared_shift
-            .iter_mut()
-            .zip([(from.x, to.x), (from.y, to.y)])
-        {
-            let shift = end - start;
-            // Copied endpoints round the same shift independently at each member's position.
-            let tolerance = 4.0 * f64::EPSILON * (start.abs() + end.abs());
-            *range = (
-                range.0.max(shift - tolerance),
-                range.1.min(shift + tolerance),
-            );
-            if range.0 > range.1 {
-                return Err(unsupported());
-            }
-            shifted |= start != end;
-        }
-        original.transform.translation.x = to.x;
-        original.transform.translation.y = to.y;
-        if !copied.matches_authored_state_of(&original) {
-            return Err(unsupported());
-        }
-    }
-    Ok(shifted)
+        .ok_or_else(unsupported)
 }
 
 pub(super) fn has_effects(

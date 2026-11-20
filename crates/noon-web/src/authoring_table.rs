@@ -228,8 +228,8 @@ pub async fn create_decimal_table_format_renderer(
 pub async fn create_mobject_table_family_labels_renderer(
     canvas: web_sys::OffscreenCanvas,
 ) -> Result<crate::WasmExecutionCanvasRenderer, JsValue> {
-    let session = noon::example_scenes::table::family_labels_session().map_err(js_error)?;
-    crate::WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
+    let program = noon::example_scenes::table::family_labels_program().map_err(js_error)?;
+    crate::WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
 /// Direct WASM renderer counterpart of the plain-text Table labels fixture.

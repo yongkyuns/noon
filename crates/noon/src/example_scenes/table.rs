@@ -1,13 +1,42 @@
 //! One retained plain, math, and composite-entry table scene for every host.
 
 use crate::{
-    Color, DecimalFormat, DecimalTable, LatexBackend, MathTable, MathTex, Mobject, MobjectFamily,
-    MobjectTable, MobjectTarget, Scene, StrokeCap, StrokeJoin, Table, TableOptions,
+    AnimationOptions, Color, ContinuationScene, ContinuationStep, DecimalFormat, DecimalTable,
+    LatexBackend, LiveContinuation, LiveProgram, MathTable, MathTex, Mobject, MobjectFamily,
+    MobjectTable, MobjectTarget, RateFunction, Scene, ScriptError, StrokeCap, StrokeJoin, Table,
+    TableOptions, Vec2,
 };
+
+pub struct LabeledTableShift {
+    family: MobjectFamily,
+    step: u8,
+}
+
+impl LiveContinuation for LabeledTableShift {
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
+    type Error = ScriptError;
+
+    fn resume(&mut self, scene: &mut ContinuationScene) -> Result<ContinuationStep, ScriptError> {
+        let delta = match self.step {
+            0 => Vec2::new(1.5, 0.0),
+            1 => Vec2::new(0.0, 1.0),
+            _ => return Ok(ContinuationStep::Finished),
+        };
+        let segment = crate::animation_request::activate(
+            &mut scene.live(),
+            self.family.animate().shift(delta).into(),
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )?;
+        self.step += 1;
+        Ok(ContinuationStep::Await(segment))
+    }
+}
 
 /// Scene counterpart of the Python fixture that exercises group-valued table
 /// labels and a group-valued top-left entry.
-pub fn family_labels_session() -> Result<crate::SceneExecution, String> {
+pub fn family_labels_program() -> Result<LiveProgram<LabeledTableShift>, String> {
     enum Shape {
         Circle(f64),
         Square(f64),
@@ -77,10 +106,58 @@ pub fn family_labels_session() -> Result<crate::SceneExecution, String> {
     )
     .map_err(|error| error.to_string())?
     .into_table();
-    scene
-        .add_many(&[table.family().into()])
+    table
+        .family()
+        .shift(-1.5, 0.0)
         .map_err(|error| error.to_string())?;
-    scene.into_execution().map_err(|error| error.to_string())
+    scene
+        .into_live_program(LabeledTableShift {
+            family: table.family().clone(),
+            step: 0,
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(all(test, feature = "prepared-prefix"))]
+#[test]
+fn labeled_table_rewinds_across_detached_and_mounted_shifts() {
+    let mut player = family_labels_program().unwrap().into_playback().unwrap();
+    let mut callbacks = crate::RustHostCallbackTable::new();
+    let snapshot = |player: &crate::PlaybackProgram<LabeledTableShift>| {
+        let session = player.session().unwrap();
+        session
+            .painter_order()
+            .iter()
+            .map(|&index| {
+                let row = &session.frame().objects[index as usize];
+                (row.id, row.transform.translation)
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut samples = Vec::new();
+    for time in [0.5, 1.0, 1.5, 2.0] {
+        for _ in 0..8 {
+            player.prepare_ready(&mut callbacks).unwrap();
+            player.advance_to(&mut callbacks, time).unwrap();
+            if !player.buffering() && player.session().unwrap().frame().time == time {
+                break;
+            }
+        }
+        assert!(!player.buffering());
+        assert_eq!(player.session().unwrap().frame().time, time);
+        samples.push(snapshot(&player));
+    }
+    let first = &samples[0];
+    let second = &samples[2];
+    assert!(!first.is_empty());
+    assert_eq!(first.len(), second.len());
+    for ((first_id, first_position), (second_id, second_position)) in first.iter().zip(second) {
+        assert_eq!(first_id, second_id);
+        let delta = *second_position - *first_position - Vec2::new(0.75, 0.5);
+        assert!(delta.x.abs() < 1e-6 && delta.y.abs() < 1e-6);
+    }
+    player.seek(0.5).unwrap();
+    assert_eq!(snapshot(&player), *first);
 }
 
 /// Plain-text Table counterpart of the ManimCE fixture with retained labels.

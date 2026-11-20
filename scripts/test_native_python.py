@@ -688,6 +688,17 @@ class TableCellEdits(Scene):
         finally:
             close_scene(scene)
 
+    def test_labeled_table_shifts_on_first_play_and_rewinds(self):
+        path = ROOT / "web/python/examples/mobject_table_family_labels.py"
+        scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
+        view = prepare_view(scene)
+        try:
+            first = view.capture(time=0.5, width=320, height=180)
+            self.assertNotEqual(first, view.capture(time=1.5, width=320, height=180))
+            self.assertEqual(first, view.capture(time=0.5, width=320, height=180))
+        finally:
+            view.close()
+
     @unittest.skipUnless(
         os.environ.get("NOON_LATEX_FONT_DIR") and os.environ.get("NOON_LATEX_RESOURCE_IDENTITY"),
         "requires an explicit native TeX compiler and BaKoMa font profile",
