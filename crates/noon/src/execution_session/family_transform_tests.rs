@@ -139,8 +139,8 @@ fn multiple_existing_family_targets_require_fixed_topology_before_publication() 
 }
 
 #[test]
-fn existing_family_targets_compose_only_with_fixed_topology_and_disjoint_objects() {
-    for (target_count, overlap) in [(1, false), (2, false), (3, false), (2, true)] {
+fn a_family_target_composes_with_disjoint_objects() {
+    for (target_count, overlap) in [(1_u32, false), (2, false), (3, false), (2, true)] {
         let mut store = SemanticStore::new();
         let left = object(&mut store, -2.0);
         let right = object(&mut store, 2.0);
@@ -182,7 +182,7 @@ fn existing_family_targets_compose_only_with_fixed_topology_and_disjoint_objects
             &request,
             AnimationOptions::new(),
         );
-        if target_count != 2 || overlap {
+        if overlap {
             assert!(result.is_err());
             assert_eq!(store.len(), nodes);
             assert_eq!(session.publication_context(), context);
@@ -196,8 +196,11 @@ fn existing_family_targets_compose_only_with_fixed_topology_and_disjoint_objects
         assert_eq!(session.frame().objects[2].transform.rotation, 0.5);
         session.advance_segment_to(segment, 1.0).unwrap();
         session.complete_segment(&mut store, segment).unwrap();
-        assert_eq!(store.node(source).unwrap().members(), [left, right]);
-        assert_eq!(session.frame().objects.len(), 3);
+        let members = store.node(source).unwrap().members();
+        assert_eq!(members.first(), Some(&left));
+        assert_eq!(members.last(), Some(&right));
+        assert_eq!(members.len(), target_count.max(2) as usize);
+        assert_eq!(session.frame().objects.len(), members.len() + 1);
     }
 }
 
@@ -268,19 +271,36 @@ fn unequal_family_transform_publishes_one_identity_free_expansion_copy() {
         .unwrap()
         .to_vec();
 
+    let signal = store.insert_semantic_input_signal(0.0).unwrap();
+    let options = AnimationOptions::new()
+        .run_time(1.0)
+        .rate_func(RateFunction::Linear);
     let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
-    let request = SemanticCompositionRequest::FamilyTransformTo {
-        source,
-        target_state: target,
-        options: AnimationOptions::new()
-            .run_time(1.0)
-            .rate_func(RateFunction::Linear),
+    let request = SemanticCompositionRequest::Composition {
+        kind: SemanticAnimationCompositionKind::Parallel,
+        options,
+        children: vec![
+            SemanticCompositionRequest::FamilyTransformTo {
+                source,
+                target_state: target,
+                options,
+            },
+            SemanticCompositionRequest::ValueTracker {
+                signal,
+                target: 1.0,
+                options,
+            },
+        ],
     };
     let segment = session
         .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
         .unwrap();
 
     session.advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(
+        session.effective_signal_value(signal),
+        Some(&ReactiveValue::Scalar(0.5))
+    );
     {
         let publication = session.take_renderer_publication();
         assert_eq!(publication.transient_presentations().len(), 1);
@@ -299,6 +319,10 @@ fn unequal_family_transform_publishes_one_identity_free_expansion_copy() {
 
     session.advance_segment_to(segment, 1.0).unwrap();
     session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        session.effective_signal_value(signal),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
     let persisted = store
         .semantic_family_members_checked(source)
         .unwrap()

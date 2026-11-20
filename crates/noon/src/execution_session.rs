@@ -4675,17 +4675,17 @@ impl ExecutionSession {
                     .map_err(|error| {
                         ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                     })?;
-                    // Both existing and candidate-local fixed-topology targets
-                    // can share ordinary tracks. Padding still needs exclusive
-                    // structural completion; use the compiler's correspondence.
-                    if !schedule.scalar_leaves().is_empty()
-                        || ((multiple_families || !schedule.leaves().is_empty())
-                            && activation.occurrences().iter().any(|occurrence| {
-                                occurrence.source_padding || occurrence.target_padding
-                            }))
+                    // Only one family can publish a padding plan and reconcile
+                    // its structure. Disjoint object and scalar tracks use the
+                    // same completion without adding another structural plan.
+                    if multiple_families
+                        && activation.occurrences().iter().any(|occurrence| {
+                            occurrence.source_padding || occurrence.target_padding
+                        })
                     {
                         return Err(ExecutionSessionAnimationError::InvalidComposition(
-                            "unequal-family Transform and scalar leaves cannot share a mixed family activation".into(),
+                            "unequal-family Transform cannot share a play with another family Transform"
+                                .into(),
                         ));
                     }
                     let mut members = HashSet::new();
