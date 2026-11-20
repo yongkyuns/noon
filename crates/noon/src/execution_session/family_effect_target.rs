@@ -7,12 +7,11 @@ fn error(message: impl std::fmt::Display) -> ExecutionSessionAnimationError {
 }
 
 /// Stage only the family's appearance endpoint, preserving its original source plan.
-pub(super) fn stage_owned_opacity(
+pub(super) fn stage_owned_opacity_target(
     execution: &ExecutionSession,
     store: &SemanticStore,
     owner: SemanticNodeId,
     opacity: f64,
-    options: AnimationOptions,
     declaration: &mut SemanticMutationTransaction,
 ) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
     let source = store
@@ -26,7 +25,49 @@ pub(super) fn stage_owned_opacity(
     declaration.set_copied_family_opacity_target(target, owner, style);
     crate::effective_capture::stage_effect_copy(store, execution, owner, target, declaration)
         .map_err(error)?;
-    Ok(declaration.create_effect_target_animation(owner, target, true, options))
+    Ok(target)
+}
+
+pub(super) fn stage_opacity_animation(
+    owner: SemanticNodeId,
+    opacity: SemanticTransactionNodeRef,
+    motion: Option<SemanticTransactionNodeRef>,
+    options: AnimationOptions,
+    declaration: &mut SemanticMutationTransaction,
+) -> Result<noon_core::SemanticLocalNodeToken, ExecutionSessionAnimationError> {
+    let Some(motion) = motion else {
+        return Ok(declaration.create_effect_target_animation(owner, opacity, true, options));
+    };
+    if options.path_arc.is_some_and(|arc| {
+        !arc.is_finite() || arc.abs() >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD
+    }) {
+        return Err(error(
+            "group shift with composite opacity requires a straight path",
+        ));
+    }
+    let mut motion_options = options.run_time(1.0);
+    motion_options.path_arc = None;
+    let motion = declaration.create_family_transform_animation_with_mode(
+        owner,
+        motion,
+        SemanticFamilyTransformMode::FixedTopology,
+        motion_options,
+    );
+    let mut opacity_options = motion_options;
+    opacity_options.lag_ratio = None;
+    let opacity = declaration.create_effect_target_animation(owner, opacity, true, opacity_options);
+    // Each child receives the method's easing. Member lag belongs only to the geometry.
+    let root_options = AnimationOptions {
+        rate_func: Some(RateFunction::Linear),
+        lag_ratio: None,
+        path_arc: None,
+        ..options
+    };
+    Ok(declaration.create_animation_composition(
+        SemanticAnimationCompositionKind::Parallel,
+        [motion, opacity],
+        root_options,
+    ))
 }
 
 pub(super) fn is_opacity_copy(
@@ -40,15 +81,14 @@ pub(super) fn is_opacity_copy(
         .is_some_and(|copy| copy.source() == source && copy.writes_object_opacity())
 }
 
-/// Python's method builder already has a copied endpoint. Admit a root fade
-/// through the same appearance track as Rust, rejecting edits that track cannot carry.
+/// Qualify a copied entering endpoint and report whether it also shifts its members.
 pub(super) fn validate_entering_opacity(
     store: &SemanticStore,
     owner: SemanticNodeId,
     target: SemanticNodeId,
-) -> Result<(), ExecutionSessionAnimationError> {
+) -> Result<bool, ExecutionSessionAnimationError> {
     let unsupported =
-        || error("detached family animate uses a separate request for composite opacity");
+        || error("detached group composite opacity can be combined with a planar shift");
     if !crate::animation_request::is_method_family(
         store,
         target,
@@ -90,17 +130,42 @@ pub(super) fn validate_entering_opacity(
             return Err(unsupported());
         }
     }
+    let mut shifted = false;
+    let mut shared_shift = [(f64::NEG_INFINITY, f64::INFINITY); 2];
     for (source, target) in store
         .ordered_family_leaf_pairs(owner, target)
         .map_err(error)?
     {
-        let original = store.semantic_object_state_checked(source).map_err(error)?;
+        let mut original = store
+            .semantic_object_state_checked(source)
+            .map_err(error)?
+            .clone();
         let copied = store.semantic_object_state_checked(target).map_err(error)?;
-        if !copied.matches_authored_state_of(original) {
+        let from = original.transform.translation;
+        let to = copied.transform.translation;
+        for (range, (start, end)) in shared_shift
+            .iter_mut()
+            .zip([(from.x, to.x), (from.y, to.y)])
+        {
+            let shift = end - start;
+            // Copied endpoints round the same shift independently at each member's position.
+            let tolerance = 4.0 * f64::EPSILON * (start.abs() + end.abs());
+            *range = (
+                range.0.max(shift - tolerance),
+                range.1.min(shift + tolerance),
+            );
+            if range.0 > range.1 {
+                return Err(unsupported());
+            }
+            shifted |= start != end;
+        }
+        original.transform.translation.x = to.x;
+        original.transform.translation.y = to.y;
+        if !copied.matches_authored_state_of(&original) {
             return Err(unsupported());
         }
     }
-    Ok(())
+    Ok(shifted)
 }
 
 pub(super) fn has_effects(

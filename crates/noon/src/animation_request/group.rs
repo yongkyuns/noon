@@ -21,6 +21,7 @@ impl FamilyMethodTarget {
         live: &LiveSession<'_>,
         family: &MobjectFamily,
         methods: &[Method],
+        composite_opacity: bool,
     ) -> Result<Self, LiveSessionError> {
         live.require_family(family)?;
         let store = live.integration_store().borrow();
@@ -39,7 +40,7 @@ impl FamilyMethodTarget {
         {
             let node = store.node(id).expect("validated member");
             if matches!(node.kind(), SemanticNodeKind::Family(_)) {
-                let Some(style) = method_group_style(&store, id, false) else {
+                let Some(style) = method_group_style(&store, id, composite_opacity) else {
                     return Err(unsupported());
                 };
                 has_composed_effects |= !node.effect_ids().is_empty();
@@ -65,7 +66,7 @@ impl FamilyMethodTarget {
             }
             states.insert(id, state);
         }
-        if has_owned_geometry && has_composed_effects {
+        if has_owned_geometry && (has_composed_effects || composite_opacity) {
             return Err(unsupported());
         }
         if (has_composed_effects || has_owned_geometry)

@@ -113,6 +113,13 @@ await qualifyPairedAuthoring({
   cases,
   artifactDirectory:"browser-smoke-artifacts/scope-opacity",prepareContext:disableAuthoringJspi,
   qualifyPixels({fixture,backend,rust,python}) {
+    if (fixture.id === "group-opacity-1.2") {
+      const blue = (x, y) => python.data[(y * python.width + x) * 4 + 2];
+      assert.equal(blue(298, 317), blue(328, 317), "the sliding overlay fades as one layer");
+      assert.ok(blue(298, 345) > blue(298, 376), "the overlay is visible below its destination at mid-fade");
+      assert.ok(blue(602, 284) < blue(632, 284), "the per-shape fade has a brighter overlap");
+      return { overlayBlue: blue(298, 317), lowerEdgeBlue: blue(298, 345) };
+    }
     if (!fixture.id.startsWith("scope-opacity-")) return {};
     return {
       rust:reference(rust,fixture.sampleTime,`${backend}/rust-wasm`),

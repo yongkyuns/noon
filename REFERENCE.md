@@ -251,6 +251,7 @@ one play. A group with a composed effect can shift, scale uniformly, or rotate i
 the plane on its first `play` and after mounting. The effect follows its members.
 `group.animate().set_object_opacity(0.42)` fades a group as one layer. Set a
 detached group's opacity to zero to fade it in on its first `play`.
+Chain a planar `shift` with `set_object_opacity` to move the group during the fade.
 The paired [Rust](crates/noon/src/example_scenes/group_animation.rs) and
 [Python](web/python/examples/showcase_group_animation.py) lesson **Move the whole
 diagram** demonstrates this with a glowing underline. Run the native lesson with

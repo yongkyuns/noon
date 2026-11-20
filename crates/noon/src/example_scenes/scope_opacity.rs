@@ -206,13 +206,14 @@ impl LiveContinuation for OverlayComparison {
                 let options = AnimationOptions::new()
                     .run_time(duration)
                     .rate_func(RateFunction::Linear);
+                let mut group = self.group.animate().set_object_opacity(opacity);
+                if self.stage == 1 {
+                    group = group.shift(noon_core::UP);
+                }
                 crate::animation_request::activate(
                     &mut live,
                     (
-                        self.group
-                            .animate()
-                            .set_object_opacity(opacity)
-                            .with_options(options),
+                        group.with_options(options),
                         self.first
                             .animate()
                             .set_object_opacity(opacity)
@@ -258,6 +259,7 @@ pub fn comparison_program() -> Result<LiveProgram<OverlayComparison>, crate::Scr
     let first = spot(1.8)?;
     let second = spot(2.7)?;
     let group = scene.family(&[(&left).into(), (&right).into()])?;
+    scene.shift_family(&group, 0.0, -1.0)?;
     scene.set_family_object_opacity(&group, 0.0)?;
     scene.set_object_opacity(&first, 0.0)?;
     scene.set_object_opacity(&second, 0.0)?;
@@ -291,13 +293,13 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let mut played = Vec::new();
-        for (time, opacity) in [
+        for (time, expected) in [
             (0.3, None),
-            (0.6, Some(0.0)),
-            (0.9, Some(0.105)),
-            (1.2, Some(0.21)),
-            (2.4, Some(0.42)),
-            (4.8, Some(1.0)),
+            (0.6, Some((0.0, -1.2))),
+            (0.9, Some((0.105, -0.95))),
+            (1.2, Some((0.21, -0.7))),
+            (2.4, Some((0.42, -0.2))),
+            (4.8, Some((1.0, -0.2))),
         ] {
             for _ in 0..8 {
                 player.prepare_ready(&mut callbacks).unwrap();
@@ -310,11 +312,25 @@ mod tests {
             let session = player.session().unwrap();
             assert_eq!(session.frame().time, time);
             let objects = painted(session);
-            let actual = objects
+            let scope = objects
                 .iter()
-                .find(|row| row.content.composed_source().is_some())
-                .map(|row| row.style.opacity);
-            assert_eq!(actual, opacity);
+                .find(|row| row.content.composed_source().is_some());
+            assert_eq!(
+                scope.map(|row| row.style.opacity),
+                expected.map(|(opacity, _)| opacity)
+            );
+            if let Some((_, y)) = expected {
+                for id in scope.unwrap().content.composed_source().unwrap().members() {
+                    let member = session
+                        .frame()
+                        .objects
+                        .iter()
+                        .find(|row| row.id == *id)
+                        .unwrap();
+                    assert!((member.transform.translation.y - y).abs() < 1e-6);
+                    assert_eq!(member.style.opacity, 1.0);
+                }
+            }
             played.push((time, objects));
         }
         for (time, objects) in played.into_iter().rev().skip(1) {
