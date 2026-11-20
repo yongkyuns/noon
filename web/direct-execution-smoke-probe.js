@@ -807,8 +807,8 @@ async function renderedPixelContext(canvas) {
   return context;
 }
 
-async function sampleRenderedColor(canvas, worldX, worldY) {
-  const context = await renderedPixelContext(canvas);
+async function sampleRenderedColor(canvas, worldX, worldY, pixels) {
+  const context = pixels ?? await renderedPixelContext(canvas);
   const worldHeight = 8;
   const worldWidth = worldHeight * (canvas.width / canvas.height);
   const x = Math.round(((worldX + worldWidth / 2) / worldWidth) * (canvas.width - 1));
@@ -1630,17 +1630,26 @@ async function directMixedScalarCompositionProof(expectedBackend) {
     ]) {
       renderer.advanceDirectRealtime(time);
       await settleDirectPublication(renderer, time);
+      const pixels = await renderedPixelContext(canvas);
       for (const offset of [-0.15, 0.15]) {
-        const color = await sampleRenderedColor(canvas, x + offset, 1);
+        const color = await sampleRenderedColor(canvas, x + offset, 1, pixels);
         if (color.blue <= color.red + 25) {
           throw new Error(`direct mixed scalar composition at ${time}ms: circle expected at ${x}, got ${JSON.stringify(color)}`);
+        }
+      }
+      // The independent group stops at its endpoint when the tracker changes again.
+      const markerY = time > 2500 ? -2.5 : -1.5 - (x + 2) / 4;
+      for (const markerX of [-1.3, 1.3]) {
+        const color = await sampleRenderedColor(canvas, markerX, markerY, pixels);
+        if (color.red <= 180 || color.green <= 150 || color.blue >= color.green - 40) {
+          throw new Error(`direct mixed scalar composition at ${time}ms: marker expected at ${markerX}, ${markerY}, got ${JSON.stringify(color)}`);
         }
       }
       samples.push({ time, x });
     }
     const wake = JSON.parse(renderer.directWakeDirectiveJson(3000));
     if (renderer.rendererBackend() !== expectedBackend || renderer.time() !== 3 ||
-        renderer.objectCount() !== 2 || wake.cadence !== "idle") {
+        renderer.objectCount() !== 4 || wake.cadence !== "idle") {
       throw new Error("direct mixed composition did not complete its shared continuation");
     }
     return samples;
