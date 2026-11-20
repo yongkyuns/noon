@@ -68,13 +68,23 @@ impl FamilyMethodTarget {
         if has_owned_geometry && has_composed_effects {
             return Err(unsupported());
         }
-        if (has_composed_effects || has_owned_geometry)
+        if has_composed_effects
             && methods
                 .iter()
                 .any(|method| !matches!(method, Method::Shift(_) | Method::Scale(_)))
         {
             return Err(LiveSessionError::Mobject(
-                "owned family animate supports shift and scale on groups with composed effects or their own geometry"
+                "owned family animate supports shift and scale on groups with composed effects"
+                    .into(),
+            ));
+        }
+        if has_owned_geometry
+            && methods
+                .iter()
+                .any(|method| matches!(method, Method::SetFill(_) | Method::SetColor(_)))
+        {
+            return Err(LiveSessionError::Mobject(
+                "groups with their own geometry support only shift, uniform scale, and planar rotation"
                     .into(),
             ));
         }
@@ -344,6 +354,7 @@ pub(crate) fn supports_geometry_method_target(
         previous.transform.translation.y = next.transform.translation.y;
         previous.transform.scale.x = new_scale.x;
         previous.transform.scale.y = new_scale.y;
+        previous.transform.orientation = next.transform.orientation;
         if !next.matches_authored_state_of(&previous) {
             return Ok(false);
         }

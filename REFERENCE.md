@@ -256,11 +256,11 @@ The paired [Rust](crates/noon/src/example_scenes/group_animation.rs) and
 diagram** demonstrates this with a glowing underline. Run the native lesson with
 `cargo run -p noon-native --example ordinary_group_animation`.
 
-A fixed-membership group with its own vector path can shift and scale
-uniformly with its children, including on its first play. The paired
+A fixed-membership group with its own vector path can shift, scale uniformly,
+and rotate in the plane with its children, including on its first play. The paired
 [Rust](crates/noon/src/example_scenes/mounted_callout.rs) and
-[Python](web/python/examples/showcase_mounted_callout.py) callout lesson moves its
-outline and label around the same center.
+[Python](web/python/examples/showcase_mounted_callout.py) callout lesson rotates
+its outline and label around the same center.
 
 Mixed object/family collections use `MobjectTarget::Object(&object)` and
 `MobjectTarget::Family(&family)`. Construction accepts arrays, vectors, and borrowed

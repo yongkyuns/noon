@@ -476,24 +476,29 @@ class Demo(Scene):
 class Outline(Scene):
     def construct(self):
         outline = VGroup().set_points([(0, 0, 0), (1/3, 0, 0), (2/3, 0, 0), (1, 0, 0)])
-        self.play(outline.animate.shift(2 * RIGHT).scale(0.5))
+        self.play(outline.animate.shift(2 * RIGHT).scale(0.5).rotate(PI / 2))
         assert self.mobjects[0] is outline
-        assert tuple(outline.get_center()) == (2.5, 0.0, 0.0)
-        assert outline.width == 0.5
+        assert all(abs(actual - expected) < 1e-6
+                   for actual, expected in zip(outline.get_center(), (2.5, 0.0, 0.0)))
+        assert outline.width < 1e-6
+        assert abs(outline.height - 0.5) < 1e-6
 """
         scene = asyncio.run(run_source(source))
         close_scene(scene)
 
-    def test_native_callout_rewinds_across_first_play(self):
+    def test_native_callout_rewinds_across_first_and_mounted_rotation(self):
+        from math import atan2, pi
+
         path = ROOT / "web/python/examples/showcase_mounted_callout.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
         callout = scene.mobjects[-1]
         self.assertEqual(callout.get_num_points(), 36)
-        self.assertEqual(tuple(callout.get_center()), (2.25, 0.625, 0.0))
-        self.assertEqual(tuple(callout.submobjects[0].get_center()), (2.25, 0.859375, 0.0))
+        points = callout.get_all_points()
+        dx, dy = points[3][0] - points[0][0], points[3][1] - points[0][1]
+        self.assertAlmostEqual(atan2(dy, dx), pi / 2 - pi / 12, places=5)
         view = prepare_view(scene)
         try:
-            times = (0.25, 1.0, 1.75, 2.5, view.duration)
+            times = (0.25, 1.0, 1.75, 2.75, view.duration)
             frames = [view.capture(time=t, width=320, height=180) for t in times]
             self.assertEqual(frames[0], view.capture(time=0.0, width=320, height=180))
             self.assertEqual(len(set(frames)), len(frames))

@@ -2522,7 +2522,7 @@ impl ExecutionSession {
                         ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                     })? {
                         return Err(ExecutionSessionAnimationError::InvalidComposition(
-                            "groups with their own geometry support only shift and uniform scale"
+                            "groups with their own geometry support only shift, uniform scale, and planar rotation"
                                 .into(),
                         ));
                     }
