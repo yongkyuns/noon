@@ -287,6 +287,66 @@ test("coalesced chord labels do not duplicate button edges or erase sample-local
   ]);
 });
 
+for (const [label, inconsistent] of [
+  ["multiple changed buttons", { buttons: 6 }],
+  ["unlabelled transition", { buttons: 0, button: -1 }],
+  ["different final mask", { buttons: 3, button: 2 }],
+]) {
+  test(`coalesced ${label} uses the parent motion without ending a held drag`, async t => {
+    const dom = pointerCanvas(t);
+    const errors = [];
+    const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
+    dom.emit("pointerdown");
+    dom.emit("pointermove", {
+      clientX: 160,
+      shiftKey: true,
+      getCoalescedEvents: coalescedSamples([{ clientX: 120 }, { clientX: 130, ...inconsistent }]),
+    });
+    dom.emit("pointerup", { clientX: 160 });
+    await inputTurn();
+    const messages = pointerMessages(engine);
+    assert.deepEqual(messages.map(m => [m.kind, m.button, m.surface_x]), [
+      ["press", 0, 100], ["move", null, 150], ["release", 0, 150],
+    ]);
+    assert.equal(messages[1].shift, true);
+    assert.equal(new Set(messages.map(m => m.source_id)).size, 1);
+    assert.deepEqual(errors, []);
+  });
+}
+
+test("an inconsistent coalesced packet preserves a confirmed parent chord edge", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
+  dom.emit("pointerdown");
+  dom.emit("pointermove", { clientX: 140, button: 2, buttons: 3,
+    getCoalescedEvents: coalescedSamples([{ clientX: 130, button: -1 }]),
+  });
+  dom.emit("pointermove", { clientX: 150, button: 2, buttons: 1 });
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(m => [m.kind, m.button, m.surface_x]), [
+    ["press", 0, 100], ["press", 2, 130], ["release", 2, 140], ["release", 0, 100],
+  ]);
+  assert.deepEqual(errors, []);
+});
+
+test("a coalesced packet with no confirmed button edge cancels only its gesture", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
+  dom.emit("pointerdown");
+  dom.emit("pointermove", { buttons: 0, getCoalescedEvents: coalescedSamples([{}]) });
+  dom.emit("pointerup");
+  dom.emit("pointerdown");
+  dom.emit("pointerup");
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(m => m.kind), ["press", "cancel", "press", "release"]);
+  assert.ok(messages[2].source_id > messages[0].source_id);
+  assert.deepEqual(errors, []);
+});
+
 for (const [label, invalid] of [
   ["foreign identity", { pointerId: 2 }],
   ["foreign pointer type", { pointerType: "pen" }],
@@ -295,9 +355,6 @@ for (const [label, invalid] of [
   ["nonfinite timestamp", { timeStamp: Infinity }],
   ["future timestamp", { timeStamp: Number.MAX_VALUE }],
   ["unsupported mask", { buttons: 64 }],
-  ["ambiguous button transition", { buttons: 6 }],
-  ["missing button edge", { buttons: 3, button: -1 }],
-  ["inconsistent final mask", { buttons: 3, button: 2 }],
 ]) {
   test(`malformed coalesced ${label} faults before forwarding any packet prefix`, async t => {
     const dom = pointerCanvas(t);
