@@ -546,9 +546,15 @@ impl<'a> LiveSession<'a> {
     pub(crate) fn capture_mobject_state(
         &self,
         source: &Mobject,
+        graph_component: bool,
     ) -> Result<SemanticObjectState, LiveSessionError> {
-        crate::effective_capture::capture_mobject_state(self.store, self.session, source)
-            .map_err(LiveSessionError::from)
+        crate::effective_capture::capture_mobject_state_with_graph_dependency(
+            self.store,
+            self.session,
+            source,
+            graph_component,
+        )
+        .map_err(LiveSessionError::from)
     }
 
     /// Read the current effective runtime value at the session's publication.

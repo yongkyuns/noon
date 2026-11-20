@@ -4,13 +4,15 @@ import { qualifyPairedAuthoring } from "./paired-authoring-qualification.mjs";
 
 await qualifyPairedAuthoring({
   artifactDirectory: process.env.NOON_GRAPH_ARTIFACTS ?? "graph-artifacts",
-  cases: [{
-    id: "graph",
+  cases: [0.25, 0.75, 1].map(sampleTime => ({
+    id: `graph-${sampleTime}`,
     file: "ordinary_graph.py",
     scene: "OrdinaryGraph",
     factory: "createDirectGraphSmokeRenderer",
     objectCount: 20,
-    duration: 0.21,
-    sampleTime: 0.21,
-  }],
+    duration: 1,
+    playback: "live",
+    sampleTime,
+    stopAtSourceCompletion: sampleTime === 1,
+  })),
 });

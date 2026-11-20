@@ -2282,16 +2282,20 @@ impl ExecutionSession {
                 target,
                 options,
             } => {
-                let mode = if target.has_owned_geometry {
-                    self.stage_geometry_method_family(store, *source, *options, admitted)?;
-                    SemanticFamilyTransformMode::FixedTopology
-                } else {
-                    self.stage_detached_method_family(
+                let mode = if matches!(
+                    target.appearance,
+                    MethodFamilyAppearance::FixedLayout | MethodFamilyAppearance::OwnedGeometry
+                ) {
+                    self.stage_fixed_method_family(
                         store,
                         *source,
-                        MethodFamilyAppearance::for_motion(target.has_composed_effects),
+                        target.appearance,
+                        *options,
                         admitted,
                     )?;
+                    SemanticFamilyTransformMode::FixedTopology
+                } else {
+                    self.stage_detached_method_family(store, *source, target.appearance, admitted)?;
                     SemanticFamilyTransformMode::Structural
                 };
                 let copied = target.stage(store, *source, declaration).map_err(|error| {
@@ -2527,34 +2531,63 @@ impl ExecutionSession {
                         declaration,
                     );
                 }
-                let has_owned_geometry = |id| {
-                    crate::animation_request::contains_family_geometry(store, id).map_err(|error| {
+                if method_target {
+                    let invalid = |error: crate::AuthoringError| {
                         ExecutionSessionAnimationError::InvalidComposition(error.to_string())
-                    })
-                };
-                if method_target
-                    && (has_owned_geometry(*source)? || has_owned_geometry(*target_state)?)
-                {
-                    if !crate::animation_request::supports_geometry_method_target(
-                        store,
-                        *source,
-                        *target_state,
-                    )
-                    .map_err(|error| {
-                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
-                    })? {
-                        return Err(ExecutionSessionAnimationError::InvalidComposition(
-                            "groups with their own geometry support only shift, uniform scale, and planar rotation"
-                                .into(),
-                        ));
+                    };
+                    let appearance = |id| {
+                        crate::animation_request::fixed_family_method_appearance(store, id)
+                            .map_err(invalid)
+                    };
+                    if let Some(appearance) = appearance(*source)?.or(appearance(*target_state)?) {
+                        let layout = appearance == MethodFamilyAppearance::FixedLayout;
+                        let supported = if layout {
+                            crate::animation_request::supports_layout_shift_target(
+                                store,
+                                *source,
+                                *target_state,
+                            )
+                        } else {
+                            crate::animation_request::supports_geometry_method_target(
+                                store,
+                                *source,
+                                *target_state,
+                            )
+                        }
+                        .map_err(invalid)?;
+                        if supported {
+                            self.stage_fixed_method_family(
+                                store, *source, appearance, *options, admitted,
+                            )?;
+                            return Ok(declaration.create_family_transform_animation_with_mode(
+                                *source,
+                                *target_state,
+                                SemanticFamilyTransformMode::FixedTopology,
+                                *options,
+                            ));
+                        }
+                        // Mounted tables retain their existing method target path for
+                        // other operations. Graph targets require fixed vertex bindings.
+                        let has_graph = |root| {
+                            store.ordered_authoring_nodes(root).is_ok_and(|nodes| {
+                                crate::animation_request::has_graph_members(store, &nodes)
+                            })
+                        };
+                        if !layout
+                            || !self.reachability.is_reachable(*source)
+                            || has_graph(*source)
+                            || has_graph(*target_state)
+                        {
+                            let message = if layout {
+                                "graph and detached table animations require planar shift with unchanged layout"
+                            } else {
+                                "groups with their own geometry support only shift, uniform scale, and planar rotation"
+                            };
+                            return Err(ExecutionSessionAnimationError::InvalidComposition(
+                                message.into(),
+                            ));
+                        }
                     }
-                    self.stage_geometry_method_family(store, *source, *options, admitted)?;
-                    return Ok(declaration.create_family_transform_animation_with_mode(
-                        *source,
-                        *target_state,
-                        SemanticFamilyTransformMode::FixedTopology,
-                        *options,
-                    ));
                 }
                 let family_effects =
                     family_effect_target::has_effects(store, *source, *target_state)?;
@@ -3640,10 +3673,11 @@ impl ExecutionSession {
         Ok(())
     }
 
-    fn stage_geometry_method_family(
+    fn stage_fixed_method_family(
         &self,
         store: &SemanticStore,
         source: SemanticNodeId,
+        appearance: MethodFamilyAppearance,
         options: AnimationOptions,
         admitted: &mut AnimationAdmissions,
     ) -> Result<(), ExecutionSessionAnimationError> {
@@ -3652,15 +3686,11 @@ impl ExecutionSession {
             .is_some_and(|arc| arc.abs() >= noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD)
         {
             return Err(ExecutionSessionAnimationError::InvalidComposition(
-                "groups with their own geometry require a straight motion path".into(),
+                "table, graph, and owned-geometry method targets require a straight motion path"
+                    .into(),
             ));
         }
-        self.stage_detached_method_family(
-            store,
-            source,
-            MethodFamilyAppearance::OwnedGeometry,
-            admitted,
-        )?;
+        self.stage_detached_method_family(store, source, appearance, admitted)?;
         Ok(())
     }
 
