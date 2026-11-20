@@ -148,105 +148,47 @@ class FeatureLessonStoryboards(unittest.TestCase):
                             and node.func.id == "WorldTransformTo" for node in ast.walk(scene)))
         self.assertEqual(entry["thumbnail"], "thumbnails/showcase/showcase-spatial-scene.png")
 
-    def test_camera_path_lesson_uses_a_finite_updater_and_retained_path_motion(self):
+    def test_camera_and_dot_follow_the_same_path_in_one_segment(self):
         manifest = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())
         entry = next(item for item in manifest["entries"] if item["id"] == "showcase-camera-follows-path")
-        self.assertEqual(entry["duration"], 9.8)
-        self.assertEqual(entry["primary_feature"], "camera-following-path-motion")
-        self.assertEqual(entry["playback_capability"], "nonreplayable-host-callbacks")
-        source = (WEB / entry["path"]).read_text()
-        tree = ast.parse(source, filename=entry["path"])
-        scene = next(node for node in tree.body if isinstance(node, ast.ClassDef))
-        construct = next(node for node in scene.body
-                         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "construct")
-        self.assertEqual([base.id for base in scene.bases if isinstance(base, ast.Name)], ["MovingCameraScene"])
-        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                            and node.func.id == "MoveAlongPath" for node in ast.walk(construct)))
-        updater_calls = [node for node in ast.walk(construct) if isinstance(node, ast.Call)
-                         and isinstance(node.func, ast.Attribute)
-                         and node.func.attr in {"add_updater", "remove_updater"}]
-        self.assertEqual(len(updater_calls), 2)
-        self.assertCountEqual([node.func.attr for node in updater_calls], ["add_updater", "remove_updater"])
-        for call in updater_calls:
-            self.assertEqual(ast.unparse(call.func.value), "camera_frame")
-            self.assertEqual(ast.unparse(call.args[0]), "follow_point")
-        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                            and node.func.id == "Restore"
-                            and ast.unparse(node.args[0]) == "camera_frame"
-                            for node in ast.walk(construct)))
-        self.assertIn("fixed axes and path", entry["features"])
+        self.assertEqual(entry["playback_capability"], "deterministic-retained-replay")
+        tree = ast.parse((WEB / entry["path"]).read_text())
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        plays = [node for node in calls if isinstance(node.func, ast.Attribute) and node.func.attr == "play"]
+        follow = [
+            [tuple(ast.unparse(value) for value in arg.args) for arg in play.args
+             if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) and arg.func.id == "MoveAlongPath"]
+            for play in plays
+        ]
+        self.assertEqual([args for args in follow if args], [[("moving_dot", "path"), ("camera_frame", "path")]])
+        self.assertTrue(any(isinstance(node.func, ast.Name) and node.func.id == "Restore"
+                            and ast.unparse(node.args[0]) == "camera_frame" for node in calls))
 
-    def test_reactive_lesson_removes_exact_registered_callbacks(self):
-        source = (WEB / "python/examples/showcase_reactive_relationships.py").read_text()
-        tree = ast.parse(source)
-        pairs = {"add_updater": [], "remove_updater": []}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in pairs:
-                self.assertIsInstance(node.func.value, ast.Name)
-                self.assertEqual(len(node.args), 1)
-                self.assertIsInstance(node.args[0], ast.Name)
-                pairs[node.func.attr].append((node.func.value.id, node.args[0].id))
-        self.assertEqual(len(pairs["add_updater"]), 3)
-        self.assertCountEqual(pairs["add_updater"], pairs["remove_updater"])
+    def test_reactive_lesson_animates_both_endpoint_positions_and_connector(self):
+        tree = ast.parse((WEB / "python/examples/showcase_reactive_relationships.py").read_text())
+        moves = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == "move_readings"]
+        self.assertEqual(len(moves), 2)
+        self.assertTrue(all([ast.unparse(arg) for arg in move.args[:3]] == ["left", "right", "connector"]
+                            for move in moves))
+        morphs = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Name) and node.func.id == "Transform"]
+        self.assertEqual(len(morphs), 1)
+        self.assertEqual(ast.unparse(morphs[0].args[0]), "connector")
+        self.assertEqual([ast.unparse(arg) for arg in morphs[0].args[1].args], ["left_end", "right_end"])
 
-    def test_always_redraw_lesson_uses_two_bounded_producers_and_declares_callbacks(self):
+    def test_animated_values_lesson_retains_shared_tracker_bindings(self):
         manifest = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())
         entry = next(item for item in manifest["entries"] if item["id"] == "showcase-always-redraw")
-        self.assertEqual(entry["playback_capability"], "nonreplayable-host-callbacks")
-        source = (WEB / entry["path"]).read_text()
-        tree = ast.parse(source)
-        scene = next(node for node in tree.body if isinstance(node, ast.ClassDef))
-        construct = next(node for node in scene.body
-                         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "construct")
-        redraws = [node for node in ast.walk(construct) if isinstance(node, ast.Call)
-                   and isinstance(node.func, ast.Name) and node.func.id == "always_redraw"]
-        self.assertEqual(len(redraws), 2)
-        produced_shapes = []
-        for redraw in redraws:
-            self.assertIsInstance(redraw.args[0], ast.Lambda)
-            produced_shapes.extend(node.func.id for node in ast.walk(redraw.args[0])
-                                   if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                                   and node.func.id in {"Circle", "Rectangle", "Line", "Path"})
-        self.assertCountEqual(produced_shapes, ["Circle", "Rectangle"])
-        self.assertFalse(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                             and node.func.attr in {"add_updater", "remove_updater"}
-                             for node in ast.walk(tree)))
-
-    def test_reactive_targets_are_bound_and_registered_before_first_play(self):
-        source = (WEB / "python/examples/showcase_reactive_relationships.py").read_text()
-        tree = ast.parse(source)
-        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
-        plays = sorted((node for node in calls if isinstance(node.func, ast.Attribute)
-                        and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
-                        and node.func.attr in {"play", "wait"}), key=lambda node: node.lineno)
-        first = plays[0]
-        registrations = [node for node in calls if isinstance(node.func, ast.Attribute)
-                         and node.func.attr == "add_updater"]
-        targets = {node.func.value.id for node in registrations}
-        self.assertEqual(targets, {"left", "right", "connector"})
-        self.assertTrue(all(node.lineno < first.lineno for node in registrations))
-        bound = {arg.id for node in calls if isinstance(node.func, ast.Attribute)
-                 and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
-                 and node.func.attr == "add" and node.lineno < first.lineno
-                 for arg in node.args if isinstance(arg, ast.Name)}
-        self.assertTrue(targets <= bound, "detached callbacks alone do not enroll a running scene")
-        faded = {node.args[0].id for node in ast.walk(first) if isinstance(node, ast.Call)
-                 and isinstance(node.func, ast.Name) and node.func.id == "FadeIn"
-                 and isinstance(node.args[0], ast.Name)}
-        self.assertFalse(targets & faded, "FadeIn cannot introduce an already attached callback target")
-        hidden = {node.func.value.id for node in calls if isinstance(node.func, ast.Attribute)
-                  and isinstance(node.func.value, ast.Name) and node.func.attr == "set_opacity"
-                  and node.lineno < first.lineno and len(node.args) == 1
-                  and isinstance(node.args[0], ast.Constant) and node.args[0].value == 0}
-        revealed = {node.func.value.value.id for node in ast.walk(first) if isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute) and node.func.attr == "set_opacity"
-                    and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "animate"
-                    and isinstance(node.func.value.value, ast.Name) and len(node.args) == 1
-                    and isinstance(node.args[0], ast.Constant) and node.args[0].value == 1}
-        self.assertTrue(targets <= hidden, "pre-enrolled targets must start invisible")
-        self.assertTrue(targets <= revealed, "each callback target needs an animated opacity reveal")
-        self.assertTrue(any(kw.arg == "rate_func" and isinstance(kw.value, ast.Name)
-                            and kw.value.id == "smooth" for kw in first.keywords))
+        self.assertEqual(entry["playback_capability"], "deterministic-retained-replay")
+        tree = ast.parse((WEB / entry["path"]).read_text())
+        bindings = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute) and node.func.attr == "bind_sampled"]
+        self.assertCountEqual([tuple(ast.unparse(arg) for arg in call.args[:2]) + (call.args[2].value,)
+                               for call in bindings], [
+            ("circle", "clock", "position"), ("circle", "clock", "scale"),
+            ("rectangle", "clock", "position"), ("rectangle", "clock", "rotation"),
+        ])
 
     def test_transform_lesson_teaches_explicit_copy_not_unimplemented_animations(self):
         source = (WEB / "python/examples/showcase_transform_ownership.py").read_text()

@@ -558,15 +558,15 @@ class BraceEdits(Scene):
         finally:
             close_scene(scene)
 
-    def test_always_redraw_gallery_uses_sampled_callback_content(self):
-        path = ROOT / "web/python/examples/showcase_always_redraw.py"
+    def test_always_redraw_uses_sampled_callback_content(self):
+        path = ROOT / "web/python/examples/ordinary_always_redraw.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), sample_hz=12))
         try:
             from _manim_scene import _context
             frames, segments, regions = _context(scene).metrics()
-            self.assertEqual(segments, 7)
-            self.assertGreater(frames, 7)
-            self.assertGreater(regions, 7)
+            self.assertEqual(segments, 1)
+            self.assertGreater(frames, 1)
+            self.assertGreater(regions, 1)
         finally:
             close_scene(scene)
 
