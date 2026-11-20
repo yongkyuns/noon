@@ -475,8 +475,9 @@ pub struct SemanticExecutionObject {
     pub fill_paint: Option<std::sync::Arc<noon_core::SemanticPaint>>,
     /// Same immutable definition and generational attachment as the compiled row.
     pub effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
-    /// Authored native action lowered with the object's time-qualified values.
+    /// Authored eligibility for presentation-only drag.
     pub viewer_draggable: bool,
+    /// Authored native action lowered with the object's time-qualified values.
     pub click_indicate: Option<std::sync::Arc<noon_core::SemanticClickIndicate>>,
     /// Authoritative scene-global semantic identity.
     pub semantic_id: SemanticNodeId,

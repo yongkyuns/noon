@@ -1823,8 +1823,7 @@ impl CompiledScene {
         self.live_object_count
     }
 
-    /// Resolve the authored click action in the currently selected execution revision.
-    /// Retired rows are excluded; visibility and driver admission remain runtime policy.
+    /// Resolve authored drag eligibility in the currently selected execution revision.
     pub fn viewer_draggable(&self, object: ObjectId) -> bool {
         self.object_index(object)
             .is_some_and(|index| self.objects[index as usize].viewer_draggable)
@@ -1834,6 +1833,8 @@ impl CompiledScene {
         self.viewer_drag_target_count != 0
     }
 
+    /// Resolve the authored click action in the currently selected execution revision.
+    /// Retired rows are excluded; visibility and driver admission remain runtime policy.
     pub fn click_indicate_binding(&self, object: ObjectId) -> Option<SemanticClickIndicate> {
         self.objects[self.object_index(object)? as usize]
             .click_indicate

@@ -107,11 +107,12 @@ pub enum SemanticMutation {
         object: SemanticTransactionNodeRef,
         transform: SemanticTransform,
     },
-    /// Replace or clear one object-owned click action declaration.
+    /// Enable or disable presentation-only viewer drag for one object.
     SetViewerDraggable {
         object: SemanticTransactionNodeRef,
         enabled: bool,
     },
+    /// Replace or clear one object-owned click action declaration.
     SetClickAction {
         object: SemanticTransactionNodeRef,
         binding: Option<SemanticClickAction>,
