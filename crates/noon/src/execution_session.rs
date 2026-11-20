@@ -4658,14 +4658,17 @@ impl ExecutionSession {
                     // Both existing and candidate-local fixed-topology targets
                     // can share ordinary tracks. Padding still needs exclusive
                     // structural completion; use the compiler's correspondence.
-                    if !schedule.scalar_leaves().is_empty()
-                        || ((multiple_families || !schedule.leaves().is_empty())
-                            && activation.occurrences().iter().any(|occurrence| {
-                                occurrence.source_padding || occurrence.target_padding
-                            }))
+                    let mixed = multiple_families
+                        || !schedule.leaves().is_empty()
+                        || !schedule.scalar_leaves().is_empty();
+                    if mixed
+                        && activation.occurrences().iter().any(|occurrence| {
+                            occurrence.source_padding || occurrence.target_padding
+                        })
                     {
                         return Err(ExecutionSessionAnimationError::InvalidComposition(
-                            "unequal-family Transform and scalar leaves cannot share a mixed family activation".into(),
+                            "unequal-family Transform requires an exclusive structural activation"
+                                .into(),
                         ));
                     }
                     let mut members = HashSet::new();

@@ -140,7 +140,13 @@ fn multiple_existing_family_targets_require_fixed_topology_before_publication() 
 
 #[test]
 fn existing_family_targets_compose_only_with_fixed_topology_and_disjoint_objects() {
-    for (target_count, overlap) in [(1, false), (2, false), (3, false), (2, true)] {
+    for (target_count, overlap, scalar) in [
+        (1, false, false),
+        (2, false, false),
+        (3, false, false),
+        (2, true, false),
+        (3, false, true),
+    ] {
         let mut store = SemanticStore::new();
         let left = object(&mut store, -2.0);
         let right = object(&mut store, 2.0);
@@ -151,14 +157,28 @@ fn existing_family_targets_compose_only_with_fixed_topology_and_disjoint_objects
         let target = family(&mut store, &targets);
         let marker = object(&mut store, 0.0);
         let root = family(&mut store, &[source, marker]);
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let other = if scalar {
+            SemanticCompositionRequest::ValueTracker {
+                signal: store.insert_semantic_input_signal(0.0).unwrap(),
+                target: 1.0,
+                options,
+            }
+        } else {
+            SemanticCompositionRequest::Rotate {
+                target: if overlap { left } else { marker },
+                angle: 1.0,
+                hold_origin: false,
+                options,
+            }
+        };
         let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
         session.take_frame_changes();
         let context = session.publication_context();
         let frame = session.frame().clone();
         let nodes = store.len();
-        let options = AnimationOptions::new()
-            .run_time(1.0)
-            .rate_func(RateFunction::Linear);
         let request = SemanticCompositionRequest::Composition {
             kind: SemanticAnimationCompositionKind::Parallel,
             options,
@@ -168,12 +188,7 @@ fn existing_family_targets_compose_only_with_fixed_topology_and_disjoint_objects
                     target_state: target,
                     options,
                 },
-                SemanticCompositionRequest::Rotate {
-                    target: if overlap { left } else { marker },
-                    angle: 1.0,
-                    hold_origin: false,
-                    options,
-                },
+                other,
             ],
         };
         let result = session.declare_and_activate_composition(

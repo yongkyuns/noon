@@ -1,16 +1,18 @@
-//! Mixed scalar and object animation through one shared composition and completion.
+//! Scalar, object and fixed-membership group animation on one timeline.
 
 use std::{f64::consts::PI, rc::Rc};
 
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
-    LiveContinuation, LiveProgram, Mobject, RateFunction, Scene,
-    SemanticAnimationCompositionKind as Kind, SemanticVec3, ValueTracker,
+    LiveContinuation, LiveProgram, Mobject, MobjectFamily, RateFunction, Scene,
+    SemanticAnimationCompositionKind as Kind, SemanticVec3, ValueTracker, Vec2,
 };
 
 pub struct MixedScalarComposition {
     circle: Mobject,
     square: Mobject,
+    markers: MobjectFamily,
+    marker_target: MobjectFamily,
     tracker: ValueTracker,
     stage: u8,
 }
@@ -41,6 +43,11 @@ impl LiveContinuation for MixedScalarComposition {
                                 Request::Rotate {
                                     target: &self.square,
                                     angle: PI,
+                                    options,
+                                },
+                                Request::FamilyMethodTargetTo {
+                                    source: &self.markers,
+                                    target_state: &self.marker_target,
                                     options,
                                 },
                             ],
@@ -114,6 +121,29 @@ pub fn program() -> Result<LiveProgram<MixedScalarComposition>, String> {
         .map_err(|error| error.to_string())?;
     scene.add(&circle).map_err(|e| e.to_string())?;
     scene.add(&square).map_err(|e| e.to_string())?;
+    let mut marker = |x| -> Result<Mobject, crate::AuthoringError> {
+        let dot = scene.circle(0.16)?;
+        scene.shift(&dot, Vec2::new(x, -1.5))?;
+        scene.set_fill(&dot, Color::YELLOW, 1.0)?;
+        scene.disable_stroke(&dot)?;
+        Ok(dot)
+    };
+    let left = marker(-1.3).map_err(|e| e.to_string())?;
+    let right = marker(1.3).map_err(|e| e.to_string())?;
+    let markers = scene
+        .family(&[(&left).into(), (&right).into()])
+        .map_err(|e| e.to_string())?;
+    let marker_target = markers
+        .copy_family()
+        .map_err(|e| e.to_string())?
+        .root()
+        .clone();
+    scene
+        .shift_family(&marker_target, 0.0, -1.0)
+        .map_err(|e| e.to_string())?;
+    scene
+        .add_many(&[(&markers).into()])
+        .map_err(|e| e.to_string())?;
     let tracker = scene
         .value_tracker(0.0)
         .map_err(|error| error.to_string())?;
@@ -131,6 +161,8 @@ pub fn program() -> Result<LiveProgram<MixedScalarComposition>, String> {
         .into_live_program(MixedScalarComposition {
             circle,
             square,
+            markers,
+            marker_target,
             tracker,
             stage: 0,
         })
@@ -163,6 +195,10 @@ mod tests {
             let frame = program.session().frame();
             assert!((frame.render_transform(0).translation.x - x).abs() < 1e-5);
             assert!((frame.render_transform(1).rotation - angle).abs() < 1e-5);
+            let marker_y = -1.5 - (x + 2.0) / 4.0;
+            for member in [2, 3] {
+                assert!((frame.render_transform(member).translation.y - marker_y).abs() < 1e-5);
+            }
         }
         for end in [2.5, 2.75, 3.0] {
             match program.drive_to(&mut callbacks, end).unwrap() {

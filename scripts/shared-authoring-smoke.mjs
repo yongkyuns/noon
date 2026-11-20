@@ -1810,6 +1810,12 @@ author(result)
         const color = renderedWorldPixel(screenshot, x + offset, 1);
         assert.ok(color.blue > color.red + 25, `mixed scalar composition at ${time}s: circle expected at ${x}`);
       }
+      const markerY = time < 2.5 ? -1.5 - (x + 2) / 4 : -2.5;
+      for (const markerX of [-1.3, 1.3]) {
+        const color = renderedWorldPixel(screenshot, markerX, markerY);
+        assert.ok(color.red > color.blue + 25 && color.green > color.blue + 25,
+          `mixed scalar composition at ${time}s missed a moving group member`);
+      }
     }
     const result = await page.evaluate(async () => {
       const { execution, authored } = window.sharedAuthoringSmoke.sampledProof;
@@ -1817,7 +1823,7 @@ author(result)
       return { duration: completed.duration, metrics: (await execution.metrics()).metrics };
     });
     assert.equal(result.duration, 3);
-    assert.equal(result.metrics.objectCount, 2);
+    assert.equal(result.metrics.objectCount, 4);
   } finally {
     await stopSampledSource(page);
   }
