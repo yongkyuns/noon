@@ -493,9 +493,9 @@ class Outline(Scene):
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
         callout = scene.mobjects[-1]
         self.assertEqual(callout.get_num_points(), 36)
-        points = callout.get_all_points()
-        dx, dy = points[3][0] - points[0][0], points[3][1] - points[0][1]
-        self.assertAlmostEqual(atan2(dy, dx), pi / 2 - pi / 12, places=5)
+        start = callout.get_start()
+        edge = callout.point_from_proportion(0.05)
+        self.assertAlmostEqual(atan2(edge[1] - start[1], edge[0] - start[0]), pi / 2 - pi / 12, places=5)
         view = prepare_view(scene)
         try:
             times = (0.25, 1.0, 1.75, 2.75, view.duration)
