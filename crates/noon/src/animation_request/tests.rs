@@ -384,11 +384,44 @@ fn owned_group_opacity_admits_one_scope_and_leaves_member_paint_unchanged() {
     let glow = execution.scene().get_effect(&family, "glow").unwrap();
     let segment = activate(
         &mut execution.live(),
-        family.animate().set_object_opacity(1.0).into(),
+        family
+            .animate()
+            .shift(RIGHT)
+            .set_object_opacity(1.0)
+            .with_options(
+                AnimationOptions::new()
+                    .run_time(3.0)
+                    .rate_func(RateFunction::ThereAndBack),
+            )
+            .into(),
         linear(),
     )
     .unwrap();
+    execution.live().advance_segment_to(segment, 1.5).unwrap();
+    assert_eq!(
+        execution
+            .scene()
+            .effective(&left)
+            .unwrap()
+            .transform
+            .translation
+            .x,
+        -1.5
+    );
+    assert_eq!(
+        execution
+            .session()
+            .frame()
+            .objects
+            .iter()
+            .find(|row| row.id == scope_id)
+            .unwrap()
+            .style
+            .opacity,
+        0.625
+    );
     finish(&mut execution.live(), segment);
+    assert_eq!(left.state().unwrap().transform.translation.x, -1.0);
     assert_eq!(family.own_style().unwrap().object_opacity, 1.0);
     assert_eq!(
         execution.session().execution_object_id(family.node_id()),
@@ -429,6 +462,7 @@ fn detached_group_fade_admits_the_original_effect_at_authored_opacity() {
     for invalid in [
         group
             .animate()
+            .shift(UP)
             .set_object_opacity(f64::NAN)
             .into_animation_request(),
         alias
@@ -453,7 +487,7 @@ fn detached_group_fade_admits_the_original_effect_at_authored_opacity() {
 
     let segment = activate(
         &mut execution.live(),
-        group.animate().set_object_opacity(1.0).into(),
+        group.animate().set_object_opacity(1.0).shift(UP).into(),
         linear(),
     )
     .unwrap();
@@ -480,6 +514,17 @@ fn detached_group_fade_admits_the_original_effect_at_authored_opacity() {
         assert_eq!(scope.style.opacity, time as f32);
         assert_eq!(scope.content.composed_source().unwrap().members(), [member]);
         assert_eq!(scope.effects.as_ref().unwrap().attachments(), [attachment]);
+        assert_eq!(
+            frame
+                .objects
+                .iter()
+                .find(|row| row.id == member)
+                .unwrap()
+                .transform
+                .translation
+                .y,
+            time as f32
+        );
         assert_eq!(
             frame
                 .objects

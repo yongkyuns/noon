@@ -88,14 +88,14 @@ class GlowEdit(Scene):
         with self.assertRaisesRegex(NoonError, "detached family animate must preserve its composed effects"):
             asyncio.run(run_source(source))
 
-    def test_entering_group_opacity_rejects_a_combined_motion_edit(self):
+    def test_entering_group_opacity_rejects_a_combined_scale(self):
         source = """from noon import *
 class MoveFade(Scene):
     def construct(self):
         group = VGroup(Circle(), Square().shift(RIGHT)).set_object_opacity(0)
-        self.play(group.animate.shift(UP).set_object_opacity(1))
+        self.play(group.animate.scale(1.5).set_object_opacity(1))
 """
-        with self.assertRaisesRegex(NoonError, "separate request for composite opacity"):
+        with self.assertRaisesRegex(NoonError, "composite opacity can be combined with a planar shift"):
             asyncio.run(run_source(source))
 
     def test_nested_group_keeps_existing_mixed_play_compositions(self):
@@ -485,12 +485,13 @@ class Demo(Scene):
             before, middle, hold, end = [view.capture(time=time, width=320, height=180)
                                          for time in (0.3, 1.2, 2.4, view.duration)]
 
-            def blue(frame, x):
-                return frame[(94 * 320 + x) * 4 + 2]
+            def blue(frame, x, y=94):
+                return frame[(y * 320 + x) * 4 + 2]
 
             self.assertLess(blue(before, 109), blue(middle, 109))
             self.assertLess(blue(middle, 109), blue(hold, 109))
             self.assertLess(blue(hold, 109), blue(end, 109))
+            self.assertGreater(blue(middle, 99, 120), blue(hold, 99, 120))
             for pixels in (middle, hold):
                 self.assertEqual(blue(pixels, 99), blue(pixels, 109))
                 self.assertLess(blue(pixels, 201), blue(pixels, 211))

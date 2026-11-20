@@ -218,6 +218,7 @@ pub(crate) enum SemanticCompositionRequest {
     FamilyObjectOpacity {
         source: SemanticNodeId,
         opacity: f64,
+        motion: Option<Box<crate::animation_request::FamilyMethodTarget>>,
         options: AnimationOptions,
     },
     MoveAlongPath {
@@ -2314,6 +2315,7 @@ impl ExecutionSession {
             SemanticCompositionRequest::FamilyObjectOpacity {
                 source,
                 opacity,
+                motion,
                 options,
             } => {
                 self.stage_detached_method_family(
@@ -2322,11 +2324,24 @@ impl ExecutionSession {
                     MethodFamilyAppearance::RootOpacity,
                     admitted,
                 )?;
-                family_effect_target::stage_owned_opacity(
+                let motion = motion
+                    .as_ref()
+                    .map(|target| target.stage(store, *source, declaration))
+                    .transpose()
+                    .map_err(|error| {
+                        ExecutionSessionAnimationError::InvalidComposition(error.to_string())
+                    })?;
+                let target = family_effect_target::stage_owned_opacity_target(
                     self,
                     store,
                     *source,
                     *opacity,
+                    declaration,
+                )?;
+                family_effect_target::stage_opacity_animation(
+                    *source,
+                    target.into(),
+                    motion.map(Into::into),
                     *options,
                     declaration,
                 )
@@ -2499,13 +2514,18 @@ impl ExecutionSession {
                         MethodFamilyAppearance::RootOpacity,
                         admitted,
                     )?;
-                    family_effect_target::validate_entering_opacity(store, *source, *target_state)?;
-                    return Ok(declaration.create_effect_target_animation(
+                    let shifts = family_effect_target::validate_entering_opacity(
+                        store,
                         *source,
                         *target_state,
-                        true,
+                    )?;
+                    return family_effect_target::stage_opacity_animation(
+                        *source,
+                        (*target_state).into(),
+                        shifts.then_some((*target_state).into()),
                         *options,
-                    ));
+                        declaration,
+                    );
                 }
                 let has_owned_geometry = |id| {
                     crate::animation_request::contains_family_geometry(store, id).map_err(|error| {

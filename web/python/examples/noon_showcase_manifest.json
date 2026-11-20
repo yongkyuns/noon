@@ -38,14 +38,14 @@
     },
     {
       "id": "showcase-group-opacity", "title": "Fade an overlay as one layer",
-      "lesson": "Bring a transparent overlay in on its first play. Compare its uniform fade with the brighter overlap produced by fading each shape separately.",
+      "lesson": "Slide in a transparent overlay while it fades as one layer. Compare its uniform color with the brighter overlap on the right.",
       "primary_feature": "composite-group-opacity", "category": "Visual design",
       "path": "python/examples/showcase_group_opacity.py", "features": ["VGroup", "animate", "composite opacity"],
       "duration": 4.8, "thumbnail_time": 2.4,
       "thumbnail": "thumbnails/showcase/showcase-group-opacity.png",
       "thumbnail_alt": "Two pairs of faded blue circles. The left pair has uniform color and the right pair has a brighter overlap.",
       "still_intervals": [[0, 0.6], [1.8, 3], [4, 4.8]],
-      "beats": [{"time": 1.2, "label": "Bring in both overlays"}, {"time": 2.4, "label": "Compare the overlap"}, {"time": 3.5, "label": "Reach full opacity"}]
+      "beats": [{"time": 1.2, "label": "Slide and fade the overlay"}, {"time": 2.4, "label": "Compare the overlap"}, {"time": 3.5, "label": "Reach full opacity"}]
     },
     {
       "id": "showcase-mounted-callout", "title": "Move a labeled callout",

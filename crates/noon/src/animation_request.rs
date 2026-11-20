@@ -181,11 +181,9 @@ tuple_request!(A a, B b, C c, D d, E e, F f, G g, H h);
 /// [`Self::rotate`] uses point correspondence for vector content; it is not the
 /// procedural angular path of an explicit Rotate animation. Families use the
 /// existing family transform interpolation and a shared geometry-center pivot.
-/// Families must already be added to the scene; a play may contain independent
-/// family targets alongside object animations. Animating a shared member or the
-/// same family twice in one play is rejected atomically. Ordinary nested vector
-/// groups are supported with fixed membership. Content-owning groups, effects,
-/// and table/graph metadata are unsupported.
+/// Fixed-membership planar families can enter on their first play. A play may
+/// contain independent family targets alongside object animations. Animating a
+/// shared member or the same family twice in one play is rejected atomically.
 #[derive(Clone, Debug)]
 #[must_use = "animation requests do nothing until passed to scene.play"]
 pub struct Animate {
@@ -256,7 +254,7 @@ impl Animate {
     }
 
     /// Animate an object's overall opacity, or a group's final composited opacity.
-    /// For a group, use a separate request for its composite opacity.
+    /// Group composite opacity can run together with a planar shift.
     pub fn set_object_opacity(mut self, opacity: f64) -> Self {
         self.object_opacity = Some(opacity);
         self
@@ -292,20 +290,34 @@ impl Animate {
             CompositeEntryHandle::Family(family) => {
                 if let Some(opacity) = self.object_opacity {
                     live.require_family(family)?;
-                    if !self.methods.is_empty() {
+                    if self
+                        .methods
+                        .iter()
+                        .any(|method| !matches!(method, Method::Shift(_)))
+                    {
                         return Err(LiveSessionError::Mobject(
-                            "group animate uses a separate request for composite opacity".into(),
+                            "group composite opacity can be combined with a planar shift".into(),
                         ));
                     }
+                    let motion = (!self.methods.is_empty())
+                        .then(|| FamilyMethodTarget::capture(live, family, &self.methods, true))
+                        .transpose()?
+                        .map(Box::new);
                     return Ok(SemanticCompositionRequest::FamilyObjectOpacity {
                         source: family.node_id(),
                         opacity,
+                        motion,
                         options: self.options,
                     });
                 }
                 return Ok(SemanticCompositionRequest::FamilyMethodTarget {
                     source: family.node_id(),
-                    target: Box::new(FamilyMethodTarget::capture(live, family, &self.methods)?),
+                    target: Box::new(FamilyMethodTarget::capture(
+                        live,
+                        family,
+                        &self.methods,
+                        false,
+                    )?),
                     options: self.options,
                 });
             }
@@ -477,9 +489,18 @@ impl From<FadeOut> for AnimationRequest {
 pub(crate) fn activate(
     live: &mut LiveSession<'_>,
     request: AnimationRequest,
-    options: AnimationOptions,
+    mut options: AnimationOptions,
 ) -> Result<ExecutionSegment, LiveSessionError> {
-    let request = request.prepare(live)?;
+    let mut request = request.prepare(live)?;
+    if let SemanticCompositionRequest::FamilyObjectOpacity {
+        motion: Some(_),
+        options: group_options,
+        ..
+    } = &mut request
+    {
+        // Resolve play overrides before splitting the method into its two channels.
+        *group_options = group_options.with_overrides(std::mem::take(&mut options));
+    }
     live.declare_and_activate_semantic_composition(&request, options)
 }
 
