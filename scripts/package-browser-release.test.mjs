@@ -70,6 +70,8 @@ async function fixture(t) {
     "web/pkg/package.json": '{"name":"noon-web","version":"0.1.0"}\n',
     "web/pkg/python-editor-bundle.js": "export const editor = true;\n",
     "web/pkg/python-editor-licenses.txt": "MIT editor fixture notice\n",
+    "web/pkg/mp4box.js": "export const demuxer = true;\n",
+    "web/pkg/mp4box-LICENSE.txt": "BSD-3-Clause demuxer fixture notice\n",
     "web/pkg/arimo-OFL.txt": "Arimo fixture license\n",
   })) await put(name, bytes);
   const rebuild = async () => {
@@ -98,7 +100,8 @@ test("complete browser candidate preserves identity, checks every payload, and i
   assert.deepEqual(await readFile(path.join(candidate, "web/runtime-build-identity.json")), identity);
   for (const name of ["web/authoring-render-worker.js", "web/python/noon.py",
     "web/python/examples/first_lesson.py", "web/pkg/python-editor-bundle.js",
-    "web/pkg/python-editor-licenses.txt", "web/pkg/arimo-OFL.txt", "web/.nojekyll", longAsset,
+    "web/pkg/python-editor-licenses.txt", "web/pkg/mp4box.js", "web/pkg/mp4box-LICENSE.txt",
+    "web/pkg/arimo-OFL.txt", "web/.nojekyll", longAsset,
     "licenses/typst-assets-0.15.1/NOTICE", "licenses/typst-assets-0.15.1/LICENSE",
     "licenses/typst-assets-0.15.1/README.md", "crates/noon/src/code_display/THIRD_PARTY_NOTICES.md"]) {
     assert.ok(name in first.manifest.files, `complete tree omitted ${name}`);

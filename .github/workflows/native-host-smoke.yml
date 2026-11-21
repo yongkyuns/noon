@@ -311,10 +311,10 @@ jobs:
           key: ${{ runner.os }}-capture-cargo-sources-${{ hashFiles('rust-toolchain.toml', '**/Cargo.toml') }}
           restore-keys: ${{ runner.os }}-capture-cargo-sources-
 
-      - name: Install software Vulkan without a virtual display
+      - name: Install software Vulkan and FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 ffmpeg
 
       - name: Verify native capture does not depend on a window or language host
         run: |

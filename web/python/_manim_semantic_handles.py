@@ -3279,8 +3279,8 @@ def _group_add(self: _compat.Group, *mobjects: object) -> _compat.Group:
         for value in mobjects:
             self._semantic_member_wrappers[_family_wrapper_key(value)] = value
         if scene is not None:
-            from _manim_scene import _reconcile_completed_family_bindings
-            _reconcile_completed_family_bindings(scene, mobjects)
+            from _manim_scene import _associate_published_wrappers
+            _associate_published_wrappers(scene, mobjects, operation="Scene.completion")
 
     try:
         _membership_call(self, context, "editFamilyMembership", "editObjectMembership", "editMembership", batch)

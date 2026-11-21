@@ -69,6 +69,7 @@ function fixture({ retire = () => Promise.resolve(), started = true, prepared = 
     preparedPlaybackPlayer: started && prepared ? oldPlayer : null,
     sceneRunPromise: null, activeSourceContinuation: null, activeRunRequest: null,
     selectedExampleId: "one", sceneSourceEditor: { value: "same source with a run-dependent failure" },
+    videoFileInput: null,
     status: { dataset: {} }, patchStatus: { dataset: {} }, authoringWorkers: null,
     currentExample: () => ({ id: "one", title: "One" }),
     generations: { beginRun: () => ({ selectionGeneration: 1, runGeneration: 2 }) },
