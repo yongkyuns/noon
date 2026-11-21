@@ -394,7 +394,7 @@ try {
     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
     assert.equal(await page.evaluate(() => window.__noonExampleGallery.selectedExampleId), nativeInputEntry.id);
     const dragCanvas = page.locator("#scene");
-    assert.match(await dragCanvas.evaluate(canvas => getComputedStyle(canvas).touchAction),
+    assert.match(await page.evaluate(() => window.getComputedStyle(document.querySelector("#scene")).touchAction),
       /^(pinch-zoom|none)$/, "one-finger dragging must stay on the scene canvas");
     await layoutReplayViewport(dragCanvas, captureSize);
     await dragCanvas.evaluate(element => element.style.setProperty("pointer-events", "auto", "important"));
