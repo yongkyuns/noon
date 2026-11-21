@@ -95,7 +95,11 @@ fn native_video_seek_and_export_preserve_pts_and_soundtrack() {
     let mut capture = SessionCapture::new(scene.session(), capture_options.clone()).unwrap();
     scene.seek(0.1).unwrap();
     let entry = capture.capture(scene.session_mut()).unwrap().rgba.to_vec();
-    assert!(entry.chunks_exact(4).any(|pixel| pixel[0..3] != [0, 0, 0]));
+    assert!(entry
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|pixel| pixel[..3] != [0, 0, 0]));
     scene.seek(0.4).unwrap();
     let late = capture.capture(scene.session_mut()).unwrap().rgba.to_vec();
     scene.seek(0.2).unwrap();
