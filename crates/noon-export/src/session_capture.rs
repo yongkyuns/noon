@@ -7,7 +7,7 @@
 use std::{error::Error, fmt};
 
 use noon::integration::scene_execution::ExecutionSession;
-use noon::integration::RuntimeIdentity;
+use noon::integration::{RendererPublication, RuntimeIdentity};
 use noon_core::PublicationContext;
 
 use crate::{gpu, CaptureError, CaptureOptions, CapturePixelFormat, CaptureSummary, CaptureWork};
@@ -61,16 +61,36 @@ impl SessionCapture {
         options: CaptureOptions,
     ) -> Result<Self, SessionCaptureError> {
         check_settled(session, &options)?;
+        let capture = Self::allocate(session.runtime_identity(), session.video_rasters(), options)?;
+        check_settled(session, &capture.options)?;
+        Ok(capture)
+    }
+
+    #[cfg(feature = "prepared-prefix")]
+    pub(crate) fn new_prefix(
+        reader: &noon::PrefixReader,
+        options: CaptureOptions,
+    ) -> Result<Self, SessionCaptureError> {
+        Self::allocate(reader.runtime_identity(), reader.video_rasters(), options)
+    }
+
+    fn allocate(
+        runtime: RuntimeIdentity,
+        videos: &[(
+            noon_core::RasterImageResourceHandle,
+            noon_core::VideoRasterResource,
+        )],
+        options: CaptureOptions,
+    ) -> Result<Self, SessionCaptureError> {
         let layout = options.layout().map_err(SessionCaptureError::Capture)?;
         let mut gpu = pollster::block_on(gpu::NativeCapture::new(&options, layout))
             .map_err(SessionCaptureError::Capture)?;
-        gpu.prepare_video(session.video_rasters())
+        gpu.prepare_video(videos)
             .map_err(SessionCaptureError::Capture)?;
-        check_settled(session, &options)?;
         Ok(Self {
             gpu,
             options,
-            runtime: session.runtime_identity(),
+            runtime,
             failed: false,
         })
     }
@@ -117,13 +137,41 @@ impl SessionCapture {
         session: &mut ExecutionSession,
     ) -> Result<SessionFrame<'_>, SessionCaptureError> {
         let receipt = self.render_inner(session, true)?;
-        Ok(SessionFrame {
+        Ok(self.frame(receipt))
+    }
+
+    fn frame(&self, receipt: CaptureReceipt) -> SessionFrame<'_> {
+        SessionFrame {
             receipt,
             width: self.options.width,
             height: self.options.height,
             format: self.gpu.pixel_format(),
             rgba: self.gpu.pixels(),
-        })
+        }
+    }
+
+    #[cfg(feature = "prepared-prefix")]
+    pub(crate) fn capture_prefix(
+        &mut self,
+        reader: &mut noon::PrefixReader,
+        read_pixels: bool,
+    ) -> Result<SessionFrame<'_>, SessionCaptureError> {
+        let result = (|| {
+            self.check_owner(reader.runtime_identity())?;
+            let context = reader.publication_context();
+            let view = gpu::CaptureView::from_prefix(reader, &self.options)
+                .map_err(SessionCaptureError::Capture)?;
+            let visibility = reader.query_renderer_viewports(&view.bounds);
+            self.render_publication(
+                context,
+                &reader.take_renderer_publication(),
+                &view,
+                visibility.object_indices(),
+                read_pixels,
+            )
+        })();
+        self.failed |= result.is_err();
+        Ok(self.frame(result?))
     }
 
     pub(crate) fn summary(
@@ -139,15 +187,9 @@ impl SessionCapture {
         read_pixels: bool,
     ) -> Result<CaptureReceipt, SessionCaptureError> {
         let result = (|| {
-            if self.failed {
-                return Err(SessionCaptureError::Inactive);
-            }
-            if session.runtime_identity() != self.runtime {
-                return Err(SessionCaptureError::WrongRuntime);
-            }
+            self.check_owner(session.runtime_identity())?;
             check_settled(session, &self.options)?;
             let context = session.publication_context();
-            let time = session.frame().time;
             let view = gpu::CaptureView::new(session, &self.options)
                 .map_err(SessionCaptureError::Capture)?;
             let queries = view
@@ -159,34 +201,56 @@ impl SessionCapture {
             let visibility = session
                 .renderer_viewport_query_union(queries)
                 .map_err(|e| SessionCaptureError::Capture(CaptureError::View(e.to_string())))?;
-            let publication = session.take_renderer_publication();
-            if publication.context() != context {
-                return Err(SessionCaptureError::Capture(
-                    CaptureError::PublicationMismatch,
-                ));
-            }
-            let work = self
-                .gpu
-                .render(
-                    &publication,
-                    &view,
-                    visibility.object_indices(),
-                    read_pixels,
-                )
-                .map_err(SessionCaptureError::Capture)?;
-            if self.options.cancellation.is_cancelled() {
-                return Err(SessionCaptureError::Cancelled);
-            }
-            Ok(CaptureReceipt {
-                publication: context,
-                published_time: time,
-                work,
-            })
+            self.render_publication(
+                context,
+                &session.take_renderer_publication(),
+                &view,
+                visibility.object_indices(),
+                read_pixels,
+            )
         })();
-        if result.is_err() {
-            self.failed = true;
-        }
+        self.failed |= result.is_err();
         result
+    }
+
+    fn check_owner(&self, runtime: RuntimeIdentity) -> Result<(), SessionCaptureError> {
+        if self.failed {
+            return Err(SessionCaptureError::Inactive);
+        }
+        if runtime != self.runtime {
+            return Err(SessionCaptureError::WrongRuntime);
+        }
+        if self.options.cancellation.is_cancelled() {
+            return Err(SessionCaptureError::Cancelled);
+        }
+        Ok(())
+    }
+
+    fn render_publication(
+        &mut self,
+        context: PublicationContext,
+        publication: &RendererPublication<'_>,
+        view: &gpu::CaptureView,
+        visible: &[usize],
+        read_pixels: bool,
+    ) -> Result<CaptureReceipt, SessionCaptureError> {
+        if publication.context() != context {
+            return Err(SessionCaptureError::Capture(
+                CaptureError::PublicationMismatch,
+            ));
+        }
+        let work = self
+            .gpu
+            .render(publication, view, visible, read_pixels)
+            .map_err(SessionCaptureError::Capture)?;
+        if self.options.cancellation.is_cancelled() {
+            return Err(SessionCaptureError::Cancelled);
+        }
+        Ok(CaptureReceipt {
+            publication: context,
+            published_time: publication.frame().time,
+            work,
+        })
     }
 }
 

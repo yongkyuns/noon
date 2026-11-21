@@ -998,7 +998,7 @@ impl SemanticExecutionPlayer {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn live_segment(&self) -> Result<noon::ExecutionSegment, String> {
+    pub(crate) fn live_segment(&self) -> Result<noon::ExecutionSegment, String> {
         match self.live_segment {
             Some(LiveSegmentReceipt::Pending(segment)) => Ok(segment),
             _ => Err("play an animation or wait before driving a live segment".to_owned()),

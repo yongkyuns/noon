@@ -289,7 +289,7 @@ fn export_source(
     })
 }
 
-fn check_receipt(
+pub(super) fn check_receipt(
     receipt: CaptureReceipt,
     observation: SampleObservation,
 ) -> Result<(), SessionFileExportError> {
@@ -311,6 +311,8 @@ pub enum SessionFileExportError {
     UnsupportedHistory,
     HistoryAudio,
     Sampling(ExportFramePolicyError),
+    #[cfg(feature = "prepared-prefix")]
+    CompletedHistory(noon::integration::CompletedPrefixExportError),
     Evaluation(EvaluationError),
     Playback(ExecutionSessionInputError),
     Capture(SessionCaptureError),
@@ -328,9 +330,11 @@ impl fmt::Display for SessionFileExportError {
                 "source export requires completed sealed deterministic history without unrecorded callbacks or input",
             ),
             Self::HistoryAudio => formatter.write_str(
-                "audio export from retained source history is not supported; use a finite immutable session (#2263)",
+                "audio export from source history requires a terminal-adopted PrefixReader; use export_completed_prefix_file",
             ),
             Self::Sampling(error) => error.fmt(formatter),
+            #[cfg(feature = "prepared-prefix")]
+            Self::CompletedHistory(error) => error.fmt(formatter),
             Self::Evaluation(error) => error.fmt(formatter),
             Self::Playback(error) => error.fmt(formatter),
             Self::Capture(error) => error.fmt(formatter),
@@ -343,6 +347,8 @@ impl Error for SessionFileExportError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Sampling(error) => Some(error),
+            #[cfg(feature = "prepared-prefix")]
+            Self::CompletedHistory(error) => Some(error),
             Self::Evaluation(error) => Some(error),
             Self::Playback(error) => Some(error),
             Self::Capture(error) => Some(error),

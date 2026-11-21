@@ -5,6 +5,8 @@
 //! is reported successful before EOF, encoder exit and destination publication.
 mod audio;
 mod blocking;
+#[cfg(feature = "prepared-prefix")]
+mod completed_prefix;
 mod destination;
 mod prepared;
 mod process;
@@ -16,10 +18,12 @@ pub use blocking::{
     BlockingSourceLimits,
 };
 
+#[cfg(feature = "prepared-prefix")]
+pub use completed_prefix::export_completed_prefix_file;
 pub use prepared::{
-    export_prepared_capture, PreparedCaptureLimits, PreparedCaptureManifest,
-    PreparedCaptureSummary, PreparedFrameOptions, PreparedFrameRate, PreparedPublication,
-    PreparedSample, PreparedStop,
+    export_prepared_capture, PreparedCaptureLimits, PreparedCaptureManifest, PreparedCaptureSource,
+    PreparedCaptureSourceKind, PreparedCaptureSummary, PreparedFrameOptions, PreparedFrameRate,
+    PreparedPublication, PreparedSample, PreparedStop,
 };
 pub use session::{
     export_scene_file, export_scene_file_with_interrupt, export_session_file,

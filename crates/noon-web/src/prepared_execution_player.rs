@@ -42,6 +42,7 @@ struct PreparedPlaybackState {
 
 use crate::retained_family_execution_encoder::NoChangePresentation as PreparedNoChangePresentation;
 
+mod export;
 pub(crate) mod source;
 use source::SourceDelivery;
 
@@ -61,6 +62,7 @@ pub struct PreparedExecutionPlayer {
     no_change_presentation: Option<PreparedNoChangePresentation>,
     // Optional interpreter delivery cursor; never the source scene/runtime.
     source: Option<SourceDelivery>,
+    finite_export: Option<noon::integration::CompletedPrefixExport>,
 }
 
 impl PreparedExecutionPlayer {
@@ -82,6 +84,7 @@ impl PreparedExecutionPlayer {
             last_publication: None,
             no_change_presentation: None,
             source: None,
+            finite_export: None,
         }
     }
 
@@ -171,7 +174,7 @@ impl PreparedExecutionPlayer {
             &publication,
             camera,
             snapshot || !self.snapshot_sent,
-            refresh || selection != self.last_selection,
+            refresh || selection != self.last_selection || self.finite_export.is_some(),
         )?
         else {
             self.no_change_presentation =

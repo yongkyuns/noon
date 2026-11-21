@@ -17,6 +17,7 @@ image-decode = ["noon/image-decode"]
 latex = ["noon/latex"]
 wgsl-effects = ["noon/wgsl-effects"]
 video-decode = ["noon/video-decode"]
+prepared-prefix = ["noon/prepared-prefix"]
 
 [[example]]
 name = "first_lesson"

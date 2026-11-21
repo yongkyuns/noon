@@ -9940,6 +9940,12 @@ mod wasm {
             self.inner.prepare_live_segment().map_err(typed_js_error)
         }
 
+        #[cfg(feature = "prepared-prefix")]
+        #[wasm_bindgen(js_name = pendingPreparedSegmentEnd)]
+        pub fn pending_prepared_segment_end(&mut self) -> Result<f64, String> {
+            self.inner.pending_prepared_segment_end()
+        }
+
         /// Complete one initial source barrier without inventing a readable range.
         #[cfg(feature = "prepared-prefix")]
         #[wasm_bindgen(js_name = prepareInitialSourceSegment)]

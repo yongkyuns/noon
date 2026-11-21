@@ -26,9 +26,9 @@ const USAGE = `Usage: node scripts/export-python-scene.mjs SOURCE.py CAPTURE_DIR
   --hold SECONDS        Frozen terminal hold (default 0)
   --backend webgpu|webgl  Chromium software renderer (default webgpu)
   --transport transferable|shared  Worker transport (default transferable)
-The Python source must author a complete finite immutable scene. Live source
-continuations/callbacks and trailing waits beyond retained tracks/audio are
-outside this profile. CAPTURE_DIRECTORY must be new.`;
+Supports finite immutable scenes and deterministic completed play()/wait()
+history. Sources requiring observed callbacks or input are rejected.
+CAPTURE_DIRECTORY must be new.`;
 
 function integer(value, name, minimum = 0) {
   const number = Number(value);
@@ -186,16 +186,21 @@ async function run(config) {
       const input = document.querySelector("#capture-video-file");
       const videoFile = input?.files[0] ?? null;
       input?.remove();
-      const authored = await authoring.run(source, {}, { videoFile });
-      if (!authored.semanticExecution || authored.semanticExecution.continuationGeneration !== undefined) {
-        throw new Error("export requires a complete immutable Python scene without a live continuation");
-      }
-      await execution.startSemanticExecution(authored.semanticExecution, {
-        authoringClient: authoring, initiallyPaused: true, transportMode: transport,
-        loopDurationSeconds: Math.max(authored.duration, 1),
+      let started = false;
+      const attach = async descriptor => {
+        await execution.startSemanticExecution(descriptor, {
+          authoringClient: authoring, initiallyPaused: true, transportMode: transport,
+        });
+        started = true;
+      };
+      const authored = await authoring.run(source, {}, {
+        videoFile, preparedPlayback: true, preparationLookaheadSeconds: null,
+        loopPlayback: false, historyExportOptions: frameOptions,
+        onSemanticContinuation: ({ semanticExecution }) => attach(semanticExecution),
       });
+      if (!started) await attach(authored.semanticExecution);
       const plan = await execution.beginFiniteExport(frameOptions);
-      if (authored.duration > plan.source_end) {
+      if (plan.source.kind === "immutable" && authored.duration > plan.source_end) {
         throw new Error(`finite export does not yet support a trailing authored interval beyond retained tracks/audio (${authored.duration} > ${plan.source_end} seconds)`);
       }
       window.noonFiniteCapture.base64 = bytes => {
@@ -273,15 +278,11 @@ async function run(config) {
     }
     assert.deepEqual(errors, [], "browser capture errors");
     const manifest = {
-      format: "noon-prepared-capture-v1", width: config.width, height: config.height,
+      format: "noon-prepared-capture-v2", source: plan.source, width: config.width, height: config.height,
       source_end: plan.source_end, frame_options: plan.frame_options, audio: plan.audio, samples,
     };
     const json = JSON.stringify(manifest);
     assert.ok(Buffer.byteLength(json) <= 16 * 1024 * 1024);
-    // The importable manifest appears only after exact sampling, media writes
-    // and file closes. No partial capture can be mistaken for complete media.
-    await writeFile(path.join(config.directory, "capture.json"), `${json}\n`, { flag: "wx" });
-    captureComplete = true;
     const report = {
       source: config.sourcePath, source_sha256: sourceHash, capture: config.directory,
       renderer_backend: start.rendererBackend, transport: start.transportMode,
@@ -294,6 +295,11 @@ async function run(config) {
       execution.terminate(); authoring.terminate();
     });
     await browser.close(); browser = null;
+    if (interrupted) throw new Error("Python capture cancelled");
+    // Publish the importable manifest after both media files and the browser close.
+    await writeFile(path.join(config.directory, "capture.json"), `${json}\n`, { flag: "wx" });
+    if (interrupted) throw new Error("Python capture cancelled");
+    captureComplete = true;
     if (config.output !== null) {
       const args = [config.directory, config.output, ...(config.overwrite ? ["--overwrite"] : [])];
       const executable = config.encoder ?? "cargo";
