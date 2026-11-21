@@ -1748,6 +1748,7 @@ function rememberSceneDraft(example) {
 
 sceneSourceEditor.addEventListener("input", (event) => {
   const example = currentExample();
+  feedbackReview?.close();
   rememberSceneDraft(example);
   if (example) {
     if (event.isComposing) cancelAutoRun();
@@ -1758,12 +1759,14 @@ sceneSourceEditor.addEventListener("input", (event) => {
 window.addEventListener("popstate", () => {
   const id = requestedExampleId();
   if (id && id !== selectedExampleId) {
+    feedbackReview?.close();
     void selectExample(id, { run: true, updateUrl: false });
   }
 });
 document.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
+    feedbackReview?.close();
     void requestSceneRun();
   }
 });

@@ -1,9 +1,9 @@
 # Mark up a paused lesson
 
 In the playground, select **Comment** above a scene with prepared playback.
-Noon pauses at the displayed frame. Drag a rectangle around the relevant area,
-click to drop a pin, or press Enter on the picture to mark the center. Write your
-note and select **Add to source**. The note is appended to the current Python
+Noon pauses the preview so you can drag a rectangle right on the scene, click
+to drop a pin, or press Enter to mark the center. Write your note under the
+preview and select **Add to source**. The note is appended to the current Python
 draft as ordinary comments, including the captured time, image-relative bounds,
 and hash of the source that produced the frame. Existing edits stay in the draft
 and playback stays paused.

@@ -78,31 +78,36 @@ try {
   await page.locator("#auto-run").evaluate(input => { input.checked = true; });
 
   await page.locator("#preview-comment").click();
-  const dialog = page.getByRole("dialog", { name: "Comment on this frame" });
-  await dialog.getByAltText("Frozen frame from the displayed Noon Run").waitFor();
+  const panel = page.getByRole("region", { name: "Frame feedback" });
+  const stage = page.locator(".canvas-frame .noon-feedback-image");
+  await panel.waitFor();
+  await stage.getByAltText("Frozen frame from the displayed Noon Run").waitFor();
   await page.waitForFunction(() => document.querySelector(".noon-feedback-status")?.textContent.startsWith("Paused at "));
-  const bounds = await dialog.locator("img").evaluate(image => {
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  const bounds = await stage.locator("img").evaluate(image => {
     const box = image.getBoundingClientRect();
     const scale = Math.min(box.width / image.naturalWidth, box.height / image.naturalHeight);
     const width = scale * image.naturalWidth, height = scale * image.naturalHeight;
     return { x: box.left + (box.width - width) / 2, y: box.top + (box.height - height) / 2, width, height };
   });
   await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-  assert.equal(await dialog.locator(".noon-feedback-mark").getAttribute("data-shape"), "point");
+  assert.equal(await stage.locator(".noon-feedback-mark").getAttribute("data-shape"), "point");
   // Drag backwards to prove the exported region stays aligned to the image.
   await page.mouse.move(bounds.x + bounds.width * 0.82, bounds.y + bounds.height * 0.135);
   await page.mouse.down();
   await page.mouse.move(bounds.x + bounds.width * 0.18, bounds.y + bounds.height * 0.08, { steps: 5 });
   await page.mouse.up();
-  const field = dialog.getByRole("textbox", { name: "Comment" });
+  const field = panel.getByRole("textbox", { name: "Comment" });
   assert.equal(await field.evaluate(text => text === document.activeElement), true);
   await field.fill(comment);
   await page.screenshot({ path: path.join(output, "selection.png") });
   const pending = page.waitForEvent("download");
-  await dialog.getByRole("button", { name: "Download evidence" }).click();
+  await panel.getByRole("button", { name: "Download evidence" }).click();
   const download = await pending;
   await download.saveAs(path.join(output, "viewer-feedback.json"));
-  await dialog.getByRole("button", { name: "Add to source" }).click();
+  await panel.getByRole("button", { name: "Add to source" }).click();
+  await panel.waitFor({ state: "hidden" });
+  await stage.waitFor({ state: "hidden" });
   const annotated = await page.locator("#python-scene-source").inputValue();
   assert.ok(annotated.startsWith(draft), "feedback must preserve unapplied editor changes");
   assert.ok(annotated.includes(`# Noon feedback (pending) at ${target} s\n# Rectangle`));

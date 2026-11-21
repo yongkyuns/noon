@@ -3,88 +3,88 @@ import {
   feedbackImageBounds, feedbackPoint, feedbackRegion,
 } from "./playground-feedback-capture.js";
 
-// Optional review chrome. This module never evaluates source or owns playback.
-// Opening the modal blocks scene pointer gestures before a capture is requested.
+// The preview overlay consumes annotation gestures while playback is paused.
 export function installPlaygroundFeedback(button, { getContext, onPaused = () => {} }) {
   const document = button?.ownerDocument;
   if (!document || document.documentElement.dataset.noonEmbed === "true") return null;
   const window = document.defaultView;
-  const dialog = document.createElement("dialog");
-  dialog.className = "noon-feedback-dialog";
-  dialog.setAttribute("aria-labelledby", "noon-feedback-title");
-  dialog.innerHTML = `
-    <header><h2 id="noon-feedback-title">Comment on this frame</h2>
-      <button type="button" data-action="close" aria-label="Close feedback">Close</button></header>
+  const preview = button.closest(".preview-pane");
+  const stage = document.createElement("div");
+  stage.className = "noon-feedback-image";
+  stage.hidden = true;
+  stage.tabIndex = 0;
+  stage.setAttribute("role", "group");
+  stage.setAttribute("aria-label", "Captured frame. Drag an area, click a point, or press Enter to mark the center.");
+  stage.innerHTML = `
+    <img alt="Frozen frame from the displayed Noon Run" draggable="false" hidden>
+    <span class="noon-feedback-mark" aria-hidden="true" hidden></span>`;
+  const panel = document.createElement("section");
+  panel.id = "noon-feedback-panel";
+  panel.className = "noon-feedback-panel";
+  panel.setAttribute("aria-label", "Frame feedback");
+  panel.hidden = true;
+  panel.innerHTML = `
     <p class="noon-feedback-status" role="status" aria-live="polite"></p>
-    <div class="noon-feedback-image" tabindex="0" role="group"
-      aria-label="Captured frame. Drag an area, click a point, or press Enter to mark the center.">
-      <img alt="Frozen frame from the displayed Noon Run" draggable="false" hidden>
-      <span class="noon-feedback-mark" aria-hidden="true" hidden></span>
-    </div>
     <form novalidate>
       <label for="noon-feedback-comment">Comment</label>
-      <textarea id="noon-feedback-comment" rows="3" maxlength="4000"
+      <textarea id="noon-feedback-comment" rows="2" maxlength="4000"
         placeholder="Keep this arrow visible until the explanation finishes…" required></textarea>
       <div class="noon-feedback-footer">
-        <span class="noon-feedback-count"></span>
+        <button type="button" data-action="close">Cancel</button>
         <button type="button" data-action="download" disabled>Download evidence</button>
         <button type="submit" disabled>Add to source</button>
       </div>
     </form>`;
   const style = document.createElement("style");
   style.textContent = `
-    .noon-feedback-dialog { color: #f7f8fb; background: #101521; border: 1px solid #3a4968;
-      border-radius: 14px; padding: 20px; width: min(860px, calc(100vw - 24px));
-      max-height: calc(100dvh - 24px); overflow: auto; box-sizing: border-box; }
-    .noon-feedback-dialog::backdrop { background: rgb(0 0 0 / 65%); }
-    .noon-feedback-dialog header, .noon-feedback-footer { display: flex; align-items: center;
-      justify-content: space-between; gap: 12px; }
-    .noon-feedback-dialog h2 { margin: 0; font: 600 19px/1.4 system-ui; }
-    .noon-feedback-dialog button { min-height: 38px; padding: 8px 14px; border: 1px solid #655894;
+    .noon-feedback-panel { flex: none; padding: .6rem .8rem; background: #101521;
+      color: #f7f8fb; border-top: 1px solid var(--border); }
+    .preview-pane:has(.noon-feedback-panel:not([hidden])) :is(.metrics, .playback-controls) { display: none; }
+    .noon-feedback-footer { display: flex; flex-wrap: wrap; gap: 6px; }
+    .noon-feedback-panel button { min-height: 34px; padding: 6px 10px; border: 1px solid #655894;
       border-radius: 7px; background: #292244; color: #f7f8fb; font: 600 13px/1.4 system-ui; cursor: pointer; }
-    .noon-feedback-dialog button:disabled { opacity: .45; cursor: not-allowed; }
-    .noon-feedback-dialog [type="submit"] { background: #534081; }
-    .noon-feedback-dialog [data-action="download"] { margin-inline-start: auto; background: transparent; }
-    .noon-feedback-dialog :focus-visible { outline: 2px solid #b3a6ff; outline-offset: 3px; }
-    .noon-feedback-dialog [hidden] { display: none !important; }
-    .noon-feedback-dialog .noon-feedback-status { min-height: 1.5em; margin: 12px 0; color: #c8c3df;
+    .noon-feedback-panel button:disabled { opacity: .45; cursor: not-allowed; }
+    .noon-feedback-panel [type="submit"] { background: #534081; }
+    .noon-feedback-panel [data-action="download"] { margin-inline-start: auto; background: transparent; }
+    .noon-feedback-panel :focus-visible, .noon-feedback-image:focus-visible { outline: 2px solid #b3a6ff; }
+    .noon-feedback-image [hidden] { display: none !important; }
+    .noon-feedback-status { margin: 0 0 .35rem; color: #c8c3df;
       font: 13px/1.5 system-ui; overflow-wrap: anywhere; }
     .noon-feedback-status[data-error="true"] { color: #ffadb7; }
-    .noon-feedback-image { position: relative; background: #090c13; border-radius: 8px;
-      cursor: crosshair; min-height: 100px; touch-action: none; }
-    .noon-feedback-image img { display: block; width: 100%; height: min(54vh, 480px);
-      object-fit: contain; border-radius: 8px; user-select: none; -webkit-user-drag: none; }
+    .noon-feedback-image { position: absolute; inset: 1px; z-index: 3; border-radius: .8rem;
+      cursor: crosshair; touch-action: none; }
+    .noon-feedback-image img { display: block; width: 100%; height: 100%; background: #090c13;
+      object-fit: contain; border-radius: inherit; user-select: none; -webkit-user-drag: none; }
     .noon-feedback-mark { position: absolute; box-sizing: border-box; border: 2px solid #fff;
       pointer-events: none; box-shadow: 0 0 0 2px #5238a6; background: rgb(128 102 237 / 25%); }
     .noon-feedback-mark[data-shape="point"] { width: 16px; height: 16px; border-radius: 50%;
       background: #8066ed; transform: translate(-50%, -50%); }
-    .noon-feedback-dialog form { margin-top: 16px; }
-    .noon-feedback-dialog label { display: block; margin-bottom: 6px; font: 600 14px/1.5 system-ui; }
-    .noon-feedback-dialog textarea { position: static; display: block; box-sizing: border-box;
-      width: 100%; height: auto; min-height: 90px; padding: 10px; margin-bottom: 12px;
+    .noon-feedback-panel label { display: block; margin-bottom: 4px; font: 600 13px/1.5 system-ui; }
+    .noon-feedback-panel textarea { position: static; display: block; box-sizing: border-box;
+      width: 100%; height: auto; padding: 6px 8px; margin-bottom: 6px;
       color: #f7f8fb; background: #080b12; border: 1px solid #3a4968; border-radius: 7px;
       font: 14px/1.5 system-ui; resize: vertical; }
-    .noon-feedback-count { color: #a5afc3; font: 12px/1.5 system-ui; }
   `;
   document.head.append(style);
-  // Keep the dialog inside the preview pane so it also works in fullscreen.
-  button.closest(".preview-pane").append(dialog);
+  preview.querySelector(".canvas-frame").append(stage);
+  preview.append(panel);
+  button.setAttribute("aria-controls", panel.id);
+  button.setAttribute("aria-pressed", "false");
   button.hidden = false;
-  const image = dialog.querySelector("img");
-  const stage = dialog.querySelector(".noon-feedback-image");
-  const mark = dialog.querySelector(".noon-feedback-mark");
-  const status = dialog.querySelector(".noon-feedback-status");
-  const text = dialog.querySelector("textarea");
-  const form = dialog.querySelector("form");
-  const submit = dialog.querySelector('[type="submit"]');
-  const download = dialog.querySelector('[data-action="download"]');
-  const count = dialog.querySelector(".noon-feedback-count");
+  const image = stage.querySelector("img");
+  const mark = stage.querySelector(".noon-feedback-mark");
+  const status = panel.querySelector(".noon-feedback-status");
+  const text = panel.querySelector("textarea");
+  const form = panel.querySelector("form");
+  const submit = panel.querySelector('[type="submit"]');
+  const download = panel.querySelector('[data-action="download"]');
   let capture = null, selection = null, drag = null, imageUrl = null, downloadUrl = null, controller = null;
   let addToSource = null;
+  let releaseCapture = null;
   let generation = 0, disposed = false, timer = null, workInFlight = null;
   const update = () => {
     const size = new TextEncoder().encode(text.value).length;
-    count.textContent = `${size.toLocaleString()} / 4,000 bytes`;
+    text.setCustomValidity(size > 4000 ? "Use at most 4,000 UTF-8 bytes." : "");
     submit.disabled = !capture || !selection || !text.value.trim() || text.value.includes("\0") || size > 4000;
     download.disabled = submit.disabled;
   };
@@ -95,6 +95,7 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
   const release = () => {
     generation++;
     controller?.abort(); controller = null;
+    releaseCapture?.(); releaseCapture = null;
     if (timer !== null) window.clearTimeout(timer);
     timer = null;
     image.removeAttribute("src");
@@ -163,29 +164,39 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
       event.preventDefault(); select({ point: { x: 0.5, y: 0.5 } });
     }
   });
-  // Do not send the playground's global Ctrl/Command+Enter Run shortcut while
-  // typing a review. Native dialog Escape/Tab behavior is intentionally retained.
-  dialog.addEventListener("keydown", event => event.stopPropagation());
-  dialog.addEventListener("close", () => { if (!dialog.open) release(); });
-  dialog.addEventListener("cancel", event => { event.preventDefault(); close(); });
-  dialog.querySelector('[data-action="close"]').addEventListener("click", close);
+  function handleFeedbackKey(event) {
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      button.focus();
+    }
+  }
+  stage.addEventListener("keydown", handleFeedbackKey);
+  panel.addEventListener("keydown", handleFeedbackKey);
+  panel.querySelector('[data-action="close"]').addEventListener("click", () => {
+    close();
+    button.focus();
+  });
   text.addEventListener("input", update);
   const resize = typeof window.ResizeObserver === "function" ? new window.ResizeObserver(drawSelection) : null;
   resize?.observe(stage);
 
   async function openReview() {
-    if (disposed || dialog.open) return;
+    if (disposed || !panel.hidden) return;
     release();
     const ticket = generation;
     const activeController = new AbortController();
     controller = activeController;
     const signal = activeController.signal;
-    dialog.showModal();
+    stage.hidden = false;
+    panel.hidden = false;
+    button.setAttribute("aria-pressed", "true");
     message("Pausing and capturing the displayed Run…");
-    let context = null;
     try {
       if (workInFlight !== null) throw new Error("The previous capture is still retiring. Try again after the preview responds.");
-      context = getContext();
+      const context = getContext();
+      releaseCapture = context.release;
       const aborted = new Promise((_, reject) => {
         signal.addEventListener("abort", () => reject(signal.reason), { once: true });
       });
@@ -222,16 +233,20 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     } catch (error) {
       if (disposed || ticket !== generation) return;
       release();
+      stage.hidden = true;
       message(error?.message ?? "The preview could not be captured.", true);
       update();
     } finally {
-      context?.release?.();
       if (ticket === generation && timer !== null) {
         window.clearTimeout(timer); timer = null;
       }
     }
   }
-  button.addEventListener("click", openReview);
+  const toggleReview = () => {
+    if (panel.hidden) void openReview();
+    else close();
+  };
+  button.addEventListener("click", toggleReview);
   form.addEventListener("submit", event => {
     event.preventDefault();
     update();
@@ -239,6 +254,7 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     try {
       addToSource(capture, selection, text.value);
       close();
+      button.focus();
     } catch (error) { message(error.message, true); }
   });
   download.addEventListener("click", () => {
@@ -256,8 +272,10 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     } catch (error) { message(error.message, true); }
   });
   function close() {
-    if (dialog.open) dialog.close();
-    // Release immediately even if the native close event is queued.
+    if (panel.hidden) return;
+    panel.hidden = true;
+    stage.hidden = true;
+    button.setAttribute("aria-pressed", "false");
     release();
   }
   return Object.freeze({
@@ -265,8 +283,8 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     dispose() {
       if (disposed) return;
       disposed = true; close(); resize?.disconnect();
-      button.removeEventListener("click", openReview);
-      button.hidden = true; dialog.remove(); style.remove();
+      button.removeEventListener("click", toggleReview);
+      button.hidden = true; stage.remove(); panel.remove(); style.remove();
     },
   });
 }
