@@ -1,0 +1,4 @@
+interface:
+  display_name: "Noon Design Decisions"
+  short_description: "Compare Noon interfaces and record design decisions"
+  default_prompt: "Use $noon-design to compare interface choices for this Noon change."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Noon Debugging"
+  short_description: "Reproduce and resolve Noon behavior regressions"
+  default_prompt: "Use $noon-debug to reproduce this Noon failure and verify the fix."
