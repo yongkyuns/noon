@@ -18,6 +18,16 @@ impl PrefixReader {
         }
     }
 
+    /// Timed raster assets in the selected historical runtime.
+    pub fn video_rasters(
+        &self,
+    ) -> &[(
+        noon_core::RasterImageResourceHandle,
+        noon_core::VideoRasterResource,
+    )] {
+        self.session.video_rasters()
+    }
+
     pub fn painter_order(&self) -> &[u32] {
         self.session.painter_order()
     }

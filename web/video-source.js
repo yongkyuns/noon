@@ -82,6 +82,10 @@ export async function openMp4(blob, mp4, signal) {
   return { blob, config, width, height, packets, ordered, timestamps, duration, audio };
 }
 
+export async function loadMp4(blob, signal) {
+  return openMp4(blob, await import("./pkg/mp4box.js"), signal);
+}
+
 function validDimensions(width, height) {
   return Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0 &&
     Math.max(width, height) <= 1920 && width * height <= 1920 * 1080;
@@ -268,6 +272,15 @@ export class VideoDecodeWindow {
       this.#pump(this.#run);
     }
     return this.#frames.get(index) ?? null;
+  }
+
+  readySpan() {
+    if (this.#failure) throw this.#failure;
+    let start = this.#wanted, end = start;
+    if (!this.#frames.has(start)) return [start, start];
+    while (this.#frames.has(start - 1)) start--;
+    while (this.#frames.has(end)) end++;
+    return [start, end];
   }
 
   close() {

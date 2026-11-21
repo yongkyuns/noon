@@ -14,9 +14,9 @@ const [javascript, declarations, wasm, wasmStats] = await Promise.all([
   stat(wasmPath),
 ]);
 
-for (const name of ["python-editor-bundle.js", "python-editor-licenses.txt"]) {
+for (const name of ["python-editor-bundle.js", "python-editor-licenses.txt", "mp4box.js", "mp4box-LICENSE.txt"]) {
   const info = await stat(join(packageDirectory, name));
-  if (!info.isFile() || info.size === 0) throw new Error(`Missing editor package asset: ${name}`);
+  if (!info.isFile() || info.size === 0) throw new Error(`Missing browser package asset: ${name}`);
 }
 
 if (existsSync(join(process.cwd(), "web", "node_modules"))) {

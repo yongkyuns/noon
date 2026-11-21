@@ -48,3 +48,21 @@ await writeFile(path.join(output, "python-editor-licenses.txt"),
   [...packages].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
     .map(([name, notice]) => `${name}\n${notice}`).join("\n\n") + "\n");
 console.log(`Bundled Python editor dependencies with ${packages.size} license notices.`);
+
+// Import the pinned demuxer only when preparing an MP4.
+const mp4 = path.join(root, "node_modules/mp4box");
+const metadata = JSON.parse(await readFile(path.join(mp4, "package.json"), "utf8"));
+assert.equal(metadata.license, "BSD-3-Clause");
+await build({
+  absWorkingDir: root,
+  stdin: { resolveDir: root, contents: 'export { createFile, MP4BoxBuffer, DataStream } from "mp4box";' },
+  outfile: path.join(output, "mp4box.js"),
+  bundle: true,
+  format: "esm",
+  target: "es2022",
+  platform: "browser",
+  minify: true,
+  legalComments: "none",
+  banner: { js: "/*! MP4Box.js license: ./mp4box-LICENSE.txt */" },
+});
+await writeFile(path.join(output, "mp4box-LICENSE.txt"), await readFile(path.join(mp4, "LICENSE")));

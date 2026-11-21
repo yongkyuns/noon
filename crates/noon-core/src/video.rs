@@ -156,6 +156,17 @@ impl VideoClipTiming {
         )
     }
 
+    /// Scene boundary where this source frame first becomes selectable.
+    /// The past-end index and frames after the trim resolve to the clip end.
+    pub fn frame_boundary(self, index: &VideoFrameIndex, ordinal: usize) -> f64 {
+        index
+            .timestamps
+            .get(ordinal)
+            .map_or(self.scene_end, |&pts| {
+                self.scene_time(pts).clamp(self.scene_start, self.scene_end)
+            })
+    }
+
     /// The next scene-time wake, including clip entry and exit. At a timestamp
     /// shared by the renderer and the clock, the boundary is already consumed.
     pub fn next_boundary(self, index: &VideoFrameIndex, scene_time: f64) -> Option<f64> {
@@ -166,11 +177,7 @@ impl VideoClipTiming {
             return Some(self.scene_start);
         }
         let frame = self.frame_at(index, scene_time)?;
-        let next = index
-            .timestamps
-            .get(frame + 1)
-            .map_or(self.scene_end, |&pts| self.scene_time(pts));
-        Some(next.min(self.scene_end))
+        Some(self.frame_boundary(index, frame + 1))
     }
 
     /// Schedule the portion of the decoded PCM that overlaps the video trim.

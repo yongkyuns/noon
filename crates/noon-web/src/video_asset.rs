@@ -2,6 +2,9 @@
 
 use std::{io, sync::Arc};
 
+#[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+pub(crate) mod readiness;
+
 use noon_core::{VideoFrameIndex, VideoFrameSource, VideoFrameWindow};
 
 #[derive(Clone, Debug)]

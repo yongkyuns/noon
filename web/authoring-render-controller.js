@@ -13,6 +13,8 @@ import {
   TransferableExecutionDeltaReceiver,
 } from "./execution-transport.js";
 
+import { VideoFrameHost } from "./video-frame-host.js";
+
 const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
 const MODE_RETAINED = "retained";
@@ -59,6 +61,7 @@ export function createAuthoringRenderController(host) {
   }
 
   let renderPort = null;
+  let video = null;
   let transportMode = null;
   let mode = null;
   let sharedReader = null;
@@ -462,6 +465,8 @@ export function createAuthoringRenderController(host) {
   }
 
   function detachRenderPort() {
+    video?.close();
+    video = null;
     effectPreparation?.prepared?.free?.();
     effectPreparation = null;
     cancelScheduledFrame();
@@ -489,6 +494,24 @@ export function createAuthoringRenderController(host) {
 
   function handleEngineMessage(message) {
     if (!message || typeof message !== "object") {
+      return;
+    }
+    if (message.type === "video_assets" || message.type === "video_demands") {
+      try {
+        if (message.type === "video_assets") {
+          const port = renderPort;
+          video ??= new VideoFrameHost(
+            () => scheduleFrame(),
+            update => port.postMessage(update),
+            error => fail(error, null),
+          );
+          video.register(message.assets);
+          renderer?.setVideoFrameProvider((...args) => video.request(...args));
+        } else {
+          if (video === null) throw new Error("video demands require installed media");
+          for (const demand of message.demands) video.prepare(demand);
+        }
+      } catch (error) { fail(error, null); }
       return;
     }
     if (message.type === "execution_wake") {
@@ -755,6 +778,7 @@ export function createAuthoringRenderController(host) {
         return;
       }
       renderer = createdRenderer;
+      if (video !== null) renderer.setVideoFrameProvider((...args) => video.request(...args));
       lastDeltaApplyMs = null;
       lastRendererCallMs = null;
       resourceBytes = null;
@@ -780,7 +804,8 @@ export function createAuthoringRenderController(host) {
         ) {
           return;
         }
-        await nextRenderOpportunity();
+        if (video?.waiting) await video.wait();
+        else await nextRenderOpportunity();
         if (stopped || bootstrapGeneration !== frameLoopGeneration) {
           return;
         }
@@ -852,8 +877,9 @@ export function createAuthoringRenderController(host) {
       return false;
     }
     const renderStartedAtMs = performance.now();
+    video?.beginPresent();
     if (!renderer.render()) {
-      invalidatePointerReceipt();
+      if (!video?.waiting) invalidatePointerReceipt();
       drainGpuDiagnostics();
       return false;
     }
@@ -1106,7 +1132,7 @@ export function createAuthoringRenderController(host) {
       return;
     }
     const needsAnimationFrame = reserveRefresh || scheduledFrame?.reservedRefresh === true ||
-      needsPresent || engineWake === null ||
+      (needsPresent && !video?.waiting) || engineWake === null ||
       engineWake.cadence === "animation_frame";
     // Keep an already-requested refresh opportunity when a wake or delta still
     // needs it. Canceling after the browser snapshots callbacks can defer the
@@ -1114,7 +1140,7 @@ export function createAuthoringRenderController(host) {
     if (needsAnimationFrame && scheduledFrame?.kind === "animation" &&
         scheduledFrame.generation === generation) return;
     cancelScheduledFrame();
-    if (!needsAnimationFrame && engineWake.cadence === "idle") return;
+    if ((!needsAnimationFrame && engineWake.cadence === "idle") || video?.waiting) return;
     const ticket = scheduleTicket;
     if (needsAnimationFrame && typeof host?.requestAnimationFrame === "function") {
       scheduledFrame = {
@@ -1153,13 +1179,14 @@ export function createAuthoringRenderController(host) {
       typeof host?.requestAnimationFrame === "function";
     const tickDue = engineWake === null || engineWake.cadence === "animation_frame" ||
       (engineWake.cadence === "timer" && performance.now() >= engineWake.deadline);
-    if (tickDue) {
+    const canTick = tickDue && !(video !== null && needsPresent);
+    if (canTick) {
       // One directive admits one engine drive. The response supplies the next
       // Rust-derived directive, so an idle/waiting continuation never RAF-polls.
       if (engineWake !== null) engineWake = { cadence: "idle", deadline: null };
       renderPort?.postMessage({ type: "tick", timestamp });
     }
-    scheduleFrame(generation, tickDue && reserveRefresh);
+    scheduleFrame(generation, canTick && reserveRefresh);
   }
 
   async function flushGpuDiagnostics() {
@@ -1366,6 +1393,8 @@ export function createAuthoringRenderController(host) {
   }
 
   function fail(error, requestId) {
+    video?.close();
+    video = null;
     frameLoopGeneration += 1;
     running = false;
     const effectiveRequestId = requestId ?? transitionRequestId;

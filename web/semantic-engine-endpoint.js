@@ -600,6 +600,13 @@ export async function attachSemanticEngine(
         ...(prepared !== null ? { loopCount: snapshot.loopCount } : {}) });
     }
   }
+  const videoAssets = request.videoAssets ?? [];
+  function sendVideoDemands() {
+    if (videoAssets.length === 0) return;
+    const demands = player.takeVideoDemands?.();
+    if (demands != null) renderPort.postMessage({ type: "video_demands", demands: JSON.parse(demands) });
+  }
+
   function publishPreparedAudioState(sampledAt = performance.now()) {
     if (prepared === null || !hasAudio || typeof player.audioAnchorJsonAt !== "function") return;
     const audioAnchor = JSON.parse(player.audioAnchorJsonAt(
@@ -1576,12 +1583,19 @@ export async function attachSemanticEngine(
               // reader maps this producing context's monotonic clock in Rust.
               if (preparedClockAdmitted) {
                 const wasBuffering = player.preparedBuffering();
+                const wasVideoBuffering = videoAssets.length > 0 && player.videoBuffering();
                 const sampledAt = testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp();
                 const mutationStartedAtEpochMs = hostEpochMs();
                 const delta = player.tickDeltaTransportJson(sampledAt);
                 observePreparedWaiting("tick", mutationStartedAtEpochMs);
-                send(delta, null, true);
-                if (hasAudio && wasBuffering !== player.preparedBuffering()) {
+                sendVideoDemands();
+                const publication = send(delta, null, true);
+                if (wasVideoBuffering && !player.videoBuffering()) {
+                  await awaitPresentation(publication);
+                  const presentedAt = performance.now();
+                  player.acknowledgeVideoPresentation(presentedAt);
+                  publishPreparedAudioState(presentedAt);
+                } else if (hasAudio && wasBuffering !== player.preparedBuffering()) {
                   publishPreparedAudioState(sampledAt);
                 }
                 observeExecutionWake(performance.now());
@@ -1872,6 +1886,16 @@ export async function attachSemanticEngine(
           latestTick = message.timestamp;
           void drain();
         }
+      } else if (message?.type === "video_window" && videoAssets.length > 0) {
+        try {
+          if (!player.setVideoWindow?.(message.clip, message.start, message.end)) return;
+          if (player.videoBuffering?.()) {
+            latestTick = performance.now();
+            void drain();
+          } else if (preparedClockAdmitted && currentPlayerPlaying()) {
+            publishPreparedAudioState();
+          }
+        } catch (error) { terminateProgression(error); }
       } else if (message?.type === "transport_writable") {
         if (transportMode === EXECUTION_TRANSPORT_SHARED && transport?.flush() > 0) {
           renderPort.postMessage({ type: "shared_delta" });
@@ -1938,6 +1962,7 @@ export async function attachSemanticEngine(
     if (resources.byteLength === 0) {
       throw new Error("semantic execution emitted an empty retained resource bundle");
     }
+    if (videoAssets.length > 0) renderPort.postMessage({ type: "video_assets", assets: videoAssets });
     renderPort.postMessage({ type: "retained_resources", bytes: resources }, [resources.buffer]);
     // A shared mailbox may already contain its initial snapshot when setup is
     // received. Install resources before exposing that mailbox to the renderer.
