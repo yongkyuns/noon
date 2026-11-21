@@ -56,7 +56,9 @@ the player, report that first-play seeking is unverified.
 Read `Noon feedback (pending)` comments in the scene source. Use the recorded
 time and region to find the visual, re-render the focused correction, and show
 the before-and-after frames. Optional snapshot downloads preserve the original
-frame and Run source. [Live viewer feedback](../../../docs/live-viewer-feedback.md)
+frame and Run source. With a Playground snapshot, use `noon-feedback compare
+--viewer` and return `viewer-comparison.json` with the exact revised draft so
+the author can accept it in the Playground. [Live viewer feedback](../../../docs/live-viewer-feedback.md)
 
 ## Repository validation
 

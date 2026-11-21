@@ -64,7 +64,7 @@ function editorHarness({ playState, deferRun, activeSource = "source used by act
     canonicalSource: "canonical source",
     currentExample: () => example,
     drafts: new Map(),
-    feedbackReview: { close() {} },
+    feedbackReview: { close() {}, setReviewSource() {} },
     updateDraftStatus: null,
     playback: { state: playState, runGeneration: 17 },
     worker: { interpreterGeneration: 4 },
