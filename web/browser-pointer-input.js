@@ -7,6 +7,7 @@ import { wheelLinePixels, wheelDeltaCssPixels } from "./browser-wheel-units.js";
 export const MAX_BROWSER_POINTER_SAMPLES = 256;
 
 const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
+const RELEASE_AFTER_CAPTURE_LOSS_MS = 40;
 
 export function attachBrowserPointerInput(canvas, {
   signal, isCurrent, send, sendMotionBatch, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, onWheel, asynchronousWheel = false, windowTarget = window, registeredView = null,
@@ -15,6 +16,7 @@ export function attachBrowserPointerInput(canvas, {
     throw new RangeError("browser pointer sample capacity must be a positive safe integer");
   }
   let selected = null;
+  let releaseTimer = null;
   // This DOM snapshot was registered before the initial renderer publication.
   // Seed only mapping-change detection; the engine still owns input admission.
   let view = registeredView === null ? null : [
@@ -23,9 +25,15 @@ export function attachBrowserPointerInput(canvas, {
   ];
   let unavailableViewReported = false;
   const active = () => !signal.aborted && isCurrent();
+  const clearReleaseTimer = () => {
+    if (releaseTimer === null) return;
+    clearTimeout(releaseTimer);
+    releaseTimer = null;
+  };
   const retire = () => {
     const contact = selected;
     selected = null;
+    clearReleaseTimer();
     if (contact !== null && canvas.hasPointerCapture?.(contact.id)) {
       canvas.releasePointerCapture(contact.id);
     }
@@ -81,7 +89,16 @@ export function attachBrowserPointerInput(canvas, {
       // A foreign contact must never release/cancel the selected pointer. After
       // a successful release, implicit capture loss adds no cancellation edge.
       if (matches && (type !== "lostpointercapture" || selected.buttons !== 0)) {
-        cancel(type === "lostpointercapture" ? "capture_lost" : "cancel");
+        if (type === "lostpointercapture" && event.pointerType === "mouse" &&
+            selected.buttons === 1 && event.buttons === 0 && event.button === -1) {
+          // Chrome can clear the button mask and retarget the pointer before
+          // dispatching pointerup. Only that real release can commit a drop.
+          releaseTimer = setTimeout(guard(() => {
+            if (active()) cancel("capture_lost");
+          }), RELEASE_AFTER_CAPTURE_LOSS_MS);
+        } else {
+          cancel(type === "lostpointercapture" ? "capture_lost" : "cancel");
+        }
       }
       return;
     }
@@ -152,6 +169,7 @@ export function attachBrowserPointerInput(canvas, {
     // when a presentation notification fails after Rust admitted the press).
     // Do not mutate a cancelled or replacement contact on return from send.
     if (!active() || selected !== contact) return;
+    if (kind === "release") clearReleaseTimer();
     contact.buttons = event.buttons;
     // Capture synchronously while the physical press is active, before a
     // worker acknowledgement could arrive after the pointer exits the canvas.
@@ -166,6 +184,10 @@ export function attachBrowserPointerInput(canvas, {
   const collect = (type, event) => {
     if (!active() || event.isPrimary !== true || event.pointerId === -1) return;
     if (selected !== null && selected.id !== event.pointerId && selected.buttons !== 0) return;
+    if (releaseTimer !== null) {
+      if (type === "pointermove" || type === "pointerleave" || type === "lostpointercapture") return;
+      if (type === "pointerdown") cancel("capture_lost");
+    }
     // A held contact without an admitted press cannot resume after cancellation
     // or enter from outside. Keep ordinary parent validation/ignore semantics;
     // do not interpret its coalesced button mask as a new press transition.
@@ -242,6 +264,12 @@ export function attachBrowserPointerInput(canvas, {
   }
   for (const type of ["pointermove", "pointerdown", "pointerup", "pointercancel", "pointerleave", "lostpointercapture"]) {
     canvas.addEventListener(type, guard(event => collect(type, event)), { signal });
+  }
+  // After an early capture loss the real release may target another element.
+  for (const type of ["pointerup", "pointercancel"]) {
+    windowTarget.addEventListener(type, guard(event => {
+      if (releaseTimer !== null && event.target !== canvas) collect(type, event);
+    }), { capture: true, signal });
   }
   windowTarget.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
   signal.addEventListener("abort", retire, { once: true });

@@ -94,7 +94,7 @@ function pointerCanvas(t) {
     target.addEventListener(type, listener, options);
   };
   let buttons = 0;
-  return { canvas, listeners, rect, win, emit(type, values = {}) {
+  return { canvas, listeners, rect, win, emit(type, values = {}, receiver = target) {
     if (type === "pointerdown") buttons = 1;
     if (type === "pointerup" || type === "pointercancel") buttons = 0;
     const event = new Event(type, { cancelable: type === "wheel" });
@@ -103,7 +103,7 @@ function pointerCanvas(t) {
       button: type === "pointermove" ? -1 : 0, buttons,
       pointerId: 1, pointerType: "mouse", isPrimary: true, ...values,
     });
-    target.dispatchEvent(event);
+    receiver.dispatchEvent(event);
     return event;
   } };
 }
@@ -521,6 +521,52 @@ test("retired coalesced callbacks neither inspect history nor deliver to a repla
   });
   await inputTurn();
   assert.equal(pointerMessages(replacement.attachments.at(-1).controlPort.peer).length, 0);
+});
+
+for (const outside of [false, true]) {
+  test(`real release survives zero-button capture loss ${outside ? "outside" : "inside"} the canvas`, async t => {
+    const dom = pointerCanvas(t);
+    const { engine } = await startInputClient(t, dom.canvas);
+    dom.emit("pointerdown");
+    dom.emit("pointermove", { clientX: 180 });
+    dom.emit("lostpointercapture", { buttons: 0, button: -1 });
+    dom.emit("pointermove", { buttons: 0, getCoalescedEvents() {
+      assert.fail("zero-button motion before the release must not replace the active drag");
+    } });
+    if (outside) dom.emit("pointerleave", { buttons: 0, button: -1 });
+    // Only the selected pointer's actual release can complete its drag.
+    dom.emit("pointerup", { pointerId: 2 }, dom.win);
+    dom.emit("pointerup", { clientX: outside ? 700 : 190 }, outside ? dom.win : undefined);
+    await inputTurn();
+    const events = pointerMessages(engine);
+    assert.deepEqual(events.map(({ kind }) => kind), ["press", "move", "release"]);
+    assert.equal(events[2].source_id, events[0].source_id);
+    assert.equal(events[2].surface_x, outside ? 690 : 180);
+  });
+}
+
+test("zero-button capture loss without a release still cancels the gesture", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  dom.emit("lostpointercapture", { buttons: 0, button: -1 });
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(({ kind }) => kind), ["press"]);
+  t.mock.timers.tick(50);
+  dom.emit("pointerup", {}, dom.win);
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(({ kind }) => kind), ["press", "capture_lost"]);
+});
+
+test("capture loss while a button is still held cancels immediately", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  dom.emit("lostpointercapture", { button: -1 });
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(({ kind }) => kind), ["press", "capture_lost"]);
 });
 
 test("held coalesced re-entry after viewport cancellation is ignored until a new press", async t => {
