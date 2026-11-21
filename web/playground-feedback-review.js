@@ -48,7 +48,16 @@ export async function readViewerComparison(file, source) {
   if (encodedSource.length > 1_000_000 || await sha256(encodedSource) !== after.provenance.sourceSha256) {
     throw new Error("The correction was rendered from a different source. Load the reviewed Python draft or render a new comparison.");
   }
-  const resolvedSource = resolveSourceFeedback(source, before);
   const pictures = await Promise.all([verifiedImage(before.frame, beforePngBase64), verifiedImage(after, afterPngBase64)]);
-  return { resolvedSource, observation: before.feedback.observation, pictures };
+  return { record: before, pictures };
+}
+
+export async function resolveReviewedSource(source, record) {
+  // Use the already bundled editor grammar only when reviewing a correction.
+  const { python } = await import("./pkg/python-editor-bundle.js");
+  const tree = python().language.parser.parse(source);
+  return resolveSourceFeedback(source, record, offset => {
+    const token = tree.resolveInner(offset, 1);
+    return token.name === "Comment" && token.from === offset;
+  });
 }

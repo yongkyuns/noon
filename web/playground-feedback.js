@@ -2,7 +2,7 @@ import {
   capturePausedFeedback, copyDisplayedCanvas, createLiveFeedbackExport,
   feedbackImageBounds, feedbackPoint, feedbackRegion,
 } from "./playground-feedback-capture.js";
-import { readViewerComparison } from "./playground-feedback-review.js";
+import { readViewerComparison, resolveReviewedSource } from "./playground-feedback-review.js";
 
 // The preview overlay consumes annotation gestures while playback is paused.
 export function installPlaygroundFeedback(button, { getContext, onPaused = () => {}, getDraft, resolveDraft }) {
@@ -341,6 +341,8 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     try {
       const result = await readViewerComparison(file, draft.source);
       if (ticket !== generation) return;
+      const resolvedSource = await resolveReviewedSource(draft.source, result.record);
+      if (ticket !== generation) return;
       for (const [i, picture] of result.pictures.entries()) {
         const url = window.URL.createObjectURL(picture.blob);
         comparisonUrls.push(url);
@@ -353,11 +355,11 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
       if (current.id !== draft.id || current.source !== draft.source) {
         throw new Error("The scene draft changed while the comparison was opening.");
       }
-      correction = { draft, source: result.resolvedSource };
+      correction = { draft, source: resolvedSource };
       comparison.hidden = false;
       stage.hidden = false;
       picker.hidden = true;
-      observation.textContent = result.observation;
+      observation.textContent = result.record.feedback.observation;
       observation.hidden = false;
       accept.disabled = false;
       message("Compare the two frames before accepting the correction.");

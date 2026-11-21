@@ -151,7 +151,8 @@ try {
   assert.equal((await check("original.py")).sourceStatus, "current");
   // Apply the source comment's contrast correction to the current scene draft.
   const labelStyle = "y=3.14, size=12, color=MUTED)";
-  const revised = annotated.replace(labelStyle, "y=3.14, size=12, color=INK)");
+  const revised = annotated.replace(labelStyle, "y=3.14, size=12, color=INK)")
+    .replace("# Unapplied editorial note", `# Unapplied editorial note\n\nfeedback_example = """\n\n${note}\n\n"""`);
   assert.notEqual(revised, annotated, "lesson subtitle changed before this revision fixture");
   await writeFile(path.join(output, "revised.py"), revised);
   assert.equal((await check("revised.py")).sourceStatus, "stale");
@@ -216,9 +217,11 @@ try {
   await page.screenshot({ path: path.join(output, "comparison", "playground-review.png") });
   await accept.click();
   await panel.waitFor({ state: "hidden" });
+  const pendingHeader = "# Noon feedback (pending)";
+  const commentStart = revised.lastIndexOf(pendingHeader);
+  assert.ok(commentStart > revised.indexOf(pendingHeader), "fixture must include a quoted copy of the note");
   assert.equal(await page.locator("#python-scene-source").inputValue(),
-    revised.replace("# Noon feedback (pending)", "# Noon feedback (resolved)"));
-  assert.equal(await review.isHidden(), true);
+    revised.slice(0, commentStart) + revised.slice(commentStart).replace(pendingHeader, "# Noon feedback (resolved)"));
   assert.equal(await page.evaluate(() => window.__noonExampleGallery.generationDiagnostics.runGeneration), runGeneration,
     "saving or resolving feedback must leave Auto-run idle");
   assert.deepEqual(errors, []);

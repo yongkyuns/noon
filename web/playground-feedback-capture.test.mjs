@@ -284,9 +284,11 @@ test("resolving an earlier note preserves its hints and the other pending commen
   const first = appendSourceFeedback(f.context.source, capture, selection, comment,
     { targets: [{ kind: "Text", text: "A label", line: 7 }], limited: true });
   const source = appendSourceFeedback(first, capture, selection, "Keep the red arrow visible.");
-  assert.equal(resolveSourceFeedback(source, record), source.replace("feedback (pending)", "feedback (resolved)"));
-  assert.throws(() => resolveSourceFeedback(first.replace("Keep its position.", "Move it."), record), /no matching/);
-  assert.throws(() => resolveSourceFeedback(appendSourceFeedback(source, capture, selection, comment), record), /More than one/);
+  const isComment = () => true;
+  assert.equal(resolveSourceFeedback(source, record, isComment), source.replace("feedback (pending)", "feedback (resolved)"));
+  assert.throws(() => resolveSourceFeedback(first.replace("Keep its position.", "Move it."), record, isComment), /no matching/);
+  assert.throws(() => resolveSourceFeedback(appendSourceFeedback(source, capture, selection, comment), record, isComment), /More than one/);
+  assert.throws(() => resolveSourceFeedback(first, record, () => false), /no matching/);
 });
 
 test("review compares the current draft and validates both picture digests", async () => {
@@ -300,7 +302,7 @@ test("review compares the current draft and validates both picture digests", asy
   const comparison = { kind: "noon-frame-feedback-comparison", schemaVersion: 1, status: "pending_review", before, after };
   const file = () => new Blob([JSON.stringify({ comparison, beforePngBase64: image, afterPngBase64: image })]);
   const reviewed = await readViewerComparison(file(), source);
-  assert.equal(reviewed.resolvedSource, source.replace("feedback (pending)", "feedback (resolved)"));
+  assert.deepEqual(reviewed.record, before);
   assert.equal(reviewed.pictures.length, 2);
   await assert.rejects(readViewerComparison(file(), `${source}# newer edit\n`), /different source/);
   after.sha256 = "0".repeat(64);

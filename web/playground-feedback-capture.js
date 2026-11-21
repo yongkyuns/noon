@@ -210,16 +210,19 @@ export function appendSourceFeedback(source, capture, selection, comment, identi
   ].join("\n") + "\n";
 }
 
-export function resolveSourceFeedback(source, { frame, feedback }) {
+export function resolveSourceFeedback(source, { frame, feedback }, isComment) {
   const fields = feedbackFields({ frame }, feedback, feedback.observation);
   const header = sourceFeedbackHeader(frame, fields);
   const observation = observationLines(fields.observation);
   const lines = source.split("\n");
   const lineAt = index => lines[index]?.replace(/\r$/, "");
   let match = -1;
-  for (let start = 0; start < lines.length; start++) {
+  let nextOffset = 0;
+  for (const [start, line] of lines.entries()) {
+    const offset = nextOffset;
+    nextOffset += line.length + 1;
     if (start > 0 && lineAt(start - 1) !== "") continue;
-    if (!header.every((line, i) => lineAt(start + i) === line)) continue;
+    if (!header.every((line, i) => lineAt(start + i) === line) || !isComment(offset)) continue;
     let bodyStart = start + header.length;
     for (let skipped = 0; skipped <= 5; skipped++, bodyStart++) {
       const after = lineAt(bodyStart + observation.length);
