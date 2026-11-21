@@ -344,7 +344,7 @@ try {
         { timeout: 5_000 },
       );
       const observation = await page.evaluate(index => window.__noonInspectionTest.wheelEvents[index], before.wheelEvents);
-      assert.ok(Math.abs(observation.deltaY - delta) < 1e-3,
+      assert.equal(observation.deltaY, delta,
         "gallery wheel receipt must belong to the dispatched input");
       let accepted = null;
       if (observation.defaultPrevented) {
@@ -364,8 +364,10 @@ try {
     }
     throw new Error("gallery inspection did not admit a fresh wheel occurrence");
   };
+  // Native wheel injection can round fractional input before the DOM sees it.
+  const zoomDelta = Math.round(500 * Math.log(2));
   const beforeZoom = await presentedFrames(page);
-  await wheel(-500 * Math.log(2));
+  await wheel(-zoomDelta);
   await waitForPresentation(page, beforeZoom);
   const zoomed = await authoredCanvas.screenshot();
   captures.zoomed = zoomed;
@@ -376,7 +378,7 @@ try {
   captures.zoomRestored = await waitForExactPixels(authoredCanvas, zoomed, "zoomed authored click");
   await assertSettled(page, "zoomed authored click");
   const beforeZoomOut = await presentedFrames(page);
-  await wheel(500 * Math.log(2));
+  await wheel(zoomDelta);
   await waitForPresentation(page, beforeZoomOut);
   captures.zoomReset = await waitForExactPixels(authoredCanvas, authoredBaseline, "inverse gallery zoom");
   await assertSettled(page, "inverse gallery zoom");
