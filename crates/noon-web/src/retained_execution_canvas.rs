@@ -977,6 +977,13 @@ mod wasm {
             self.video_frame_provider = Some(provider);
         }
 
+        /// Repaint the selected publication for explicit export readback.
+        #[wasm_bindgen(js_name = renderExportFrame)]
+        pub fn render_export_frame(&mut self) -> Result<bool, JsValue> {
+            self.pending_frame = true;
+            self.render()
+        }
+
         pub fn render(&mut self) -> Result<bool, JsValue> {
             self.require_webgpu_device()?;
             if self.webgl_context_lifecycle.is_lost()

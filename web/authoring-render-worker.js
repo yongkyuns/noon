@@ -1,8 +1,8 @@
 import { createAuthoringRenderController } from "./authoring-render-controller.js";
 
 const controller = createAuthoringRenderController({
-  postMessage(message) {
-    self.postMessage(message);
+  postMessage(message, transfer = []) {
+    self.postMessage(message, transfer);
   },
   close() {
     self.close();

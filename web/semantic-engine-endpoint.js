@@ -1252,7 +1252,7 @@ export async function attachSemanticEngine(
               }
               finiteExport = JSON.parse(player.observeFiniteExportJson());
             }
-            await awaitPresentation(null);
+            presentationReceipt = await awaitPresentation(null);
             break;
           }
           case "acknowledge_finite_export":

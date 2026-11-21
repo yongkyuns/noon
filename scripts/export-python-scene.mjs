@@ -194,17 +194,10 @@ async function run(config) {
         authoringClient: authoring, initiallyPaused: true, transportMode: transport,
         loopDurationSeconds: Math.max(authored.duration, 1),
       });
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const plan = await execution.beginFiniteExport(frameOptions);
       if (authored.duration > plan.source_end) {
         throw new Error(`finite export does not yet support a trailing authored interval beyond retained tracks/audio (${authored.duration} > ${plan.source_end} seconds)`);
       }
-      const copy = document.createElement("canvas");
-      copy.width = width; copy.height = height;
-      const context = copy.getContext("2d", { willReadFrequently: true, alpha: false });
-      if (context === null) throw new Error("RGBA readback canvas is unavailable");
-      window.noonFiniteCapture.copy = copy;
-      window.noonFiniteCapture.context = context;
       window.noonFiniteCapture.base64 = bytes => {
         let encoded = "";
         for (let first = 0; first < bytes.length; first += 32_768) {
@@ -230,7 +223,11 @@ async function run(config) {
     while (status.kind !== "complete") {
       if (interrupted) throw new Error("Python capture cancelled");
       assert.equal(status.kind, "needs_sample");
-      const sample = await deadline(page.evaluate(() => window.noonFiniteCapture.execution.sampleFiniteExport()), "renderer sample");
+      const sample = await deadline(page.evaluate(async () => {
+        const { execution, base64 } = window.noonFiniteCapture;
+        const { pixels, ...sample } = await execution.sampleFiniteExport();
+        return { ...sample, rgba: pixels === undefined ? null : base64(pixels) };
+      }), "renderer sample");
       assert.equal(sample.kind, "sample");
       const observation = sample.observation;
       manifestBytes += Buffer.byteLength(JSON.stringify(observation)) + 1;
@@ -238,19 +235,7 @@ async function run(config) {
       samples.push(observation);
       if (sample.frame !== null) {
         assert.equal(sample.frame.pts, frames);
-        const base64 = await deadline(page.evaluate(async ({ width, height }) => {
-          // The worker command already waited for the matching retained
-          // presentation. Let its OffscreenCanvas placeholder reach the page,
-          // then synchronously copy pixels before acknowledging that sample.
-          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-          const { execution, context, base64 } = window.noonFiniteCapture;
-          if (execution.canvas.width !== width || execution.canvas.height !== height) {
-            throw new Error("renderer dimensions changed during finite capture");
-          }
-          context.drawImage(execution.canvas, 0, 0);
-          return base64(context.getImageData(0, 0, width, height).data);
-        }, { width: config.width, height: config.height }), "RGBA readback");
-        const rgba = Buffer.from(base64, "base64");
+        const rgba = Buffer.from(sample.rgba, "base64");
         assert.equal(rgba.length, frameBytes);
         await framesFile.writeFile(rgba);
         frames += 1;

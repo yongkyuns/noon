@@ -62,6 +62,7 @@ export function createAuthoringRenderController(host) {
 
   let renderPort = null;
   let video = null;
+  let exportReadback = null;
   let transportMode = null;
   let mode = null;
   let sharedReader = null;
@@ -177,6 +178,27 @@ export function createAuthoringRenderController(host) {
         case "resize":
           resize(message);
           return;
+        case "capture_export_frame": {
+          if (renderer === null || needsPresent ||
+              !samePublication(lastPresentedPublication, message.publication ?? null)) {
+            throw new Error("export capture requires the displayed renderer publication");
+          }
+          exportReadback ??= new OffscreenCanvas(width, height).getContext("2d", { willReadFrequently: true, alpha: false });
+          if (exportReadback === null) throw new Error("RGBA readback canvas is unavailable");
+          if (exportReadback.canvas.width !== width || exportReadback.canvas.height !== height) {
+            exportReadback.canvas.width = width;
+            exportReadback.canvas.height = height;
+          }
+          // Repaint and take ownership of that buffer in the same task. The
+          // DOM placeholder can lag and its swapchain can discard old buffers.
+          if (!renderer.renderExportFrame()) throw new Error("export capture could not repaint the displayed publication");
+          const snapshot = canvas.transferToImageBitmap();
+          try { exportReadback.drawImage(snapshot, 0, 0); }
+          finally { snapshot.close(); }
+          const pixels = exportReadback.getImageData(0, 0, width, height).data;
+          respond(message.requestId, { type: "capture_export_frame", pixels }, [pixels.buffer]);
+          return;
+        }
         case "metrics":
           if (!drainGpuDiagnostics()) return;
           if (message.profilePublicationStages === true) publicationStageProfiling = true;
@@ -467,6 +489,7 @@ export function createAuthoringRenderController(host) {
   function detachRenderPort() {
     video?.close();
     video = null;
+    exportReadback = null;
     effectPreparation?.prepared?.free?.();
     effectPreparation = null;
     cancelScheduledFrame();
@@ -1381,8 +1404,8 @@ export function createAuthoringRenderController(host) {
     return candidate;
   }
 
-  function respond(requestId, payload) {
-    postMain({ requestId: validateRequestId(requestId), ...payload });
+  function respond(requestId, payload, transfer) {
+    postMain({ requestId: validateRequestId(requestId), ...payload }, transfer);
   }
 
   function validateRequestId(requestId) {
@@ -1408,7 +1431,7 @@ export function createAuthoringRenderController(host) {
     postMain({ type: "error", requestId: effectiveRequestId, message });
   }
 
-  function postMain(payload) {
+  function postMain(payload, transfer) {
     if (host === null) {
       throw new Error("authoring render host is not configured");
     }
@@ -1416,7 +1439,7 @@ export function createAuthoringRenderController(host) {
       channel: RENDER_CHANNEL,
       protocolVersion: RENDER_PROTOCOL_VERSION,
       ...payload,
-    });
+    }, transfer);
   }
 
   function validateMainMessage(message) {
