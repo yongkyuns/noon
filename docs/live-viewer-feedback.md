@@ -45,14 +45,19 @@ index if the relevant frame is beyond the initial frame.
 ```bash
 node tools/noon-mcp/bin/noon-feedback.mjs compare \
   --feedback review/feedback.json --candidate revised-preview/manifest.json \
-  --sample 1 --source scene.py --output comparison
+  --sample 1 --source scene.py --output comparison --viewer
 ```
 
-Show the author `comparison/before.png` and `comparison/after.png`, and explain
-the focused edit. The comparison stays pending for the author to accept. If
-timing changed, choose the corresponding moment from the new run explicitly.
+Give the author the revised Python source with its pending comment intact and
+`comparison/viewer-comparison.json`. With the revised draft in the Playground,
+select **Review correction** and open the file. The preview shows the original
+and revised frames at their recorded times. **Accept correction** changes only
+that comment from `pending` to `resolved`. **Save .py** includes the decision.
+If the draft changes, render a fresh comparison for the source the author will
+review. If timing changed, explicitly choose the corresponding moment in the
+new run when making the comparison.
 
 The viewer checks the Run, time, and shared Rust presentation receipt around
 the canvas copy. The browser writes the Python source comment. The browser smoke
-covers adding and saving a comment, preserving an unapplied edit, and revising
-**One Extra Column** at the captured frame.
+covers adding and saving a comment, preserving an unapplied edit, and accepting
+the reviewed correction to **One Extra Column** at the captured frame.

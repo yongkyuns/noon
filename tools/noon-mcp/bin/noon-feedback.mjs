@@ -4,15 +4,15 @@ import { runFeedbackCli } from "../src/feedback-cli.mjs";
 const USAGE = `Usage:
   noon-feedback import-live --input <viewer-feedback.json> --output <new-feedback-dir>
   noon-feedback check --feedback <feedback.json> --source <scene.py>
-  noon-feedback compare --feedback <feedback.json> --candidate <manifest.json> [--sample <index>] --source <revised.py> --output <new-dir>
+  noon-feedback compare --feedback <feedback.json> --candidate <manifest.json> [--sample <index>] --source <revised.py> --output <new-dir> [--viewer]
 
 In the playground, choose Comment, mark an area or point, and download the note.
 Use import-live to verify and extract the source, PNG, and feedback record.
 Use schema-2 noon-preview output for the candidate. Sample indices start at zero.
 Bundles retain PNG and source snapshots. Existing output directories are never reused.
 Check exits 2 when the source is stale, 1 on error, and 0 when current.
-Comparison preserves both observations and remains pending review; it never retimes
-the interval or declares an educational, narration, or timing problem resolved.
+Use --viewer to produce viewer-comparison.json for inline Playground review.
+The comparison preserves both observations and stays pending until the author reviews it.
 `;
 
 try {
