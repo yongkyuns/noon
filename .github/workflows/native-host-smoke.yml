@@ -383,7 +383,7 @@ jobs:
       - name: Qualify CPython source, cleanup and native pixels without a browser
         run: |
           python3 scripts/test_build_native_python.py
-          python3 scripts/build-native-python.py --profile dev
+          python3 scripts/build-native-python.py --profile dev --video
           PYTHONPATH=build/python env -u DISPLAY -u WAYLAND_DISPLAY \
             python3 scripts/test_native_python.py -v
           python3 scripts/python_host_conformance.py \

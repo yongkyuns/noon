@@ -375,17 +375,17 @@ def _sync_membership_wrapper_attachments(
             wrapper._scene = None
 
 
-def _reconcile_completed_family_bindings(
-    scene: _base.Scene, families: tuple[object, ...]
+def _associate_published_wrappers(
+    scene: _base.Scene, entries: tuple[object, ...], *, operation: str
 ) -> None:
-    """Refresh affected wrapper identities from completed Rust membership only."""
-    if not families:
+    """Associate Python wrappers with membership already published by Rust."""
+    if not entries:
         return
     context = _context(scene)
     wrappers: dict[str, object] = {}
-    for family in families:
-        _register_membership_wrappers(scene, family, registry=wrappers)
-    batch = engine_call(context.beginMembershipBatch, "add", operation="Scene.completion")
+    for entry in entries:
+        _register_membership_wrappers(scene, entry, registry=wrappers)
+    batch = engine_call(context.beginMembershipBatch, "add", operation=operation)
     next_object_id = scene._next_object_id
     reservations = []
     detached = []
@@ -396,7 +396,7 @@ def _reconcile_completed_family_bindings(
         if wrapper._scene is not None and wrapper._scene is not scene:
             raise ValueError("completion wrapper belongs to another Scene")
         present = bool(engine_call(
-            context.containsMobject, wrapper._semantic_handle, operation="Scene.completion"
+            context.containsMobject, wrapper._semantic_handle, operation=operation
         ))
         if present:
             next_object_id, appended = _membership_leaf_bindings(
@@ -408,13 +408,31 @@ def _reconcile_completed_family_bindings(
             detached.append(wrapper)
     # This validates the entire binding batch against published Rust membership.
     # It does not add/remove objects, relower, or repeat matching cleanup.
-    engine_call(context.associatePublishedMobjects, batch, operation="Scene.completion")
+    engine_call(context.associatePublishedMobjects, batch, operation=operation)
     for wrapper, reservation, handle in reservations:
         _commit_typed_binding(wrapper, scene, reservation, handle)
     _membership_registry(scene).update(wrappers)
     for wrapper in detached:
         wrapper._canonical_live_target_context = context
         wrapper._scene = None
+
+
+def _canonical_video(scene, source, start_time, source_start, source_end, height):
+    from os import fspath
+
+    context = _context(scene)
+    create = getattr(context, "createVideo", None)
+    if create is None:
+        raise NotImplementedError("video import requires a Noon host with video decoding")
+    handle = engine_call(
+        create, fspath(source), float(start_time), float(source_start),
+        None if source_end is None else float(source_end), float(height),
+        operation="Scene.video",
+    )
+    video = object.__new__(_base.Mobject)
+    _semantic_handles._attach_shared_handle(video, handle)
+    _associate_published_wrappers(scene, (video,), operation="Scene.video")
+    return video
 
 
 def _canonical_scene_mobjects(scene: _base.Scene) -> list[object]:
@@ -3209,7 +3227,7 @@ def _play_canonical_composition(
             for family in family_registrations:
                 register(family)
     def completed() -> None:
-        _reconcile_completed_family_bindings(self, completed_families)
+        _associate_published_wrappers(self, completed_families, operation="Scene.completion")
         for target in removals:
             _reconcile_fade_membership(self, target, "out")
 

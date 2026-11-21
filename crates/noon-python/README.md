@@ -53,6 +53,19 @@ dimensions. Fully predeclared scenes can export their authored soundtrack as
 window playback with audio, build with `python scripts/build-native-python.py
 --audio`. This enables the same device backend as the Rust window.
 
+### Native video objects
+
+Build the extension with `--video --audio` to import and preview local H.264
+MP4 clips. `Scene.video(path, start_time=..., source_start=..., source_end=...)`
+adds the clip and its optional AAC soundtrack to the finite scene timeline.
+Times are in seconds. The preview and MP4 exporter use the same clip timing.
+
+```bash
+python scripts/build-native-python.py --video --audio
+NOON_VIDEO_SOURCE=/path/to/clip.mp4 PYTHONPATH=build/python \
+  python -m noon_native crates/noon-python/examples/video_object.py --mp4 scene.mp4
+```
+
 ### Native LaTeX
 
 `Tex`, `MathTex`, and DecimalNumber labels use the system `latex` and

@@ -307,12 +307,13 @@ impl Context {
         let mut session =
             scene_execution::lower(&self.scene).map_err(|e| engine_error(e.to_string()))?;
         session.require_effect_resource_preparation();
-        // Predeclared audio uses the immutable timeline for preview and export.
+        // Predeclared media uses the immutable timeline for preview and export.
         if !self.drag_targets.is_empty() {
             scene_execution::borrow_uninstalled(&self.scene, &mut session)
                 .set_translation_drag_targets(&self.drag_targets)
                 .map_err(engine_error)?;
-        } else if self.retain_history && !session.has_audio() {
+        } else if self.retain_history && !session.has_audio() && session.video_rasters().is_empty()
+        {
             session
                 .begin_replay_retention(Default::default())
                 .map_err(|e| engine_error(e.to_string()))?;
@@ -1100,6 +1101,40 @@ impl Context {
             store: Rc::clone(self.scene.integration_store()),
             node,
         })
+    }
+
+    #[cfg(feature = "video-decode")]
+    #[pyo3(name = "createVideo")]
+    fn create_video(
+        &mut self,
+        py: Python<'_>,
+        path: std::path::PathBuf,
+        start_time: f64,
+        source_start: f64,
+        source_end: Option<f64>,
+        height: f64,
+    ) -> PyResult<MobjectHandle> {
+        self.available()?;
+        if self.has_execution() {
+            return Err(engine_error(noon::AuthoringError::Unsupported(
+                noon::UnsupportedAuthoringOperation::VideoRequiresSetup,
+            )));
+        }
+        let asset = py
+            .detach(move || noon::NativeVideoAsset::open(path))
+            .map_err(|error| {
+                engine_error(AuthoringFailure::new("resource", "video.import", error))
+            })?;
+        let source_end = source_end.unwrap_or_else(|| asset.frame_index().duration());
+        self.scene
+            .video(
+                std::sync::Arc::new(asset),
+                start_time,
+                source_start..source_end,
+                height,
+            )
+            .map(MobjectHandle::from_semantic_mobject)
+            .map_err(engine_error)
     }
 
     #[pyo3(name = "authoredWait")]
