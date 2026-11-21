@@ -1,7 +1,7 @@
 // DOM mechanics for one selected primary pointer. Selection here chooses an
 // input source, never a scene target. Runtime signals remain owned by Rust.
 // Additional contacts are ignored while the selected pointer has buttons down.
-// No OS/DOM capture is requested; leaving the content viewport cancels.
+// Hold DOM capture across canvas boundaries so Rust still receives the release.
 import { wheelLinePixels, wheelDeltaCssPixels } from "./browser-wheel-units.js";
 
 const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
@@ -21,10 +21,17 @@ export function attachBrowserPointerInput(canvas, {
   ];
   let unavailableViewReported = false;
   const active = () => !signal.aborted && isCurrent();
-  const cancel = (kind = "cancel") => {
-    if (selected === null) return;
-    const previous = selected;
+  const retire = () => {
+    const contact = selected;
     selected = null;
+    if (contact !== null && canvas.hasPointerCapture?.(contact.id)) {
+      canvas.releasePointerCapture(contact.id);
+    }
+    return contact;
+  };
+  const cancel = (kind = "cancel") => {
+    const previous = retire();
+    if (previous === null) return;
     send({
       kind, source_id: previous.source, pointer_id: previous.id,
       view_revision: previous.viewRevision,
@@ -136,7 +143,7 @@ export function attachBrowserPointerInput(canvas, {
     // already cancelled its contact. Retire this DOM source without another
     // cancellation, edge reconstruction, queued replay, or fatal detachment.
     if (admitted === false) {
-      if (selected === contact) selected = null;
+      if (selected === contact) retire();
       return false;
     }
     // Delivery can synchronously retire the attachment/contact (for example,
@@ -144,6 +151,12 @@ export function attachBrowserPointerInput(canvas, {
     // Do not mutate a cancelled or replacement contact on return from send.
     if (!active() || selected !== contact) return;
     contact.buttons = event.buttons;
+    // Capture synchronously while the physical press is active, before a
+    // worker acknowledgement could arrive after the pointer exits the canvas.
+    if (type === "pointerdown" && button === 0 && event.isTrusted &&
+        !canvas.hasPointerCapture?.(contact.id)) {
+      canvas.setPointerCapture?.(contact.id);
+    }
     // Touch IDs may be recycled; the next contact must receive a new source.
     if (kind === "release" && selected.buttons === 0 && event.pointerType !== "mouse") selected = null;
     return true;
@@ -206,7 +219,7 @@ export function attachBrowserPointerInput(canvas, {
           if (value !== undefined && typeof value !== "boolean") {
             throw new TypeError("worker inspection admission must resolve to a boolean or undefined");
           }
-          if (active() && value === true && selected === contact) selected = null;
+          if (active() && value === true && selected === contact) retire();
         }).catch(error => { if (active()) onError(error); });
         return;
       }
@@ -215,7 +228,7 @@ export function attachBrowserPointerInput(canvas, {
       }
       // Shared Rust already cancelled a changed view's semantic gesture. Retire
       // only its DOM contact; sending another cancellation would use a dead token.
-      if (changed === true) selected = null;
+      if (changed === true) retire();
       if (changed !== undefined) event.preventDefault();
     }), { passive: false, signal });
   }
@@ -223,6 +236,7 @@ export function attachBrowserPointerInput(canvas, {
     canvas.addEventListener(type, guard(event => collect(type, event)), { signal });
   }
   windowTarget.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
+  signal.addEventListener("abort", retire, { once: true });
   if (onView) {
     // Reuse startup registration when available; collection never invents a receipt.
     // Scroll/resize/element resize can invalidate mapping without pointer motion.
@@ -238,7 +252,7 @@ export function attachBrowserPointerInput(canvas, {
     refresh();
   }
   return { invalidateView, retireSource(source) {
-    if (selected?.source === source) selected = null;
+    if (selected?.source === source) retire();
   } };
 }
 
