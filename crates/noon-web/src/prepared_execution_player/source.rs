@@ -393,6 +393,54 @@ mod wasm {
 
     #[wasm_bindgen]
     impl PreparedExecutionPlayer {
+        #[wasm_bindgen(js_name = feedbackTargetsJson)]
+        pub fn feedback_targets_json(
+            &self,
+            context: &CanonicalAuthoringSceneContext,
+            query: &str,
+        ) -> Result<String, JsValue> {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Query {
+                session: u32,
+                sequence: u64,
+                time: f64,
+                view_revision: u64,
+                region: [f32; 4],
+            }
+            let query: Query = serde_json::from_str(query)
+                .map_err(|error| JsValue::from_str(&error.to_string()))?;
+            if self.prepared_playing()
+                || self.prepared_time() != query.time
+                || !self
+                    .last_publication
+                    .is_some_and(|p| p.session == query.session && p.sequence == query.sequence)
+                || !self
+                    .pointer
+                    .view()
+                    .is_some_and(|view| view.revision == query.view_revision)
+            {
+                return Ok("null".into());
+            }
+            let reader = &self.playback.reader;
+            let source = context.inner.feedback_source();
+            let Some(result) = self
+                .pointer
+                .capture(reader)
+                .ok()
+                .flatten()
+                .and_then(|frame| reader.feedback_targets(&frame, query.region, &source))
+            else {
+                return Ok("null".into());
+            };
+            let targets: Vec<_> = result.targets.into_iter().map(|hint| serde_json::json!({
+                "kind": hint.kind, "text": hint.text,
+                "line": hint.source.map(|site| site.line.get()),
+                "callerLine": hint.source.and_then(|site| site.caller_line.map(|line| line.get())),
+            })).collect();
+            Ok(serde_json::json!({ "targets": targets, "limited": result.limited }).to_string())
+        }
+
         #[wasm_bindgen(js_name = prepareSourceSegment)]
         pub fn prepare_source_segment(
             &mut self,

@@ -437,10 +437,15 @@ const feedbackReview = installPlaygroundFeedback(document.querySelector("#previe
       runGeneration: run.token.runGeneration,
       buildIdentity: () => client.ready(),
       isCurrent,
-      addToSource(capture, selection, comment) {
+      findTargets(capture, { x, y, width, height }) {
+        if (!isCurrent() || capture.viewRevision === null) return null;
+        return active.feedbackTargets({ ...capture.presentationReceipt, viewRevision: capture.viewRevision,
+          region: [x, y, width, height] });
+      },
+      addToSource(capture, selection, comment, identified) {
         if (!isCurrent()) throw new Error("The displayed Run changed. Reopen Comment on the scene you want to annotate.");
         // Update the existing textarea/CodeMirror source without requesting a Run.
-        sceneSourceEditor.value = appendSourceFeedback(sceneSourceEditor.value, capture, selection, comment);
+        sceneSourceEditor.value = appendSourceFeedback(sceneSourceEditor.value, capture, selection, comment, identified);
         rememberSceneDraft(example);
         updateDraftStatus(example);
         draftStatus.value = "Feedback added to source · preview paused";

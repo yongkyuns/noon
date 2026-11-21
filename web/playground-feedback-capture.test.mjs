@@ -84,6 +84,18 @@ test("invalid publication observations fail closed", () => {
   assert.equal(assertPausedPublication(f.state).time, f.receipt.time);
 });
 
+test("object hints require a renderer view that stayed current through the image copy", async () => {
+  const f = fixture();
+  f.receipt.viewRevision = 2;
+  assert.equal((await capturePausedFeedback(f.context, f.adapters)).viewRevision, 2);
+  const copy = f.adapters.copyImage;
+  f.adapters.copyImage = canvas => {
+    f.receipt.viewRevision = 3;
+    return copy(canvas);
+  };
+  assert.equal((await capturePausedFeedback(f.context, f.adapters)).viewRevision, null);
+});
+
 for (const phase of ["before-copy", "after-copy"]) {
   for (const field of ["session", "sequence", "time"]) {
     test(`changed ${field} ${phase} is rejected rather than attached to the wrong picture`, async () => {

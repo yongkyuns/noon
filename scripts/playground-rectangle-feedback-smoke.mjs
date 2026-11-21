@@ -81,8 +81,11 @@ try {
   const panel = page.getByRole("region", { name: "Frame feedback" });
   const stage = page.locator(".canvas-frame .noon-feedback-image");
   await panel.waitFor();
-  await stage.getByAltText("Frozen frame from the displayed Noon Run").waitFor();
-  await page.waitForFunction(() => document.querySelector(".noon-feedback-status")?.textContent.startsWith("Paused at "));
+  await page.waitForFunction(() => {
+    const status = document.querySelector(".noon-feedback-status");
+    if (status?.dataset.error === "true") throw new Error(status.textContent);
+    return status?.textContent.startsWith("Paused at ");
+  });
   assert.equal(await page.getByRole("dialog").count(), 0);
   const bounds = await stage.locator("img").evaluate(image => {
     const box = image.getBoundingClientRect();
@@ -114,6 +117,11 @@ try {
   assert.ok(annotated.includes(`# ${comment}`));
   const note = annotated.slice(draft.length).trim();
   assert.ok(note.split("\n").every(line => line.startsWith("#")));
+  const subtitleLine = original.split("\n").findIndex(line => line.includes('meta = label("CUDA shared-memory transpose')) + 1;
+  const hints = note.split("\n").filter(line => line.startsWith("# Object hint "));
+  assert.ok(hints.length <= 4);
+  assert.ok(hints.some(line => line.includes('Text("CUDA shared-memory transpose') &&
+    line.includes(`Python line ${subtitleLine}`)), `missing subtitle source hint in ${note}`);
   const pendingSource = page.waitForEvent("download");
   await page.getByRole("button", { name: "Save .py" }).click();
   await (await pendingSource).saveAs(path.join(output, "annotated.py"));

@@ -111,7 +111,8 @@ export async function capturePausedFeedback(context, {
   check();
   await afterPaint(signal);
   check();
-  assertPausedPublication(await context.player.state(), receipt);
+  const beforeCopy = await context.player.state();
+  assertPausedPublication(beforeCopy, receipt);
   check();
   const copied = copyImage(context.canvas);
   const encoding = Promise.resolve(copied?.png);
@@ -120,7 +121,8 @@ export async function capturePausedFeedback(context, {
   requireCapture(Number.isSafeInteger(copied?.width) && Number.isSafeInteger(copied?.height) &&
     copied.width > 0 && copied.height > 0 && copied.width <= 8192 && copied.height <= 8192 &&
     copied.width <= Math.floor(MAX_PIXELS / copied.height), "Captured image exceeds the review size limit.");
-  assertPausedPublication(await context.player.state(), receipt);
+  const afterCopy = await context.player.state();
+  assertPausedPublication(afterCopy, receipt);
   check();
   const png = await encoding;
   check();
@@ -145,7 +147,9 @@ export async function capturePausedFeedback(context, {
       sceneRevision: null, frameRevision: null,
     }),
   });
-  return Object.freeze({ source, png: ownedPng, frame, presentationReceipt: receipt });
+  const viewRevision = beforeCopy.presentationReceipt.viewRevision;
+  return Object.freeze({ source, png: ownedPng, frame, presentationReceipt: receipt,
+    viewRevision: viewRevision === afterCopy.presentationReceipt.viewRevision ? viewRevision ?? null : null });
 }
 
 function feedbackFields(capture, selection, comment) {
@@ -166,16 +170,24 @@ function feedbackFields(capture, selection, comment) {
   };
 }
 
-export function appendSourceFeedback(source, capture, selection, comment) {
+export function appendSourceFeedback(source, capture, selection, comment, identified = null) {
   const { interval, region, point, observation } = feedbackFields(capture, selection, comment);
   const bounds = region ?? point;
   const coordinates = Object.entries(bounds).map(([key, value]) => `${key}=${Number(value.toFixed(6))}`).join(" ");
   const lines = observation.trim().split(/\r\n|[\r\n\u2028\u2029]/u).map(line => `# ${line}`.trimEnd());
   const separator = source.endsWith("\n") ? "\n" : "\n\n";
+  const hints = (identified?.targets ?? []).map(({ kind, text, line, callerLine }) => {
+    const label = text === null ? kind : `${kind}(${JSON.stringify(text)})`;
+    const location = callerLine ? ` · Python line ${callerLine} (created at line ${line})`
+      : line ? ` · Python line ${line}` : "";
+    return `# Object hint ${label}${location}`;
+  });
   return source + separator + [
     `# Noon feedback (pending) at ${interval.start} s`,
     `# ${region ? "Rectangle" : "Point"} on the frame (normalized) ${coordinates}`,
     `# Displayed source SHA-256 ${capture.frame.provenance.sourceSha256}`,
+    ...hints,
+    ...(identified?.limited ? ["# Object hints cover a bounded search of this frame."] : []),
     ...lines,
   ].join("\n") + "\n";
 }

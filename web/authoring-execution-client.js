@@ -249,6 +249,10 @@ export class AuthoringExecutionClient {
     return this.#withStablePlayer((player) => player.state());
   }
 
+  async feedbackTargets(query) {
+    return this.#withStablePlayer((player) => player.feedbackTargets(query));
+  }
+
   async metrics(options = {}) {
     const report = await this.#withStablePlayer((player) => player.metrics(options));
     return {

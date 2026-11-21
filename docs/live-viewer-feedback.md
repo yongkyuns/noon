@@ -8,6 +8,11 @@ draft as ordinary comments, including the captured time, image-relative bounds,
 and hash of the source that produced the frame. Existing edits stay in the draft
 and playback stays paused.
 
+When you release a rectangle, Noon checks the paused frame for up to four
+overlapping 2D objects. The comment includes their types, visible text, and
+Python creation or caller lines when available. Dense scenes can yield a partial
+list, and the marked region still gives the reviewer a place to look.
+
 Use **Save .py** to save the annotated scene. An agent working on that source can
 find `Noon feedback (pending)` at the end of the file. Use the recorded time and
 region to find the visual, render a revision, and keep the note pending until

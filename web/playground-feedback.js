@@ -80,13 +80,14 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
   const download = panel.querySelector('[data-action="download"]');
   let capture = null, selection = null, drag = null, imageUrl = null, downloadUrl = null, controller = null;
   let addToSource = null;
+  let findTargets = null, identified = null, lookupPending = false;
   let releaseCapture = null;
   let generation = 0, disposed = false, timer = null, workInFlight = null;
   const update = () => {
     const size = new TextEncoder().encode(text.value).length;
     text.setCustomValidity(size > 4000 ? "Use at most 4,000 UTF-8 bytes." : "");
-    submit.disabled = !capture || !selection || !text.value.trim() || text.value.includes("\0") || size > 4000;
-    download.disabled = submit.disabled;
+    download.disabled = !capture || !selection || !text.value.trim() || text.value.includes("\0") || size > 4000;
+    submit.disabled = download.disabled || lookupPending;
   };
   const message = (value, error = false) => {
     status.textContent = value;
@@ -104,6 +105,7 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     imageUrl = null; downloadUrl = null;
     capture = null; selection = null; drag = null;
     addToSource = null;
+    findTargets = null; identified = null; lookupPending = false;
     image.hidden = true; mark.hidden = true;
     text.value = "";
     update();
@@ -122,9 +124,26 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     mark.style.width = region ? `${region.width * bounds.width}px` : "";
     mark.style.height = region ? `${region.height * bounds.height}px` : "";
   }
-  function select(next) {
-    selection = next; drawSelection(); update();
+  async function select(next) {
+    selection = next; identified = null;
+    lookupPending = Boolean(next.region && findTargets);
+    drawSelection(); update();
     text.focus();
+    if (!lookupPending) return;
+    const ticket = generation;
+    let timeout;
+    try {
+      const result = await Promise.race([
+        findTargets(capture, next.region),
+        new Promise(resolve => { timeout = window.setTimeout(() => resolve(null), 750); }),
+      ]);
+      if (ticket === generation && selection === next) identified = result;
+    } catch {
+      // The rectangle remains usable if the captured publication has retired.
+    } finally {
+      window.clearTimeout(timeout);
+      if (ticket === generation && selection === next) { lookupPending = false; update(); }
+    }
   }
   function imagePoint(event, clamp = false) {
     return feedbackPoint(event.clientX, event.clientY, image.getBoundingClientRect(),
@@ -227,6 +246,7 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
       if (disposed || ticket !== generation || signal.aborted) return;
       capture = candidate;
       addToSource = context.addToSource;
+      findTargets = context.findTargets;
       message(`Paused at ${candidate.frame.provenance.publishedTime.toFixed(3)} s. Drag an area or click a point.`);
       stage.focus();
       update();
@@ -252,7 +272,7 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     update();
     if (submit.disabled) return;
     try {
-      addToSource(capture, selection, text.value);
+      addToSource(capture, selection, text.value, identified);
       close();
       button.focus();
     } catch (error) { message(error.message, true); }

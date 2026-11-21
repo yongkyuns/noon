@@ -60,6 +60,15 @@ impl MobjectHandle {
 #[pymethods]
 #[allow(clippy::too_many_arguments)]
 impl MobjectHandle {
+    #[pyo3(name = "recordSourceSite")]
+    fn record_source_site(&self, line: u32, caller_line: u32) -> PyResult<()> {
+        self.handle
+            .integration_store()
+            .borrow_mut()
+            .record_source_site(self.handle.node_id(), line, caller_line)
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "shapeMatcherBounds")]
     fn shape_matcher_bounds(&self) -> PyResult<[f64; 4]> {
         noon::MobjectTarget::from(&self.handle)

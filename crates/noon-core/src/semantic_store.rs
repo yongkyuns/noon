@@ -138,6 +138,13 @@ pub enum SourceIdentity {
     },
 }
 
+/// An optional authoring location. Several objects may originate at one call site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceSite {
+    pub line: std::num::NonZeroU32,
+    pub caller_line: Option<std::num::NonZeroU32>,
+}
+
 /// Whether a semantic node currently participates in authored top-level scene membership.
 ///
 /// This is the semantic view only. Intrusive ordering links remain private storage
@@ -381,6 +388,7 @@ pub struct SemanticNode {
     /// temporary state-less frontend identity seam only.
     object_state: Option<SemanticObjectState>,
     source_identity: Option<SourceIdentity>,
+    source_site: Option<SourceSite>,
     scene_membership: SemanticSceneMembership,
     /// Families containing this node. Multiple parents are intentional and
     /// preserve Manim-style aliasing/reference semantics. This list contains only
@@ -1335,6 +1343,7 @@ impl SemanticStore {
             kind,
             object_state: None,
             source_identity: None,
+            source_site: None,
             scene_membership: SemanticSceneMembership::Detached,
             parents: Vec::new(),
             members: OrderedFamilyMembers::default(),
@@ -1498,6 +1507,29 @@ impl SemanticStore {
         debug_assert!(inserted);
         self.register_semantic_scoped_signal_reference(scope, signal);
         Ok(true)
+    }
+
+    /// Record creation provenance without changing authored or effective scene state.
+    pub fn record_source_site(
+        &mut self,
+        id: SemanticNodeId,
+        line: u32,
+        caller_line: u32,
+    ) -> Result<(), SemanticStoreError> {
+        let node = self
+            .node_mut(id)
+            .ok_or(SemanticStoreError::UnknownNode(id))?;
+        if let Some(line) = std::num::NonZeroU32::new(line) {
+            node.source_site.get_or_insert(SourceSite {
+                line,
+                caller_line: std::num::NonZeroU32::new(caller_line),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn source_site(&self, id: SemanticNodeId) -> Option<SourceSite> {
+        self.node(id)?.source_site
     }
 
     pub fn set_source_identity(
