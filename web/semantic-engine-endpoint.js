@@ -7,6 +7,7 @@ import {
   createSharedExecutionMailbox, executionDeltaMetadata,
   prepareExecutionDeltaMetadataForSend, prepareExecutionDeltaTransportForSend,
 } from "./execution-transport.js";
+import { MAX_BROWSER_POINTER_SAMPLES } from "./browser-pointer-input.js";
 
 export const MAX_PENDING_SEMANTIC_CONTROLS = 128;
 export const MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE = 128;
@@ -961,6 +962,26 @@ export async function attachSemanticEngine(
         requestId: _requestId,
         ...input
       } = message;
+      if (Array.isArray(input.input)) {
+        const motions = input.input;
+        const first = motions[0];
+        if (motions.length === 0 || motions.length > MAX_BROWSER_POINTER_SAMPLES) {
+          throw new TypeError("invalid browser pointer motion batch size");
+        }
+        for (const sample of motions) {
+          if (sample?.kind !== "move" || sample.button !== null ||
+              sample.source_id !== first.source_id || sample.pointer_id !== first.pointer_id ||
+              sample.view_revision !== first.view_revision ||
+              sample.viewport_width !== first.viewport_width || sample.viewport_height !== first.viewport_height ||
+              !Number.isFinite(sample.surface_x) || !Number.isFinite(sample.surface_y)) {
+            throw new TypeError("invalid browser pointer motion batch");
+          }
+        }
+        for (const sample of motions) {
+          if (!player.submitBrowserPointerInputJson(JSON.stringify({ ...input, input: sample }))) return false;
+        }
+        return true;
+      }
       return player.submitBrowserPointerInputJson(JSON.stringify(input));
     } else {
       throw new Error(`unsupported continuation input ${message.type}`);

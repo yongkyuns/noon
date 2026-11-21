@@ -832,6 +832,7 @@ export class ExecutionWorkerClient {
 
   // Pin the last observed successful presentation at collection, before readiness
   // or delivery yields. A later acknowledgement never relabels this occurrence.
+  // Coalesced motion shares that receipt and one reservation for all samples.
   async submitBrowserPointerInput(input) {
     this.#requireStarted();
     return this.#requestNativeInput("browser_pointer_input", {

@@ -412,6 +412,34 @@ for (const mode of ["transferable", "shared"]) {
   });
 }
 
+test("prepared pointer motion uses the collected receipt and publishes once per packet", { timeout: 3000 }, async () => {
+  const f = fixture(undefined, { initiallyPaused: true });
+  try {
+    await f.attach();
+    f.acknowledge();
+    const presentation = { session: 7, sequence: 0, presentation: 1, view_revision: 1 };
+    await f.present(undefined, presentation);
+    const inputs = [12, 34, 22].map(x => ({
+      kind: "move", source_id: 1, pointer_id: 1, view_revision: 1,
+      button: null, surface_x: x, surface_y: 13, viewport_width: 640, viewport_height: 360,
+    }));
+    const drains = f.count("drain");
+    const reply = await f.request("browser_pointer_input", { input: inputs, presentation });
+    assert.equal(reply.pointerInputAccepted, true);
+    assert.deepEqual(f.calls.filter(([name]) => name === "pointer").map(([, input]) => input),
+      inputs.map(input => ({ input, presentation })));
+    assert.equal(f.count("drain"), drains + 1);
+
+    // A malformed tail must not forward any part of the packet to Rust.
+    const malformed = inputs.slice();
+    delete malformed[1];
+    const invalid = await f.request("browser_pointer_input", { input: malformed, presentation });
+    assert.equal(invalid.type, "error");
+    assert.match(invalid.message, /invalid browser pointer motion batch/);
+    assert.equal(f.count("pointer"), inputs.length);
+  } finally { f.close(); }
+});
+
 test("prepared backpressure preserves accepted control order and never extracts blocked output", { timeout: 3000 }, async () => {
   const f = fixture();
   try {
