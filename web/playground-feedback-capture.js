@@ -100,18 +100,27 @@ export async function capturePausedFeedback(context, {
   requireCapture(paused?.playing === false && paused.preparedPlayback === true &&
     Number.isFinite(paused.time) && paused.time >= 0 && paused.time <= 600,
   "Comment capture is available for paused prepared playback. Finish preparing this scene first.");
-  // Re-present this exact authored time through the existing player. This is
-  // not a new clock, an extrapolated frame time, or a source replay.
-  const presented = await context.player.seek(paused.time);
-  check();
-  const receipt = assertPausedPublication(presented);
-  requireCapture(receipt.time === paused.time, "The player did not present the requested paused time.");
-  onPaused(presented);
   const build = await context.buildIdentity();
   check();
-  await afterPaint(signal);
-  check();
-  const beforeCopy = await context.player.state();
+  async function presentPausedFrame() {
+    const presented = await context.player.seek(paused.time);
+    check();
+    const receipt = assertPausedPublication(presented);
+    requireCapture(receipt.time === paused.time, "The player did not present the requested paused time.");
+    onPaused(presented);
+    await afterPaint(signal);
+    check();
+    const state = await context.player.state();
+    check();
+    return { receipt, state };
+  }
+  let presented = await presentPausedFrame();
+  if (presented.state?.playing === false && presented.state.preparedPlayback === true &&
+      presented.state.time === paused.time && presented.state.presentationReceipt == null) {
+    // Opening the inline panel can resize the canvas while the first frame settles.
+    presented = await presentPausedFrame();
+  }
+  const { receipt, state: beforeCopy } = presented;
   assertPausedPublication(beforeCopy, receipt);
   check();
   const copied = copyImage(context.canvas);
@@ -170,11 +179,22 @@ function feedbackFields(capture, selection, comment) {
   };
 }
 
-export function appendSourceFeedback(source, capture, selection, comment, identified = null) {
-  const { interval, region, point, observation } = feedbackFields(capture, selection, comment);
+function sourceFeedbackHeader(frame, { interval, region, point }) {
   const bounds = region ?? point;
   const coordinates = Object.entries(bounds).map(([key, value]) => `${key}=${Number(value.toFixed(6))}`).join(" ");
-  const lines = observation.trim().split(/\r\n|[\r\n\u2028\u2029]/u).map(line => `# ${line}`.trimEnd());
+  return [
+    `# Noon feedback (pending) at ${interval.start} s`,
+    `# ${region ? "Rectangle" : "Point"} on the frame (normalized) ${coordinates}`,
+    `# Displayed source SHA-256 ${frame.provenance.sourceSha256}`,
+  ];
+}
+
+const BOUNDED_HINTS = "# Object hints cover a bounded search of this frame.";
+const observationLines = observation => observation.trim().split(/\r\n|[\r\n\u2028\u2029]/u)
+  .map(line => `# ${line}`.trimEnd());
+
+export function appendSourceFeedback(source, capture, selection, comment, identified = null) {
+  const feedback = feedbackFields(capture, selection, comment);
   const separator = source.endsWith("\n") ? "\n" : "\n\n";
   const hints = (identified?.targets ?? []).map(({ kind, text, line, callerLine }) => {
     const label = text === null ? kind : `${kind}(${JSON.stringify(text)})`;
@@ -183,13 +203,41 @@ export function appendSourceFeedback(source, capture, selection, comment, identi
     return `# Object hint ${label}${location}`;
   });
   return source + separator + [
-    `# Noon feedback (pending) at ${interval.start} s`,
-    `# ${region ? "Rectangle" : "Point"} on the frame (normalized) ${coordinates}`,
-    `# Displayed source SHA-256 ${capture.frame.provenance.sourceSha256}`,
+    ...sourceFeedbackHeader(capture.frame, feedback),
     ...hints,
-    ...(identified?.limited ? ["# Object hints cover a bounded search of this frame."] : []),
-    ...lines,
+    ...(identified?.limited ? [BOUNDED_HINTS] : []),
+    ...observationLines(feedback.observation),
   ].join("\n") + "\n";
+}
+
+export function resolveSourceFeedback(source, { frame, feedback }, isComment) {
+  const fields = feedbackFields({ frame }, feedback, feedback.observation);
+  const header = sourceFeedbackHeader(frame, fields);
+  const observation = observationLines(fields.observation);
+  const lines = source.split("\n");
+  const lineAt = index => lines[index]?.replace(/\r$/, "");
+  let match = -1;
+  let nextOffset = 0;
+  for (const [start, line] of lines.entries()) {
+    const offset = nextOffset;
+    nextOffset += line.length + 1;
+    if (start > 0 && lineAt(start - 1) !== "") continue;
+    if (!header.every((line, i) => lineAt(start + i) === line) || !isComment(offset)) continue;
+    let bodyStart = start + header.length;
+    for (let skipped = 0; skipped <= 5; skipped++, bodyStart++) {
+      const after = lineAt(bodyStart + observation.length);
+      if ((after === undefined || after === "") && observation.every((line, i) => lineAt(bodyStart + i) === line)) {
+        requireCapture(match === -1, "More than one pending comment matches this comparison.");
+        match = start;
+        break;
+      }
+      const hint = lineAt(bodyStart);
+      if (!hint?.startsWith("# Object hint ") && hint !== BOUNDED_HINTS) break;
+    }
+  }
+  requireCapture(match !== -1, "This scene has no matching pending comment.");
+  lines[match] = lines[match].replace("(pending)", "(resolved)");
+  return lines.join("\n");
 }
 
 export function createLiveFeedbackExport(capture, selection, comment) {

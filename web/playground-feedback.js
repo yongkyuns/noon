@@ -2,13 +2,15 @@ import {
   capturePausedFeedback, copyDisplayedCanvas, createLiveFeedbackExport,
   feedbackImageBounds, feedbackPoint, feedbackRegion,
 } from "./playground-feedback-capture.js";
+import { readViewerComparison, resolveReviewedSource } from "./playground-feedback-review.js";
 
 // The preview overlay consumes annotation gestures while playback is paused.
-export function installPlaygroundFeedback(button, { getContext, onPaused = () => {} }) {
+export function installPlaygroundFeedback(button, { getContext, onPaused = () => {}, getDraft, resolveDraft }) {
   const document = button?.ownerDocument;
   if (!document || document.documentElement.dataset.noonEmbed === "true") return null;
   const window = document.defaultView;
   const preview = button.closest(".preview-pane");
+  const reviewButton = preview.querySelector("#preview-review-correction");
   const stage = document.createElement("div");
   stage.className = "noon-feedback-image";
   stage.hidden = true;
@@ -17,7 +19,11 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
   stage.setAttribute("aria-label", "Captured frame. Drag an area, click a point, or press Enter to mark the center.");
   stage.innerHTML = `
     <img alt="Frozen frame from the displayed Noon Run" draggable="false" hidden>
-    <span class="noon-feedback-mark" aria-hidden="true" hidden></span>`;
+    <span class="noon-feedback-mark" aria-hidden="true" hidden></span>
+    <div class="noon-feedback-comparison" hidden>
+      <figure><img alt="Original frame"><figcaption></figcaption></figure>
+      <figure><img alt="Revised frame"><figcaption></figcaption></figure>
+    </div>`;
   const panel = document.createElement("section");
   panel.id = "noon-feedback-panel";
   panel.className = "noon-feedback-panel";
@@ -34,7 +40,18 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
         <button type="button" data-action="download" disabled>Download evidence</button>
         <button type="submit" disabled>Add to source</button>
       </div>
-    </form>`;
+    </form>
+    <div data-review hidden>
+      <div data-comparison-picker>
+        <label for="noon-feedback-comparison-file">Comparison file</label>
+        <input id="noon-feedback-comparison-file" type="file" accept=".json,application/json">
+      </div>
+      <p class="noon-feedback-observation" hidden></p>
+      <div class="noon-feedback-footer">
+        <button type="button" data-action="close-review">Cancel</button>
+        <button type="button" data-action="accept" disabled>Accept correction</button>
+      </div>
+    </div>`;
   const style = document.createElement("style");
   style.textContent = `
     .noon-feedback-panel { flex: none; padding: .6rem .8rem; background: #101521;
@@ -55,6 +72,12 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
       cursor: crosshair; touch-action: none; }
     .noon-feedback-image img { display: block; width: 100%; height: 100%; background: #090c13;
       object-fit: contain; border-radius: inherit; user-select: none; -webkit-user-drag: none; }
+    .noon-feedback-comparison { height: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px; cursor: default; background: #101521; color: #f7f8fb; }
+    .noon-feedback-comparison figure { margin: 0; min-height: 0; display: grid;
+      grid-template-rows: minmax(0, 1fr) auto; }
+    .noon-feedback-comparison figcaption { padding: 4px; text-align: center; font: 13px/1.4 system-ui; }
+    .noon-feedback-observation { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 5em; overflow: auto; }
     .noon-feedback-mark { position: absolute; box-sizing: border-box; border: 2px solid #fff;
       pointer-events: none; box-shadow: 0 0 0 2px #5238a6; background: rgb(128 102 237 / 25%); }
     .noon-feedback-mark[data-shape="point"] { width: 16px; height: 16px; border-radius: 50%;
@@ -70,6 +93,8 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
   preview.append(panel);
   button.setAttribute("aria-controls", panel.id);
   button.setAttribute("aria-pressed", "false");
+  reviewButton.setAttribute("aria-controls", panel.id);
+  reviewButton.setAttribute("aria-pressed", "false");
   button.hidden = false;
   const image = stage.querySelector("img");
   const mark = stage.querySelector(".noon-feedback-mark");
@@ -78,11 +103,21 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
   const form = panel.querySelector("form");
   const submit = panel.querySelector('[type="submit"]');
   const download = panel.querySelector('[data-action="download"]');
+  const review = panel.querySelector("[data-review]");
+  const picker = review.querySelector("[data-comparison-picker]");
+  const fileInput = picker.querySelector("input");
+  const observation = review.querySelector(".noon-feedback-observation");
+  const accept = review.querySelector('[data-action="accept"]');
+  const comparison = stage.querySelector(".noon-feedback-comparison");
+  const comparisonImages = [...comparison.querySelectorAll("img")];
+  const captions = [...comparison.querySelectorAll("figcaption")];
   let capture = null, selection = null, drag = null, imageUrl = null, downloadUrl = null, controller = null;
   let addToSource = null;
   let findTargets = null, identified = null, lookupPending = false;
   let releaseCapture = null;
   let generation = 0, disposed = false, timer = null, workInFlight = null;
+  let correction = null;
+  const comparisonUrls = [];
   const update = () => {
     const size = new TextEncoder().encode(text.value).length;
     text.setCustomValidity(size > 4000 ? "Use at most 4,000 UTF-8 bytes." : "");
@@ -93,6 +128,16 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     status.textContent = value;
     status.dataset.error = String(error);
   };
+  function clearComparison() {
+    correction = null;
+    accept.disabled = true;
+    picker.hidden = false;
+    comparison.hidden = true;
+    observation.hidden = true;
+    observation.textContent = "";
+    for (const picture of comparisonImages) picture.removeAttribute("src");
+    for (const url of comparisonUrls.splice(0)) window.URL.revokeObjectURL(url);
+  }
   const release = () => {
     generation++;
     controller?.abort(); controller = null;
@@ -107,6 +152,9 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     addToSource = null;
     findTargets = null; identified = null; lookupPending = false;
     image.hidden = true; mark.hidden = true;
+    clearComparison();
+    fileInput.value = "";
+    fileInput.disabled = false;
     text.value = "";
     update();
   };
@@ -187,16 +235,14 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     event.stopPropagation();
     if (event.key === "Escape") {
       event.preventDefault();
-      close();
-      button.focus();
+      closeAndFocus();
     }
   }
   stage.addEventListener("keydown", handleFeedbackKey);
   panel.addEventListener("keydown", handleFeedbackKey);
-  panel.querySelector('[data-action="close"]').addEventListener("click", () => {
-    close();
-    button.focus();
-  });
+  for (const action of ["close", "close-review"]) {
+    panel.querySelector(`[data-action="${action}"]`).addEventListener("click", closeAndFocus);
+  }
   text.addEventListener("input", update);
   const resize = typeof window.ResizeObserver === "function" ? new window.ResizeObserver(drawSelection) : null;
   resize?.observe(stage);
@@ -210,6 +256,8 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     const signal = activeController.signal;
     stage.hidden = false;
     panel.hidden = false;
+    form.hidden = false;
+    review.hidden = true;
     button.setAttribute("aria-pressed", "true");
     message("Pausing and capturing the displayed Run…");
     try {
@@ -263,10 +311,81 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     }
   }
   const toggleReview = () => {
-    if (panel.hidden) void openReview();
-    else close();
+    const wasAnnotating = !panel.hidden && review.hidden;
+    close();
+    if (!wasAnnotating) void openReview();
   };
   button.addEventListener("click", toggleReview);
+  function toggleComparison() {
+    const wasComparing = !panel.hidden && !review.hidden;
+    close();
+    if (wasComparing) return;
+    stage.setAttribute("aria-label", "Before and after frames");
+    panel.hidden = false;
+    form.hidden = true;
+    review.hidden = false;
+    reviewButton.setAttribute("aria-pressed", "true");
+    message("Choose viewer-comparison.json to review the correction.");
+    fileInput.focus();
+  }
+  reviewButton.addEventListener("click", toggleComparison);
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    clearComparison();
+    stage.hidden = true;
+    const draft = getDraft();
+    const ticket = ++generation;
+    fileInput.disabled = true;
+    message("Checking the comparison against this draft…");
+    try {
+      const result = await readViewerComparison(file, draft.source);
+      if (ticket !== generation) return;
+      const resolvedSource = await resolveReviewedSource(draft.source, result.record);
+      if (ticket !== generation) return;
+      for (const [i, picture] of result.pictures.entries()) {
+        const url = window.URL.createObjectURL(picture.blob);
+        comparisonUrls.push(url);
+        comparisonImages[i].src = url;
+        captions[i].textContent = `${i === 0 ? "Before" : "After"} · ${picture.time.toFixed(3)} s`;
+      }
+      await Promise.all(comparisonImages.map(img => img.decode()));
+      if (ticket !== generation) return;
+      const current = getDraft();
+      if (current.id !== draft.id || current.source !== draft.source) {
+        throw new Error("The scene draft changed while the comparison was opening.");
+      }
+      correction = { draft, source: resolvedSource };
+      comparison.hidden = false;
+      stage.hidden = false;
+      picker.hidden = true;
+      observation.textContent = result.record.feedback.observation;
+      observation.hidden = false;
+      accept.disabled = false;
+      message("Compare the two frames before accepting the correction.");
+      accept.focus();
+    } catch (error) {
+      if (ticket !== generation) return;
+      clearComparison();
+      message(error instanceof SyntaxError ? "The comparison file is not valid JSON." : error.message, true);
+    } finally {
+      if (ticket === generation) {
+        fileInput.value = "";
+        fileInput.disabled = false;
+      }
+    }
+  });
+  accept.addEventListener("click", () => {
+    if (!correction) return;
+    try {
+      resolveDraft(correction.draft, correction.source);
+      closeAndFocus();
+    } catch (error) {
+      clearComparison();
+      stage.hidden = true;
+      message(error.message, true);
+    }
+  });
   form.addEventListener("submit", event => {
     event.preventDefault();
     update();
@@ -295,15 +414,25 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     if (panel.hidden) return;
     panel.hidden = true;
     stage.hidden = true;
+    stage.setAttribute("aria-label", "Captured frame. Drag an area, click a point, or press Enter to mark the center.");
     button.setAttribute("aria-pressed", "false");
+    reviewButton.setAttribute("aria-pressed", "false");
     release();
+  }
+  function closeAndFocus() {
+    const returnToReview = !review.hidden && !reviewButton.hidden;
+    close();
+    (returnToReview ? reviewButton : button).focus();
   }
   return Object.freeze({
     close,
+    setReviewSource(source) { reviewButton.hidden = !/^# Noon feedback \(pending\) at /m.test(source); },
     dispose() {
       if (disposed) return;
       disposed = true; close(); resize?.disconnect();
       button.removeEventListener("click", toggleReview);
+      reviewButton.removeEventListener("click", toggleComparison);
+      reviewButton.hidden = true;
       button.hidden = true; stage.remove(); panel.remove(); style.remove();
     },
   });
