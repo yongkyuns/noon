@@ -18,14 +18,20 @@ export function parseFeedbackCliArgs(argv) {
   const flags = Object.hasOwn(commands, command) ? commands[command] : null;
   if (!flags) throw new TypeError("expected import-live, check, or compare");
   const args = { command, sample: 0 };
-  for (let index = 1; index < argv.length; index += 2) {
-    const name = argv[index].replace(/^--/, "");
-    if (argv[index] !== `--${name}` || !flags.includes(name)) {
-      throw new TypeError(`unknown ${command} argument: ${argv[index]}`);
+  for (let index = 1; index < argv.length;) {
+    const flag = argv[index++];
+    const name = flag.replace(/^--/, "");
+    if (flag === "--viewer" && command === "compare") {
+      if (args.viewer) throw new TypeError("duplicate --viewer");
+      args.viewer = true;
+      continue;
+    }
+    if (flag !== `--${name}` || !flags.includes(name)) {
+      throw new TypeError(`unknown ${command} argument: ${flag}`);
     }
     if (Object.hasOwn(args, name) && name !== "sample") throw new TypeError(`duplicate --${name}`);
     if (name === "sample" && args.sampleSupplied) throw new TypeError("duplicate --sample");
-    const value = argv[index + 1];
+    const value = argv[index++];
     if (typeof value !== "string" || value.trim() === "" || value.includes("\0")) {
       throw new TypeError(`--${name} requires a non-empty value without NUL`);
     }
@@ -59,10 +65,20 @@ export async function runFeedbackCli({ argv, cwd = process.cwd() }) {
   const candidate = await previewFrame(path.resolve(cwd, args.candidate), args.sample, source.sha256);
   const comparison = buildFeedbackComparison(original.record, candidate, source.sha256);
   const outputDir = path.resolve(cwd, args.output);
-  await writeBundle(outputDir, {
+  const files = {
     "comparison.json": jsonBytes(comparison),
     "before.png": original.png, "after.png": candidate.png,
     "before-source.txt": original.source.bytes, "after-source.txt": source.bytes,
-  });
-  return Object.freeze({ outputDir, comparisonPath: path.join(outputDir, "comparison.json"), comparison });
+  };
+  const viewerFilename = "viewer-comparison.json";
+  if (args.viewer) {
+    if (!comparison.before.frame.provenance.sessionId.startsWith("playground:")) {
+      throw new Error("A Playground comparison requires a comment captured in the Playground.");
+    }
+    files[viewerFilename] = jsonBytes({ comparison, beforePngBase64: original.png.toString("base64"),
+      afterPngBase64: candidate.png.toString("base64") }, 23 * 1024 * 1024);
+  }
+  await writeBundle(outputDir, files);
+  return Object.freeze({ outputDir, comparisonPath: path.join(outputDir, "comparison.json"), comparison,
+    ...(args.viewer ? { viewerPath: path.join(outputDir, viewerFilename) } : {}) });
 }

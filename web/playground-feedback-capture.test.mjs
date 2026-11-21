@@ -3,8 +3,9 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import {
   appendSourceFeedback, assertPausedPublication, capturePausedFeedback, copyDisplayedCanvas,
-  createLiveFeedbackExport, feedbackPoint, feedbackRegion,
+  createLiveFeedbackExport, feedbackPoint, feedbackRegion, resolveSourceFeedback,
 } from "./playground-feedback-capture.js";
+import { readViewerComparison } from "./playground-feedback-review.js";
 
 const PNG = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=", "base64"));
 const digest = bytes => createHash("sha256").update(bytes).digest("hex");
@@ -44,8 +45,8 @@ function fixture() {
 test("capture pauses and re-presents through the existing player, bracketing the synchronous copy", async () => {
   const f = fixture();
   const capture = await capturePausedFeedback(f.context, f.adapters);
-  assert.deepEqual(f.calls, ["pause", ["observe", f.receipt.time], ["seek", f.receipt.time],
-    ["observe", f.receipt.time], "build", "paint", "state", "copy", "state"]);
+  assert.deepEqual(f.calls, ["pause", ["observe", f.receipt.time], "build", ["seek", f.receipt.time],
+    ["observe", f.receipt.time], "paint", "state", "copy", "state"]);
   assert.equal(capture.source, f.context.source);
   assert.notEqual(capture.source, f.control.editorSource);
   assert.equal(capture.frame.provenance.sourceSha256, digest(f.context.source));
@@ -94,6 +95,23 @@ test("object hints require a renderer view that stayed current through the image
     return copy(canvas);
   };
   assert.equal((await capturePausedFeedback(f.context, f.adapters)).viewRevision, null);
+});
+
+test("capture re-presents the same paused time once if the surface has no receipt yet", async () => {
+  const f = fixture();
+  let reads = 0;
+  const state = f.context.player.state;
+  f.context.player.state = async () => {
+    if (++reads === 1) {
+      f.receipt.sequence++;
+      return { ...f.state, presentationReceipt: undefined };
+    }
+    return state();
+  };
+  const capture = await capturePausedFeedback(f.context, f.adapters);
+  assert.deepEqual(f.calls.filter(call => call[0] === "seek"), [["seek", f.receipt.time], ["seek", f.receipt.time]]);
+  assert.equal(capture.presentationReceipt.sequence, f.receipt.sequence);
+  assert.equal(f.control.copies, 1);
 });
 
 for (const phase of ["before-copy", "after-copy"]) {
@@ -256,4 +274,35 @@ test("canvas pixels are copied synchronously, encoding is asynchronous, and temp
   encode(new Blob([PNG], { type: "image/png" }));
   assert.deepEqual(await result.png, PNG);
   assert.equal(copy.width, 1); assert.equal(copy.height, 1);
+});
+
+test("resolving an earlier note preserves its hints and the other pending comment", async () => {
+  const f = fixture(), capture = await capturePausedFeedback(f.context, f.adapters);
+  const selection = { region: { x: 0.2, y: 0.3, width: 0.4, height: 0.1 } };
+  const comment = "Brighten the label.\nKeep its position.";
+  const record = createLiveFeedbackExport(capture, selection, comment).feedback;
+  const first = appendSourceFeedback(f.context.source, capture, selection, comment,
+    { targets: [{ kind: "Text", text: "A label", line: 7 }], limited: true });
+  const source = appendSourceFeedback(first, capture, selection, "Keep the red arrow visible.");
+  assert.equal(resolveSourceFeedback(source, record), source.replace("feedback (pending)", "feedback (resolved)"));
+  assert.throws(() => resolveSourceFeedback(first.replace("Keep its position.", "Move it."), record), /no matching/);
+  assert.throws(() => resolveSourceFeedback(appendSourceFeedback(source, capture, selection, comment), record), /More than one/);
+});
+
+test("review compares the current draft and validates both picture digests", async () => {
+  const f = fixture(), capture = await capturePausedFeedback(f.context, f.adapters);
+  const selection = { point: { x: 0.5, y: 0.5 } };
+  const comment = "Brighten the label.";
+  const source = appendSourceFeedback(f.context.source, capture, selection, comment);
+  const before = createLiveFeedbackExport(capture, selection, comment).feedback;
+  const after = { ...capture.frame, provenance: { ...capture.frame.provenance, sourceSha256: digest(source) } };
+  const image = Buffer.from(PNG).toString("base64");
+  const comparison = { kind: "noon-frame-feedback-comparison", schemaVersion: 1, status: "pending_review", before, after };
+  const file = () => new Blob([JSON.stringify({ comparison, beforePngBase64: image, afterPngBase64: image })]);
+  const reviewed = await readViewerComparison(file(), source);
+  assert.equal(reviewed.resolvedSource, source.replace("feedback (pending)", "feedback (resolved)"));
+  assert.equal(reviewed.pictures.length, 2);
+  await assert.rejects(readViewerComparison(file(), `${source}# newer edit\n`), /different source/);
+  after.sha256 = "0".repeat(64);
+  await assert.rejects(readViewerComparison(file(), source), /picture does not match/);
 });

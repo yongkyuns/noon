@@ -415,6 +415,18 @@ let autoRunTimer = null;
 let autoRunEpoch = 0;
 
 const feedbackReview = installPlaygroundFeedback(document.querySelector("#preview-comment"), {
+  getDraft: () => ({ id: selectedExampleId, source: sceneSourceEditor.value }),
+  resolveDraft(draft, source) {
+    if (draft.id !== selectedExampleId || draft.source !== sceneSourceEditor.value) {
+      throw new Error("The source changed since this correction was reviewed. Open a comparison for the current draft.");
+    }
+    cancelAutoRun();
+    const example = currentExample();
+    sceneSourceEditor.value = source;
+    rememberSceneDraft(example);
+    updateDraftStatus(example);
+    draftStatus.value = "Correction accepted · feedback marked resolved in source";
+  },
   getContext() {
     const active = player;
     const run = activeRunIdentity;
@@ -1640,12 +1652,14 @@ async function selectExample(
     }
 
     cancelAutoRun();
+    feedbackReview?.close();
     if (selectedExampleId && selectedExampleId !== id && sceneSourceEditor.value !== canonicalSource) {
       drafts.set(selectedExampleId, sceneSourceEditor.value);
     }
     selectedExampleId = id;
     canonicalSource = source;
     sceneSourceEditor.value = drafts.get(id) ?? source;
+    feedbackReview?.setReviewSource(sceneSourceEditor.value);
     resetButton.disabled = sceneSourceEditor.value === canonicalSource;
     renderSelectedMetadata();
     renderGallery({ keepSelectedVisible: true });
@@ -1700,8 +1714,10 @@ sceneButton.addEventListener("click", requestSceneRun);
 resetButton.addEventListener("click", () => {
   const example = currentExample();
   if (!example) return;
+  feedbackReview?.close();
   drafts.delete(example.id);
   sceneSourceEditor.value = canonicalSource;
+  feedbackReview?.setReviewSource(sceneSourceEditor.value);
   resetButton.disabled = true;
   scheduleAutoRun();
   updateDraftStatus(example);
@@ -1748,6 +1764,7 @@ sceneSourceEditor.addEventListener("compositionend", () => {
 });
 function rememberSceneDraft(example) {
   if (example) drafts.set(example.id, sceneSourceEditor.value);
+  feedbackReview?.setReviewSource(sceneSourceEditor.value);
   resetButton.disabled = sceneSourceEditor.value === canonicalSource;
 }
 

@@ -80,6 +80,7 @@ try {
   await page.locator("#preview-comment").click();
   const panel = page.getByRole("region", { name: "Frame feedback" });
   const stage = page.locator(".canvas-frame .noon-feedback-image");
+  const capturedImage = stage.getByAltText("Frozen frame from the displayed Noon Run");
   await panel.waitFor();
   await page.waitForFunction(() => {
     const status = document.querySelector(".noon-feedback-status");
@@ -87,7 +88,7 @@ try {
     return status?.textContent.startsWith("Paused at ");
   });
   assert.equal(await page.getByRole("dialog").count(), 0);
-  const bounds = await stage.locator("img").evaluate(image => {
+  const bounds = await capturedImage.evaluate(image => {
     const box = image.getBoundingClientRect();
     const scale = Math.min(box.width / image.naturalWidth, box.height / image.naturalHeight);
     const width = scale * image.naturalWidth, height = scale * image.naturalHeight;
@@ -126,7 +127,7 @@ try {
   await page.getByRole("button", { name: "Save .py" }).click();
   await (await pendingSource).saveAs(path.join(output, "annotated.py"));
   assert.equal(await readFile(path.join(output, "annotated.py"), "utf8"), annotated);
-  assert.equal(await page.locator(".noon-feedback-image img").getAttribute("src"), null);
+  assert.equal(await capturedImage.getAttribute("src"), null);
   assert.equal(await controls.getAttribute("data-playing"), "false");
   assert.deepEqual(errors, []);
 
@@ -178,9 +179,9 @@ try {
       close: reason => preview.evaluate(reason => window.noonAgentPreviewHost.close(reason), reason),
     }) }),
   });
-  const { comparison } = await runFeedbackCli({ cwd: output,
+  const { comparison, viewerPath } = await runFeedbackCli({ cwd: output,
     argv: ["compare", "--feedback", "review/feedback.json", "--candidate", candidate.manifestPath,
-      "--sample", "1", "--source", "revised.py", "--output", "comparison"],
+      "--sample", "1", "--source", "revised.py", "--output", "comparison", "--viewer"],
   });
   assert.equal(comparison.status, "pending_review");
   assert.equal(comparison.before.frame.provenance.publishedTime, time);
@@ -189,9 +190,39 @@ try {
   const revisedPicture = PNG.sync.read(await readFile(path.join(output, "comparison/after.png")));
   assert.ok(highlightBrightness(revisedPicture, feedback.region) > highlightBrightness(picture, feedback.region) + 35,
     "the marked subtitle must be visibly brighter after the revision");
+  const review = page.getByRole("button", { name: "Review correction" });
+  const accept = panel.getByRole("button", { name: "Accept correction" });
+  const comparisonFile = panel.getByLabel("Comparison file");
+  await review.click();
+  await comparisonFile.setInputFiles(viewerPath);
+  await panel.getByText("The correction was rendered from a different source.", { exact: false }).waitFor();
+  assert.equal(await accept.isDisabled(), true);
+  assert.equal(await page.locator("#python-scene-source").inputValue(), annotated);
+  await panel.getByRole("button", { name: "Cancel" }).click();
+
+  // Load the agent's exact revised draft, then review the comparison inline.
+  await page.locator("#auto-run").uncheck();
+  await editor.focus();
+  await editor.press("ControlOrMeta+A");
+  await page.keyboard.insertText(revised);
+  assert.equal(await page.locator("#python-scene-source").inputValue(), revised);
+  await page.locator("#auto-run").evaluate(input => { input.checked = true; });
+  await review.click();
+  await comparisonFile.setInputFiles(viewerPath);
+  await stage.getByAltText("Original frame").waitFor();
+  await stage.getByAltText("Revised frame").waitFor();
+  assert.equal(await page.getByRole("dialog").count(), 0);
+  assert.equal(await page.locator("#python-scene-source").inputValue(), revised);
+  await page.screenshot({ path: path.join(output, "comparison", "playground-review.png") });
+  await accept.click();
+  await panel.waitFor({ state: "hidden" });
+  assert.equal(await page.locator("#python-scene-source").inputValue(),
+    revised.replace("# Noon feedback (pending)", "# Noon feedback (resolved)"));
+  assert.equal(await review.isHidden(), true);
   assert.equal(await page.evaluate(() => window.__noonExampleGallery.generationDiagnostics.runGeneration), runGeneration,
-    "saving a source comment must not trigger Auto-run");
-  console.log("Compared the original frame with a fresh render of the revised subtitle at the same scene time.");
+    "saving or resolving feedback must leave Auto-run idle");
+  assert.deepEqual(errors, []);
+  console.log("Reviewed the revised subtitle and resolved its comment in the Python draft.");
 } finally {
   await browser?.close();
   await server.close();
