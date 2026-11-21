@@ -134,8 +134,8 @@ impl PickNode {
             return;
         }
         let positions = row.mesh.positions();
-        for indices in row.mesh.indices().chunks_exact(3) {
-            let [a, b, c] = [indices[0], indices[1], indices[2]].map(|i| positions[i as usize]);
+        for indices in row.mesh.indices().as_chunks::<3>().0 {
+            let [a, b, c] = indices.map(|i| positions[i as usize]);
             if let Some(depth) = ray
                 .triangle(a, b, c)
                 .filter(|depth| *depth >= near && *depth <= *best)
