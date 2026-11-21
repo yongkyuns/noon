@@ -29,9 +29,20 @@ pub(crate) struct BrowserVideoReadiness {
     windows: HashMap<ClipKey, Range<usize>>,
     demands: HashMap<ClipKey, VideoDemand>,
     pub(crate) pending: Option<f64>,
+    pub(crate) awaiting_picture: bool,
 }
 
 impl BrowserVideoReadiness {
+    pub(crate) fn waiting(&self) -> bool {
+        self.pending.is_some() || self.awaiting_picture
+    }
+
+    pub(crate) fn clear_selection(&mut self) {
+        self.pending = None;
+        self.awaiting_picture = false;
+        self.demands.clear();
+    }
+
     pub(crate) fn update(
         &mut self,
         video: &VideoRasters,
@@ -102,7 +113,7 @@ impl BrowserVideoReadiness {
             .boundary(video, origin)
             .filter(|&time| time <= selected)
         {
-            self.demand(video, boundary, LOOKAHEAD_SECONDS);
+            self.demand(video, boundary);
             self.pending = Some(if held || selected < current {
                 requested
             } else {
@@ -111,10 +122,12 @@ impl BrowserVideoReadiness {
             return false;
         }
         self.pending = None;
-        self.demand(video, selected, LOOKAHEAD_SECONDS);
+        self.awaiting_picture |= held;
+        self.demand(video, selected);
         true
     }
 
+    #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn next_preload(&self, video: &VideoRasters, time: f64) -> Option<f64> {
         video
             .iter()
@@ -138,14 +151,14 @@ impl BrowserVideoReadiness {
 
     /// Ask the codec host to warm only the target or a clip about to enter.
     /// The host deduplicates requests against its current window.
-    fn demand(&mut self, video: &VideoRasters, time: f64, lookahead: f64) {
+    pub(crate) fn demand(&mut self, video: &VideoRasters, time: f64) {
         for (handle, raster) in video {
             let source = raster.source();
             let Some(asset_id) = source.external_asset_id() else {
                 continue;
             };
             let timing = raster.timing();
-            if time < timing.scene_start() - lookahead {
+            if time < timing.scene_start() - LOOKAHEAD_SECONDS {
                 continue;
             }
             let Some(index) = timing.frame_at(source.frame_index(), time.max(timing.scene_start()))
@@ -202,7 +215,7 @@ mod tests {
         let mut ready = BrowserVideoReadiness::default();
         let key = clip_key(handle);
         assert_eq!(ready.boundary(&clip, 0.5), Some(1.0));
-        ready.demand(&clip, 0.9, 0.125);
+        ready.demand(&clip, 0.9);
         let demand: serde_json::Value =
             serde_json::from_str(&ready.take_demands().unwrap()).unwrap();
         assert_eq!(

@@ -11,7 +11,11 @@ const DECODE_QUEUE = 4;
 // Keep those surfaces until the cache window reaches them.
 const REORDER_RESERVE = 16;
 
-const mediaError = (detail) => new Error(`Cannot import MP4: ${detail}`);
+export function videoImportError(detail) {
+  return Object.assign(new Error(`Cannot import MP4: ${detail}`), {
+    noonErrorVersion: 1, category: "invalid_input", code: "media.invalid_video",
+  });
+}
 const seconds = (ticks, scale) => ticks / scale;
 const microseconds = (time) => Math.round(time * 1_000_000);
 
@@ -22,12 +26,12 @@ function checkSignal(signal) {
 /// Decode independently of any HTML media element and its clock.
 export async function openMp4(blob, mp4, signal) {
   if (!(blob instanceof Blob) || blob.size === 0 || blob.size > MAX_FILE_BYTES) {
-    throw mediaError("use a nonempty local MP4 up to 128 MiB");
+    throw videoImportError("use a nonempty local MP4 up to 128 MiB");
   }
   const file = mp4.createFile(false);
   let info;
   file.onReady = (movie) => { info = movie; };
-  file.onError = (_kind, error) => { throw mediaError(error); };
+  file.onError = (_kind, error) => { throw videoImportError(error); };
   // Follow the parser past mdat. Only MP4 metadata is needed to build the index,
   // including for files that place moov after the compressed media data.
   for (let offset = 0; offset < blob.size && info === undefined;) {
@@ -40,16 +44,16 @@ export async function openMp4(blob, mp4, signal) {
   if (!info || info.isFragmented || info.videoTracks.length !== 1 ||
       info.audioTracks.length > 1 ||
       info.tracks.length !== 1 + info.audioTracks.length) {
-    throw mediaError("expected one H.264 video track and optional AAC in an ordinary MP4");
+    throw videoImportError("expected one H.264 video track and optional AAC in an ordinary MP4");
   }
   const [track] = info.videoTracks;
   const width = track.video.width, height = track.video.height;
   if (!track.codec.startsWith("avc1.") || !validDimensions(width, height)) {
-    throw mediaError("expected H.264 video within a 1920 × 1080 pixel budget");
+    throw videoImportError("expected H.264 video within a 1920 × 1080 pixel budget");
   }
   const packets = trackPackets(file, track, blob.size);
   const description = packets[0].description.avcC;
-  if (!description || !packets[0].key) throw mediaError("missing AVC configuration or first keyframe");
+  if (!description || !packets[0].key) throw videoImportError("missing AVC configuration or first keyframe");
   const configStream = new mp4.DataStream();
   description.write(configStream);
   const config = {
@@ -57,7 +61,7 @@ export async function openMp4(blob, mp4, signal) {
     description: configStream.buffer.slice(8),
   };
   if (typeof VideoDecoder === "undefined" || !(await VideoDecoder.isConfigSupported(config)).supported) {
-    throw mediaError("the browser cannot decode this H.264 profile");
+    throw videoImportError("the browser cannot decode this H.264 profile");
   }
   const edit = trackEdit(track);
   const clipEnd = edit.mediaStart + edit.duration;
@@ -67,7 +71,7 @@ export async function openMp4(blob, mp4, signal) {
   const duration = clipEnd - origin;
   if (!(duration > 0) || duration > MAX_SECONDS ||
       ordered.some((packet, i) => i > 0 && packet.timestamp <= ordered[i - 1].timestamp)) {
-    throw mediaError("invalid video duration or duplicate presentation timestamps");
+    throw videoImportError("invalid video duration or duplicate presentation timestamps");
   }
   const timestamps = new Float64Array(ordered.length);
   for (const [index, packet] of ordered.entries()) {
@@ -83,7 +87,12 @@ export async function openMp4(blob, mp4, signal) {
 }
 
 export async function loadMp4(blob, signal) {
-  return openMp4(blob, await import("./pkg/mp4box.js"), signal);
+  try {
+    return await openMp4(blob, await import("./pkg/mp4box.js"), signal);
+  } catch (error) {
+    if (signal?.aborted || error?.noonErrorVersion === 1) throw error;
+    throw videoImportError("the file could not be read as H.264 MP4");
+  }
 }
 
 function validDimensions(width, height) {
@@ -95,7 +104,7 @@ function trackPackets(file, track, fileSize) {
   const samples = file.getTrackSamplesInfo(track.id);
   if (!samples?.length || samples.length > MAX_FRAMES ||
       !Number.isSafeInteger(track.timescale) || track.timescale <= 0) {
-    throw mediaError("invalid track index or too many samples");
+    throw videoImportError("invalid track index or too many samples");
   }
   let keyIndex = 0;
   return samples.map((sample, index) => {
@@ -103,7 +112,7 @@ function trackPackets(file, track, fileSize) {
     if (![cts, duration, offset, size].every(Number.isSafeInteger) || duration < 0 ||
         offset < 0 || size <= 0 || offset + size > fileSize ||
         format !== samples[0].description_index) {
-      throw mediaError("invalid or changing sample description");
+      throw videoImportError("invalid or changing sample description");
     }
     const time = seconds(cts, track.timescale);
     if (sample.is_sync) keyIndex = index;
@@ -125,7 +134,7 @@ function trackEdit(track) {
     const duration = seconds(entry.segment_duration, track.movie_timescale);
     if (media || !(duration >= 0) || entry.media_rate_integer !== 1 ||
         entry.media_rate_fraction !== 0 || entry.media_time < -1) {
-      throw mediaError("unsupported MP4 edit list");
+      throw videoImportError("unsupported MP4 edit list");
     }
     if (entry.media_time === -1) {
       movieStart += duration;
@@ -133,7 +142,7 @@ function trackEdit(track) {
       media = { movieStart, mediaStart: seconds(entry.media_time, track.timescale), duration };
     }
   }
-  if (!media) throw mediaError("track has no playable interval");
+  if (!media) throw videoImportError("track has no playable interval");
   return media;
 }
 
@@ -142,13 +151,13 @@ function audioDescription(file, track, fileSize, videoStart) {
   const sampleRate = track.audio.sample_rate, numberOfChannels = track.audio.channel_count;
   if (track.codec !== "mp4a.40.2" || !(sampleRate >= 8000 && sampleRate <= 192000) ||
       ![1, 2].includes(numberOfChannels) || !(edit.duration > 0 && edit.duration <= MAX_SECONDS)) {
-    throw mediaError("expected mono or stereo AAC-LC within 60 seconds");
+    throw videoImportError("expected mono or stereo AAC-LC within 60 seconds");
   }
   const packets = trackPackets(file, track, fileSize);
   const esd = packets[0].description.esds?.esd;
   const description = esd?.descs.find((entry) => entry.tag === 4)
     ?.descs.find((entry) => entry.tag === 5)?.data;
-  if (!description?.length) throw mediaError("missing AAC configuration");
+  if (!description?.length) throw videoImportError("missing AAC configuration");
   return {
     edit, packets, offset: edit.movieStart - videoStart,
     config: { codec: track.codec, sampleRate, numberOfChannels, description },
@@ -163,12 +172,12 @@ export async function decodeSoundtrack(asset, signal) {
   if (!asset.audio) return null;
   const { edit, packets, config, offset } = asset.audio;
   if (typeof AudioDecoder === "undefined" || !(await AudioDecoder.isConfigSupported(config)).supported) {
-    throw mediaError("the browser cannot decode this AAC track");
+    throw videoImportError("the browser cannot decode this AAC track");
   }
   const { sampleRate, numberOfChannels: channels } = config;
   const frames = Math.ceil(edit.duration * sampleRate);
   // Bound retained audio on browsers with high-rate input.
-  if (frames * channels * 4 > 64 * 1024 * 1024) throw mediaError("decoded soundtrack exceeds 64 MiB");
+  if (frames * channels * 4 > 64 * 1024 * 1024) throw videoImportError("decoded soundtrack exceeds 64 MiB");
   const pcm = new Float32Array(frames * channels);
   let failure;
   let wake;
@@ -176,7 +185,7 @@ export async function decodeSoundtrack(asset, signal) {
     output(data) {
       try {
         if (data.sampleRate !== sampleRate || data.numberOfChannels !== channels) {
-          throw mediaError("the decoded audio format changed");
+          throw videoImportError("the decoded audio format changed");
         }
         const first = Math.round((seconds(data.timestamp, 1_000_000) - edit.mediaStart) * sampleRate);
         const from = Math.max(0, -first);
@@ -426,7 +435,7 @@ export class VideoDecodeWindow {
         await decoder.flush();
         if (this.#run === run && this.#converting === 0 &&
             !run.pending.has(this.#wanted) && !this.#frames.has(this.#wanted)) {
-          throw mediaError("the requested presentation frame did not decode");
+          throw videoImportError("the requested presentation frame did not decode");
         }
         return;
       }

@@ -4689,3 +4689,46 @@ mod callback_mixed_provisional_membership_regression {
             .is_err());
     }
 }
+
+#[test]
+fn finite_video_clock_waits_for_pixels_then_presentation_before_authorizing_audio() {
+    let raster =
+        crate::video_asset::BrowserVideoSource::new(3, 16, 9, vec![0.0, 0.25, 0.5], 0.75).unwrap();
+    let mut scene = noon::Scene::new();
+    let pcm =
+        noon_core::AudioResource::from_interleaved(8_000, 1, vec![0.125; 6_000], 32_000).unwrap();
+    noon::integration::place_video(
+        &mut scene,
+        std::sync::Arc::new(raster),
+        Some((&pcm, 0.0)),
+        0.0,
+        0.0..0.75,
+        4.0,
+    )
+    .unwrap();
+    scene.wait(1.0).unwrap();
+    let source = scene.into_execution().unwrap();
+    let key = crate::video_asset::readiness::clip_key(source.session().video_rasters()[0].0);
+    let mut player = SemanticExecutionPlayer::from_scene_execution(source, 1.0, 313).unwrap();
+    player.initial_delta_json().unwrap();
+    let audio_anchor = |player: &SemanticExecutionPlayer| {
+        serde_json::from_str::<serde_json::Value>(&player.audio_anchor_json(0.0).unwrap()).unwrap()
+    };
+
+    player.set_video_window(&key, 0, 1).unwrap();
+    player.tick_callback_phase_json(1000.0).unwrap();
+    assert_eq!(audio_anchor(&player)["authorizedUntil"], 0.25);
+    player.tick_callback_phase_json(1300.0).unwrap();
+    assert_eq!(player.time(), 0.0);
+    assert!(player.video_buffering());
+    player.set_video_window(&key, 0, 3).unwrap();
+    player.tick_callback_phase_json(4000.0).unwrap();
+    assert_eq!(player.time(), 0.25);
+    assert_eq!(audio_anchor(&player)["buffering"], true);
+
+    player.acknowledge_video_presentation(4200.0).unwrap();
+    assert_eq!(audio_anchor(&player)["buffering"], false);
+    assert_eq!(audio_anchor(&player)["authorizedUntil"], 1.0);
+    player.tick_callback_phase_json(4325.0).unwrap();
+    assert_eq!(player.time(), 0.375);
+}

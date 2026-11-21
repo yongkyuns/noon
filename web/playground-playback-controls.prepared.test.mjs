@@ -579,3 +579,21 @@ for (const preparedPlayback of [false, true]) test(`completed static ${preparedP
   ]) assert.throws(() => f.controls.sync(invalid), /prepared playback state/);
   assert.equal(f.output.value, "0.00 / 0.00 s");
 });
+
+test("video readiness shades the full duration rail without restricting a scrub", async () => {
+  const state = prepared({ time: 1, durationSeconds: 8, preparedFrontier: 8,
+    videoReadyUntil: 2, buffering: true });
+  const f = fixture(state);
+  const rail = f.range;
+  assert.equal(rail.max, "8");
+  assert.equal(rail.style["--ready-through"], "25%");
+  assert.equal(f.output.title, "Video ready through 2.00 s");
+  assert.equal(rail.disabled, false);
+  f.seek(7);
+  await flush();
+  assert.deepEqual(f.calls, [["seek", 7]]);
+  f.setState({ ...state, time: 7, videoReadyUntil: 7.5, buffering: false });
+  assert.equal(f.range, rail);
+  assert.equal(rail.max, "8");
+  assert.equal(rail.style["--ready-through"], "93.75%");
+});

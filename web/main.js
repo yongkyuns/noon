@@ -25,6 +25,14 @@ const statusText = document.querySelector("#status-text");
 const draftStatus = document.querySelector("#draft-status");
 const sceneButton = document.querySelector("#replace-scene");
 const autoRunCheckbox = document.querySelector("#auto-run");
+const videoFileInput = document.querySelector("#video-file");
+const chooseVideoFile = document.querySelector("#choose-video-file");
+chooseVideoFile?.addEventListener("click", () => videoFileInput.click());
+videoFileInput?.addEventListener("change", () => {
+  const file = videoFileInput.files[0];
+  chooseVideoFile.textContent = file ? "Video selected" : "Video file";
+  chooseVideoFile.title = file?.name ?? "";
+});
 const patchButton = document.querySelector("#apply-patch");
 const patchStatus = document.querySelector("#patch-status");
 const recoverButton = document.querySelector("#preview-recover");
@@ -1169,6 +1177,7 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
     }
   };
   const source = sourceSnapshot ?? sceneSourceEditor.value;
+  const videoFile = videoFileInput?.files[0] ?? null;
   const runRequest = { token: runToken, source, exampleId: example.id };
   activeRunRequest = runRequest;
   updateDraftStatus();
@@ -1249,6 +1258,7 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
           preparationLookaheadSeconds,
           diagnosticPreparationTiming,
           loopPlayback: example.loop !== false,
+          videoFile,
           async onSemanticContinuation(registration) {
             if (earlyContinuation !== null) {
               throw new Error("Python source registered more than one semantic continuation");

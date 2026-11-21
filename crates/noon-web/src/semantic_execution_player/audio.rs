@@ -32,12 +32,20 @@ impl SemanticExecutionPlayer {
         if !sampled_epoch_ms.is_finite() {
             return Err("audio anchor requires a finite host timestamp".into());
         }
-        Ok(serde_json::json!({
-            "session": self.encoder.session(), "time": self.source.session().frame().time,
-            "playing": self.clock.is_playing(), "buffering": false,
+        let time = self.time();
+        let mut anchor = serde_json::json!({
+            "session": self.encoder.session(), "time": time,
+            "playing": self.clock.is_playing(), "buffering": self.video.waiting(),
             "sampledEpochMs": sampled_epoch_ms,
-        })
-        .to_string())
+        });
+        let media = self.source.session().video_rasters();
+        if let Some(end) = self.finite_audio_end.filter(|_| !media.is_empty()) {
+            anchor["authorizedUntil"] = serde_json::json!(self
+                .video
+                .boundary(media, time)
+                .map_or(end, |limit| end.min(limit)));
+        }
+        Ok(anchor.to_string())
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sectionsJson))]

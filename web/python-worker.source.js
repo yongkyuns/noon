@@ -2,6 +2,7 @@ import initNoonWeb, {
   WasmAuthoringStore,
   WasmAudioSource,
   WasmAudioClipOptions,
+  WasmVideoSource,
   WasmAuthoringFamilyHandle,
   WasmEffectDefinition,
   WasmEffectUpdate,
@@ -45,6 +46,7 @@ import initNoonWeb, {
 import { resolveAnimationOptionsPlain } from "./animation-options.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
 import { createPreparedInterpreterDriver } from "./prepared-interpreter-driver.js";
+import { decodeSoundtrack, loadMp4, videoImportError } from "./video-source.js";
 import { createWorkerTaskYield } from "./worker-task-yield.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
 import { loadCompiledRuntimeBuild, validateRuntimeBuildIdentity } from "./runtime-build-verifier.js";
@@ -288,6 +290,21 @@ async function initializePyodide() {
   self.noonSurfaceSamplingPlan = (...args) => new WasmSurfaceSamplingPlan(...args);
   self.noonCreateAuthoringMeshHandle = (options) => authoringStore.createMesh(options);
   self.noonCreateAuthoringMeshFamilyHandle = (options) => authoringStore.createMeshFamily(options);
+  self.noonLoadUploadedVideo = async () => {
+    const run = activeAuthoringRun;
+    if (!run?.videoFile) throw videoImportError("choose a file with Video file before running the scene");
+    run.videoPreparation ??= prepareUploadedVideo(run);
+    const source = await run.videoPreparation;
+    if (run !== activeAuthoringRun) throw new Error("video import belongs to a retired Run");
+    return source;
+  };
+  self.noonPlaceUploadedVideo = (context, source, ...timing) => {
+    const run = activeAuthoringRun;
+    if (!run || run.videoSource !== source) throw new Error("video belongs to a different Run");
+    const video = context.video(source, ...timing);
+    run.videoContexts.add(context);
+    return video;
+  };
   self.noonLoadImageUrl = async (url) => {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`image request failed: HTTP ${response.status}`);
@@ -665,6 +682,21 @@ async function loadCompatibilityBundle() {
 }
 
 
+async function prepareUploadedVideo(run) {
+  const signal = run.videoAbort.signal;
+  const asset = await loadMp4(run.videoFile, signal);
+  const audio = await decodeSoundtrack(asset, signal);
+  signal.throwIfAborted();
+  const pcm = audio ? WasmAudioSource.fromInterleaved(audio.pcm, audio.sampleRate, audio.channels) : undefined;
+  run.videoSource = new WasmVideoSource(1, asset.width, asset.height, asset.timestamps,
+    asset.duration, pcm, audio?.offset ?? 0);
+  return run.videoSource;
+}
+
+function videoAssetsFor(run, context) {
+  return run?.videoContexts?.has(context) ? [{id: 1, blob: run.videoFile}] : undefined;
+}
+
 function registerSemanticExecution(context) {
   const run = activeAuthoringRun;
   const continuation = run?.continuation;
@@ -684,6 +716,7 @@ function registerSemanticExecution(context) {
   else context.prepareExecutionRun();
   const token = `semantic-${nextSemanticContext++}`;
   semanticContexts.set(token, { context, endpoints: new Set(), released: false, runRequestId: run?.requestId,
+    videoAssets: videoAssetsFor(run, context),
     ...(run?.preparedPlayback ? { preparedPlayback: true, preparedSourceFinished: false } : {}),
   });
   if (run?.preparedPlayback) run.completedPreparedContextId = token;
@@ -855,6 +888,7 @@ function registerContinuationContext(context) {
   const preparedPlayback = activeAuthoringRun.preparedPlayback === true;
   const entry = {
     context,
+    videoAssets: videoAssetsFor(activeAuthoringRun, context),
     runRequestId: activeAuthoringRun.requestId,
     continuationGeneration: generation,
     endpoints: new Set(),
@@ -1516,6 +1550,9 @@ async function handleRequest(request) {
     if (request.type === "run") {
       const run = {
         requestId, continuation: null, continuationCallbackSession: null,
+        videoFile: request.videoFile, videoPreparation: null, videoSource: null,
+        videoAbort: request.videoFile ? new AbortController() : null,
+        videoContexts: request.videoFile ? new WeakSet() : null,
         preparedPlayback: request.preparedPlayback === true,
         loopPlayback: request.loopPlayback !== false,
         diagnosticPreparationTiming: request.diagnosticPreparationTiming === true,
@@ -1583,6 +1620,8 @@ async function handleRequest(request) {
             retireSemanticContext(run.completedPreparedContextId, entry);
           }
         }
+        run.videoAbort?.abort();
+        if (!fatalAuthoringFailure) run.videoSource?.free();
         if (activeAuthoringRun === run) activeAuthoringRun = null;
       }
       return;
@@ -1722,7 +1761,7 @@ async function attachObservedSemanticExecution(request, entry, continuation, con
   let endpoint;
   endpoint = await attachSemanticEngine(
     entry.context,
-    request,
+    { ...request, videoAssets: entry.videoAssets },
     () => {
       entry.endpoints.delete(endpoint);
       if (request.completedStaticSource === true) entry.released = true;
@@ -1912,7 +1951,7 @@ async function attachPreparedReceiver(request, entry, receiver, recovering) {
   receiver.attaching = true;
   let endpoint;
   try {
-    endpoint = await attachSemanticEngine(entry.context, request,
+    endpoint = await attachSemanticEngine(entry.context, { ...request, videoAssets: entry.videoAssets },
       retained => receiver.finish(retained), null, null, null, null, null,
       { ...receiver.prepared, retainOnSetupFailure: recovering }, observeSemanticExecution(request, entry, true));
   } finally { receiver.attaching = false; }
@@ -2196,6 +2235,9 @@ function validateRequest(request) {
     }
     if (!isRecord(request.context)) {
       throw new Error("Python authoring context must be an object");
+    }
+    if (request.videoFile !== undefined && !(request.videoFile instanceof Blob)) {
+      throw new Error("uploaded video must be a Blob");
     }
     if (request.preparedPlayback !== undefined && typeof request.preparedPlayback !== "boolean") {
       throw new Error("preparedPlayback must be a boolean");

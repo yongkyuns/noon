@@ -418,17 +418,23 @@ def _associate_published_wrappers(
 
 
 def _canonical_video(scene, source, start_time, source_start, source_end, height):
-    from os import fspath
-
     context = _context(scene)
-    create = getattr(context, "createVideo", None)
-    if create is None:
-        raise NotImplementedError("video import requires a Noon host with video decoding")
-    handle = engine_call(
-        create, fspath(source), float(start_time), float(source_start),
+    timing = (
+        float(start_time), float(source_start),
         None if source_end is None else float(source_end), float(height),
-        operation="Scene.video",
     )
+    if hasattr(context, "createVideo"):
+        from os import fspath
+
+        handle = engine_call(context.createVideo, fspath(source), *timing, operation="Scene.video")
+    else:
+        from _noon_video import VideoSource
+
+        if not isinstance(source, VideoSource):
+            raise TypeError("choose an MP4 with Video file and await VideoSource.from_upload()")
+        from _noon_host import noonPlaceUploadedVideo
+
+        handle = engine_call(noonPlaceUploadedVideo, context, source._handle, *timing, operation="Scene.video")
     video = object.__new__(_base.Mobject)
     _semantic_handles._attach_shared_handle(video, handle)
     _associate_published_wrappers(scene, (video,), operation="Scene.video")

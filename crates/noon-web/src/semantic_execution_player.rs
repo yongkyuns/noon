@@ -1,5 +1,8 @@
 //! Worker transport adapter retaining the semantic Scene and its lowered session.
 //! It never parses authoring JSON or reconstructs engine state from transport.
+mod video;
+use crate::video_asset::readiness::BrowserVideoReadiness;
+
 mod audio;
 #[cfg(any(target_arch = "wasm32", test))]
 mod effects;
@@ -138,6 +141,7 @@ pub struct SemanticExecutionPlayer {
     /// geometry ID generation, so two live callback leases cannot alias ID 0.
     callback_geometry_sources: GeometryResourceArena,
     clock: PlaybackClock,
+    video: BrowserVideoReadiness,
     /// Admission-time endpoint of the finite audio profile, derived from the
     /// existing runtime/scalar schedules. It is never advanced by device time.
     finite_audio_end: Option<f64>,
@@ -494,6 +498,7 @@ impl SemanticExecutionPlayer {
             source,
             callback_geometry_sources: GeometryResourceArena::new(),
             clock,
+            video: BrowserVideoReadiness::default(),
             encoder,
             resource_bundle,
             snapshot_sent: false,
@@ -623,6 +628,7 @@ impl SemanticExecutionPlayer {
         let resource_bundle = resource_bundle
             .encode_binary()
             .map_err(|error| error.to_string())?;
+        self.video = BrowserVideoReadiness::default();
         self.clock = clock;
         self.finite_audio_end = finite_audio_end;
         self.resource_bundle = resource_bundle;
@@ -1116,7 +1122,7 @@ impl SemanticExecutionPlayer {
         let callback_blocked = self.pending_callback_phase.is_some()
             || self.source.session().callback_termination().is_some();
         let mut wake = self.source.session().wake_state();
-        if callback_blocked || !self.clock.is_playing() {
+        if callback_blocked || !self.clock.is_playing() || self.video.waiting() {
             wake = wake.without_timeline_wake();
         } else if let Some(end) = self.finite_audio_end {
             wake = wake.with_additional_timeline(TimelineWakeState::Deadline(end));
@@ -1128,6 +1134,14 @@ impl SemanticExecutionPlayer {
                 .is_some_and(|receipt| receipt.segment().end_time() > 0.0);
             if self.source.session().has_replay_timeline_work() || authored_interval {
                 wake = wake.with_additional_timeline(TimelineWakeState::Deadline(loop_duration));
+            }
+        }
+        if self.clock.is_playing() && !self.video.waiting() {
+            if let Some(deadline) = self
+                .video
+                .next_preload(self.source.session().video_rasters(), self.time())
+            {
+                wake = wake.with_additional_timeline(TimelineWakeState::Deadline(deadline));
             }
         }
         if !callback_blocked & self.source.session().interactions_active() {
@@ -1178,7 +1192,15 @@ impl SemanticExecutionPlayer {
             .clone()
             .timer_delay_milliseconds(deadline, wall_time_ms, current)
             .map_err(|error| error.to_string())?;
-        Ok((deadline - remaining / 1_000.0).min(deadline).max(current))
+        let observed = (deadline - remaining / 1_000.0).min(deadline).max(current);
+        if self
+            .video
+            .boundary(self.source.session().video_rasters(), current)
+            .is_some_and(|limit| limit <= observed)
+        {
+            return Ok(current);
+        }
+        Ok(observed)
     }
 
     /// Drive the current segment from one Rust-derived browser wall-time mapping.
@@ -2436,6 +2458,9 @@ impl SemanticExecutionPlayer {
         let requested = self
             .finite_audio_end
             .map_or(requested, |end| requested.min(end));
+        let Some(requested) = self.video_tick_time(requested) else {
+            return Ok(None);
+        };
         let phase = self.advance_to_callback_phase(requested)?;
         if self.finite_audio_end == Some(requested) {
             clock.seek(requested).map_err(|error| error.to_string())?;
@@ -3083,6 +3108,8 @@ impl SemanticExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = initialDeltaJson))]
     pub fn initial_delta_json(&mut self) -> Result<String, String> {
+        self.video
+            .demand(self.source.session().video_rasters(), self.time());
         self.encoded_delta(true)?
             .ok_or_else(|| "initial snapshot missing".into())
     }
@@ -3144,6 +3171,9 @@ impl SemanticExecutionPlayer {
         let mut clock = self.clock.clone();
         let time = clock.scene_time(timestamp_ms).map_err(|e| e.to_string())?;
         let time = self.finite_audio_end.map_or(time, |end| time.min(end));
+        let Some(time) = self.video_tick_time(time) else {
+            return Ok(None);
+        };
         scene_execution::evaluate(self.source.scene_mut(), time)
             .map_err(|error| error.to_string())?;
         if self.finite_audio_end == Some(time) {
@@ -3197,6 +3227,9 @@ impl SemanticExecutionPlayer {
         let mut clock = self.clock.clone();
         clock.seek(time).map_err(|e| e.to_string())?;
         self.seek_session(time)?;
+        self.video.clear_selection();
+        self.video
+            .demand(self.source.session().video_rasters(), time);
         self.clock = clock;
         #[cfg(any(target_arch = "wasm32", test))]
         self.clear_translation_drag_undo();
@@ -3235,6 +3268,12 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())
     }
     pub fn pause(&mut self) {
+        if self.video.waiting() {
+            self.clock
+                .seek(self.time())
+                .expect("current video sample is a valid scene time");
+        }
+        self.video.clear_selection();
         self.clock.pause();
     }
     pub fn resume(&mut self) {

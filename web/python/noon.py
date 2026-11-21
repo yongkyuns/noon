@@ -1610,7 +1610,7 @@ class Scene:
         self, source: object, *, start_time: float = 0.0, source_start: float = 0.0,
         source_end: float | None = None, height: float = 6.0,
     ) -> Mobject:
-        """Place a video and its soundtrack on the scene timeline in seconds."""
+        """Place native MP4 or a prepared browser VideoSource on the timeline."""
         return _scene_operations()._canonical_video(
             self, source, start_time, source_start, source_end, height,
         )
@@ -1832,6 +1832,7 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 _PUBLIC_EXPORTS = {
     "AudioSource": "_noon_audio",
+    "VideoSource": "_noon_video",
     "AudioClip": "_noon_audio",
     "PlaybackControl": "_noon_audio",
     "typing": "_manim_typing",
