@@ -2,7 +2,10 @@
 use std::sync::Arc;
 
 use super::SemanticStore;
-use crate::{RasterImageResourceArena, RasterImageResourceError, RasterImageResourceHandle};
+use crate::{
+    RasterImageResource, RasterImageResourceArena, RasterImageResourceError,
+    RasterImageResourceHandle,
+};
 
 #[cfg(test)]
 mod paint_tests;
@@ -26,9 +29,21 @@ impl SemanticStore {
     where
         E: From<RasterImageResourceError>,
     {
-        let (handle, fresh) = self
-            .raster_image_resources
-            .admit_rgba8(width, height, rgba8)?;
+        self.with_raster_image(
+            RasterImageResource::from_rgba8(width, height, rgba8)?,
+            publish,
+        )
+    }
+
+    pub fn with_raster_image<T, E>(
+        &mut self,
+        resource: RasterImageResource,
+        publish: impl FnOnce(&mut Self, RasterImageResourceHandle) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<RasterImageResourceError>,
+    {
+        let (handle, fresh) = self.raster_image_resources.admit(resource)?;
         let mut admission = ImageAdmission {
             store: self,
             handle,

@@ -7,6 +7,8 @@ use std::{
     },
 };
 
+use crate::VideoRasterResource;
+
 static NEXT_RASTER_IMAGE_RESOURCE_ARENA: AtomicU64 = AtomicU64::new(1);
 
 fn next_raster_image_resource_arena() -> u64 {
@@ -64,7 +66,13 @@ struct RasterImageResourceKey {
 pub struct RasterImageResource {
     width: u32,
     height: u32,
-    rgba8: Arc<[u8]>,
+    source: RasterImageSource,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RasterImageSource {
+    Pixels(Arc<[u8]>),
+    Video(VideoRasterResource),
 }
 
 impl RasterImageResource {
@@ -85,12 +93,32 @@ impl RasterImageResource {
         Ok(Self {
             width,
             height,
-            rgba8,
+            source: RasterImageSource::Pixels(rgba8),
         })
     }
 
+    pub fn from_video(video: VideoRasterResource) -> Result<Self, RasterImageResourceError> {
+        let (width, height) = video.source().dimensions();
+        expected_rgba8_len(width, height)?;
+        Ok(Self {
+            width,
+            height,
+            source: RasterImageSource::Video(video),
+        })
+    }
+
+    pub fn video(&self) -> Option<&VideoRasterResource> {
+        match &self.source {
+            RasterImageSource::Pixels(_) => None,
+            RasterImageSource::Video(video) => Some(video),
+        }
+    }
+
     pub fn into_rgba8(self) -> Arc<[u8]> {
-        self.rgba8
+        match self.source {
+            RasterImageSource::Pixels(pixels) => pixels,
+            RasterImageSource::Video(_) => Arc::from([]),
+        }
     }
 
     pub const fn width(&self) -> u32 {
@@ -101,20 +129,27 @@ impl RasterImageResource {
         self.height
     }
 
+    /// Static image bytes. A video raster has no static pixels.
     pub fn rgba8(&self) -> &[u8] {
-        self.rgba8.as_ref()
+        match &self.source {
+            RasterImageSource::Pixels(pixels) => pixels,
+            RasterImageSource::Video(_) => &[],
+        }
     }
 
     pub fn retained_bytes(&self) -> usize {
-        size_of::<Self>().saturating_add(self.rgba8.len())
+        size_of::<Self>().saturating_add(self.rgba8().len())
     }
 
-    fn key(&self) -> RasterImageResourceKey {
-        RasterImageResourceKey {
+    fn key(&self) -> Option<RasterImageResourceKey> {
+        let RasterImageSource::Pixels(rgba8) = &self.source else {
+            return None;
+        };
+        Some(RasterImageResourceKey {
             width: self.width,
             height: self.height,
-            rgba8: self.rgba8.clone(),
-        }
+            rgba8: rgba8.clone(),
+        })
     }
 }
 
@@ -209,9 +244,19 @@ impl RasterImageResourceArena {
         height: u32,
         rgba8: impl Into<Arc<[u8]>>,
     ) -> Result<(RasterImageResourceHandle, bool), RasterImageResourceError> {
-        let resource = RasterImageResource::from_rgba8(width, height, rgba8)?;
+        self.admit(RasterImageResource::from_rgba8(width, height, rgba8)?)
+    }
+
+    pub(crate) fn admit(
+        &mut self,
+        resource: RasterImageResource,
+    ) -> Result<(RasterImageResourceHandle, bool), RasterImageResourceError> {
         let key = resource.key();
-        if let Some(handle) = self.handles_by_content.get(&key).copied() {
+        if let Some(handle) = key
+            .as_ref()
+            .and_then(|key| self.handles_by_content.get(key))
+            .copied()
+        {
             return Ok((handle, false));
         }
 
@@ -231,7 +276,7 @@ impl RasterImageResourceArena {
         self.retained_bytes = self
             .retained_bytes
             .saturating_add(resource.retained_bytes());
-        self.pixel_bytes = self.pixel_bytes.saturating_add(resource.rgba8.len());
+        self.pixel_bytes = self.pixel_bytes.saturating_add(resource.rgba8().len());
         self.entries.insert(
             id,
             RasterImageResourceEntry {
@@ -239,7 +284,9 @@ impl RasterImageResourceArena {
                 value: resource,
             },
         );
-        self.handles_by_content.insert(key, handle);
+        if let Some(key) = key {
+            self.handles_by_content.insert(key, handle);
+        }
         Ok((handle, true))
     }
 
@@ -259,9 +306,11 @@ impl RasterImageResourceArena {
             .remove(&handle.id)
             .expect("fresh unpublished image must remain resident until publication");
         assert_eq!(entry.version, handle.version);
-        self.handles_by_content.remove(&entry.value.key());
+        if let Some(key) = entry.value.key() {
+            self.handles_by_content.remove(&key);
+        }
         self.retained_bytes -= entry.value.retained_bytes();
-        self.pixel_bytes -= entry.value.rgba8.len();
+        self.pixel_bytes -= entry.value.rgba8().len();
     }
 
     /// Retire a semantic-store resource after its last durable semantic owner
@@ -279,11 +328,13 @@ impl RasterImageResourceArena {
             return None;
         }
         let entry = self.entries.remove(&handle.id)?;
-        self.handles_by_content.remove(&entry.value.key());
+        if let Some(key) = entry.value.key() {
+            self.handles_by_content.remove(&key);
+        }
         self.retained_bytes = self
             .retained_bytes
             .saturating_sub(entry.value.retained_bytes());
-        self.pixel_bytes = self.pixel_bytes.saturating_sub(entry.value.rgba8.len());
+        self.pixel_bytes = self.pixel_bytes.saturating_sub(entry.value.rgba8().len());
         Some(entry.value)
     }
 

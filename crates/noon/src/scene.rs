@@ -6,6 +6,8 @@ mod image;
 mod layout;
 pub(crate) mod object_edits;
 mod sections;
+#[cfg(all(feature = "video-decode", not(target_arch = "wasm32")))]
+mod video;
 use crate::{
     AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,
     SceneMembershipRequest, ValueTracker,

@@ -46,6 +46,8 @@ impl NativeApp {
             self.sync_playback_presentation(identity, now)?;
         }
         self.playback_paused = true;
+        self.video_pending_time = None;
+        self.video_waiting = false;
         self.realtime_clock = None;
         #[cfg(feature = "audio")]
         self.release_audio();
@@ -81,6 +83,8 @@ impl NativeApp {
         // stream or destroy its anchor. Successful seek retires transient input
         // in the same session and preserves viewer play/pause intent.
         self.execution.seek_to(time)?;
+        self.video_pending_time = None;
+        self.video_waiting = false;
         #[cfg(feature = "audio")]
         self.release_audio();
         self.realtime_clock = None;
@@ -187,7 +191,10 @@ impl NativeApp {
                     "Paused"
                 } else if self.execution.playback_finished() {
                     "Finished"
-                } else if self.execution.buffering() || !self.execution.presentation_ready() {
+                } else if self.video_waiting
+                    || self.execution.buffering()
+                    || !self.execution.presentation_ready()
+                {
                     "Loading"
                 } else {
                     "Playing"

@@ -97,6 +97,11 @@ impl RetainedResourceBundle {
             let image = images
                 .get(handle)
                 .ok_or(RetainedResourceTransportError::UnknownImage(transport))?;
+            if image.video().is_some() {
+                return Err(RetainedResourceTransportError::InvalidImage(
+                    "video raster transport requires a video decoder on the render host".into(),
+                ));
+            }
             if image.rgba8().len() > MAX_IMAGE_BYTES {
                 return Err(RetainedResourceTransportError::InvalidImage(
                     "worker image payload exceeds 64 MiB".into(),

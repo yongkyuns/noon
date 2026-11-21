@@ -85,6 +85,7 @@ pub(super) struct NativeCapture {
     device: wgpu::Device,
     queue: wgpu::Queue,
     renderer: GpuRenderer,
+    video: noon_render_wgpu::VideoPresentation,
     prepared_effect_modules: Option<noon_render_wgpu::PreparedEffectPrograms>,
     preparer: RetainedFramePreparer,
     text: RetainedTextGpuState,
@@ -108,6 +109,18 @@ pub(super) struct NativeCapture {
 }
 
 impl NativeCapture {
+    pub(super) fn prepare_video(
+        &mut self,
+        videos: &[(
+            noon_core::RasterImageResourceHandle,
+            noon_core::VideoRasterResource,
+        )],
+    ) -> Result<(), CaptureError> {
+        self.video = noon_render_wgpu::VideoPresentation::new(videos, std::sync::Arc::new(|| {}))
+            .map_err(CaptureError::gpu)?;
+        Ok(())
+    }
+
     pub(super) fn prepare_effect_modules(
         &mut self,
         programs: &[noon_core::WgslEffectProgram],
@@ -214,6 +227,7 @@ impl NativeCapture {
             device,
             queue,
             renderer,
+            video: noon_render_wgpu::VideoPresentation::default(),
             prepared_effect_modules: None,
             preparer: RetainedFramePreparer::new(),
             text,
@@ -397,6 +411,13 @@ impl NativeCapture {
             .renderer
             .upload_retained(&self.device, &self.queue, &prepared, &mut self.text)
             .bytes_uploaded();
+        self.video
+            .prepare_export(publication.frame().time, self.wait_timeout)
+            .map_err(CaptureError::gpu)?;
+        retained_upload_bytes += self
+            .video
+            .upload(&mut self.renderer, &self.queue)
+            .map_err(CaptureError::gpu)?;
         if !transient.slots.is_empty() {
             self.renderer
                 .upload_derived(&self.device, &self.queue, &transient);

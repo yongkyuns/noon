@@ -4135,7 +4135,11 @@ impl SemanticMutationTransaction {
                 } = animation.intent()
                 {
                     for resource in values.image_resources() {
-                        if store.raster_image_resources().get(resource).is_none() {
+                        if store
+                            .raster_image_resources()
+                            .get(resource)
+                            .is_none_or(|image| image.video().is_some())
+                        {
                             return Err(
                                 SemanticMutationTransactionError::InvalidPaintImageResource {
                                     object: SemanticTransactionNodeRef::Pending(*token),
@@ -4677,7 +4681,11 @@ fn validate_style_image_resources(
     object: SemanticTransactionNodeRef,
 ) -> Result<(), SemanticMutationTransactionError> {
     for resource in style.image_resources() {
-        if store.raster_image_resources().get(resource).is_none() {
+        if store
+            .raster_image_resources()
+            .get(resource)
+            .is_none_or(|image| image.video().is_some())
+        {
             return Err(
                 SemanticMutationTransactionError::InvalidPaintImageResource { object, resource },
             );

@@ -391,6 +391,9 @@ struct NativeApp {
     config: NativeViewportConfig,
     window: Option<Arc<Window>>,
     gpu: Option<NativeGpu>,
+    video: Option<noon_render_wgpu::VideoPresentation>,
+    video_waiting: bool,
+    video_pending_time: Option<f64>,
     realtime_clock: Option<RealtimeClock>,
     // Viewer intent and presentation admission on the existing host clock;
     // Runtime remains the only authored-time and replay authority.
@@ -485,6 +488,9 @@ impl NativeApp {
             config,
             window: None,
             gpu: None,
+            video: None,
+            video_waiting: false,
+            video_pending_time: None,
             realtime_clock: None,
             playback_paused: false,
             playback_picture_pending: false,
@@ -691,6 +697,9 @@ impl NativeApp {
         now: Instant,
     ) -> Result<(), NativeHostError> {
         if self.execution.session().runtime_identity() != previous {
+            self.video = None;
+            self.video_waiting = false;
+            self.video_pending_time = None;
             // Retire the collector's old contact and physical receipt. Never
             // retag a historical pointer edge for the causal source incarnation.
             self.pointer_source_changed()?;
@@ -732,6 +741,49 @@ impl NativeApp {
         Ok(())
     }
 
+    fn attach_video(&mut self) -> Result<(), NativeHostError> {
+        let videos = self.execution.session().video_rasters();
+        if self.video.is_none() && !videos.is_empty() {
+            let window = Arc::downgrade(self.window.as_ref().expect("video host owns a window"));
+            self.video = Some(
+                noon_render_wgpu::VideoPresentation::new(
+                    videos,
+                    Arc::new(move || {
+                        if let Some(window) = window.upgrade() {
+                            window.request_redraw();
+                        }
+                    }),
+                )
+                .map_err(|error| NativeHostError::Program(error.to_string()))?,
+            );
+        }
+        Ok(())
+    }
+
+    fn video_ready(&mut self, target: f64) -> Result<bool, NativeHostError> {
+        if let Some(video) = self.video.as_mut() {
+            self.video_waiting = !video
+                .prepare_realtime(target)
+                .map_err(|error| NativeHostError::Program(error.to_string()))?;
+        }
+        Ok(!self.video_waiting)
+    }
+
+    fn advance_with_video(&mut self, target: f64) -> Result<(), NativeHostError> {
+        if self.video_ready(target)? {
+            self.execution.advance_to(target)
+        } else {
+            self.video_pending_time = Some(target);
+            self.playback_picture_pending = true;
+            self.realtime_clock = None;
+            self.force_full_redraw = true;
+            #[cfg(feature = "audio")]
+            self.release_audio();
+            self.update_playback_title();
+            Ok(())
+        }
+    }
+
     fn advance_realtime_timeline(&mut self, now: Instant) -> Result<(), NativeHostError> {
         if self.playback_paused || self.playback_picture_pending {
             return Ok(());
@@ -749,13 +801,13 @@ impl NativeApp {
         let was_buffering = self.execution.buffering();
         let identity = self.execution.session().runtime_identity();
         match timeline {
-            TimelineWakeState::Continuous => self.execution.advance_to(requested)?,
+            TimelineWakeState::Continuous => self.advance_with_video(requested)?,
             TimelineWakeState::Deadline(scene_time) => {
                 if clock
                     .wall_deadline(scene_time)
                     .is_some_and(|deadline| deadline <= now)
                 {
-                    self.execution.advance_to(requested.max(scene_time))?;
+                    self.advance_with_video(requested.max(scene_time))?;
                 }
             }
             TimelineWakeState::Quiescent => {
@@ -787,6 +839,23 @@ impl NativeApp {
         if !self.execution.presentation_ready() {
             return Ok(());
         }
+        self.attach_video()?;
+        let video_was_waiting = self.video_waiting;
+        if !self.video_ready(
+            self.video_pending_time
+                .unwrap_or_else(|| self.execution.frame_time()),
+        )? {
+            self.update_playback_title();
+            return Ok(());
+        }
+        if let Some(target) = self.video_pending_time.take() {
+            self.execution.advance_to(target)?;
+            #[cfg(feature = "audio")]
+            self.prepare_audio()?;
+        }
+        if video_was_waiting {
+            self.update_playback_title();
+        }
         if !self.publication_pending()
             && (self.playback_paused
                 || self.execution.buffering()
@@ -816,6 +885,9 @@ impl NativeApp {
         // AFTER it succeeds, not the old timestamp from before that wait.
         let now = Instant::now();
         self.advance_realtime_timeline(now)?;
+        if self.video_waiting {
+            return Ok(());
+        }
         // Reaching a frontier may transfer an already-staged publication to the
         // observed owner. Complete its device handshake before drawing that head.
         self.resume_ready_preserving_clock(now)?;
@@ -914,6 +986,11 @@ impl NativeApp {
                 .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
             gpu.renderer
                 .upload_retained(&gpu.device, &gpu.queue, &prepared, &mut gpu.text_state);
+            if let Some(video) = self.video.as_ref() {
+                video
+                    .upload(&mut gpu.renderer, &gpu.queue)
+                    .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+            }
             if !derived.slots.is_empty() {
                 gpu.renderer
                     .upload_derived(&gpu.device, &gpu.queue, &derived);
@@ -930,6 +1007,9 @@ impl NativeApp {
                 // or install a pointer receipt for an image that was never shown.
                 self.execution.admit_retained_publication(retained)?;
                 self.advance_realtime_timeline(now)?;
+                if self.video_waiting {
+                    return Ok(());
+                }
                 acquired = Some((surface_texture, reconfigure_after_present));
                 continue;
             }
@@ -1130,6 +1210,10 @@ impl ApplicationHandler for NativeApp {
             self.window = Some(window);
         }
 
+        if let Err(error) = self.attach_video() {
+            self.fail(event_loop, error);
+            return;
+        }
         if self.gpu.is_none() {
             let window = self
                 .window
@@ -1321,6 +1405,10 @@ impl ApplicationHandler for NativeApp {
         #[cfg(test)]
         if self.exit_after_requested_present() {
             event_loop.exit();
+            return;
+        }
+        if self.video_waiting {
+            self.set_wait_mode(event_loop, ControlFlow::Wait);
             return;
         }
         if self.publication_pending() {

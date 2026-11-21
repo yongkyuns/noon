@@ -10,6 +10,7 @@ description = "Native window host for typed Noon execution sessions"
 
 [features]
 wgsl-effects = ["noon/wgsl-effects"]
+video-decode = ["noon/video-decode"]
 audio = ["dep:cpal"]
 latex = ["noon/latex"]
 
@@ -33,6 +34,10 @@ required-features = ["audio"]
 [[example]]
 name = "background_music_lesson"
 required-features = ["audio"]
+
+[[example]]
+name = "video_object"
+required-features = ["video-decode", "audio"]
 
 [dev-dependencies]
 noon-export = { path = "../noon-export" }

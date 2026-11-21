@@ -101,6 +101,15 @@ impl SceneInstance {
         self.timeline_scheduler.live_group_count() != 0 || self.has_replay_interval()
     }
 
+    pub fn video_rasters(
+        &self,
+    ) -> &[(
+        noon_core::RasterImageResourceHandle,
+        noon_core::VideoRasterResource,
+    )] {
+        self.timeline_scheduler.video_rasters()
+    }
+
     /// Current runtime-owned dirty/deadline/completion state for platform hosts.
     pub fn wake_state(&self) -> RuntimeWakeState {
         RuntimeWakeState {
@@ -112,6 +121,11 @@ impl SceneInstance {
         } else {
             TimelineWakeState::Continuous
         })
+        .with_additional_timeline(
+            self.timeline_scheduler
+                .next_video_frame(self.frame.time)
+                .map_or(TimelineWakeState::Quiescent, TimelineWakeState::Deadline),
+        )
         .with_additional_timeline(
             self.next_replay_revision_time()
                 .map_or(TimelineWakeState::Quiescent, TimelineWakeState::Deadline),

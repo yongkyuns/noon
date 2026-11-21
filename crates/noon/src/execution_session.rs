@@ -1284,6 +1284,15 @@ impl ExecutionSession {
         self.runtime.last_patch_stats()
     }
 
+    pub fn video_rasters(
+        &self,
+    ) -> &[(
+        noon_core::RasterImageResourceHandle,
+        noon_core::VideoRasterResource,
+    )] {
+        self.runtime.video_rasters()
+    }
+
     /// Read-only raster-image resources projected with this execution session.
     pub fn raster_image_resources(&self) -> &dyn noon_core::RasterImageResourceLookup {
         self.runtime.raster_image_resources()

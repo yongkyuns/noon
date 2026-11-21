@@ -62,7 +62,9 @@ impl SessionCapture {
     ) -> Result<Self, SessionCaptureError> {
         check_settled(session, &options)?;
         let layout = options.layout().map_err(SessionCaptureError::Capture)?;
-        let gpu = pollster::block_on(gpu::NativeCapture::new(&options, layout))
+        let mut gpu = pollster::block_on(gpu::NativeCapture::new(&options, layout))
+            .map_err(SessionCaptureError::Capture)?;
+        gpu.prepare_video(session.video_rasters())
             .map_err(SessionCaptureError::Capture)?;
         check_settled(session, &options)?;
         Ok(Self {

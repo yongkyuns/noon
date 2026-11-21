@@ -16,6 +16,7 @@ bundled-fonts = ["noon/bundled-fonts"]
 image-decode = ["noon/image-decode"]
 latex = ["noon/latex"]
 wgsl-effects = ["noon/wgsl-effects"]
+video-decode = ["noon/video-decode"]
 
 [[example]]
 name = "first_lesson"
@@ -29,3 +30,6 @@ pollster = "=1.0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tempfile = "=3.27.0"

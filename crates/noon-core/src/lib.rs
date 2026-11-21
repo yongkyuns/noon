@@ -20,6 +20,7 @@ mod resources;
 mod semantic_store;
 mod spatial3d;
 mod vector_path;
+mod video;
 pub use vector_path::{SemanticPathSegment, VectorPath};
 mod planar_math;
 pub use planar_math::{DRect, DVec2, Rect, Vec2};
@@ -38,6 +39,7 @@ pub use reactive::*;
 pub use resources::*;
 pub use semantic_store::*;
 pub use spatial3d::*;
+pub use video::*;
 
 use serde::{Deserialize, Serialize};
 
