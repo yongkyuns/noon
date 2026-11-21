@@ -109,6 +109,10 @@ NOON_PREVIEW_RUNTIME_CONFIG=/absolute/path/to/runtime.json \
 Use a fresh run after editing source. The public preview contract is forward-only;
 it does not claim arbitrary seek or persistent live-object editing.
 
+Use `node bin/noon-feedback.mjs` to import a playground feedback download,
+check its source, and preserve a before-and-after comparison from a new preview.
+[Live viewer feedback](../../docs/live-viewer-feedback.md)
+
 ## Tools and evidence
 
 `noon_capabilities` accepts optional `symbols` and `examples` arrays, each
