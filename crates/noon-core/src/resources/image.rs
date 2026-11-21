@@ -235,6 +235,14 @@ impl RasterImageResourceArena {
             .map(|(handle, _)| handle)
     }
 
+    pub fn intern_video(
+        &mut self,
+        video: VideoRasterResource,
+    ) -> Result<RasterImageResourceHandle, RasterImageResourceError> {
+        self.admit(RasterImageResource::from_video(video)?)
+            .map(|(handle, _)| handle)
+    }
+
     /// Register a payload and report whether this admission owns a new resource.
     /// The semantic publication guard uses that ownership to roll back only fresh
     /// content. Deduplicated resources are never owned by a later admission.

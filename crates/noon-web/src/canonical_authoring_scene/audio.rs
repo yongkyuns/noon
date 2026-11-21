@@ -6,12 +6,12 @@ use noon::{AudioClipOptions, AudioResource, PlaybackControl};
 use std::rc::Rc;
 
 impl CanonicalAuthoringScene {
-    fn require_pre_execution_media_authoring(&self) -> Result<(), AuthoringFailure> {
+    pub(super) fn require_pre_execution_media_authoring(&self) -> Result<(), AuthoringFailure> {
         if !self.player_ownership.is_unstarted() {
             return Err(AuthoringFailure::new(
                 "unsupported_operation",
                 "authoring.finite_media_after_execution",
-                "audio and playback-control declarations must precede execution",
+                "media and playback-control declarations must precede execution",
             ));
         }
         Ok(())

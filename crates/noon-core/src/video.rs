@@ -9,6 +9,10 @@ use crate::{AudioClipOptions, AudioResource};
 pub trait VideoFrameSource: Debug + Send + Sync {
     fn dimensions(&self) -> (u32, u32);
     fn frame_index(&self) -> &VideoFrameIndex;
+    /// Identifier used by a host that owns encoded media in another context.
+    fn external_asset_id(&self) -> Option<u32> {
+        None
+    }
     fn open_window(
         self: Arc<Self>,
         wake: Box<dyn Fn() + Send>,
@@ -131,6 +135,10 @@ impl VideoClipTiming {
 
     pub const fn scene_end(self) -> f64 {
         self.scene_end
+    }
+
+    pub fn source_range(self) -> Range<f64> {
+        self.source_start..self.source_end
     }
 
     /// Select a frame by PTS, independently of any earlier sample. Compare

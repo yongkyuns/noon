@@ -110,6 +110,17 @@ impl SceneInstance {
         self.timeline_scheduler.video_rasters()
     }
 
+    pub(crate) fn invalidate_video_frame(&mut self, previous_time: f64) {
+        if self
+            .timeline_scheduler
+            .next_video_frame(previous_time)
+            .is_some_and(|boundary| boundary <= self.frame.time)
+        {
+            self.changes
+                .accumulate(crate::FrameChanges::presentation_redraw());
+        }
+    }
+
     /// Current runtime-owned dirty/deadline/completion state for platform hosts.
     pub fn wake_state(&self) -> RuntimeWakeState {
         RuntimeWakeState {

@@ -437,6 +437,11 @@ impl RasterImageGpuRenderer {
                 height: resource.height(),
                 depth_or_array_layers: 1,
             };
+            let video = resource.video().is_some();
+            let mut usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
+            if cfg!(target_arch = "wasm32") && video {
+                usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
+            }
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Noon immutable raster image"),
                 size,
@@ -444,10 +449,9 @@ impl RasterImageGpuRenderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                usage,
                 view_formats: &[],
             });
-            let video = resource.video().is_some();
             if !video {
                 write_pixels(queue, &texture, resource.rgba8());
                 stats.pixel_bytes_uploaded += resource.rgba8().len();
@@ -504,6 +508,51 @@ impl RasterImageGpuRenderer {
             texture.video_frame = None;
             Ok(0)
         }
+    }
+
+    #[cfg(all(target_arch = "wasm32", feature = "web"))]
+    pub(super) fn write_external_video_frame(
+        &mut self,
+        queue: &wgpu::Queue,
+        handle: RasterImageResourceHandle,
+        frame: Option<(usize, wgpu::ExternalImageSource)>,
+    ) -> std::io::Result<usize> {
+        let Some((index, source)) = frame else {
+            return self.write_video_frame(queue, handle, None);
+        };
+        let Some(texture) = self.textures.get_mut(&handle) else {
+            return Ok(0);
+        };
+        if !texture.video {
+            return Err(std::io::Error::other(
+                "video samples require a video raster texture",
+            ));
+        }
+        if texture.video_frame == Some(index) {
+            return Ok(0);
+        }
+        let texture_size = texture._texture.size();
+        if (source.width(), source.height()) != (texture_size.width, texture_size.height) {
+            return Err(std::io::Error::other("decoded video dimensions changed"));
+        }
+        queue.copy_external_image_to_texture(
+            &wgpu::CopyExternalImageSourceInfo {
+                source,
+                origin: wgpu::Origin2d::ZERO,
+                flip_y: false,
+            },
+            wgpu::CopyExternalImageDestInfo {
+                texture: &texture._texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+                color_space: wgpu::PredefinedColorSpace::Srgb,
+                premultiplied_alpha: false,
+            },
+            texture_size,
+        );
+        texture.video_frame = Some(index);
+        Ok(texture.pixel_bytes)
     }
 
     pub(super) fn texture_binding(

@@ -7,7 +7,7 @@ pub use composed_sources::TransportComposedSourceHandle;
 use composed_sources::{install_composed_sources, ComposedSources, TransportComposedSourceEntry};
 pub(crate) mod residency;
 use crate::TransportImageResourceHandle;
-use images::{install_images, ImageHandles, TransportImageEntry};
+use images::{install_images, ImageHandles, TransportImageEntry, VideoHandles};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt,
@@ -753,7 +753,7 @@ impl RetainedResourceBundle {
 
         let shader_programs = install_shader_programs(self.shader_programs)?;
         let composed_sources = install_composed_sources(self.composed_sources)?;
-        let (images, image_handles) = install_images(self.images)?;
+        let (images, image_handles, video_handles) = install_images(self.images)?;
         let mut geometries = GeometryResourceArena::new();
         let mut geometry_handles = HashMap::with_capacity(self.geometries.len());
         for entry in self.geometries {
@@ -833,6 +833,7 @@ impl RetainedResourceBundle {
             composed_sources,
             images,
             image_handles,
+            video_handles,
             image_layers: HashMap::new(),
             texts,
             geometries,
@@ -980,6 +981,7 @@ pub struct InstalledRetainedResources {
     shader_programs: ShaderPrograms,
     images: noon_core::RasterImageResourceArena,
     image_handles: ImageHandles,
+    video_handles: VideoHandles,
     image_layers: HashMap<u64, usize>,
     texts: TextResourceArena,
     geometries: GeometryResourceArena,
@@ -1182,7 +1184,7 @@ impl InstalledRetainedResources {
         bundle.validate_protocol()?;
         let shader_programs = install_shader_programs(bundle.shader_programs)?;
         let composed_sources = install_composed_sources(bundle.composed_sources)?;
-        let (images, image_handles) = install_images(bundle.images)?;
+        let (images, image_handles, video_handles) = install_images(bundle.images)?;
         let mut geometries = GeometryResourceArena::new();
         let mut mesh_insertions = self.geometries.stage_insertions();
         let mut geometry_handles = HashMap::with_capacity(bundle.geometries.len());
@@ -1326,6 +1328,7 @@ impl InstalledRetainedResources {
             composed_sources,
             images,
             image_handles,
+            video_handles,
             image_layers: HashMap::new(),
             texts,
             geometries,
@@ -1416,6 +1419,8 @@ impl InstalledRetainedResources {
         self.inventory
             .images
             .extend(installed.inventory.images.iter().copied());
+        self.video_handles
+            .extend(installed.video_handles.iter().copied());
         self.image_handles.extend(
             installed
                 .image_handles
@@ -1596,6 +1601,7 @@ impl InstalledRetainedResources {
         let Some(content) = self.image_handles.remove(&transport) else {
             return;
         };
+        self.video_handles.remove(&transport);
         self.inventory.images.remove(&transport);
         let handle = content.resource();
         if self.images.get(handle).is_some() {
