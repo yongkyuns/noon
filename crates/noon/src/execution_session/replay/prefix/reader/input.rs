@@ -179,6 +179,15 @@ impl PrefixReader {
     pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
         self.session.query_viewport(bounds)
     }
+
+    pub fn feedback_targets(
+        &self,
+        displayed: &PointerFrameSnapshot,
+        region: [f32; 4],
+        source: &noon_core::SemanticStore,
+    ) -> Option<crate::integration::FeedbackTargets> {
+        self.session.feedback_targets(displayed, region, source)
+    }
     /// Candidate membership is qualified by both reader incarnation and frame.
     pub fn viewport_query_is_current(&self, query: &ExecutionViewportQuery) -> bool {
         query.is_current_for(&self.session)

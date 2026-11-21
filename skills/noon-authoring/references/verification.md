@@ -51,6 +51,13 @@ If first-play seeking is impossible for a faithful scene, report the exact
 blocker and when seeking becomes available, if ever. If you could not exercise
 the player, report that first-play seeking is unverified.
 
+## Feedback from the live viewer
+
+Read `Noon feedback (pending)` comments in the scene source. Use the recorded
+time and region to find the visual, re-render the focused correction, and show
+the before-and-after frames. Optional snapshot downloads preserve the original
+frame and Run source. [Live viewer feedback](../../../docs/live-viewer-feedback.md)
+
 ## Repository validation
 
 For repository changes, the existing validation entrypoints are:

@@ -127,6 +127,7 @@ async function snapshot(page) {
       buffering: controls?.dataset.buffering,
       elapsedSeconds: Number(controls?.dataset.elapsedSeconds),
       seekEnd: Number(scrubber?.max),
+      seekTitle: scrubber?.title ?? "",
       seekStatus: controls?.querySelector(".playback-live-status")?.textContent ?? "",
     };
   });
@@ -322,9 +323,11 @@ function assertHeldControls(held) {
   else {
     assert.equal(held.buffering, "false");
     if (held.preparing === "true") {
-      // The authoring hook can run before the renderer finishes preparation.
       assert.equal(held.durationKnown, "false");
-      assert.equal(held.scrubberDisabled, true);
+      // Preparation allows seeking as soon as the reader has adopted history.
+      const canSeek = held.seekTitle.startsWith("Available history:");
+      assert.equal(held.scrubberDisabled, !canSeek);
+      if (canSeek) assert.ok(held.elapsedSeconds >= 0 && held.elapsedSeconds <= held.seekEnd);
       assert.equal(held.toggleDisabled, false);
       assert.equal(held.seekStatus, "Preparing animation…");
     } else if (held.durationKnown === "true") {

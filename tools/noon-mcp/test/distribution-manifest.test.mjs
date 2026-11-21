@@ -64,6 +64,8 @@ test("distribution manifest pins package, skill, capability and runner identitie
     "source package manifest must not pretend a runtime build was loaded");
   for (const [name, digest] of Object.entries(first.runner.sourceSha256)) assertSha(digest, `runner source ${name}`);
   for (const required of [
+    "tools/noon-mcp/bin/noon-feedback.mjs",
+    "tools/noon-mcp/src/feedback-live-import.mjs",
     "tools/noon-mcp/src/distribution-manifest.mjs",
     "tools/noon-mcp/src/server.mjs",
     "scripts/agent-preview-sessions.mjs",

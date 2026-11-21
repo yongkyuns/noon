@@ -664,6 +664,11 @@ export class ExecutionWorkerClient {
     return result.debugFrame;
   }
 
+  async feedbackTargets(query) {
+    this.#requireStarted();
+    return (await this.#requestEngine("feedback_targets", { query })).feedbackTargets;
+  }
+
   async sampleToAuthoredTime(timeSeconds, { stopAtSourceCompletion = false, collectTimings = false } = {}) {
     this.#requireStarted();
     if (this.#semanticPacing !== SEMANTIC_PACING_EXTERNAL_SAMPLES) {

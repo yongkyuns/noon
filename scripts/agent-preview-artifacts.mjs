@@ -100,6 +100,18 @@ function copyBytes(bytes) {
   return copy;
 }
 
+export function inspectCapturedPng(bytes) {
+  check(Buffer.isBuffer(bytes) && !types.isSharedArrayBuffer(typedArrayBuffer.call(bytes)),
+    "INVALID_INPUT", "png must be an unshared Buffer");
+  const byteLength = typedArrayByteLength.call(bytes);
+  check(byteLength > 0 && byteLength <= DEFAULT_LIMITS.maxArtifactBytes,
+    "PAYLOAD_LIMIT", "frame exceeds encoded byte limit");
+  return Object.freeze({
+    ...pngDimensions(bytes, DEFAULT_LIMITS), byteLength,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+  });
+}
+
 /**
  * Optional host artifact ownership, NOT runner session/scene state or execution.
  * A trusted adapter supplies already-captured PNGs and observed provenance.

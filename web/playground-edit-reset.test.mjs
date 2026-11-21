@@ -64,6 +64,7 @@ function editorHarness({ playState, deferRun, activeSource = "source used by act
     canonicalSource: "canonical source",
     currentExample: () => example,
     drafts: new Map(),
+    feedbackReview: { close() {} },
     updateDraftStatus: null,
     playback: { state: playState, runGeneration: 17 },
     worker: { interpreterGeneration: 4 },
@@ -239,11 +240,13 @@ test("a failed Run before runtime adoption keeps the displayed run identity", ()
 });
 
 test("editor input submits only through the existing Run router", () => {
+  const draftStart = main.indexOf("function rememberSceneDraft(");
   const editorStart = main.indexOf('sceneSourceEditor.addEventListener("input"');
   const editorEnd = main.indexOf('window.addEventListener("popstate"', editorStart);
   const editor = main.slice(editorStart, editorEnd);
   assert.doesNotMatch(editor, /runScene\(|requestSceneRun\(|retireActiveRunForReplacement\(|invalidateRun\(|terminate\(/);
-  assert.match(editor, /drafts\.set\(example\.id, sceneSourceEditor\.value\)/);
+  assert.match(editor, /rememberSceneDraft\(example\)/);
+  assert.match(main.slice(draftStart, editorStart), /drafts\.set\(example\.id, sceneSourceEditor\.value\)/);
   assert.match(main.slice(requestStart, requestEnd), /return runRequestRouter\.request\(\)/);
   assert.match(main.slice(resetStart, resetEnd), /sceneSourceEditor\.value = canonicalSource/);
   assert.match(main, /run: \(source, exampleId, selectionGeneration\) => runScene\(source, exampleId, selectionGeneration\)/);
