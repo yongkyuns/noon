@@ -225,6 +225,27 @@ def _attach_shared_handle(self: _base.Mobject, handle: object) -> None:
     self._semantic_handle_fresh = True
 
 
+def _record_python_source_site(handle: object) -> None:
+    """Pass the executed call site to the shared Rust node at construction."""
+    frame = sys._getframe(1)
+    origin = None
+    caller = 0
+    for _ in range(24):
+        if frame is None:
+            break
+        if frame.f_globals.get("__name__") == "__main__":
+            if origin is None:
+                origin = frame
+            elif frame.f_code.co_filename == origin.f_code.co_filename:
+                caller = frame.f_lineno
+                break
+            if frame.f_code.co_name == "construct":
+                break
+        frame = frame.f_back
+    if origin is not None and (record := getattr(handle, "recordSourceSite", None)) is not None:
+        engine_call(record, origin.f_lineno, caller)
+
+
 def _constructor_color(name: str, value: object) -> _base.Color:
     return _compat._as_color(name, value)
 
@@ -399,6 +420,7 @@ def _attach_geometry_options(
         else engine_call(context.createManimGeometry, options)
     )
     _attach_shared_handle(self, handle)
+    _record_python_source_site(handle)
     if context is not None:
         self._canonical_live_target_context = context
 

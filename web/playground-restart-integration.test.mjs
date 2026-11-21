@@ -39,6 +39,7 @@ function navigationFixture() {
   const authoringStarts = [];
   const authoringStart = index => authoringStarts[index] ??= deferred();
   let fullscreenDisposals = 0, diagnosticInvalidations = 0, diagnosticDisposals = 0;
+  let feedbackClosures = 0, feedbackDisposals = 0;
   const diagnosticBegins = [];
   const window = new EventTarget();
   const diagnostics = { hidden: false };
@@ -61,6 +62,7 @@ function navigationFixture() {
     document: { querySelector: () => diagnostics },
     authoringSourceDocument,
     previousPreview: { hold() {}, showLive() {}, accept() {}, clear() {}, dispose() {} },
+    feedbackReview: { close() { feedbackClosures++; }, dispose() { feedbackDisposals++; } },
     diagnosticPanel: {
       beginRun(document, source) { diagnosticBegins.push({ document, source }); },
       invalidate() { diagnosticInvalidations += 1; },
@@ -130,6 +132,8 @@ function navigationFixture() {
     get diagnosticInvalidations() { return diagnosticInvalidations; },
     get diagnosticDisposals() { return diagnosticDisposals; },
     get diagnosticBegins() { return diagnosticBegins; },
+    get feedbackClosures() { return feedbackClosures; },
+    get feedbackDisposals() { return feedbackDisposals; },
     dispatch(type, persisted) {
       const event = new Event(type); Object.defineProperty(event, "persisted", { value: persisted });
       window.dispatchEvent(event);
@@ -212,6 +216,8 @@ test("Safari cached return keeps explicit Run, edits and subsequent navigation t
     assert.equal(f.diagnosticInvalidations, cycle + 1);
     assert.equal(f.diagnosticDisposals, 0,
       "cached documents must retain diagnostic listeners for the next edit");
+    assert.equal(f.feedbackClosures, cycle + 1);
+    assert.equal(f.feedbackDisposals, 0);
     assert.equal(f.clients[cycle].terminated, true);
     assert.equal(f.owners[cycle].terminations, 1);
     assert.equal(f.context.canvas, f.owners[cycle].canvas, "restart must use the replacement, untransferred canvas");
@@ -223,6 +229,7 @@ test("Safari cached return keeps explicit Run, edits and subsequent navigation t
   assert.equal(f.fullscreenDisposals, 0, "cached DOM controls remain installed");
   f.dispatch("pagehide", false);
   assert.equal(f.fullscreenDisposals, 1, "permanent departure disposes DOM controls");
+  assert.equal(f.feedbackDisposals, 1);
   assert.equal(f.diagnosticInvalidations, 4);
   assert.equal(f.diagnosticDisposals, 1, "permanent departure disposes diagnostic listeners once");
   assert.ok(f.diagnosticBegins.length >= 3, "each restored explicit source run reopens diagnostics");

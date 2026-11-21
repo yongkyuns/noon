@@ -88,6 +88,7 @@ pub use crate::execution_session::{
     EffectiveSemanticPropertyWrite, ExecutionViewportQuery, RequiredCallbackInvocation,
     StaleViewportQuery, StructuralPublicationStats,
 };
+pub use crate::execution_session::{FeedbackTarget, FeedbackTargets};
 pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
 pub use crate::execution_session::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};
 pub use crate::host_callbacks::{

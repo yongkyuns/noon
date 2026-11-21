@@ -629,6 +629,8 @@ class Text(_RetainedTextMobject):
             opacity,
             presentation_applied=context is not None,
         )
+        from _manim_semantic_handles import _record_python_source_site
+        _record_python_source_site(handle)
 
     @property
     def text(self) -> str:

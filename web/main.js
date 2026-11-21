@@ -9,6 +9,8 @@ import { PresentationRate } from "./frame-metrics.js";
 import { PlaygroundPlaybackControls } from "./playground-playback-controls.js";
 import { createRunRequestRouter } from "./playground-run-request-router.js";
 import { installPreviewFullscreen } from "./playground-fullscreen.js";
+import { installPlaygroundFeedback } from "./playground-feedback.js";
+import { appendSourceFeedback } from "./playground-feedback-capture.js";
 import {
   exampleUrl,
   filterGalleryExamples,
@@ -419,6 +421,51 @@ let metricsNextPollAt = 0;
 let metricsEpoch = 0;
 let autoRunTimer = null;
 let autoRunEpoch = 0;
+
+const feedbackReview = installPlaygroundFeedback(document.querySelector("#preview-comment"), {
+  getContext() {
+    const active = player;
+    const run = activeRunIdentity;
+    const example = currentExample();
+    const client = authoringWorkers.activeClient;
+    if (!active || !client || (run?.outcome !== "complete" && run?.outcome !== "running") ||
+        !example || run.exampleId !== example.id ||
+        !isPreparedPlayback(active) || !isCurrentRun(run.token) || busyDepth > 0 ||
+        playerNeedsRestart || runtimeRecoveryPromise !== null) {
+      throw new Error("Run a scene and wait for prepared playback before adding feedback.");
+    }
+    cancelAutoRun();
+    const capturedCanvas = canvas;
+    const release = beginBusy();
+    const isCurrent = () => player === active && canvas === capturedCanvas &&
+      selectedExampleId === example.id && activeRunIdentity === run && isCurrentRun(run.token) &&
+      !playerNeedsRestart && runtimeRecoveryPromise === null;
+    return {
+      player: active, canvas: capturedCanvas, source: run.source,
+      runGeneration: run.token.runGeneration,
+      buildIdentity: () => client.ready(),
+      isCurrent,
+      findTargets(capture, { x, y, width, height }) {
+        if (!isCurrent() || capture.viewRevision === null) return null;
+        return active.feedbackTargets({ ...capture.presentationReceipt, viewRevision: capture.viewRevision,
+          region: [x, y, width, height] });
+      },
+      addToSource(capture, selection, comment, identified) {
+        if (!isCurrent()) throw new Error("The displayed Run changed. Reopen Comment on the scene you want to annotate.");
+        // Update the existing textarea/CodeMirror source without requesting a Run.
+        sceneSourceEditor.value = appendSourceFeedback(sceneSourceEditor.value, capture, selection, comment, identified);
+        rememberSceneDraft(example);
+        updateDraftStatus(example);
+        draftStatus.value = "Feedback added to source · preview paused";
+      },
+      release,
+    };
+  },
+  onPaused(state) {
+    playbackControls?.sync(state);
+    setPlaybackRuntimeStatus(state);
+  },
+});
 
 function currentExample() {
   return SCENE_EXAMPLES.find((example) => example.id === selectedExampleId) ?? null;
@@ -1709,10 +1756,15 @@ sceneSourceEditor.addEventListener("compositionend", () => {
   scheduleAutoRun();
   updateDraftStatus();
 });
-sceneSourceEditor.addEventListener("input", (event) => {
-  const example = currentExample();
+function rememberSceneDraft(example) {
   if (example) drafts.set(example.id, sceneSourceEditor.value);
   resetButton.disabled = sceneSourceEditor.value === canonicalSource;
+}
+
+sceneSourceEditor.addEventListener("input", (event) => {
+  const example = currentExample();
+  feedbackReview?.close();
+  rememberSceneDraft(example);
   if (example) {
     if (event.isComposing) cancelAutoRun();
     else scheduleAutoRun();
@@ -1722,12 +1774,14 @@ sceneSourceEditor.addEventListener("input", (event) => {
 window.addEventListener("popstate", () => {
   const id = requestedExampleId();
   if (id && id !== selectedExampleId) {
+    feedbackReview?.close();
     void selectExample(id, { run: true, updateUrl: false });
   }
 });
 document.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
+    feedbackReview?.close();
     void requestSceneRun();
   }
 });
@@ -1935,9 +1989,11 @@ try {
       activeSourceContinuation = null;
       diagnosticPanel.invalidate();
       previousPreview.clear();
+      feedbackReview?.close();
       if (!event.persisted) {
         diagnosticPanel.dispose();
         previousPreview.dispose();
+        feedbackReview?.dispose();
         disposeFullscreen();
       }
       stopMetricsPolling();

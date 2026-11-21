@@ -7,6 +7,7 @@ import {
   createSharedExecutionMailbox, executionDeltaMetadata,
   prepareExecutionDeltaMetadataForSend, prepareExecutionDeltaTransportForSend,
 } from "./execution-transport.js";
+import { MAX_BROWSER_POINTER_SAMPLES } from "./browser-pointer-input.js";
 
 export const MAX_PENDING_SEMANTIC_CONTROLS = 128;
 export const MAX_REQUIRED_CALLBACK_PHASES_PER_ADVANCE = 128;
@@ -494,6 +495,7 @@ export async function attachSemanticEngine(
       const presentationReceipt = !receiverFailed && samePublication(lastSentPublication, lastPresentedPublication) &&
         samePublication(lastPresentedDeltaMetadata, lastPresentedPublication)
         ? lastPresentedDeltaMetadata : null;
+      const viewRevision = lastPresentedPublication?.pointerReceipt?.view_revision;
       return {
         type, preparedPlayback: true,
         // Cold initialization and command acknowledgements observe only the
@@ -513,7 +515,9 @@ export async function attachSemanticEngine(
         loopDuration: observation.loopDuration, loopCount: observation.loopCount,
         loopError: observation.loopError,
         heldPresentation: preparedClockAdmitted ? observation.heldPresentation ?? null : null,
-        ...(presentationReceipt === null ? {} : { presentationReceipt }),
+        ...(presentationReceipt === null ? {} : {
+          presentationReceipt: viewRevision === undefined ? presentationReceipt : { ...presentationReceipt, viewRevision },
+        }),
         replaySupported: true, replayUnavailable: null,
         canUndoTranslationDrag: player.canUndoTranslationDrag === true, nextPatchSequence: "0",
       };
@@ -973,6 +977,26 @@ export async function attachSemanticEngine(
         requestId: _requestId,
         ...input
       } = message;
+      if (Array.isArray(input.input)) {
+        const motions = input.input;
+        const first = motions[0];
+        if (motions.length === 0 || motions.length > MAX_BROWSER_POINTER_SAMPLES) {
+          throw new TypeError("invalid browser pointer motion batch size");
+        }
+        for (const sample of motions) {
+          if (sample?.kind !== "move" || sample.button !== null ||
+              sample.source_id !== first.source_id || sample.pointer_id !== first.pointer_id ||
+              sample.view_revision !== first.view_revision ||
+              sample.viewport_width !== first.viewport_width || sample.viewport_height !== first.viewport_height ||
+              !Number.isFinite(sample.surface_x) || !Number.isFinite(sample.surface_y)) {
+            throw new TypeError("invalid browser pointer motion batch");
+          }
+        }
+        for (const sample of motions) {
+          if (!player.submitBrowserPointerInputJson(JSON.stringify({ ...input, input: sample }))) return false;
+        }
+        return true;
+      }
       return player.submitBrowserPointerInputJson(JSON.stringify(input));
     } else {
       throw new Error(`unsupported continuation input ${message.type}`);
@@ -1800,6 +1824,18 @@ export async function attachSemanticEngine(
         if (message.type === "stop") { stop(); return; }
         if (!Number.isSafeInteger(message.requestId) || message.requestId < 0) throw new Error("invalid engine request ID");
         if (message.type === "state") { post({ requestId: message.requestId, ...state("state"), sceneJson: null }); return; }
+        if (message.type === "feedback_targets") {
+          const query = message.query;
+          const displayed = lastPresentedDeltaMetadata;
+          const matches = query && displayed && pendingPointerInvalidation === null &&
+            samePublication(lastSentPublication, lastPresentedPublication) &&
+            query.session === displayed.session && query.sequence === displayed.sequence &&
+            Number.isSafeInteger(query.viewRevision) && query.viewRevision === lastPresentedPublication.pointerReceipt?.view_revision;
+          const feedbackTargets = prepared !== null && player !== null && !receiverFailed && matches
+            ? JSON.parse(player.feedbackTargetsJson(context, JSON.stringify(query))) : null;
+          post({ requestId: message.requestId, type: "feedback_targets", feedbackTargets });
+          return;
+        }
         if (message.type === "metrics") {
           const preparedPlayback = prepared === null || !preparedClockAdmitted ? null : (() => {
             const observedAt = performance.now();
@@ -1928,6 +1964,9 @@ export async function attachSemanticEngine(
         post({ type: "pointer_presentation_invalidated", receipt: message.receipt });
         if (!Number.isSafeInteger(message.receipt.presentation) || message.receipt.presentation <= 0) {
           fail(new Error("invalid pointer presentation invalidation")); return;
+        }
+        if (lastPresentedPublication?.pointerReceipt?.presentation === message.receipt.presentation) {
+          lastPresentedPublication = { ...lastPresentedPublication, pointerReceipt: null };
         }
         // Until cleanup runs, Rust still owns the first acknowledged receipt.
         // A newer repaint may itself disappear while transport is backpressured;

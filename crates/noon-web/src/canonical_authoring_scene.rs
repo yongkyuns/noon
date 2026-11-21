@@ -592,6 +592,11 @@ impl Default for CanonicalAuthoringScene {
 }
 
 impl CanonicalAuthoringScene {
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn feedback_source(&self) -> std::cell::Ref<'_, noon_core::SemanticStore> {
+        self.scene.integration_store().borrow()
+    }
+
     #[allow(dead_code)] // Used by the wasm-only prepared authoring path.
     pub(crate) fn section_navigation_snapshot(&self) -> noon::SceneSectionNavigation {
         self.scene.section_navigation()

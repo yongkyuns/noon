@@ -2819,6 +2819,15 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = recordSourceSite)]
+        pub fn record_source_site(&self, line: u32, caller_line: u32) -> Result<(), JsValue> {
+            self.handle
+                .integration_store()
+                .borrow_mut()
+                .record_source_site(self.handle.node_id(), line, caller_line)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = interpolateManim)]
         pub fn interpolate_manim(
             &mut self,
