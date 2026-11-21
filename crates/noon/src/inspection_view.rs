@@ -77,6 +77,27 @@ impl InspectionView2D {
         )
     }
 
+    pub(crate) fn panned(self, delta: [f64; 2]) -> Self {
+        Self {
+            offset: [
+                self.offset[0] - delta[0] * self.scale,
+                self.offset[1] + delta[1] * self.scale,
+            ],
+            ..self
+        }
+    }
+
+    pub(crate) fn returning_to_authored(self, progress: f64) -> Self {
+        if progress >= 1.0 {
+            return Self::default();
+        }
+        let remaining = 1.0 - progress;
+        Self {
+            offset: self.offset.map(|axis| axis * remaining),
+            scale: (self.scale.ln() * remaining).exp(),
+        }
+    }
+
     /// Prepare a new zoom adjustment about an occurrence-local scene anchor.
     ///
     /// `anchor` must come from the existing projection of the admitted displayed
@@ -145,6 +166,166 @@ fn representable_camera(x: f64, y: f64, height: f64) -> Result<Camera2DState, In
     };
     validate_camera(camera).map_err(|_| InspectionViewError::UnrepresentableCamera)?;
     Ok(camera)
+}
+
+/// Relative 3D navigation in viewport-height units, with zoom in log scale.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SpatialInspectionMotion {
+    pub orbit: [f64; 2],
+    pub pan: [f64; 2],
+    pub zoom: f64,
+    pub reset: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct InspectionView3D {
+    rotation: noon_core::SemanticRotation3D,
+    offset: noon_core::SemanticVec3,
+    scale: f64,
+}
+
+impl Default for InspectionView3D {
+    fn default() -> Self {
+        Self {
+            rotation: noon_core::SemanticRotation3D::IDENTITY,
+            offset: noon_core::SemanticVec3::new(0.0, 0.0, 0.0),
+            scale: 1.0,
+        }
+    }
+}
+
+impl InspectionView3D {
+    pub(crate) fn moved(self, motion: SpatialInspectionMotion) -> Option<Self> {
+        use noon_core::{SemanticRotation3D as Rotation, SemanticVec3 as Vec3};
+        if !motion
+            .orbit
+            .into_iter()
+            .chain(motion.pan)
+            .chain([motion.zoom])
+            .all(f64::is_finite)
+        {
+            return None;
+        }
+        let [x, y] = motion.orbit;
+        let rotation = if x == 0.0 && y == 0.0 {
+            self.rotation
+        } else {
+            let yaw =
+                Rotation::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), -x * std::f64::consts::PI)?;
+            let pitch =
+                Rotation::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), -y * std::f64::consts::PI)?;
+            self.rotation.compose(yaw)?.compose(pitch)?
+        };
+        let [x, y] = motion.pan;
+        let delta = self
+            .rotation
+            .rotate_vector(Vec3::new(-x * self.scale, y * self.scale, 0.0))?;
+        let offset = Vec3::new(
+            self.offset.x + delta.x,
+            self.offset.y + delta.y,
+            self.offset.z + delta.z,
+        );
+        offset.is_finite().then_some(Self {
+            rotation,
+            offset,
+            scale: (self.scale * motion.zoom.clamp(-16.0, 16.0).exp())
+                .clamp(InspectionView2D::MIN_SCALE, InspectionView2D::MAX_SCALE),
+        })
+    }
+
+    pub(crate) fn returning_to_authored(self, progress: f64) -> Option<Self> {
+        if progress >= 1.0 {
+            return Some(Self::default());
+        }
+        let remaining = 1.0 - progress;
+        Some(Self {
+            rotation: self
+                .rotation
+                .interpolate(noon_core::SemanticRotation3D::IDENTITY, progress)?,
+            offset: noon_core::SemanticVec3::new(
+                self.offset.x * remaining,
+                self.offset.y * remaining,
+                self.offset.z * remaining,
+            ),
+            scale: (self.scale.ln() * remaining).exp(),
+        })
+    }
+
+    pub(crate) fn resolve(
+        self,
+        camera: noon_core::SemanticCamera3D,
+        focal_distance: Option<f64>,
+    ) -> Option<noon_core::SemanticCamera3D> {
+        use noon_core::{
+            SemanticCamera3D, SemanticProjection3D as Projection, SemanticVec3 as Vec3,
+        };
+        let (near, far) = match camera.projection {
+            Projection::Perspective { near, far, .. }
+            | Projection::Orthographic { near, far, .. } => (near, far),
+        };
+        // A direct pose has no explicit target. Use the world origin's depth
+        // along the optical axis, with a fallback for an origin behind the eye.
+        let distance = focal_distance.unwrap_or_else(|| {
+            let depth = camera
+                .orientation
+                .inverse()
+                .rotate_vector(camera.position)
+                .map(|v| v.z);
+            depth
+                .filter(|depth| *depth > near)
+                .unwrap_or(near.sqrt() * far.sqrt())
+                .min(far)
+        });
+        let (height, projection) = match camera.projection {
+            Projection::Perspective {
+                vertical_fov_radians,
+                near,
+                far,
+            } => {
+                let tangent = (vertical_fov_radians * 0.5).tan();
+                (
+                    2.0 * distance * tangent,
+                    Projection::Perspective {
+                        vertical_fov_radians: if self.scale == 1.0 {
+                            vertical_fov_radians
+                        } else {
+                            2.0 * (tangent * self.scale).atan()
+                        },
+                        near,
+                        far,
+                    },
+                )
+            }
+            Projection::Orthographic { height, near, far } => (
+                height,
+                Projection::Orthographic {
+                    height: height * self.scale,
+                    near,
+                    far,
+                },
+            ),
+        };
+        let rotated = self.rotation.rotate_vector(Vec3::new(0.0, 0.0, distance))?;
+        let delta = camera.orientation.rotate_vector(Vec3::new(
+            rotated.x + self.offset.x * height,
+            rotated.y + self.offset.y * height,
+            (rotated.z - distance) + self.offset.z * height,
+        ))?;
+        let result = SemanticCamera3D::new(
+            Vec3::new(
+                camera.position.x + delta.x,
+                camera.position.y + delta.y,
+                camera.position.z + delta.z,
+            ),
+            camera.orientation.compose(self.rotation)?,
+            projection,
+        )?;
+        result
+            .camera_matrix(1.0)?
+            .iter()
+            .all(|value| (*value as f32).is_finite())
+            .then_some(result)
+    }
 }
 
 #[cfg(test)]

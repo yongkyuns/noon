@@ -20,7 +20,10 @@ pub use input::{
     ExecutionSessionInputError, NativePointerInputPublication, NativePointerInputToken,
     PointerFrameError, PointerFrameSnapshot, PointerFrameView,
 };
-pub use inspection::InspectionNavigationError;
+pub use inspection::{
+    InspectionNavigationError, SpatialInspectionHighlight, SpatialPickCache, SpatialPickFrame,
+    SpatialPointerInput, SpatialPointerPhase,
+};
 pub use translation_drag::{TranslationDragError, TranslationDragReceipt, TranslationDragUndo};
 mod hover;
 pub use hover::PointerHoverTransition;
@@ -956,7 +959,7 @@ impl Clone for ExecutionSession {
             pointer_selection: self.pointer_selection.fresh(),
             translation_drag: self.translation_drag.clone(),
             interaction_bindings: self.interaction_bindings.clone(),
-            inspection: self.inspection,
+            inspection: self.inspection.without_gestures(),
             last_structural_publication: self.last_structural_publication,
             callback_schedule: self.callback_schedule.clone(),
             next_callback_sequence: Some(0),

@@ -69,7 +69,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
     if (selector === "#patch-status") return { dataset: { state: "applied" }, value: "" };
     if (selector === "#status-text") return { textContent: "" };
     return { dataset: {
-      state: "applied", interaction: showcase ? "none" : "pointer-fill-selection", rendererBackend: "WebGL2",
+      state: "applied", interaction: "viewer", rendererBackend: "WebGL2",
     } };
   } };
   const inspection = { pending: [], samples: [], wheelEvents: [] };

@@ -75,7 +75,7 @@ test("source-owned first pass keeps playback controls unavailable until replay i
   );
   assert.match(runScene, /continuationGeneration: null,[\s\S]*?updatePlaybackControls\(\{\s*supported: result\.replaySupported !== false,/);
   const patchStatusStart = main.indexOf("function setRunPatchStatus(");
-  const patchStatusEnd = main.indexOf("async function applyExampleInteraction(", patchStatusStart);
+  const patchStatusEnd = main.indexOf("async function applyViewerInteraction(", patchStatusStart);
   assert.match(main.slice(patchStatusStart, patchStatusEnd),
     /patchStatus\.dataset\.runGeneration = String\(runToken\.runGeneration\)/);
 });

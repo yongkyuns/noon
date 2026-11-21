@@ -543,6 +543,10 @@ impl SemanticExecutionPlayer {
     fn advance_native_interactions(&mut self, wall_time_seconds: f64) -> Result<(), String> {
         self.source
             .advance_interactions(wall_time_seconds)
+            .map_err(|error| error.to_string())?;
+        self.source
+            .session_mut()
+            .advance_viewer_inspection(wall_time_seconds)
             .map_err(|error| error.to_string())
     }
 
@@ -1144,7 +1148,7 @@ impl SemanticExecutionPlayer {
                 wake = wake.with_additional_timeline(TimelineWakeState::Deadline(deadline));
             }
         }
-        if !callback_blocked & self.source.session().interactions_active() {
+        if !callback_blocked && self.interactions_active_wasm() {
             wake = wake.with_additional_timeline(TimelineWakeState::Continuous);
         }
         BrowserExecutionWakePlan::from_runtime(wake)
@@ -1472,10 +1476,25 @@ impl SemanticExecutionPlayer {
             .session()
             .inset_2d_views()
             .map_err(|e| e.to_string())?;
+        let spatial_inspection = if self.finite_export.is_some() {
+            None
+        } else {
+            self.source
+                .session()
+                .inspection_spatial_camera()
+                .map_err(|error| error.to_string())?
+        };
+        let spatial_highlight = self
+            .finite_export
+            .is_none()
+            .then(|| self.source.session().spatial_inspection_highlight())
+            .flatten();
         let publication = self.source.session_mut().take_renderer_publication();
         let Some(mut delta) = self.encoder.encode_renderer_publication(
             &publication,
             camera,
+            spatial_inspection,
+            spatial_highlight,
             snapshot || !self.snapshot_sent,
             self.finite_export.is_some()
                 || presentation != self.last_sent_selection_overlay
@@ -1502,10 +1521,20 @@ impl SemanticExecutionPlayer {
                 .worker_pointer_presentation
                 .view()
                 .filter(|view| view.drawable());
+            self.worker_pointer_presentation
+                .retire_planar_binding_if_changed(
+                    pointer_frame.as_ref(),
+                    &mut self.browser_pointer_binding,
+                );
             self.worker_pointer_presentation.issue(
                 delta.retained.session,
                 delta.retained.sequence,
                 pointer_frame,
+            );
+            self.worker_pointer_presentation.issue_spatial(
+                &publication,
+                spatial_inspection.map(|(_, camera)| camera),
+                delta.retained.snapshot,
             );
         }
         self.last_sent_selection_overlay = presentation;
@@ -2859,6 +2888,21 @@ impl SemanticExecutionPlayer {
     /// Configure session/editor fill selection, never an authored interaction binding.
     /// Configuration is ordered with native input and is not replayed into a new scene.
     #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = enableDefaultViewerSelection))]
+    pub fn enable_default_viewer_selection(&mut self) {
+        self.source.session_mut().enable_default_viewer_selection();
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = viewerPointerMotion))]
+    pub fn viewer_pointer_motion(&self) -> Option<bool> {
+        let session = &self.source.session();
+        session
+            .default_viewer_selection()
+            .then(|| session.has_native_pointer_subscribers())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPointerFillSelection))]
     pub fn set_pointer_fill_selection(&mut self, max_movement: Option<f32>) -> Result<(), String> {
         match max_movement {
@@ -2939,6 +2983,43 @@ impl SemanticExecutionPlayer {
     /// Retire the preview command when its execution player is torn down or rebased.
     pub fn clear_translation_drag_undo(&mut self) {
         self.translation_drag_undo = None;
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = spatialNavigation))]
+    pub fn spatial_navigation(&self) -> bool {
+        self.source
+            .session()
+            .camera_3d()
+            .is_ok_and(|camera| camera.is_some())
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = moveSpatialInspectionJson))]
+    pub fn move_spatial_inspection_json(&mut self, json: &str) -> Result<bool, String> {
+        use crate::worker_pointer_presentation::SpatialInput;
+        let Some(input) = self.worker_pointer_presentation.spatial_input(json)? else {
+            return Ok(false);
+        };
+        let target = self.source.session_mut();
+        match input {
+            SpatialInput::CancelContacts => {
+                target.cancel_spatial_pointer_gestures();
+                Ok(false)
+            }
+            SpatialInput::Motion(motion) => target
+                .move_spatial_inspection(motion)
+                .map_err(|error| error.to_string()),
+            SpatialInput::Pointer(samples, displayed, aspect) => {
+                let mut changed = false;
+                for sample in samples {
+                    changed |= target
+                        .submit_spatial_pointer(sample, displayed, aspect)
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(changed)
+            }
+        }
     }
 
     /// Admit one collection-time inspection occurrence through the same owned
@@ -3197,7 +3278,7 @@ impl SemanticExecutionPlayer {
         if !timestamp_ms.is_finite() || timestamp_ms < 0.0 {
             return Err("interaction tick requires a finite non-negative timestamp".into());
         }
-        if !self.source.session().interactions_active() {
+        if !self.interactions_active_wasm() {
             return Ok(None);
         }
         self.advance_native_interactions(timestamp_ms / 1_000.0)?;
@@ -3210,6 +3291,7 @@ impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = interactionsActive))]
     pub fn interactions_active_wasm(&self) -> bool {
         self.source.session().interactions_active()
+            || self.source.session().viewer_inspection_active()
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekDeltaJson))]

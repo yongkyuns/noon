@@ -279,7 +279,7 @@ impl ExecutionSession {
         self.runtime.has_click_indicate_bindings()
             || !self.interaction_bindings.is_empty()
             || self.translation_drag.has_targets()
-            || self.pointer_selection.enabled()
+            || (self.pointer_selection.enabled() && !self.default_viewer_selection())
             || !self
                 .reactive_projection
                 .native_state_targets(&NativeStateSource::PointerPosition)
@@ -453,11 +453,15 @@ impl ExecutionSession {
         suppress_click_action: bool,
     ) -> Result<PreparedNativePointerPublication, ExecutionSessionInputError> {
         let previous = self.preflight_native_pointer_input(token, input)?;
-        let selection = self.prepare_pointer_selection(token, input)?;
+        let mut selection = self.prepare_pointer_selection(token, input)?;
         let action = (!suppress_click_action)
             .then(|| self.prepare_click_action(selection.click))
             .transpose()?
             .flatten();
+
+        if self.default_viewer_selection() && action.is_some() {
+            self.keep_current_viewer_selection(&mut selection);
+        }
 
         let mut inputs = if matches!(input.kind(), NativePointerInputKind::Cancel(_)) {
             self.pointer_button_reset_inputs()

@@ -167,8 +167,8 @@ try {
   await waitForAuthoring(page);
   assert.equal(
     await page.evaluate(() => document.querySelector("#status")?.dataset.interaction),
-    "pointer-fill-selection",
-    "gallery manifest must enable selection on the public runtime",
+    "viewer",
+    "the public viewer enables selection",
   );
 
   report.captureViewport = await replayViewport(canvas, captureSize, { deviceScaleFactor: profile.deviceScaleFactor });
@@ -243,8 +243,8 @@ try {
   await waitForAuthoring(page);
   assert.equal(
     await page.evaluate(() => document.querySelector("#status")?.dataset.interaction),
-    "none",
-    "source-declared click actions must not require manifest interaction policy",
+    "viewer",
+    "source-declared click actions coexist with viewer defaults",
   );
   const authoredPlayback = await readLiveState(page);
   report.authoredPlaybackBeforeSeek = authoredPlayback;
@@ -307,7 +307,7 @@ try {
   await page.waitForTimeout(150);
   assert.equal(changedPixels(authoredBaseline, await authoredCanvas.screenshot()), 0, "background click must not change the source-declared scene");
   assert.equal(await presentedFrames(page), beforeBackground, "background click must not create interaction work");
-  // Exercise the actual gallery opt-in, not a manually constructed client.
+  // Exercise the default inspection through the public gallery canvas.
   const domWheel = profile.hasTouch;
   report.wheelInput = domWheel ? "DOM wheel (touch profile)" : "browser mouse wheel";
   const dispatchWheel = async delta => {

@@ -18,6 +18,14 @@ pub(super) struct PlayerPointerTarget<'a> {
 }
 
 impl BrowserPointerTarget for PlayerPointerTarget<'_> {
+    fn default_viewer_selection(&self) -> bool {
+        self.source.session().default_viewer_selection()
+    }
+
+    fn cancel_spatial_pointer_gestures(&mut self) {
+        self.source.session_mut().cancel_spatial_pointer_gestures();
+    }
+
     fn observe_pointer_frame(
         &mut self,
         frame: &noon::integration::PointerFrameSnapshot,

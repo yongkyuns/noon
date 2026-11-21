@@ -133,6 +133,65 @@ mod admission {
         }
     }
 
+    pub(crate) enum SpatialInput<'a> {
+        CancelContacts,
+        Motion(noon::SpatialInspectionMotion),
+        Pointer(
+            Vec<noon::SpatialPointerInput>,
+            Option<&'a noon::SpatialPickFrame>,
+            f64,
+        ),
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum WorkerSpatialInput {
+        CancelContacts {
+            view_revision: u64,
+            cancel_contacts: bool,
+        },
+        Pointer {
+            view_revision: u64,
+            samples: Vec<SpatialPointerSample>,
+            presentation: Option<WorkerPointerReceipt>,
+        },
+        Motion {
+            view_revision: u64,
+            orbit: [f64; 2],
+            pan: [f64; 2],
+            zoom: f64,
+            reset: bool,
+        },
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum SpatialPointerPhase {
+        Press,
+        Move,
+        Release,
+        Cancel,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SpatialPointerSample {
+        id: i32,
+        phase: SpatialPointerPhase,
+        x: f32,
+        y: f32,
+        timestamp_ms: f64,
+        touch: bool,
+        pan: bool,
+    }
+
+    struct IssuedSpatialFrame {
+        session: u32,
+        sequence: u64,
+        view_revision: u64,
+        frame: noon::SpatialPickFrame,
+    }
+
     #[derive(Default)]
     pub(crate) struct WorkerPointerPresentation {
         view: Option<PointerPresentationView>,
@@ -140,10 +199,137 @@ mod admission {
         presented: Option<WorkerPointerReceipt>,
         presented_frame: Option<PresentedFrame>,
         retired_presentation: u64,
+        spatial_cache: noon::SpatialPickCache,
+        issued_spatial: [Option<IssuedSpatialFrame>; 2],
+        presented_spatial: [Option<(WorkerPointerReceipt, noon::SpatialPickFrame)>; 2],
         rejected: Option<RejectedSource>,
         refresh_pending: bool,
     }
     impl WorkerPointerPresentation {
+        pub(crate) fn spatial_input(&self, json: &str) -> Result<Option<SpatialInput<'_>>, String> {
+            let input: WorkerSpatialInput = serde_json::from_str(json)
+                .map_err(|error| format!("invalid spatial inspection input: {error}"))?;
+            let revision = match input {
+                WorkerSpatialInput::CancelContacts { view_revision, .. }
+                | WorkerSpatialInput::Pointer { view_revision, .. }
+                | WorkerSpatialInput::Motion { view_revision, .. } => view_revision,
+            };
+            let Some(view) = self
+                .view
+                .filter(|view| view.drawable() && view.revision == revision)
+            else {
+                return Ok(None);
+            };
+            match input {
+                WorkerSpatialInput::CancelContacts {
+                    cancel_contacts: true,
+                    ..
+                } => Ok(Some(SpatialInput::CancelContacts)),
+                WorkerSpatialInput::CancelContacts { .. } => {
+                    Err("spatial gesture cancellation requires cancel_contacts to be true".into())
+                }
+                WorkerSpatialInput::Motion {
+                    orbit,
+                    pan,
+                    zoom,
+                    reset,
+                    ..
+                } => Ok(Some(SpatialInput::Motion(noon::SpatialInspectionMotion {
+                    orbit,
+                    pan,
+                    zoom,
+                    reset,
+                }))),
+                WorkerSpatialInput::Pointer {
+                    samples,
+                    presentation,
+                    ..
+                } => {
+                    if samples.is_empty()
+                        || samples.len() > 256
+                        || (samples.len() > 1
+                            && samples
+                                .iter()
+                                .any(|s| !matches!(s.phase, SpatialPointerPhase::Move)))
+                    {
+                        return Err("invalid spatial pointer batch".into());
+                    }
+                    let displayed = presentation.and_then(|receipt| {
+                        self.presented_spatial
+                            .iter()
+                            .flatten()
+                            .find(|(key, _)| *key == receipt)
+                            .map(|(_, frame)| frame)
+                    });
+                    let samples = samples
+                        .into_iter()
+                        .map(|s| noon::SpatialPointerInput {
+                            id: s.id,
+                            phase: match s.phase {
+                                SpatialPointerPhase::Press => noon::SpatialPointerPhase::Press,
+                                SpatialPointerPhase::Move => noon::SpatialPointerPhase::Move,
+                                SpatialPointerPhase::Release => noon::SpatialPointerPhase::Release,
+                                SpatialPointerPhase::Cancel => noon::SpatialPointerPhase::Cancel,
+                            },
+                            position: Vec2::new(s.x, s.y),
+                            view_revision: revision,
+                            viewport_height: view.height,
+                            timestamp_ms: s.timestamp_ms,
+                            touch: s.touch,
+                            pan: s.pan,
+                        })
+                        .collect();
+                    Ok(Some(SpatialInput::Pointer(
+                        samples,
+                        displayed,
+                        f64::from(view.width) / f64::from(view.height),
+                    )))
+                }
+            }
+        }
+
+        pub(crate) fn issue_spatial(
+            &mut self,
+            publication: &noon_runtime::RendererPublication<'_>,
+            camera_override: Option<noon_core::SemanticCamera3D>,
+            snapshot: bool,
+        ) {
+            let spatial = self
+                .spatial_cache
+                .capture(publication, camera_override, snapshot);
+            self.issued_spatial[1] = self.issued_spatial[0].take();
+            self.issued_spatial[0] =
+                spatial
+                    .zip(self.issued.as_ref())
+                    .map(|(frame, issued)| IssuedSpatialFrame {
+                        session: issued.session,
+                        sequence: issued.sequence,
+                        view_revision: issued.frame.view().revision(),
+                        frame,
+                    });
+        }
+
+        fn note_spatial_presented(&mut self, receipt: WorkerPointerReceipt) -> bool {
+            if receipt.presentation <= self.retired_presentation {
+                return false;
+            }
+            if let Some((last, _)) = &self.presented_spatial[0] {
+                if receipt.presentation <= last.presentation {
+                    return receipt == *last;
+                }
+            }
+            let Some(issued) = self.issued_spatial.iter().flatten().find(|frame| {
+                receipt.session == frame.session
+                    && receipt.sequence == frame.sequence
+                    && receipt.view_revision == frame.view_revision
+            }) else {
+                return false;
+            };
+            self.presented_spatial[1] = self.presented_spatial[0].take();
+            self.presented_spatial[0] = Some((receipt, issued.frame.clone()));
+            true
+        }
+
         pub(crate) fn view(&self) -> Option<PointerPresentationView> {
             self.view
         }
@@ -158,6 +344,7 @@ mod admission {
             sequence: &mut u64,
         ) -> Result<(), String> {
             browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, true)?;
+            target.cancel_spatial_pointer_gestures();
             let retired = binding.map(|contact| {
                 let (pointer, view, viewport) = contact.identity_and_view();
                 RejectedSource {
@@ -202,11 +389,14 @@ mod admission {
             // Cancel before changing admission metadata; callback/sequence failure
             // must not claim that the old gesture was retired.
             browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, true)?;
+            target.cancel_spatial_pointer_gestures();
             if let Some(old) = self.presented {
                 self.retired_presentation = old.presentation;
             }
             self.view = Some(view);
             self.issued = None;
+            self.issued_spatial = [None, None];
+            self.presented_spatial = [None, None];
             self.presented = None;
             self.presented_frame = None;
             self.refresh_pending = true;
@@ -250,6 +440,23 @@ mod admission {
                     }))
         }
 
+        pub(crate) fn retire_planar_binding_if_changed(
+            &self,
+            frame: Option<&PointerFrameSnapshot>,
+            binding: &mut Option<BrowserPointerBinding>,
+        ) {
+            if self
+                .issued
+                .as_ref()
+                .zip(frame)
+                .is_some_and(|(previous, next)| {
+                    previous.frame.inspection_revision() != next.inspection_revision()
+                })
+            {
+                BrowserPointerBinding::retire_after_inspection(binding);
+            }
+        }
+
         pub(crate) fn issue(
             &mut self,
             session: u32,
@@ -272,8 +479,9 @@ mod admission {
             receipt: WorkerPointerReceipt,
         ) -> Result<bool, String> {
             receipt.validate()?;
+            let spatial_presented = self.note_spatial_presented(receipt);
             let Some(issued) = self.issued.as_ref() else {
-                return Ok(false);
+                return Ok(spatial_presented);
             };
             if receipt.session != issued.session
                 || receipt.sequence != issued.sequence
@@ -283,7 +491,7 @@ mod admission {
                     .presented
                     .is_some_and(|old| receipt.presentation <= old.presentation && receipt != old)
             {
-                return Ok(false);
+                return Ok(spatial_presented);
             }
             // A delayed renderer receipt may still describe the held contact's
             // visible mapping. Refresh hover only if that frame is current;
@@ -318,12 +526,18 @@ mod admission {
             receipt: WorkerPointerReceipt,
         ) -> Result<bool, String> {
             receipt.validate()?;
-            if self.presented != Some(receipt) {
+            if self.presented != Some(receipt)
+                && self.presented_spatial[0]
+                    .as_ref()
+                    .is_none_or(|(last, _)| *last != receipt)
+            {
                 return Ok(false);
             }
             // The physical source can deliver its eventual real release, but the
             // gesture cannot cross an unavailable surface.
             browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, false)?;
+            target.cancel_spatial_pointer_gestures();
+            self.presented_spatial = [None, None];
             self.retired_presentation = receipt.presentation;
             self.presented = None;
             self.presented_frame = None;
@@ -525,7 +739,9 @@ mod admission {
             // callback-only scenes. Keep callback admission strict for actual
             // subscribers and retire uninterested sources through the same
             // bounded rejection path (including their asynchronous packet tail).
-            let interested = binding.is_some() || target.has_native_pointer_subscribers();
+            let interested = binding.is_some()
+                || target.has_native_pointer_subscribers()
+                || (target.default_viewer_selection() && input.kind == BrowserPointerKind::Press);
             if let (true, false, Some(receipt), Some(issued)) = (
                 interested,
                 captured_continuation,
@@ -579,4 +795,4 @@ mod admission {
     }
 }
 #[cfg(any(target_arch = "wasm32", test))]
-pub(crate) use admission::WorkerPointerPresentation;
+pub(crate) use admission::{SpatialInput, WorkerPointerPresentation};

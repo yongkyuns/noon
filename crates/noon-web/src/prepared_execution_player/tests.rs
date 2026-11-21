@@ -1203,3 +1203,273 @@ fn prepared_video_wait_holds_the_shared_clock_and_mixer_at_the_same_pts_boundary
     assert_eq!(anchor(&player, 4_500.0)["time"], 0.0);
     assert_eq!(anchor(&player, 4_500.0)["playing"], false);
 }
+
+#[test]
+fn spatial_inspection_republishes_only_the_camera_and_survives_seek() {
+    use noon_core::{SemanticCamera3D, SemanticProjection3D, SemanticRotation3D, SemanticVec3};
+
+    let mut scene = Scene::new();
+    let camera = SemanticCamera3D::new(
+        SemanticVec3::new(0.0, 0.0, 10.0),
+        SemanticRotation3D::IDENTITY,
+        SemanticProjection3D::Perspective {
+            vertical_fov_radians: 0.6,
+            near: 0.1,
+            far: 100.0,
+        },
+    )
+    .unwrap();
+    scene.camera_3d(camera).unwrap();
+    let mut source = scene.into_execution().unwrap();
+    source
+        .session_mut()
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let segment = source.session_mut().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(1.0).unwrap();
+    let (_, reader) = source.session().create_prepared_prefix(segment).unwrap();
+    let mut player = PreparedExecutionPlayer::from_reader(reader, 312);
+    player.set_prepared_playing(false);
+    player
+        .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
+        .unwrap();
+    assert!(player.spatial_navigation());
+    let (mut mirror, _) = ready(&mut player);
+    let original = mirror.camera_3d_object().unwrap().clone();
+    let input =
+        r#"{"view_revision":1,"orbit":[0.2,0.1],"pan":[0.03,-0.05],"zoom":-0.3,"reset":false}"#;
+    assert!(!player
+        .move_spatial_inspection_json(
+            &input.replace(r#""view_revision":1"#, r#""view_revision":0"#)
+        )
+        .unwrap());
+    assert!(player.move_spatial_inspection_json(input).unwrap());
+
+    let json = player.drain_delta_json().unwrap().unwrap();
+    let delta = decode(&json).retained;
+    assert_eq!(delta.objects.len(), 1);
+    assert_eq!(delta.objects[0].object, original.id);
+    assert_eq!(delta.time, 0.0);
+    receive(&mut mirror, &json);
+    let inspected = mirror.camera_3d_object().unwrap().clone();
+    assert_ne!(inspected.world_transform(), original.world_transform());
+    assert_ne!(inspected.camera_projection(), original.camera_projection());
+    assert_eq!(source.session().camera_3d().unwrap(), Some(camera));
+
+    if let Some(json) = player.seek_delta_json(0.5).unwrap() {
+        receive(&mut mirror, &json);
+    }
+    assert_eq!(
+        mirror.camera_3d_object().unwrap().world_transform(),
+        inspected.world_transform()
+    );
+    assert!(player
+        .move_spatial_inspection_json(
+            r#"{"view_revision":1,"orbit":[0,0],"pan":[0,0],"zoom":0,"reset":true}"#,
+        )
+        .unwrap());
+    assert!(player.playback.reader.viewer_inspection_active());
+    assert!(player.tick_delta_json(1_000.0).unwrap().is_none());
+    let halfway = player.tick_delta_json(1_175.0).unwrap().unwrap();
+    receive(&mut mirror, &halfway);
+    let midway = mirror.camera_3d_object().unwrap();
+    assert_ne!(midway.world_transform(), inspected.world_transform());
+    assert_ne!(midway.world_transform(), original.world_transform());
+    receive(
+        &mut mirror,
+        &player.tick_delta_json(1_400.0).unwrap().unwrap(),
+    );
+    assert!(!player.playback.reader.viewer_inspection_active());
+    assert_eq!(
+        mirror.camera_3d_object().unwrap().world_transform(),
+        original.world_transform()
+    );
+    assert_eq!(
+        mirror.camera_3d_object().unwrap().camera_projection(),
+        original.camera_projection()
+    );
+}
+
+#[test]
+fn spatial_click_highlights_the_front_mesh_without_mutating_its_authored_style() {
+    use noon_core::{
+        MeshResource, SemanticCamera3D, SemanticProjection3D, SemanticRotation3D, SemanticVec3,
+        SemanticWorldTransform3D,
+    };
+
+    let mut scene = Scene::new();
+    scene
+        .camera_3d(
+            SemanticCamera3D::new(
+                SemanticVec3::new(0.0, 0.0, 10.0),
+                SemanticRotation3D::IDENTITY,
+                SemanticProjection3D::Orthographic {
+                    height: 8.0,
+                    near: 0.1,
+                    far: 100.0,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let triangle = MeshResource::new(
+        vec![
+            SemanticVec3::new(-2.0, -2.0, 0.0),
+            SemanticVec3::new(2.0, -2.0, 0.0),
+            SemanticVec3::new(0.0, 2.0, 0.0),
+        ],
+        None,
+        vec![0, 1, 2],
+    )
+    .unwrap();
+    let near = scene
+        .mesh(
+            noon::MeshOptions::new(triangle.clone()).with_transform(SemanticWorldTransform3D {
+                translation: SemanticVec3::new(0.0, 0.0, 2.0),
+                ..SemanticWorldTransform3D::IDENTITY
+            }),
+        )
+        .unwrap();
+    let far = scene.mesh(noon::MeshOptions::new(triangle)).unwrap();
+    scene.add(&near).unwrap();
+    scene.add(&far).unwrap();
+    let target = noon_compile::semantic_execution_object_id(near.node_id());
+    let mut source = scene.into_execution().unwrap();
+    source
+        .session_mut()
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let segment = source.session_mut().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(1.0).unwrap();
+    let (_, reader) = source.session().create_prepared_prefix(segment).unwrap();
+    let mut player = PreparedExecutionPlayer::from_reader(reader, 313);
+    player.set_prepared_playing(false);
+    player
+        .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
+        .unwrap();
+    let (mut mirror, first_receipt) = ready(&mut player);
+    let scroll = r#"{"view_revision":1,"orbit":[0,0],"pan":[0,0],"zoom":0.1,"reset":false}"#;
+    assert!(player.move_spatial_inspection_json(scroll).unwrap());
+    let presented = player.drain_delta_json().unwrap().unwrap();
+    receive(&mut mirror, &presented);
+    assert!(player.move_spatial_inspection_json(scroll).unwrap());
+    receive(&mut mirror, &player.drain_delta_json().unwrap().unwrap());
+    // Presentation can arrive after the engine has issued another camera frame.
+    let receipt = WorkerPointerReceipt {
+        sequence: decode(&presented).retained.sequence,
+        presentation: first_receipt.presentation + 1,
+        ..first_receipt
+    };
+    assert!(player
+        .note_pointer_presentation_json(&serde_json::to_string(&receipt).unwrap())
+        .unwrap());
+    let sample = |phase, time, x| {
+        serde_json::json!({
+        "view_revision":1, "presentation":receipt,
+        "samples":[{"id":2,"phase":phase,"x":x,"y":0.5,"timestamp_ms":time,"touch":false,"pan":false}],
+    }).to_string()
+    };
+    let original = mirror
+        .frame()
+        .unwrap()
+        .objects
+        .iter()
+        .find(|row| row.id == target)
+        .unwrap()
+        .style
+        .fill;
+    assert!(!player
+        .move_spatial_inspection_json(&sample("press", 0, 1.0))
+        .unwrap());
+    assert!(player
+        .move_spatial_inspection_json(&sample("release", 10, 1.0))
+        .unwrap());
+    let json = player.drain_delta_json().unwrap().unwrap();
+    let delta = decode(&json).retained;
+    assert_eq!(delta.objects.len(), 1);
+    assert_eq!(delta.objects[0].object, target);
+    assert_ne!(delta.objects[0].style.fill, original);
+    assert_eq!(delta.time, 0.0);
+    receive(&mut mirror, &json);
+    assert_eq!(
+        source
+            .session()
+            .frame()
+            .objects
+            .iter()
+            .find(|row| row.id == target)
+            .unwrap()
+            .style
+            .fill,
+        original,
+    );
+    // A background click clears the tint using the original retained style.
+    assert!(!player
+        .move_spatial_inspection_json(&sample("press", 500, 0.1))
+        .unwrap());
+    assert!(player
+        .move_spatial_inspection_json(&sample("release", 510, 0.1))
+        .unwrap());
+    let delta = decode(&player.drain_delta_json().unwrap().unwrap()).retained;
+    assert_eq!(delta.objects[0].style.fill, original);
+}
+
+#[test]
+fn default_planar_viewer_selects_on_demand_and_pans_without_scene_rows() {
+    let mut scene = Scene::new();
+    let mut circle = scene.circle(0.75).unwrap();
+    circle.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
+    scene.add(&circle).unwrap();
+    let mut source = scene.into_execution().unwrap();
+    source
+        .session_mut()
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let segment = source.session_mut().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(1.0).unwrap();
+    let (_, reader) = source.session().create_prepared_prefix(segment).unwrap();
+    let mut player = PreparedExecutionPlayer::from_reader(reader, 314);
+    player.set_prepared_playing(false);
+    player.enable_default_viewer_selection();
+    assert_eq!(player.viewer_pointer_motion(), Some(false));
+    player
+        .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
+        .unwrap();
+    let (mut mirror, receipt) = ready(&mut player);
+    assert!(player.tick_delta_json(1_000.0).unwrap().is_none());
+    assert!(input(&mut player, "press", receipt, 1));
+    assert!(input(&mut player, "release", receipt, 1));
+    let selected = player.drain_delta_json().unwrap().unwrap();
+    assert!(decode(&selected).selection_overlay.is_some());
+    receive(&mut mirror, &selected);
+    assert!(player.tick_delta_json(1_100.0).unwrap().is_none());
+
+    assert!(player
+        .move_spatial_inspection_json(
+            r#"{"view_revision":1,"orbit":[0,0],"pan":[0.25,0.125],"zoom":0,"reset":false}"#,
+        )
+        .unwrap());
+    let panned = player.drain_delta_json().unwrap().unwrap();
+    let delta = decode(&panned).retained;
+    assert_eq!(delta.camera.center, noon_core::Vec2::new(-2.0, 1.0));
+    assert_eq!(delta.time, 0.0);
+    assert!(delta.objects.is_empty());
+    receive(&mut mirror, &panned);
+    assert_eq!(mirror.camera().center, delta.camera.center);
+    assert!(player
+        .move_spatial_inspection_json(
+            r#"{"view_revision":1,"orbit":[0,0],"pan":[0,0],"zoom":0,"reset":true}"#,
+        )
+        .unwrap());
+    assert_eq!(
+        player.execution_wake(1_110.0).unwrap().cadence(),
+        "animation_frame"
+    );
+    assert!(player.tick_delta_json(1_120.0).unwrap().is_none());
+    let middle = decode(&player.tick_delta_json(1_295.0).unwrap().unwrap()).retained;
+    assert_eq!(middle.time, 0.0);
+    assert_eq!(middle.camera.center, noon_core::Vec2::new(-1.0, 0.5));
+    let restored = decode(&player.tick_delta_json(1_500.0).unwrap().unwrap()).retained;
+    assert_eq!(restored.camera, noon_core::Camera2DState::default());
+    assert_eq!(player.execution_wake(1_500.0).unwrap().cadence(), "idle");
+}
