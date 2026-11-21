@@ -106,6 +106,25 @@ impl VideoPresentation {
 
 #[cfg(all(target_arch = "wasm32", feature = "web"))]
 impl GpuRenderer {
+    pub fn has_video_frame(&self, handle: RasterImageResourceHandle, index: usize) -> bool {
+        self.images
+            .as_ref()
+            .is_some_and(|images| images.has_video_frame(handle, index))
+    }
+
+    /// Upload CPU pixels on a browser adapter without usable external copies.
+    pub fn write_rgba_video_frame(
+        &mut self,
+        queue: &wgpu::Queue,
+        handle: RasterImageResourceHandle,
+        index: usize,
+        pixels: &[u8],
+    ) -> io::Result<usize> {
+        self.images.as_mut().map_or(Ok(0), |images| {
+            images.write_video_frame(queue, handle, Some((index, pixels)))
+        })
+    }
+
     /// Upload a browser-owned frame into the same retained raster slot used by
     /// native video. The caller resolves the frame index from Rust scene time.
     pub fn write_external_video_frame(

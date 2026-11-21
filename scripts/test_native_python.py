@@ -22,12 +22,8 @@ class NativePythonTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as scratch:
             directory = Path(scratch)
             clip, silent = directory / "clip.mp4", directory / "silent.mp4"
-            subprocess.run([
-                "ffmpeg", "-v", "error", "-f", "lavfi", "-i",
-                "testsrc2=size=96x54:rate=12:duration=1",
-                "-f", "lavfi", "-i", "sine=frequency=800:duration=1",
-                "-c:v", "libx264", "-c:a", "aac", str(clip),
-            ], check=True)
+            fixture = ROOT / "crates/noon-export/tests/fixtures/video-pts-and-click.ffmpeg"
+            subprocess.run(["ffmpeg", *fixture.read_text().splitlines(), str(clip)], check=True)
             subprocess.run([
                 "ffmpeg", "-v", "error", "-i", str(clip),
                 "-map", "0:v:0", "-c", "copy", str(silent),

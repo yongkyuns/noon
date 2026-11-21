@@ -511,6 +511,13 @@ impl RasterImageGpuRenderer {
     }
 
     #[cfg(all(target_arch = "wasm32", feature = "web"))]
+    pub(super) fn has_video_frame(&self, handle: RasterImageResourceHandle, index: usize) -> bool {
+        self.textures
+            .get(&handle)
+            .is_some_and(|texture| texture.video_frame == Some(index))
+    }
+
+    #[cfg(all(target_arch = "wasm32", feature = "web"))]
     pub(super) fn write_external_video_frame(
         &mut self,
         queue: &wgpu::Queue,

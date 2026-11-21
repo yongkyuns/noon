@@ -221,9 +221,14 @@ mod wasm {
         preload_bytes_uploaded: usize,
     }
 
+    enum BrowserVideoPixels {
+        External(wgpu::ExternalImageSource),
+        Rgba(js_sys::Uint8Array),
+    }
+
     type BrowserRasterFrame = (
         noon_core::RasterImageResourceHandle,
-        Option<(usize, wgpu::ExternalImageSource)>,
+        Option<(usize, BrowserVideoPixels)>,
     );
 
     /// Render-worker endpoint for `noon.execution.retained`.
@@ -247,6 +252,7 @@ mod wasm {
         mirror: InstalledRetainedExecutionMirror,
         pending_frame: bool,
         video_frame_provider: Option<js_sys::Function>,
+        video_uses_cpu_pixels: bool,
         pending_changes: FrameChanges,
         // Renderer-side capability bit, derived only from admitted worker rows.
         // Ordinary no-glow sessions retain the original zero-extra-work path.
@@ -412,6 +418,10 @@ mod wasm {
                 preload_bytes_uploaded,
             } = build_retained_gpu_state(&mirror, &device, &queue, config.format)?;
 
+            // Software WebGPU can accept a hardware-backed ImageBitmap copy
+            // without making its pixels available to the software texture.
+            let video_uses_cpu_pixels = backend == wgpu::Backend::BrowserWebGpu
+                && device.adapter_info().device_type == wgpu::DeviceType::Cpu;
             let mut result = Self {
                 instance,
                 surface,
@@ -426,6 +436,7 @@ mod wasm {
                 mirror,
                 pending_frame: false,
                 video_frame_provider: None,
+                video_uses_cpu_pixels,
                 pending_changes: FrameChanges::default(),
                 glow_transport_seen: false,
                 preparer,
@@ -960,7 +971,7 @@ mod wasm {
             Ok(())
         }
 
-        /// The codec host lends a ready bitmap for a Rust-selected frame.
+        /// The codec host lends ready pixels for a Rust-selected frame.
         #[wasm_bindgen(js_name = setVideoFrameProvider)]
         pub fn set_video_frame_provider(&mut self, provider: js_sys::Function) {
             self.video_frame_provider = Some(provider);
@@ -1201,11 +1212,28 @@ mod wasm {
             );
             let mut video_bytes = 0usize;
             for (handle, frame) in video_frames {
-                video_bytes = video_bytes.saturating_add(
-                    self.renderer
-                        .write_external_video_frame(&self.queue, handle, frame)
-                        .map_err(js_error)?,
-                );
+                let bytes = match frame {
+                    Some((index, BrowserVideoPixels::Rgba(pixels))) => {
+                        if self.renderer.has_video_frame(handle, index) {
+                            Ok(0)
+                        } else {
+                            self.renderer.write_rgba_video_frame(
+                                &self.queue,
+                                handle,
+                                index,
+                                &pixels.to_vec(),
+                            )
+                        }
+                    }
+                    Some((index, BrowserVideoPixels::External(image))) => self
+                        .renderer
+                        .write_external_video_frame(&self.queue, handle, Some((index, image))),
+                    None => self
+                        .renderer
+                        .write_external_video_frame(&self.queue, handle, None),
+                }
+                .map_err(js_error)?;
+                video_bytes = video_bytes.saturating_add(bytes);
             }
             self.last_bytes_uploaded = upload
                 .bytes_uploaded()
@@ -1720,20 +1748,28 @@ mod wasm {
                         .external_asset_id()
                         .ok_or_else(|| js_message("video raster has no browser asset identity"))?;
                     let clip = format!("{}:{}", origin.arena, origin.id);
-                    let bitmap = provider.call3(
+                    let pixels = provider.call4(
                         &JsValue::NULL,
                         &asset_id.into(),
                         &clip.into(),
                         &(index as u32).into(),
+                        &self.video_uses_cpu_pixels.into(),
                     )?;
-                    if bitmap.is_null() || bitmap.is_undefined() {
+                    if pixels.is_null() || pixels.is_undefined() {
                         ready = false;
                         continue;
                     }
-                    let bitmap = bitmap.dyn_into::<web_sys::ImageBitmap>().map_err(|_| {
-                        js_message("browser video provider returned an invalid bitmap")
-                    })?;
-                    Some((index, wgpu::ExternalImageSource::ImageBitmap(bitmap)))
+                    let pixels = if self.video_uses_cpu_pixels {
+                        BrowserVideoPixels::Rgba(pixels.dyn_into::<js_sys::Uint8Array>().map_err(
+                            |_| js_message("software WebGPU requires RGBA video pixels"),
+                        )?)
+                    } else {
+                        let bitmap = pixels.dyn_into::<web_sys::ImageBitmap>().map_err(|_| {
+                            js_message("browser video provider returned an invalid bitmap")
+                        })?;
+                        BrowserVideoPixels::External(wgpu::ExternalImageSource::ImageBitmap(bitmap))
+                    };
+                    Some((index, pixels))
                 } else {
                     None
                 };

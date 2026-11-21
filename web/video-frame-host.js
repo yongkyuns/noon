@@ -11,6 +11,7 @@ export class VideoFrameHost {
   #fail;
   #waiting = false;
   #resolve = null;
+  #readback = null;
 
   constructor(wake, publish, fail) {
     this.#wake = wake;
@@ -32,7 +33,7 @@ export class VideoFrameHost {
   beginPresent() { this.#waiting = false; }
   wait() { return new Promise(resolve => { this.#resolve = resolve; }); }
 
-  request(assetId, key, index) {
+  request(assetId, key, index, cpuPixels = false) {
     let clip = this.#clips.get(key);
     if (!clip) {
       const asset = this.#assets.get(assetId);
@@ -51,7 +52,24 @@ export class VideoFrameHost {
     clip.index = index;
     const bitmap = this.#request(key, clip);
     this.#waiting ||= bitmap === null;
-    return bitmap;
+    return bitmap !== null && cpuPixels ? this.#rgba(clip, bitmap) : bitmap;
+  }
+
+  #rgba(clip, bitmap) {
+    if (clip.rgba?.index !== clip.index) {
+      this.#readback ??= new OffscreenCanvas(1, 1).getContext("2d", {willReadFrequently: true});
+      const context = this.#readback;
+      if (!context) throw new Error("software WebGPU requires a canvas for decoded video pixels");
+      const {width, height} = bitmap;
+      if (context.canvas.width !== width || context.canvas.height !== height) {
+        context.canvas.width = width;
+        context.canvas.height = height;
+      }
+      context.drawImage(bitmap, 0, 0);
+      const {buffer, byteOffset, byteLength} = context.getImageData(0, 0, width, height).data;
+      clip.rgba = {index: clip.index, bytes: new Uint8Array(buffer, byteOffset, byteLength)};
+    }
+    return clip.rgba.bytes;
   }
 
   prepare({assetId, clip, index}) {
@@ -66,6 +84,7 @@ export class VideoFrameHost {
     for (const clip of this.#clips.values()) clip.window?.close();
     this.#clips.clear();
     this.#assets.clear();
+    this.#readback = null;
     this.#resolve?.();
     this.#resolve = null;
   }

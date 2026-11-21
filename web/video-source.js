@@ -1,7 +1,7 @@
 // MP4 input and WebCodecs output. Noon supplies the requested frame index and
 // owns playback time. This module owns only compressed samples and decoded pixels.
 
-const MAX_FILE_BYTES = 128 * 1024 * 1024;
+export const MAX_VIDEO_FILE_BYTES = 128 * 1024 * 1024;
 const MAX_SECONDS = 60;
 const MAX_FRAMES = 7200;
 const READ_BYTES = 1024 * 1024;
@@ -25,7 +25,7 @@ function checkSignal(signal) {
 
 /// Decode independently of any HTML media element and its clock.
 export async function openMp4(blob, mp4, signal) {
-  if (!(blob instanceof Blob) || blob.size === 0 || blob.size > MAX_FILE_BYTES) {
+  if (!(blob instanceof Blob) || blob.size === 0 || blob.size > MAX_VIDEO_FILE_BYTES) {
     throw videoImportError("use a nonempty local MP4 up to 128 MiB");
   }
   const file = mp4.createFile(false);

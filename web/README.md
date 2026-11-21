@@ -232,6 +232,15 @@ result.wait(2.5)
 This example uses at least two seconds of source footage. The existing slider
 scrubs silently when paused. Select **Play with sound** to start an audible clip.
 
+For MP4 export, save this example as `scene.py` and omit the final `wait` line.
+The trimmed clip supplies the finite duration. Run the existing exporter after
+building the browser package.
+
+```bash
+node scripts/export-python-scene.mjs scene.py /tmp/noon-video-capture \
+  --video clip.mp4 --mp4 scene.mp4 --fps 30000/1001
+```
+
 ## Live authoring
 
 Edit **Python scene source** and click **Run** to author and attach a shared semantic execution session. Turn on **Auto-run** to submit edits after a 500 ms pause. Both use the same full scene restart. Within a running session, shared Rust semantics own object identity and mutations.

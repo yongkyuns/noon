@@ -17,38 +17,7 @@ fn native_video_seek_and_export_preserve_pts_and_soundtrack() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("vfr.mp4");
     let output = Command::new("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-nostdin",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc2=size=96x54:rate=12:duration=2",
-            "-itsoffset",
-            "0.25",
-            "-f",
-            "lavfi",
-            "-i",
-            "aevalsrc=if(lt(t\\,0.025)\\,0.5*sin(2*PI*1800*t)\\,0):s=48000:d=1.7",
-            "-vf",
-            "drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable=eq(n\\,3),select=not(eq(mod(n\\,5)\\,2))",
-            "-fps_mode",
-            "vfr",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-g",
-            "6",
-            "-bf",
-            "2",
-            "-sc_threshold",
-            "0",
-            "-c:a",
-            "aac",
-        ])
+        .args(include_str!("fixtures/video-pts-and-click.ffmpeg").lines())
         .arg(&path)
         .output()
         .expect("run FFmpeg fixture generator");
@@ -183,7 +152,7 @@ fn native_video_seek_and_export_preserve_pts_and_soundtrack() {
         let first = frames.next().unwrap();
         assert_eq!(first.iter().any(|&pixel| pixel > 25), start_frame != 0);
         let flash = frames
-            .position(|frame| frame.iter().all(|&pixel| pixel > 170))
+            .position(|frame| frame[128 * 72 * 3 / 4..].iter().all(|&pixel| pixel > 170))
             .expect("source flash must appear in the rendered clip")
             + 1;
         let visual_time = flash as f64 * (1001.0 / 30_000.0);
