@@ -6,6 +6,7 @@ use noon::{
     integration::{ExportFrameOptions, ExportStop, FrameRate},
     NativeVideoAsset, NativeVideoCache, Scene,
 };
+use noon_core::Vec2;
 use noon_export::{
     output::{export_scene_file, OutputOptions},
     CaptureOptions, SessionCapture,
@@ -81,6 +82,8 @@ fn native_video_seek_and_export_preserve_pts_and_soundtrack() {
     let scene_end = 1.225;
     let mut scene = Scene::new();
     let video = scene.video(asset, 0.1, 0.125..1.25, 8.0).unwrap();
+    scene.scale(&video, 0.5, 0.5).unwrap();
+    scene.shift(&video, Vec2::new(1.0, 0.0)).unwrap();
     scene.set_opacity(&video, 0.8).unwrap();
     let mut scene = scene.into_execution().unwrap();
     let session = scene.session();
@@ -90,26 +93,41 @@ fn native_video_seek_and_export_preserve_pts_and_soundtrack() {
 
     let capture_options = CaptureOptions::new(128, 72);
     let mut capture = SessionCapture::new(scene.session(), capture_options.clone()).unwrap();
+    scene.seek(0.1).unwrap();
+    let entry = capture.capture(scene.session_mut()).unwrap().rgba.to_vec();
+    assert!(entry.chunks_exact(4).any(|pixel| pixel[0..3] != [0, 0, 0]));
     scene.seek(0.4).unwrap();
     let late = capture.capture(scene.session_mut()).unwrap().rgba.to_vec();
-    assert!(late.iter().any(|&byte| (1..220).contains(&byte)));
     scene.seek(0.2).unwrap();
     let early = capture.capture(scene.session_mut()).unwrap().rgba.to_vec();
     assert_ne!(early, late);
-    scene.seek(0.4).unwrap();
+    scene.session_mut().advance_to(0.4).unwrap();
     assert_eq!(capture.capture(scene.session_mut()).unwrap().rgba, late);
     let paused = capture.capture(scene.session_mut()).unwrap();
     assert_eq!(paused.receipt.work.retained_upload_bytes, 0);
     assert_eq!(paused.rgba, late);
-    scene.seek(0.0).unwrap();
-    assert!(capture
-        .capture(scene.session_mut())
-        .unwrap()
-        .rgba
-        .as_chunks::<4>()
-        .0
+    scene.seek(0.26).unwrap();
+    let flash = capture.capture(scene.session_mut()).unwrap();
+    let pixel = |x: usize, y: usize| &flash.rgba[(y * 128 + x) * 4..][..4];
+    assert!(pixel(64, 36)[..3]
         .iter()
-        .all(|pixel| *pixel == [0, 0, 0, 255]));
+        .all(|value| (195..=210).contains(value)));
+    assert_eq!(pixel(36, 36), &[0, 0, 0, 255]);
+    assert_eq!(pixel(64, 15), &[0, 0, 0, 255]);
+    for time in [scene_end, 0.0] {
+        scene.seek(time).unwrap();
+        assert!(capture
+            .capture(scene.session_mut())
+            .unwrap()
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| *pixel == [0, 0, 0, 255]));
+    }
+    scene.session_mut().advance_to(0.1).unwrap();
+    assert_eq!(capture.capture(scene.session_mut()).unwrap().rgba, entry);
+    scene.seek(0.0).unwrap();
 
     drop(capture);
     let fps = FrameRate::new(30_000, 1_001).unwrap();
@@ -152,7 +170,11 @@ fn native_video_seek_and_export_preserve_pts_and_soundtrack() {
         let first = frames.next().unwrap();
         assert_eq!(first.iter().any(|&pixel| pixel > 25), start_frame != 0);
         let flash = frames
-            .position(|frame| frame[128 * 72 * 3 / 4..].iter().all(|&pixel| pixel > 170))
+            .position(|frame| {
+                frame[(36 * 128 + 64) * 3..][..3]
+                    .iter()
+                    .all(|&pixel| pixel > 170)
+            })
             .expect("source flash must appear in the rendered clip")
             + 1;
         let visual_time = flash as f64 * (1001.0 / 30_000.0);

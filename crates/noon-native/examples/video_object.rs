@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use noon::{AnimationOptions, NativeVideoAsset, Scene};
-use noon_core::{SemanticAnimationCompositionKind, SemanticAnimationIntent};
+use noon::{NativeVideoAsset, Scene};
+use noon_core::{RateFunction, SemanticVec3};
 use noon_native::NativeViewportConfig;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,19 +14,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let duration = asset.frame_index().duration();
     let mut scene = Scene::new();
     let video = scene.video(asset, 0.0, 0.0..duration, 6.0)?;
-    let mut target = video.copy_handle()?;
-    target.shift(1.5, 0.0)?;
-    let motion =
-        scene.declare_transform_to(&video, &target, AnimationOptions::new().run_time(duration))?;
-    let root = scene.declare_animation(
-        SemanticAnimationIntent::Composition {
-            kind: SemanticAnimationCompositionKind::Parallel,
-            children: vec![motion.node_id()],
-        },
-        AnimationOptions::new(),
+    let translation = scene.value_tracker(0.0)?;
+    let position = scene.position_from_tracker(
+        &translation,
+        SemanticVec3::new(1.0, 0.0, 0.0),
+        SemanticVec3::new(0.0, 0.0, 0.0),
     )?;
+    scene.bind_position(&video, &position)?;
+    scene
+        .play_value(&translation, 1.5)
+        .rate_func(RateFunction::Linear)
+        .run_time(2.0)?;
     noon_native::run_with_config(
-        scene.into_execution_with_animation_root(&root)?,
+        scene.into_execution()?,
         NativeViewportConfig {
             title: "Noon video object".into(),
             playback_controls: true,
