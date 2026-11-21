@@ -4,10 +4,12 @@
 // Hold DOM capture across canvas boundaries so Rust still receives the release.
 import { wheelLinePixels, wheelDeltaCssPixels } from "./browser-wheel-units.js";
 
+export const MAX_BROWSER_POINTER_SAMPLES = 256;
+
 const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
 
 export function attachBrowserPointerInput(canvas, {
-  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, onWheel, asynchronousWheel = false, windowTarget = window, registeredView = null,
+  signal, isCurrent, send, sendMotionBatch, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, onWheel, asynchronousWheel = false, windowTarget = window, registeredView = null,
 }) {
   if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
     throw new RangeError("browser pointer sample capacity must be a positive safe integer");
@@ -68,7 +70,7 @@ export function attachBrowserPointerInput(canvas, {
     if (changed) onView?.(viewRevision(), rect.width, rect.height);
     return rect;
   };
-  const receive = (type, event, receiptRect = null) => {
+  const receive = (type, event, receiptRect = null, deliver = send) => {
     if (!active()) return;
     // -1 is the non-pointing-device ID, not a source for pointer gestures.
     if (event.isPrimary !== true || event.pointerId === -1) return;
@@ -131,7 +133,7 @@ export function attachBrowserPointerInput(canvas, {
       selected = { id: event.pointerId, source: allocateSource(), buttons: 0, viewRevision: viewRevision() };
     }
     const contact = selected;
-    const admitted = send({
+    const admitted = deliver({
       kind, source_id: contact.source, pointer_id: contact.id,
       surface_x: event.clientX - rect.left, surface_y: event.clientY - rect.top,
       viewport_width: rect.width, viewport_height: rect.height,
@@ -189,9 +191,15 @@ export function attachBrowserPointerInput(canvas, {
     // This is receipt-time mapping, not historical displayed-frame association.
     const rect = currentView();
     if (rect === null || (initialButtons !== 0 && selected === null)) return;
+    // Hold one worker reservation for an entire motion packet. Button
+    // transitions keep the ordinary occurrence path and its ordering.
+    const motions = sendMotionBatch && samples.length > 1 && samples.every(sample => sample.button === -1)
+      ? [] : null;
+    const deliver = motions === null ? send : input => { motions.push(input); };
     for (const sample of samples) {
-      if (!active() || !receive(type, sample, rect)) break;
+      if (!active() || !receive(type, sample, rect, deliver)) break;
     }
+    if (active() && motions?.length) sendMotionBatch(motions);
   };
   const guard = operation => event => {
     try { operation(event); } catch (error) { onError(error); }
@@ -256,9 +264,9 @@ export function attachBrowserPointerInput(canvas, {
   } };
 }
 
-// Validate and snapshot the complete bounded packet before any delivery. There
-// is no retained queue or frontend gesture policy here. Each sample still uses
-// the existing session-ordered producer reservation and acknowledgement path.
+// Validate and snapshot the complete bounded packet before any delivery. The
+// worker receives a pure motion packet in one request and applies its samples
+// in order. The direct host continues to admit individual occurrences.
 function coalescedSamples(event, initialButtons, capacity) {
   const events = event.getCoalescedEvents();
   if (!Array.isArray(events)) throw new TypeError("invalid DOM coalesced sample list");

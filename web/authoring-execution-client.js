@@ -1,5 +1,5 @@
-import { ExecutionWorkerClient, ExecutionTransitionCancelled, MAX_IN_FLIGHT_NATIVE_INPUTS } from "./execution-worker-client.js";
-import { attachBrowserPointerInput } from "./browser-pointer-input.js";
+import { ExecutionWorkerClient, ExecutionTransitionCancelled } from "./execution-worker-client.js";
+import { attachBrowserPointerInput, MAX_BROWSER_POINTER_SAMPLES } from "./browser-pointer-input.js";
 import { DEFAULT_SHARED_SLOT_CAPACITY } from "./execution-transport.js";
 
 export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
@@ -624,13 +624,14 @@ export class AuthoringExecutionClient {
     };
     const submit = input => {
       if (signal.aborted || this.#player !== player || this.#transition !== null) return;
-      lastInput = input;
+      const lastOccurrence = Array.isArray(input) ? input.at(-1) : input;
+      lastInput = lastOccurrence;
       const preceding = previousDelivery;
       const delivery = player.submitBrowserPointerInput(input);
       previousDelivery = delivery;
       void delivery.then(result => {
         if (result.pointerInputAccepted === false && this.#pointerAbortController === controller) {
-          this.#pointerCollector?.retireSource(input.source_id);
+          this.#pointerCollector?.retireSource(lastOccurrence.source_id);
         }
       }).catch(error => fault(error, preceding));
     };
@@ -640,6 +641,7 @@ export class AuthoringExecutionClient {
       isCurrent: () => this.#player === player && this.#lifecycleGeneration === generation &&
         this.#transition === null,
       send: submit,
+      sendMotionBatch: submit,
       allocateSource: () => {
         if (this.#pointerSourceSequence >= Number.MAX_SAFE_INTEGER) {
           throw new Error("browser pointer source sequence exhausted");
@@ -649,7 +651,7 @@ export class AuthoringExecutionClient {
       viewRevision: () => this.#pointerViewRevision,
       advanceView: () => this.#advancePointerView(),
       onError: error => { void fault(error); },
-      maxSamples: MAX_IN_FLIGHT_NATIVE_INPUTS,
+      maxSamples: MAX_BROWSER_POINTER_SAMPLES,
       asynchronousWheel: true,
       onWheel: input => {
         // A DOM wheel has no associated pointer identity. Retain its own cursor

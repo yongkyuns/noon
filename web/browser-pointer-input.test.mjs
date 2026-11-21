@@ -60,6 +60,7 @@ async function prepare(client) {
 }
 
 const { MAX_IN_FLIGHT_NATIVE_INPUTS } = await import("./execution-worker-client.js");
+const { MAX_BROWSER_POINTER_SAMPLES } = await import("./browser-pointer-input.js");
 const inputTurn = () => new Promise(resolve => setImmediate(resolve));
 
 async function startInputClient(t, canvas = new FakeCanvas(), callbacks = {}) {
@@ -148,9 +149,9 @@ test("a viewport changed while startup waits registers its actual dimensions", a
 
 // Unwrap only for the pre-existing collector assertions; worker receipt tests
 // below assert the full immutable wire envelope independently.
-const pointerMessages = engine => engine.messages
-  .filter(message => message.type === "browser_pointer_input")
-  .map(({ input, ...envelope }) => ({ ...envelope, ...input }));
+const pointerRequests = engine => engine.messages.filter(message => message.type === "browser_pointer_input");
+const pointerMessages = engine => pointerRequests(engine).flatMap(({ input, ...envelope }) =>
+  (Array.isArray(input) ? input : [input]).map(sample => ({ ...envelope, ...sample })));
 
 // Supply raw samples; browsers can copy one parent button label into several
 // samples. Test the real collector/client route, not a second click recognizer.
@@ -165,7 +166,7 @@ function coalescedSamples(values) {
 }
 
 function acknowledgePointers(engine) {
-  for (const message of pointerMessages(engine)) {
+  for (const message of pointerRequests(engine)) {
     engine.emitMessage(envelope("noon.engine", message.type, { requestId: message.requestId }));
   }
 }
@@ -420,7 +421,7 @@ test("oversized coalesced packets fail before walking samples or posting a trunc
   const dom = pointerCanvas(t);
   const errors = [];
   const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
-  const oversized = new Array(MAX_IN_FLIGHT_NATIVE_INPUTS + 1);
+  const oversized = new Array(MAX_BROWSER_POINTER_SAMPLES + 1);
   Object.defineProperty(oversized, 0, { get() { assert.fail("size must be checked before visiting samples"); } });
   dom.emit("pointermove", { getCoalescedEvents: () => oversized });
   dom.emit("pointerdown");
@@ -430,14 +431,31 @@ test("oversized coalesced packets fail before walking samples or posting a trunc
   assert.equal(pointerMessages(engine).length, 0);
 });
 
-test("coalesced packets use the existing aggregate producer bound and ordered overflow cleanup", async t => {
+test("motion batches leave room for a quick release before any acknowledgements", async t => {
   const dom = pointerCanvas(t);
   const errors = [];
   const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
   dom.emit("pointerdown");
-  dom.emit("pointermove", { getCoalescedEvents: coalescedSamples(
-    Array.from({ length: MAX_IN_FLIGHT_NATIVE_INPUTS }, (_, i) => ({ clientX: 110 + i })),
-  ) });
+  const motion = coalescedSamples(Array.from({ length: 48 }, (_, i) => ({ clientX: 110 + i })));
+  dom.emit("pointermove", { getCoalescedEvents: motion });
+  dom.emit("pointermove", { getCoalescedEvents: motion });
+  dom.emit("pointermove", { getCoalescedEvents: motion });
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerRequests(engine).map(({ input }) => Array.isArray(input) ? input.length : input.kind),
+    ["press", 48, 48, 48, "release"]);
+  assert.deepEqual(errors, []);
+  acknowledgePointers(engine);
+});
+
+test("separate requests still enforce the aggregate producer bound and ordered cleanup", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
+  dom.emit("pointerdown");
+  for (let i = 0; i < MAX_IN_FLIGHT_NATIVE_INPUTS; i += 1) {
+    dom.emit("pointermove", { clientX: 110 + i });
+  }
   await inputTurn();
   assert.equal(pointerMessages(engine).length, MAX_IN_FLIGHT_NATIVE_INPUTS);
   assert.equal(errors.length, 1);
@@ -467,12 +485,13 @@ test("an exactly capacity-sized coalesced packet forwards all samples without a 
   const errors = [];
   const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
   dom.emit("pointermove", { getCoalescedEvents: coalescedSamples(
-    Array.from({ length: MAX_IN_FLIGHT_NATIVE_INPUTS }, (_, i) => ({ clientX: 110 + i })),
+    Array.from({ length: MAX_BROWSER_POINTER_SAMPLES }, (_, i) => ({ clientX: 110 + i })),
   ) });
   await inputTurn();
+  assert.equal(pointerRequests(engine).length, 1);
   const messages = pointerMessages(engine);
-  assert.equal(messages.length, MAX_IN_FLIGHT_NATIVE_INPUTS);
-  assert.deepEqual(messages.map(m => m.surface_x), Array.from({ length: MAX_IN_FLIGHT_NATIVE_INPUTS }, (_, i) => 100 + i));
+  assert.equal(messages.length, MAX_BROWSER_POINTER_SAMPLES);
+  assert.deepEqual(messages.map(m => m.surface_x), Array.from({ length: MAX_BROWSER_POINTER_SAMPLES }, (_, i) => 100 + i));
   assert.equal(errors.length, 0);
 });
 
