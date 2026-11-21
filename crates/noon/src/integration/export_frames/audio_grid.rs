@@ -41,28 +41,17 @@ impl ExportAudioGrid {
         let byte_len = frames
             .checked_mul(u64::from(format.channels()) * 4)
             .ok_or(ExportAudioGridError::UnrepresentableFrameCount)?;
-        let rate = f64::from(format.sample_rate());
-        if !(sampling.start_time + frames as f64 / rate).is_finite() {
-            return Err(ExportAudioGridError::InvalidInterval);
-        }
-        // Search the actual mixer grid instead of rounding (end - start) * rate.
-        // Large origins and fractional boundaries must retain the same phase.
-        let (mut low, mut high) = (0, frames);
-        while low < high {
-            let middle = low + (high - low) / 2;
-            if sampling.start_time + middle as f64 / rate < sampling.end_time {
-                low = middle + 1;
-            } else {
-                high = middle;
-            }
-        }
-        Ok(Self {
+        format
+            .scene_time_at(sampling.start_time, frames)
+            .map_err(|_| ExportAudioGridError::InvalidInterval)?;
+        Self {
             scene_start: sampling.start_time,
             frames,
-            mixed_frames: low,
+            mixed_frames: frames,
             format,
             byte_len,
-        })
+        }
+        .truncate_at(sampling.end_time)
     }
 
     pub const fn scene_start(self) -> f64 {
@@ -79,6 +68,31 @@ impl ExportAudioGrid {
     }
     pub const fn byte_len(self) -> u64 {
         self.byte_len
+    }
+
+    /// Silence samples at and after an authored endpoint without changing
+    /// output duration, crop phase or PCM frame count.
+    pub fn truncate_at(mut self, end: f64) -> Result<Self, ExportAudioGridError> {
+        if !end.is_finite() || end < 0.0 {
+            return Err(ExportAudioGridError::InvalidInterval);
+        }
+        // Search the mixer coordinates to preserve fractional crop phase.
+        let (mut low, mut high) = (0, self.mixed_frames);
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if self
+                .format
+                .scene_time_at(self.scene_start, middle)
+                .map_err(|_| ExportAudioGridError::InvalidInterval)?
+                < end
+            {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        self.mixed_frames = low;
+        Ok(self)
     }
 
     /// Number of leading frames to mix in an otherwise zero-filled block.

@@ -22,6 +22,8 @@
 mod callback_membership;
 #[cfg(feature = "code")]
 pub mod code_input;
+#[cfg(feature = "prepared-prefix")]
+mod completed_prefix_export;
 pub use callback_membership::{
     callback_line_path, callback_provisional_key, commit_callback_path,
     commit_inline_callback_content, resolve_callback_provisional, CallbackMembershipCollector,
@@ -37,6 +39,8 @@ pub use latex_input::{latex_member_colors, LatexInput};
 mod pixel_readback;
 pub mod spatial_input;
 
+#[cfg(feature = "prepared-prefix")]
+pub use completed_prefix_export::{CompletedPrefixExport, CompletedPrefixExportError};
 pub use export_frames::{
     ExportAudioGrid, ExportAudioGridError, ExportEndReason, ExportFrame, ExportFrameOptions,
     ExportFramePolicy, ExportFramePolicyError, ExportFramePolicyStatus, ExportFrameSummary,
