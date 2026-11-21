@@ -1,4 +1,4 @@
-"""Run after building the browser package. Requires Chromium, Cargo and FFmpeg."""
+"""Video playback and export regressions for the built browser package."""
 
 import json
 from pathlib import Path
@@ -26,11 +26,21 @@ def decode(path, *options):
 
 
 class BrowserVideoExportTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        temporary = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(temporary.cleanup)
+        cls.asset = Path(temporary.name) / "source.mp4"
+        subprocess.run(["ffmpeg", *FIXTURE.read_text().splitlines(), str(cls.asset)], check=True)
+
+    def test_scrub_resume_and_replace_during_decode(self):
+        subprocess.run(["node", "scripts/playground-video-lifecycle.mjs", str(self.asset)],
+                       cwd=ROOT, check=True)
+
     def test_cropped_export_uses_the_same_composited_samples_and_trimmed_sound(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
-            asset, source = directory / "source.mp4", directory / "scene.py"
-            subprocess.run(["ffmpeg", *FIXTURE.read_text().splitlines(), str(asset)], check=True)
+            source = directory / "scene.py"
             source.write_text(SOURCE)
             captures = []
             for start in (0, 4):
@@ -38,7 +48,7 @@ class BrowserVideoExportTests(unittest.TestCase):
                 with self.subTest(start_frame=start):
                     report = json.loads(subprocess.check_output([
                         "node", "scripts/export-python-scene.mjs", str(source), str(capture),
-                        "--video", str(asset), "--mp4", str(output), "--width", str(WIDTH),
+                        "--video", str(self.asset), "--mp4", str(output), "--width", str(WIDTH),
                         "--height", str(HEIGHT), "--fps", "30000/1001", "--start-frame", str(start),
                     ], cwd=ROOT))
                     self.assertEqual(report["native"]["frames"], 37 - start)
