@@ -25,10 +25,11 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
       <label for="noon-feedback-comment">Comment</label>
       <textarea id="noon-feedback-comment" rows="3" maxlength="4000"
         placeholder="Keep this arrow visible until the explanation finishes…" required></textarea>
-      <div class="noon-feedback-footer"><span class="noon-feedback-count"></span>
-        <button type="submit" disabled>Download feedback</button></div>
-      <p class="noon-feedback-help">The file includes this picture, its time, and the source that produced it.
-        Attach it to your agent chat with the scene you want to revise.</p>
+      <div class="noon-feedback-footer">
+        <span class="noon-feedback-count"></span>
+        <button type="button" data-action="download" disabled>Download evidence</button>
+        <button type="submit" disabled>Add to source</button>
+      </div>
     </form>`;
   const style = document.createElement("style");
   style.textContent = `
@@ -42,6 +43,8 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     .noon-feedback-dialog button { min-height: 38px; padding: 8px 14px; border: 1px solid #655894;
       border-radius: 7px; background: #292244; color: #f7f8fb; font: 600 13px/1.4 system-ui; cursor: pointer; }
     .noon-feedback-dialog button:disabled { opacity: .45; cursor: not-allowed; }
+    .noon-feedback-dialog [type="submit"] { background: #534081; }
+    .noon-feedback-dialog [data-action="download"] { margin-inline-start: auto; background: transparent; }
     .noon-feedback-dialog :focus-visible { outline: 2px solid #b3a6ff; outline-offset: 3px; }
     .noon-feedback-dialog [hidden] { display: none !important; }
     .noon-feedback-dialog .noon-feedback-status { min-height: 1.5em; margin: 12px 0; color: #c8c3df;
@@ -61,8 +64,7 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
       width: 100%; height: auto; min-height: 90px; padding: 10px; margin-bottom: 12px;
       color: #f7f8fb; background: #080b12; border: 1px solid #3a4968; border-radius: 7px;
       font: 14px/1.5 system-ui; resize: vertical; }
-    .noon-feedback-count, .noon-feedback-help { color: #a5afc3; font: 12px/1.5 system-ui; }
-    .noon-feedback-help { margin: 12px 0 0; }
+    .noon-feedback-count { color: #a5afc3; font: 12px/1.5 system-ui; }
   `;
   document.head.append(style);
   // Keep the dialog inside the preview pane so it also works in fullscreen.
@@ -75,13 +77,16 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
   const text = dialog.querySelector("textarea");
   const form = dialog.querySelector("form");
   const submit = dialog.querySelector('[type="submit"]');
+  const download = dialog.querySelector('[data-action="download"]');
   const count = dialog.querySelector(".noon-feedback-count");
   let capture = null, selection = null, drag = null, imageUrl = null, downloadUrl = null, controller = null;
+  let addToSource = null;
   let generation = 0, disposed = false, timer = null, workInFlight = null;
   const update = () => {
     const size = new TextEncoder().encode(text.value).length;
     count.textContent = `${size.toLocaleString()} / 4,000 bytes`;
     submit.disabled = !capture || !selection || !text.value.trim() || text.value.includes("\0") || size > 4000;
+    download.disabled = submit.disabled;
   };
   const message = (value, error = false) => {
     status.textContent = value;
@@ -97,6 +102,7 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     if (downloadUrl !== null) window.URL.revokeObjectURL(downloadUrl);
     imageUrl = null; downloadUrl = null;
     capture = null; selection = null; drag = null;
+    addToSource = null;
     image.hidden = true; mark.hidden = true;
     text.value = "";
     update();
@@ -209,6 +215,7 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
       const candidate = await Promise.race([work, aborted]);
       if (disposed || ticket !== generation || signal.aborted) return;
       capture = candidate;
+      addToSource = context.addToSource;
       message(`Paused at ${candidate.frame.provenance.publishedTime.toFixed(3)} s. Drag an area or click a point.`);
       stage.focus();
       update();
@@ -230,6 +237,14 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
     update();
     if (submit.disabled) return;
     try {
+      addToSource(capture, selection, text.value);
+      close();
+    } catch (error) { message(error.message, true); }
+  });
+  download.addEventListener("click", () => {
+    update();
+    if (download.disabled) return;
+    try {
       const exported = createLiveFeedbackExport(capture, selection, text.value);
       if (downloadUrl !== null) window.URL.revokeObjectURL(downloadUrl);
       downloadUrl = window.URL.createObjectURL(new Blob([`${JSON.stringify(exported)}\n`], { type: "application/json" }));
@@ -237,7 +252,7 @@ export function installPlaygroundFeedback(button, { getContext, onPaused = () =>
       link.href = downloadUrl;
       link.download = `noon-feedback-${capture.frame.id}.json`;
       document.body.append(link); link.click(); link.remove();
-      message("Feedback prepared for download. It remains attached to this snapshot, even after a new Run.");
+      message("Evidence downloaded. Select Add to source to keep the comment with the scene.");
     } catch (error) { message(error.message, true); }
   });
   function close() {

@@ -2,15 +2,21 @@
 
 In the playground, select **Comment** above a scene with prepared playback.
 Noon pauses at the displayed frame. Drag a rectangle around the relevant area,
-click to drop a pin, or press Enter on the picture to mark the center. Write one
-comment and select **Download feedback**. Closing the panel leaves playback paused.
+click to drop a pin, or press Enter on the picture to mark the center. Write your
+note and select **Add to source**. The note is appended to the current Python
+draft as ordinary comments, including the captured time, image-relative bounds,
+and hash of the source that produced the frame. Existing edits stay in the draft
+and playback stays paused.
 
-Attach the download to your agent chat and identify the scene you want to
-revise. The file contains the original PNG, the selection, the comment, the
-exact scene time, and the source that produced the displayed Run. The bounds
-are fractions of the image, measured from its top-left corner.
+Use **Save .py** to save the annotated scene. An agent working on that source can
+find `Noon feedback (pending)` at the end of the file. Use the recorded time and
+region to find the visual, render a revision, and keep the note pending until
+the author accepts it. The bounds start at the top-left of the captured image.
 
-## Agent handoff
+## Download the original evidence
+
+Choose **Download evidence** if the reviewer needs the original frame. The
+bundle contains the PNG, selection, comment, scene time, and displayed Run source.
 
 From the Noon checkout with the locked `tools/noon-mcp` dependencies installed:
 
@@ -41,7 +47,7 @@ Show the author `comparison/before.png` and `comparison/after.png`, and explain
 the focused edit. The comparison stays pending for the author to accept. If
 timing changed, choose the corresponding moment from the new run explicitly.
 
-The viewer checks that the same Run, time, and presentation receipt bracket
-the canvas copy. Capture is available once prepared playback has a matching
-receipt. The browser smoke exercises rectangle capture, an unapplied source
-edit, import, and a before-and-after revision in **One Extra Column**.
+The viewer checks the Run, time, and shared Rust presentation receipt around
+the canvas copy. The browser writes the Python source comment. The browser smoke
+covers adding and saving a comment, preserving an unapplied edit, and revising
+**One Extra Column** at the captured frame.

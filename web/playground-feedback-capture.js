@@ -148,7 +148,7 @@ export async function capturePausedFeedback(context, {
   return Object.freeze({ source, png: ownedPng, frame, presentationReceipt: receipt });
 }
 
-export function createLiveFeedbackExport(capture, selection, comment) {
+function feedbackFields(capture, selection, comment) {
   const { point, region = null } = selection ?? {};
   const target = point ?? region;
   const validPoint = target && [target.x, target.y].every(value => Number.isFinite(value) && value >= 0 && value <= 1);
@@ -157,22 +157,41 @@ export function createLiveFeedbackExport(capture, selection, comment) {
   requireCapture(validPoint && (point ? region === null : validRegion), "Select an area or point on the captured frame.");
   requireCapture(typeof comment === "string" && comment.trim() && !comment.includes("\0") &&
     encoder.encode(comment).length <= 4000, "Write a comment of at most 4,000 UTF-8 bytes.");
+  const time = capture.frame.provenance.publishedTime;
+  return {
+    interval: { start: time, end: time },
+    region: region && { x: region.x, y: region.y, width: region.width, height: region.height },
+    ...(point ? { point: { x: point.x, y: point.y } } : {}),
+    observation: comment, desiredChange: "Propose a focused correction for this comment.", preserve: null,
+  };
+}
+
+export function appendSourceFeedback(source, capture, selection, comment) {
+  const { interval, region, point, observation } = feedbackFields(capture, selection, comment);
+  const bounds = region ?? point;
+  const coordinates = Object.entries(bounds).map(([key, value]) => `${key}=${Number(value.toFixed(6))}`).join(" ");
+  const lines = observation.trim().split(/\r\n|[\r\n\u2028\u2029]/u).map(line => `# ${line}`.trimEnd());
+  const separator = source.endsWith("\n") ? "\n" : "\n\n";
+  return source + separator + [
+    `# Noon feedback (pending) at ${interval.start} s`,
+    `# ${region ? "Rectangle" : "Point"} on the frame (normalized) ${coordinates}`,
+    `# Displayed source SHA-256 ${capture.frame.provenance.sourceSha256}`,
+    ...lines,
+  ].join("\n") + "\n";
+}
+
+export function createLiveFeedbackExport(capture, selection, comment) {
+  const feedback = feedbackFields(capture, selection, comment);
   let binary = "";
   for (let offset = 0; offset < capture.png.length; offset += 0x8000) {
     binary += String.fromCharCode(...capture.png.subarray(offset, offset + 0x8000));
   }
-  const time = capture.frame.provenance.publishedTime;
   return {
     kind: "noon-live-feedback-export", schemaVersion: 1,
     source: capture.source, pngBase64: btoa(binary), presentationReceipt: capture.presentationReceipt,
     feedback: {
       kind: "noon-frame-feedback", schemaVersion: 1, status: "pending_review",
-      feedback: {
-        interval: { start: time, end: time },
-        region: region && { x: region.x, y: region.y, width: region.width, height: region.height },
-        ...(point ? { point: { x: point.x, y: point.y } } : {}),
-        observation: comment, desiredChange: "Propose a focused correction for this comment.", preserve: null,
-      },
+      feedback,
       frame: capture.frame,
     },
   };

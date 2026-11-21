@@ -10,6 +10,7 @@ import { PlaygroundPlaybackControls } from "./playground-playback-controls.js";
 import { createRunRequestRouter } from "./playground-run-request-router.js";
 import { installPreviewFullscreen } from "./playground-fullscreen.js";
 import { installPlaygroundFeedback } from "./playground-feedback.js";
+import { appendSourceFeedback } from "./playground-feedback-capture.js";
 import {
   exampleUrl,
   filterGalleryExamples,
@@ -417,8 +418,10 @@ const feedbackReview = installPlaygroundFeedback(document.querySelector("#previe
   getContext() {
     const active = player;
     const run = activeRunIdentity;
+    const example = currentExample();
     const client = authoringWorkers.activeClient;
     if (!active || !client || (run?.outcome !== "complete" && run?.outcome !== "running") ||
+        !example || run.exampleId !== example.id ||
         !isPreparedPlayback(active) || !isCurrentRun(run.token) || busyDepth > 0 ||
         playerNeedsRestart || runtimeRecoveryPromise !== null) {
       throw new Error("Run a scene and wait for prepared playback before adding feedback.");
@@ -426,13 +429,22 @@ const feedbackReview = installPlaygroundFeedback(document.querySelector("#previe
     cancelAutoRun();
     const capturedCanvas = canvas;
     const release = beginBusy();
+    const isCurrent = () => player === active && canvas === capturedCanvas &&
+      selectedExampleId === example.id && activeRunIdentity === run && isCurrentRun(run.token) &&
+      !playerNeedsRestart && runtimeRecoveryPromise === null;
     return {
       player: active, canvas: capturedCanvas, source: run.source,
       runGeneration: run.token.runGeneration,
       buildIdentity: () => client.ready(),
-      isCurrent: () => player === active && canvas === capturedCanvas &&
-        activeRunIdentity === run && isCurrentRun(run.token) &&
-        !playerNeedsRestart && runtimeRecoveryPromise === null,
+      isCurrent,
+      addToSource(capture, selection, comment) {
+        if (!isCurrent()) throw new Error("The displayed Run changed. Reopen Comment on the scene you want to annotate.");
+        // Update the existing textarea/CodeMirror source without requesting a Run.
+        sceneSourceEditor.value = appendSourceFeedback(sceneSourceEditor.value, capture, selection, comment);
+        rememberSceneDraft(example);
+        updateDraftStatus(example);
+        draftStatus.value = "Feedback added to source · preview paused";
+      },
       release,
     };
   },
@@ -1729,10 +1741,14 @@ sceneSourceEditor.addEventListener("compositionend", () => {
   scheduleAutoRun();
   updateDraftStatus();
 });
-sceneSourceEditor.addEventListener("input", (event) => {
-  const example = currentExample();
+function rememberSceneDraft(example) {
   if (example) drafts.set(example.id, sceneSourceEditor.value);
   resetButton.disabled = sceneSourceEditor.value === canonicalSource;
+}
+
+sceneSourceEditor.addEventListener("input", (event) => {
+  const example = currentExample();
+  rememberSceneDraft(example);
   if (example) {
     if (event.isComposing) cancelAutoRun();
     else scheduleAutoRun();

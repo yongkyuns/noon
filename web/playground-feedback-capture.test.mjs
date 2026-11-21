@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import {
-  assertPausedPublication, capturePausedFeedback, copyDisplayedCanvas,
+  appendSourceFeedback, assertPausedPublication, capturePausedFeedback, copyDisplayedCanvas,
   createLiveFeedbackExport, feedbackPoint, feedbackRegion,
 } from "./playground-feedback-capture.js";
 
@@ -215,6 +215,20 @@ test("reverse drags clamp to the image and export the exact rectangle", async ()
   assert.equal(Object.hasOwn(note.feedback.feedback, "point"), false);
   assert.throws(() => createLiveFeedbackExport(capture, { region: { ...region, width: 1.1 } }, "Fix this"));
   assert.throws(() => createLiveFeedbackExport(capture, { region, point: start }, "Fix this"));
+});
+
+test("source feedback preserves the draft and writes each line as an inert Python comment", async () => {
+  const f = fixture(), capture = await capturePausedFeedback(f.context, f.adapters);
+  const source = "# Unapplied editor draft\nvalue = 2\n";
+  const region = { x: 0.2, y: 0.3, width: 0.4, height: 0.1 };
+  const result = appendSourceFeedback(source, capture, { region }, "Keep the arrow.\r\nvalue = 9\r# more\u2028Last line");
+  assert.ok(result.startsWith(source));
+  assert.deepEqual(result.slice(source.length).trim().split("\n"), [
+    `# Noon feedback (pending) at ${f.receipt.time} s`,
+    "# Rectangle on the frame (normalized) x=0.2 y=0.3 width=0.4 height=0.1",
+    `# Displayed source SHA-256 ${digest(f.context.source)}`,
+    "# Keep the arrow.", "# value = 9", "# # more", "# Last line",
+  ]);
 });
 
 test("canvas pixels are copied synchronously, encoding is asynchronous, and temporary storage is released", async () => {

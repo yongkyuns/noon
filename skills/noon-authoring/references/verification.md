@@ -53,9 +53,10 @@ the player, report that first-play seeking is unverified.
 
 ## Feedback from the live viewer
 
-When the author attaches a Noon feedback download, [import and check it](../../../docs/live-viewer-feedback.md)
-before editing. Inspect the original frame, selection, and source. Re-render the
-focused correction and give the author the before-and-after frames to review.
+Read `Noon feedback (pending)` comments in the scene source. Use the recorded
+time and region to find the visual, re-render the focused correction, and show
+the before-and-after frames. Optional snapshot downloads preserve the original
+frame and Run source. [Live viewer feedback](../../../docs/live-viewer-feedback.md)
 
 ## Repository validation
 

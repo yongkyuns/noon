@@ -72,7 +72,10 @@ try {
   await editor.click();
   await editor.press("ControlOrMeta+End");
   await page.keyboard.insertText("\n# Unapplied editorial note\n");
-  assert.notEqual(await page.locator("#python-scene-source").inputValue(), original);
+  const draft = await page.locator("#python-scene-source").inputValue();
+  assert.notEqual(draft, original);
+  const runGeneration = await page.evaluate(() => window.__noonExampleGallery.generationDiagnostics.runGeneration);
+  await page.locator("#auto-run").evaluate(input => { input.checked = true; });
 
   await page.locator("#preview-comment").click();
   const dialog = page.getByRole("dialog", { name: "Comment on this frame" });
@@ -96,10 +99,20 @@ try {
   await field.fill(comment);
   await page.screenshot({ path: path.join(output, "selection.png") });
   const pending = page.waitForEvent("download");
-  await dialog.getByRole("button", { name: "Download feedback" }).click();
+  await dialog.getByRole("button", { name: "Download evidence" }).click();
   const download = await pending;
   await download.saveAs(path.join(output, "viewer-feedback.json"));
-  await dialog.getByRole("button", { name: "Close feedback" }).click();
+  await dialog.getByRole("button", { name: "Add to source" }).click();
+  const annotated = await page.locator("#python-scene-source").inputValue();
+  assert.ok(annotated.startsWith(draft), "feedback must preserve unapplied editor changes");
+  assert.ok(annotated.includes(`# Noon feedback (pending) at ${target} s\n# Rectangle`));
+  assert.ok(annotated.includes(`# ${comment}`));
+  const note = annotated.slice(draft.length).trim();
+  assert.ok(note.split("\n").every(line => line.startsWith("#")));
+  const pendingSource = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Save .py" }).click();
+  await (await pendingSource).saveAs(path.join(output, "annotated.py"));
+  assert.equal(await readFile(path.join(output, "annotated.py"), "utf8"), annotated);
   assert.equal(await page.locator(".noon-feedback-image img").getAttribute("src"), null);
   assert.equal(await controls.getAttribute("data-playing"), "false");
   assert.deepEqual(errors, []);
@@ -118,15 +131,14 @@ try {
   for (let i = 0; i < picture.data.length; i += 16) pixels.add(picture.data.readUInt32BE(i));
   assert.ok(pixels.size > 100, "the captured lesson must contain actual drawn pixels");
   await writeFile(path.join(output, "original.py"), original);
-  console.log(`Live rectangle imported with the displayed source and a rendered frame at ${frame.provenance.publishedTime}s.`);
-  await page.close();
+  console.log(`Live rectangle saved in the scene source and independently exported at ${frame.provenance.publishedTime}s.`);
 
   const check = source => runFeedbackCli({ cwd: output, argv: ["check", "--feedback", "review/feedback.json", "--source", source] });
   assert.equal((await check("original.py")).sourceStatus, "current");
-  // Apply the requested contrast correction to the source snapshot the agent sees.
+  // Apply the source comment's contrast correction to the current scene draft.
   const labelStyle = "y=3.14, size=12, color=MUTED)";
-  const revised = original.replace(labelStyle, "y=3.14, size=12, color=INK)");
-  assert.notEqual(revised, original, "lesson subtitle changed before this revision fixture");
+  const revised = annotated.replace(labelStyle, "y=3.14, size=12, color=INK)");
+  assert.notEqual(revised, annotated, "lesson subtitle changed before this revision fixture");
   await writeFile(path.join(output, "revised.py"), revised);
   assert.equal((await check("revised.py")).sourceStatus, "stale");
 
@@ -164,6 +176,8 @@ try {
   const revisedPicture = PNG.sync.read(await readFile(path.join(output, "comparison/after.png")));
   assert.ok(highlightBrightness(revisedPicture, feedback.region) > highlightBrightness(picture, feedback.region) + 35,
     "the marked subtitle must be visibly brighter after the revision");
+  assert.equal(await page.evaluate(() => window.__noonExampleGallery.generationDiagnostics.runGeneration), runGeneration,
+    "saving a source comment must not trigger Auto-run");
   console.log("Compared the original frame with a fresh render of the revised subtitle at the same scene time.");
 } finally {
   await browser?.close();
