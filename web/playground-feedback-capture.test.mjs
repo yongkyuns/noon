@@ -72,6 +72,18 @@ test("unknown build observations stay null rather than inheriting checkout ident
   });
 });
 
+test("finite soundtrack feedback reads the replay state before pausing and uses its matched frame", async () => {
+  const f = fixture();
+  f.context.checkReplay = true;
+  Object.assign(f.state, { preparedPlayback: false, hasAudio: true, replaySupported: false });
+  await assert.rejects(capturePausedFeedback(f.context, f.adapters), /prepared or finite soundtrack playback/);
+  assert.deepEqual(f.calls, ["state"]);
+  f.state.replaySupported = true;
+  const capture = await capturePausedFeedback(f.context, f.adapters);
+  assert.deepEqual(capture.presentationReceipt, f.receipt);
+  assert.equal(f.control.copies, 1);
+});
+
 test("invalid publication observations fail closed", () => {
   const f = fixture();
   for (const state of [

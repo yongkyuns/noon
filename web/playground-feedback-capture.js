@@ -40,10 +40,15 @@ export function feedbackRegion(start, end) {
   };
 }
 
+function supportsFeedbackPlayback(state) {
+  return state?.preparedPlayback === true ||
+    (state?.hasAudio === true && state.replaySupported === true && state.sourceExecution !== "observed");
+}
+
 export function assertPausedPublication(state, expected = null) {
   const receipt = state?.presentationReceipt;
-  requireCapture(state?.playing === false && state.preparedPlayback === true,
-    "Comment capture requires paused prepared playback.");
+  requireCapture(state?.playing === false && supportsFeedbackPlayback(state),
+    "Comment capture requires paused prepared or finite soundtrack playback.");
   requireCapture(Number.isFinite(state.time) && state.time >= 0 && state.time <= 600,
     "This feedback format supports captured times from 0 to 600 seconds.");
   requireCapture(Number.isSafeInteger(receipt?.session) && receipt.session >= 0 &&
@@ -93,13 +98,19 @@ export async function capturePausedFeedback(context, {
     }
   };
   check();
+  if (context.checkReplay) {
+    const current = await context.player.state();
+    check();
+    requireCapture(supportsFeedbackPlayback(current),
+      "Comment capture requires prepared or finite soundtrack playback.");
+  }
   const source = context.source;
   const paused = await context.player.pause();
   check();
   onPaused(paused);
-  requireCapture(paused?.playing === false && paused.preparedPlayback === true &&
+  requireCapture(paused?.playing === false && supportsFeedbackPlayback(paused) &&
     Number.isFinite(paused.time) && paused.time >= 0 && paused.time <= 600,
-  "Comment capture is available for paused prepared playback. Finish preparing this scene first.");
+  "Pause a scene with prepared or finite soundtrack playback before adding feedback.");
   const build = await context.buildIdentity();
   check();
   async function presentPausedFrame() {
@@ -115,7 +126,7 @@ export async function capturePausedFeedback(context, {
     return { receipt, state };
   }
   let presented = await presentPausedFrame();
-  if (presented.state?.playing === false && presented.state.preparedPlayback === true &&
+  if (presented.state?.playing === false && supportsFeedbackPlayback(presented.state) &&
       presented.state.time === paused.time && presented.state.presentationReceipt == null) {
     // Opening the inline panel can resize the canvas while the first frame settles.
     presented = await presentPausedFrame();

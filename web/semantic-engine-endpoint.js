@@ -485,6 +485,12 @@ export async function attachSemanticEngine(
       catch (error) { terminateProgression(error); }
     }
   };
+  function confirmedPresentationReceipt() {
+    if (receiverFailed || !samePublication(lastSentPublication, lastPresentedPublication) ||
+        !samePublication(lastPresentedDeltaMetadata, lastPresentedPublication)) return null;
+    const viewRevision = lastPresentedPublication?.pointerReceipt?.view_revision;
+    return viewRevision === undefined ? lastPresentedDeltaMetadata : { ...lastPresentedDeltaMetadata, viewRevision };
+  }
   const state = (type) => {
     if (prepared !== null && player !== null) {
       const observedAt = performance.now();
@@ -492,10 +498,7 @@ export async function attachSemanticEngine(
       const time = type === "state" && preparedClockAdmitted
         ? player.preparedPlaybackTimeAt(observedAt) : observation.time;
       sections = JSON.parse(player.sectionsJson());
-      const presentationReceipt = !receiverFailed && samePublication(lastSentPublication, lastPresentedPublication) &&
-        samePublication(lastPresentedDeltaMetadata, lastPresentedPublication)
-        ? lastPresentedDeltaMetadata : null;
-      const viewRevision = lastPresentedPublication?.pointerReceipt?.view_revision;
+      const presentationReceipt = confirmedPresentationReceipt();
       return {
         type, preparedPlayback: true,
         // Cold initialization and command acknowledgements observe only the
@@ -515,9 +518,7 @@ export async function attachSemanticEngine(
         loopDuration: observation.loopDuration, loopCount: observation.loopCount,
         loopError: observation.loopError,
         heldPresentation: preparedClockAdmitted ? observation.heldPresentation ?? null : null,
-        ...(presentationReceipt === null ? {} : {
-          presentationReceipt: viewRevision === undefined ? presentationReceipt : { ...presentationReceipt, viewRevision },
-        }),
+        ...(presentationReceipt === null ? {} : { presentationReceipt }),
         replaySupported: true, replayUnavailable: null,
         canUndoTranslationDrag: player.canUndoTranslationDrag === true, nextPatchSequence: "0",
       };
@@ -542,14 +543,19 @@ export async function attachSemanticEngine(
     // Cue state and the displayed playhead consume the same Rust clock sample.
     const time = type === "state" && pacing === SEMANTIC_PACING_REALTIME
       ? player.playbackTimeAt(performance.now()) : player.time();
+    const playing = player.isPlaying();
+    const presentationReceipt = type === "state" && !playing && hasAudio &&
+      continuation === null && !completedStaticSource && replayUnavailable === null
+      ? confirmedPresentationReceipt() : null;
     return {
       type, time,
       sectionState: sections.length ? JSON.parse(player.sectionStateJson(time)) : null,
-      playing: player.isPlaying(), nextPatchSequence: "0",
+      playing, nextPatchSequence: "0",
       sections,
       hasAudio,
       ...(hasVideo ? { buffering: player.videoWaiting(), videoReadyUntil: player.videoReadyUntil() ?? null } : {}),
       ...(hasAudio ? { durationSeconds: player.finiteAudioDuration() } : {}),
+      ...(presentationReceipt === null ? {} : { presentationReceipt }),
       canUndoTranslationDrag: player.canUndoTranslationDrag,
       ...(sourceFinished && continuation !== null
         ? { preparedPlayback: false, sourcePlaybackControllable: false,
