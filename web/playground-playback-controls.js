@@ -598,6 +598,7 @@ export class PlaygroundPlaybackControls {
       this.#seekRange = result.seekRange;
       this.#durationSeconds = result.durationSeconds;
       this.#buffering = result.buffering;
+      this.#videoReadyUntil = result.videoReadyUntil ?? null;
       this.#preparing = result.preparing === true;
     }
     const receipt = result.presentationReceipt;

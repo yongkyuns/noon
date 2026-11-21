@@ -589,11 +589,16 @@ test("video readiness shades the full duration rail without restricting a scrub"
   assert.equal(rail.style["--ready-through"], "25%");
   assert.equal(f.output.title, "Video ready through 2.00 s");
   assert.equal(rail.disabled, false);
+  f.player.seek = async time => {
+    f.calls.push(["seek", time]);
+    return { ...state, time, videoReadyUntil: 7.5, buffering: false,
+      presentationReceipt: { session: 1, sequence: 1, time } };
+  };
   f.seek(7);
   await flush();
   assert.deepEqual(f.calls, [["seek", 7]]);
-  f.setState({ ...state, time: 7, videoReadyUntil: 7.5, buffering: false });
   assert.equal(f.range, rail);
   assert.equal(rail.max, "8");
   assert.equal(rail.style["--ready-through"], "93.75%");
+  assert.equal(f.output.title, "Video ready through 7.50 s");
 });
