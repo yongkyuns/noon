@@ -10,7 +10,7 @@ const section = (start, end) => {
   return source.slice(begin, finish);
 };
 const lifecycle = [
-  section("function registerSemanticExecution", "function continuationEvent"),
+  section("function videoAssetsFor", "function continuationEvent"),
   section("function continuationEvent", "function failContinuation("),
   section("function failContinuation(", "function isContinuationControl"),
   section("function isContinuationControl", "function retireSemanticContext"),

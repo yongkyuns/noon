@@ -718,7 +718,8 @@ impl SceneInstance {
             next_drivers.insert(object_index);
         }
 
-        let time_changed = self.frame.time != prepared.time;
+        let previous_time = self.frame.time;
+        let time_changed = previous_time != prepared.time;
         self.frame.time = prepared.time;
         let mut changed = self.update_requested_family_animations(prepared.time);
         for (object_index, row) in final_rows {
@@ -738,6 +739,7 @@ impl SceneInstance {
         self.last_stats = prepared.stats;
         if time_changed {
             self.last_stats.time_effect_rows = self.invalidate_time_effects();
+            self.invalidate_video_frame(previous_time);
         }
         let changed = time_changed || changed || reactive_changed;
         if publish && changed {

@@ -723,7 +723,13 @@ export class ExecutionWorkerClient {
   }
 
   async sampleFiniteExport() {
-    return (await this.#requestEngine("sample_finite_export", {})).finiteExport;
+    const { finiteExport, presentationReceipt } = await this.#requestEngine("sample_finite_export", {});
+    if (finiteExport.frame === null) return finiteExport;
+    if (presentationReceipt == null) throw new Error("finite export sample has no renderer receipt");
+    const { pixels } = await this.#requestRender("capture_export_frame", {
+      publication: { session: presentationReceipt.session, sequence: presentationReceipt.sequence },
+    });
+    return { ...finiteExport, pixels };
   }
 
   async acknowledgeFiniteExport(observation) {

@@ -88,7 +88,9 @@ mod raster_image_prepare;
 use derived_display::DerivedDisplayGpu;
 pub use presentation::OutputTransfer;
 use presentation::PresentationBridge;
+mod video_presentation;
 pub use raster_image_prepare::RasterImagePrepareError;
+pub use video_presentation::VideoPresentation;
 
 use crate::{
     CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathCoverage, PathInstance,

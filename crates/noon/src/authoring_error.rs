@@ -35,6 +35,8 @@ pub enum UnsupportedAuthoringOperation {
     EffectiveTrackerUnavailable,
     /// Native-reactive declarations and subscriptions are lowered at bootstrap.
     SignalAuthoringRequiresSetup,
+    /// Video assets and their soundtrack are declared before execution.
+    VideoRequiresSetup,
     /// The execution plan fixes its camera at bootstrap.
     CameraRequiresSetup,
     /// Text and external content do not expose a vector path.
@@ -108,6 +110,7 @@ impl std::fmt::Display for UnsupportedAuthoringOperation {
             Self::EffectPreparationRequiresExecution => "effect preparation requires a running Scene",
             Self::EffectiveTrackerUnavailable => "ValueTracker is not lowered into this execution session",
             Self::SignalAuthoringRequiresSetup => "signal declarations and bindings must be authored before execution",
+            Self::VideoRequiresSetup => "video requires scene setup",
             Self::CameraRequiresSetup => "camera initialization must precede execution",
             Self::PathQueryContent => "path queries require retained geometry",
             Self::ExternalGeometry => "external geometry must resolve to an immutable semantic resource",
@@ -149,6 +152,7 @@ pub enum AuthoringError {
     AudioResource(noon_core::AudioResourceError),
     /// A finite authored clip has invalid timing, trim, gain, or fades.
     AudioClip(noon_core::AudioClipError),
+    VideoTiming(noon_core::VideoTimingError),
     /// Authored and published effect generations disagree for a coherent capture.
     EffectCaptureMismatch {
         owner: noon_core::SemanticNodeId,
@@ -363,6 +367,7 @@ impl std::fmt::Display for AuthoringError {
             Self::PaintTransition(error) => error.fmt(f),
             Self::AudioResource(error) => error.fmt(f),
             Self::AudioClip(error) => error.fmt(f),
+            Self::VideoTiming(error) => error.fmt(f),
             Self::EffectParameter(error) => error.fmt(f),
             Self::EffectCaptureMismatch { owner } => write!(f, "effect capture for {owner:?} requires the exact published attachment generations"),
             Self::EffectNotFound { owner, name } => write!(f, "object {owner:?} has no effect named {name:?}"),
@@ -523,6 +528,7 @@ impl std::error::Error for AuthoringError {
             Self::ImageDecode(error) => Some(error),
             Self::AudioResource(error) => Some(error),
             Self::AudioClip(error) => Some(error),
+            Self::VideoTiming(error) => Some(error),
             Self::EffectParameter(error) => Some(error),
             Self::ImageResource(error) => Some(error),
             Self::FamilyPairing(error) => Some(error),

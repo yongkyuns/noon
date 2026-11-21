@@ -27,6 +27,7 @@ const requiredFiles = [
   "web/runtime-build-identity.json", "web/runtime-build-verifier.js",
   "web/pkg/noon_web.js", "web/pkg/noon_web.d.ts", "web/pkg/noon_web_bg.wasm",
   "web/pkg/package.json", "web/pkg/python-editor-bundle.js", "web/pkg/python-editor-licenses.txt",
+  "web/pkg/mp4box.js", "web/pkg/mp4box-LICENSE.txt",
   "web/pkg/arimo-OFL.txt", "web/ci-artifact.json", "web/ci-Cargo.lock",
 ];
 const omittedDirectories = new Set([".git", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"]);

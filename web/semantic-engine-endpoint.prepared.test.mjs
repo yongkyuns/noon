@@ -906,3 +906,37 @@ test("prepared shared chunks do not admit the selected clock before the complete
     assert.ok(f.count("wake") > wakes);
   } finally { f.close(); }
 });
+
+test("video readiness wakes a held prepared player and waits for its picture", { timeout: 3000 }, async () => {
+  const f = fixture();
+  let waiting = false;
+  let decoded = false;
+  let confirmed = false;
+  const tick = f.player.tickDeltaTransportJson.bind(f.player);
+  Object.assign(f.player, {
+    videoBuffering: () => waiting,
+    setVideoWindow: () => { decoded = true; return true; },
+    acknowledgeVideoPresentation: () => { confirmed = true; },
+    tickDeltaTransportJson(wallTime) {
+      waiting = !decoded;
+      return tick(wallTime);
+    },
+  });
+  try {
+    await f.attach({ videoAssets: [{ id: 1, blob: new Blob() }] });
+    f.acknowledge();
+    await f.present();
+    await f.when(() => f.messages.at(-1)?.cadence === "animation_frame");
+    f.bufferOnNextTick();
+    f.tick();
+    await f.when(() => f.messages.at(-1)?.cadence === "idle" && f.count("tick") === 1);
+    assert.equal(f.deltas.length, 1);
+    f.publishOnTick();
+    f.rendererMessage({ type: "video_window", clip: "1:1", start: 1, end: 3 });
+    await f.when(() => f.deltas.length === 2);
+    assert.equal(confirmed, false);
+    f.acknowledge(f.deltas[1]);
+    await f.present(f.deltas[1]);
+    assert.equal(confirmed, true);
+  } finally { f.close(); }
+});

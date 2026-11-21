@@ -237,6 +237,10 @@ mod host_callbacks;
 mod image_authoring;
 #[cfg(feature = "image-decode")]
 mod image_decode;
+#[cfg(all(feature = "video-decode", not(target_arch = "wasm32")))]
+mod video_decode;
+#[cfg(all(feature = "video-decode", not(target_arch = "wasm32")))]
+pub use video_decode::{NativeVideoAsset, NativeVideoCache, NativeVideoFrames};
 mod inspection_view;
 pub mod integration;
 #[cfg(feature = "latex")]

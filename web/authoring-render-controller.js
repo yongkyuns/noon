@@ -13,6 +13,8 @@ import {
   TransferableExecutionDeltaReceiver,
 } from "./execution-transport.js";
 
+import { VideoFrameHost } from "./video-frame-host.js";
+
 const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
 const MODE_RETAINED = "retained";
@@ -59,6 +61,8 @@ export function createAuthoringRenderController(host) {
   }
 
   let renderPort = null;
+  let video = null;
+  let exportReadback = null;
   let transportMode = null;
   let mode = null;
   let sharedReader = null;
@@ -174,6 +178,27 @@ export function createAuthoringRenderController(host) {
         case "resize":
           resize(message);
           return;
+        case "capture_export_frame": {
+          if (renderer === null || needsPresent ||
+              !samePublication(lastPresentedPublication, message.publication ?? null)) {
+            throw new Error("export capture requires the displayed renderer publication");
+          }
+          exportReadback ??= new OffscreenCanvas(width, height).getContext("2d", { willReadFrequently: true, alpha: false });
+          if (exportReadback === null) throw new Error("RGBA readback canvas is unavailable");
+          if (exportReadback.canvas.width !== width || exportReadback.canvas.height !== height) {
+            exportReadback.canvas.width = width;
+            exportReadback.canvas.height = height;
+          }
+          // Repaint and take ownership of that buffer in the same task. The
+          // DOM placeholder can lag and its swapchain can discard old buffers.
+          if (!renderer.renderExportFrame()) throw new Error("export capture could not repaint the displayed publication");
+          const snapshot = canvas.transferToImageBitmap();
+          try { exportReadback.drawImage(snapshot, 0, 0); }
+          finally { snapshot.close(); }
+          const pixels = exportReadback.getImageData(0, 0, width, height).data;
+          respond(message.requestId, { type: "capture_export_frame", pixels }, [pixels.buffer]);
+          return;
+        }
         case "metrics":
           if (!drainGpuDiagnostics()) return;
           if (message.profilePublicationStages === true) publicationStageProfiling = true;
@@ -462,6 +487,9 @@ export function createAuthoringRenderController(host) {
   }
 
   function detachRenderPort() {
+    video?.close();
+    video = null;
+    exportReadback = null;
     effectPreparation?.prepared?.free?.();
     effectPreparation = null;
     cancelScheduledFrame();
@@ -489,6 +517,24 @@ export function createAuthoringRenderController(host) {
 
   function handleEngineMessage(message) {
     if (!message || typeof message !== "object") {
+      return;
+    }
+    if (message.type === "video_assets" || message.type === "video_demands") {
+      try {
+        if (message.type === "video_assets") {
+          const port = renderPort;
+          video ??= new VideoFrameHost(
+            () => scheduleFrame(),
+            update => port.postMessage(update),
+            error => fail(error, null),
+          );
+          video.register(message.assets);
+          renderer?.setVideoFrameProvider((...args) => video.request(...args));
+        } else {
+          if (video === null) throw new Error("video demands require installed media");
+          for (const demand of message.demands) video.prepare(demand);
+        }
+      } catch (error) { fail(error, null); }
       return;
     }
     if (message.type === "execution_wake") {
@@ -755,6 +801,7 @@ export function createAuthoringRenderController(host) {
         return;
       }
       renderer = createdRenderer;
+      if (video !== null) renderer.setVideoFrameProvider((...args) => video.request(...args));
       lastDeltaApplyMs = null;
       lastRendererCallMs = null;
       resourceBytes = null;
@@ -780,7 +827,8 @@ export function createAuthoringRenderController(host) {
         ) {
           return;
         }
-        await nextRenderOpportunity();
+        if (video?.waiting) await video.wait();
+        else await nextRenderOpportunity();
         if (stopped || bootstrapGeneration !== frameLoopGeneration) {
           return;
         }
@@ -852,8 +900,9 @@ export function createAuthoringRenderController(host) {
       return false;
     }
     const renderStartedAtMs = performance.now();
+    video?.beginPresent();
     if (!renderer.render()) {
-      invalidatePointerReceipt();
+      if (!video?.waiting) invalidatePointerReceipt();
       drainGpuDiagnostics();
       return false;
     }
@@ -1106,7 +1155,7 @@ export function createAuthoringRenderController(host) {
       return;
     }
     const needsAnimationFrame = reserveRefresh || scheduledFrame?.reservedRefresh === true ||
-      needsPresent || engineWake === null ||
+      (needsPresent && !video?.waiting) || engineWake === null ||
       engineWake.cadence === "animation_frame";
     // Keep an already-requested refresh opportunity when a wake or delta still
     // needs it. Canceling after the browser snapshots callbacks can defer the
@@ -1114,7 +1163,7 @@ export function createAuthoringRenderController(host) {
     if (needsAnimationFrame && scheduledFrame?.kind === "animation" &&
         scheduledFrame.generation === generation) return;
     cancelScheduledFrame();
-    if (!needsAnimationFrame && engineWake.cadence === "idle") return;
+    if ((!needsAnimationFrame && engineWake.cadence === "idle") || video?.waiting) return;
     const ticket = scheduleTicket;
     if (needsAnimationFrame && typeof host?.requestAnimationFrame === "function") {
       scheduledFrame = {
@@ -1153,13 +1202,14 @@ export function createAuthoringRenderController(host) {
       typeof host?.requestAnimationFrame === "function";
     const tickDue = engineWake === null || engineWake.cadence === "animation_frame" ||
       (engineWake.cadence === "timer" && performance.now() >= engineWake.deadline);
-    if (tickDue) {
+    const canTick = tickDue && !(video !== null && needsPresent);
+    if (canTick) {
       // One directive admits one engine drive. The response supplies the next
       // Rust-derived directive, so an idle/waiting continuation never RAF-polls.
       if (engineWake !== null) engineWake = { cadence: "idle", deadline: null };
       renderPort?.postMessage({ type: "tick", timestamp });
     }
-    scheduleFrame(generation, tickDue && reserveRefresh);
+    scheduleFrame(generation, canTick && reserveRefresh);
   }
 
   async function flushGpuDiagnostics() {
@@ -1354,8 +1404,8 @@ export function createAuthoringRenderController(host) {
     return candidate;
   }
 
-  function respond(requestId, payload) {
-    postMain({ requestId: validateRequestId(requestId), ...payload });
+  function respond(requestId, payload, transfer) {
+    postMain({ requestId: validateRequestId(requestId), ...payload }, transfer);
   }
 
   function validateRequestId(requestId) {
@@ -1366,6 +1416,8 @@ export function createAuthoringRenderController(host) {
   }
 
   function fail(error, requestId) {
+    video?.close();
+    video = null;
     frameLoopGeneration += 1;
     running = false;
     const effectiveRequestId = requestId ?? transitionRequestId;
@@ -1379,7 +1431,7 @@ export function createAuthoringRenderController(host) {
     postMain({ type: "error", requestId: effectiveRequestId, message });
   }
 
-  function postMain(payload) {
+  function postMain(payload, transfer) {
     if (host === null) {
       throw new Error("authoring render host is not configured");
     }
@@ -1387,7 +1439,7 @@ export function createAuthoringRenderController(host) {
       channel: RENDER_CHANNEL,
       protocolVersion: RENDER_PROTOCOL_VERSION,
       ...payload,
-    });
+    }, transfer);
   }
 
   function validateMainMessage(message) {

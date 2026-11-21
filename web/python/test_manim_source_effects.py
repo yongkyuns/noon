@@ -373,6 +373,33 @@ def tokens(value):
             with self.subTest(source=unsafe):
                 self.assertFalse(source_execution_proof(unsafe)["admitted"])
 
+    def test_uploaded_video_stays_in_prepared_source(self):
+        source = dedent("""
+            from noon import *
+            result = Scene()
+            media = await VideoSource.from_upload()
+            plane = result.video(media, start_time=0.2, source_start=0.1)
+            plane.shift(LEFT)
+            result.wait(2)
+        """).lstrip()
+        self.assertTrue(source_execution_proof(source)["admitted"])
+        for altered in (
+            source.replace("result = Scene()", "VideoSource = Circle\nresult = Scene()"),
+            source.replace("result.video(media", "Circle().video(media"),
+            source.replace("plane = result.video", "result.wait(1)\nplane = result.video"),
+            source.replace("VideoSource.from_upload()", "VideoSource.from_upload(url)"),
+        ):
+            with self.subTest(source=altered):
+                self.assertFalse(source_execution_proof(altered)["admitted"])
+        construct = dedent("""
+            from noon import Scene, VideoSource
+            class Lesson(Scene):
+                async def construct(self):
+                    self.video(await VideoSource.from_upload())
+                    await self.wait(2)
+        """).lstrip()
+        self.assertTrue(source_execution_proof(construct)["admitted"])
+
     def test_audio_option_proof_rejects_integer_literals_outside_device_range_without_raising(self):
         duration = str(10**1000)
         source = ("from noon import *\nclass Example(Scene):\n"

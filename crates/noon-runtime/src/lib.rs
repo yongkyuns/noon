@@ -1823,6 +1823,7 @@ impl SceneInstance {
 
         if self.frame.time != previous_time {
             stats.time_effect_rows = self.invalidate_time_effects();
+            self.invalidate_video_frame(previous_time);
         }
         self.last_stats = stats;
         if self.frame.time != previous_time {

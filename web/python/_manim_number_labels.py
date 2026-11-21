@@ -108,8 +108,8 @@ def _bind_label_family(axis, labels, context):
         label._canonical_live_target_context = context
     scene = getattr(axis.shaft, "_scene", None)
     if scene is not None:
-        from _manim_scene import _reconcile_completed_family_bindings
-        _reconcile_completed_family_bindings(scene, (labels,))
+        from _manim_scene import _associate_published_wrappers
+        _associate_published_wrappers(scene, (labels,), operation="Scene.completion")
 
 
 def _remember(axis, labels):

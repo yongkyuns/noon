@@ -1590,8 +1590,8 @@ class BarChart(Axes):
                 changed.extend((previous, replacement) if previous is not None else (replacement,))
         scene = self.x_axis.shaft._scene
         if changed and scene is not None:
-            from _manim_scene import _reconcile_completed_family_bindings
-            _reconcile_completed_family_bindings(scene, tuple(changed))
+            from _manim_scene import _associate_published_wrappers
+            _associate_published_wrappers(scene, tuple(changed), operation="Scene.completion")
         return self
 
 

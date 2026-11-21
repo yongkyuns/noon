@@ -3910,6 +3910,7 @@ mod wasm {
     mod numbers;
     mod sample_space;
     mod spatial;
+    mod video;
     mod world_composition;
     use noon_core::{Color, Style, Transform2D, Vec2};
     use wasm_bindgen::prelude::*;

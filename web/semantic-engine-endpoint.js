@@ -101,6 +101,8 @@ export async function attachSemanticEngine(
   let player = null;
   let replayUnavailable = null;
   let hasAudio = false;
+  const videoAssets = request.videoAssets ?? [];
+  const hasVideo = videoAssets.length > 0;
   let lastAudioAuthorizedUntil = null;
   let lastAudioBuffering = null;
   let sections = [];
@@ -468,7 +470,7 @@ export async function attachSemanticEngine(
     const admitsPreparedClock = prepared !== null && !preparedClockAdmitted &&
       samePublication(publication, lastSentPublication);
     if (player !== null && pacing === SEMANTIC_PACING_REALTIME &&
-        (admitsPreparedClock || (firstPresentation && continuationActive))) {
+        (admitsPreparedClock || (firstPresentation && (continuationActive || hasVideo)))) {
       try {
         if (admitsPreparedClock) {
           // A cold seek may already have selected a newer frame. An older
@@ -477,7 +479,8 @@ export async function attachSemanticEngine(
           observeExecutionWake(performance.now(), true);
           prepared.wakeSource();
           requestSourceHandoff();
-        } else observeContinuationWake(performance.now(), true);
+        } else if (continuationActive) observeContinuationWake(performance.now(), true);
+        else observeExecutionWake(performance.now(), true);
       }
       catch (error) { terminateProgression(error); }
     }
@@ -506,6 +509,7 @@ export async function attachSemanticEngine(
         seekRange: observation.seekRange,
         durationSeconds: observation.end,
         buffering: observation.buffering,
+        ...(hasVideo ? { videoReadyUntil: player.videoReadyUntil?.() ?? null } : {}),
         preparing: observation.preparing,
         completed: observation.completed, advancing: observation.advancing,
         loopDuration: observation.loopDuration, loopCount: observation.loopCount,
@@ -544,6 +548,7 @@ export async function attachSemanticEngine(
       playing: player.isPlaying(), nextPatchSequence: "0",
       sections,
       hasAudio,
+      ...(hasVideo ? { buffering: player.videoWaiting(), videoReadyUntil: player.videoReadyUntil() ?? null } : {}),
       ...(hasAudio ? { durationSeconds: player.finiteAudioDuration() } : {}),
       canUndoTranslationDrag: player.canUndoTranslationDrag,
       ...(sourceFinished && continuation !== null
@@ -604,13 +609,20 @@ export async function attachSemanticEngine(
         ...(prepared !== null ? { loopCount: snapshot.loopCount } : {}) });
     }
   }
-  function publishPreparedAudioState(sampledAt = performance.now()) {
-    if (prepared === null || !hasAudio || typeof player.audioAnchorJsonAt !== "function") return;
-    const audioAnchor = JSON.parse(player.audioAnchorJsonAt(
-      sampledAt, performance.timeOrigin + sampledAt,
-    ));
+  function sendVideoDemands() {
+    if (!hasVideo) return;
+    const demands = player.takeVideoDemands?.();
+    if (demands != null) renderPort.postMessage({ type: "video_demands", demands: JSON.parse(demands) });
+  }
+
+  function publishBoundedAudioState(sampledAt = performance.now()) {
+    if (!hasAudio || (prepared === null && !hasVideo)) return;
+    const epoch = performance.timeOrigin + sampledAt;
+    const audioAnchor = JSON.parse(prepared !== null
+      ? player.audioAnchorJsonAt(sampledAt, epoch)
+      : player.audioAnchorJson(epoch));
     if (typeof audioAnchor.buffering !== "boolean") {
-      throw new Error("prepared audio anchor is missing Rust buffering state");
+      throw new Error("bounded audio anchor is missing Rust buffering state");
     }
     const authorizationAdvanced = Number.isFinite(audioAnchor.authorizedUntil) &&
       (lastAudioAuthorizedUntil === null || audioAnchor.authorizedUntil > lastAudioAuthorizedUntil);
@@ -632,7 +644,7 @@ export async function attachSemanticEngine(
   };
   const observeExecutionWake = (wallTime, force = false) => {
     if (receiverFailed) return;
-    if (prepared !== null && !preparedClockAdmitted) {
+    if ((prepared !== null && !preparedClockAdmitted) || (hasVideo && lastPresentedPublication === null)) {
       emitExecutionWake("idle", null, force);
       return;
     }
@@ -1264,7 +1276,7 @@ export async function attachSemanticEngine(
               }
               finiteExport = JSON.parse(player.observeFiniteExportJson());
             }
-            await awaitPresentation(null);
+            presentationReceipt = await awaitPresentation(null);
             break;
           }
           case "acknowledge_finite_export":
@@ -1328,7 +1340,7 @@ export async function attachSemanticEngine(
               context.setSourcePlaybackPlaying(true);
               break;
             }
-            if (hasAudio) {
+            if (hasAudio || hasVideo) {
               await awaitPresentation(null);
               if (currentPlayerTime() === player.finiteAudioDuration()) {
                 await awaitPresentation(send(player.seekDeltaJson(0)));
@@ -1390,8 +1402,8 @@ export async function attachSemanticEngine(
               const navigation = JSON.parse(player.sectionStateJson(sectionTime));
               noTargetSectionQuery = navigation[message.previous ? "previous" : "next"] == null;
             }
-            const playing = hasAudio && currentPlayerPlaying();
-            if (hasAudio) {
+            const playing = (hasAudio || hasVideo) && currentPlayerPlaying();
+            if (hasAudio || hasVideo) {
               if (prepared !== null) {
                 const mutationStartedAtEpochMs = hostEpochMs();
                 player.pausePreparedAt(performance.now());
@@ -1405,6 +1417,7 @@ export async function attachSemanticEngine(
               : player.seekDeltaJson(message.type === "restart_playback" ? 0 : message.time);
             if (prepared !== null) observePreparedWaiting("seek", seekStartedAtEpochMs);
             const acceptedEpochMs = performance.timeOrigin + performance.now();
+            sendVideoDemands();
             const publication = send(delta);
             const evidence = prepared === null ? captureCommandPresentation(publication) : null;
             if (evidence !== null) commandPublication = evidence.identity;
@@ -1421,7 +1434,7 @@ export async function attachSemanticEngine(
                 player.setPreparedPlaying(true);
                 observePreparedWaiting("resume-after-seek", mutationStartedAtEpochMs);
               }
-            } else if (hasAudio) {
+            } else if (hasAudio || hasVideo) {
               const presented = await awaitPresentation(publication);
               if (presented !== null && (publication !== null || evidence !== null)) {
                 presentationReceipt = publication !== null
@@ -1600,13 +1613,20 @@ export async function attachSemanticEngine(
               // reader maps this producing context's monotonic clock in Rust.
               if (preparedClockAdmitted) {
                 const wasBuffering = player.preparedBuffering();
+                const wasVideoBuffering = hasVideo && player.videoBuffering();
                 const sampledAt = testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp();
                 const mutationStartedAtEpochMs = hostEpochMs();
                 const delta = player.tickDeltaTransportJson(sampledAt);
                 observePreparedWaiting("tick", mutationStartedAtEpochMs);
-                send(delta, null, true);
-                if (hasAudio && wasBuffering !== player.preparedBuffering()) {
-                  publishPreparedAudioState(sampledAt);
+                sendVideoDemands();
+                const publication = send(delta, null, true);
+                if (wasVideoBuffering && !player.videoBuffering()) {
+                  await awaitPresentation(publication);
+                  const presentedAt = performance.now();
+                  player.acknowledgeVideoPresentation(presentedAt);
+                  publishBoundedAudioState(presentedAt);
+                } else if (hasAudio && wasBuffering !== player.preparedBuffering()) {
+                  publishBoundedAudioState(sampledAt);
                 }
                 observeExecutionWake(performance.now());
                 prepared.wakeSource();
@@ -1640,7 +1660,18 @@ export async function attachSemanticEngine(
               // without replacing the worker's global clock or its scheduler.
               const wasPlaying = currentPlayerPlaying();
               const sampledAt = testOnlyTickTimestamp === null ? performance.now() : testOnlyTickTimestamp();
-              await publishCallbackPhase(player.tickCallbackPhaseJson(sampledAt));
+              const wasVideoBuffering = hasVideo && player.videoBuffering();
+              const phase = player.tickCallbackPhaseJson(sampledAt);
+              sendVideoDemands();
+              const { publication } = await publishCallbackPhase(phase);
+              if (wasVideoBuffering && !player.videoBuffering()) {
+                await awaitPresentation(publication);
+                const presentedAt = performance.now();
+                player.acknowledgeVideoPresentation(presentedAt);
+                publishBoundedAudioState(presentedAt);
+              } else if (hasVideo && player.videoBuffering()) {
+                publishBoundedAudioState(sampledAt);
+              }
               if (hasAudio && wasPlaying && !currentPlayerPlaying()) {
                 post({ type: "audio_state", audioAnchor: JSON.parse(player.audioAnchorJson(performance.timeOrigin + sampledAt)) });
               }
@@ -1908,6 +1939,17 @@ export async function attachSemanticEngine(
           latestTick = message.timestamp;
           void drain();
         }
+      } else if (message?.type === "video_window" && hasVideo) {
+        try {
+          if (!player.setVideoWindow?.(message.clip, message.start, message.end)) return;
+          if (player.videoBuffering?.()) {
+            latestTick = performance.now();
+            void drain();
+          } else if ((preparedClockAdmitted || (prepared === null && lastPresentedPublication !== null)) &&
+                     currentPlayerPlaying()) {
+            publishBoundedAudioState();
+          }
+        } catch (error) { terminateProgression(error); }
       } else if (message?.type === "transport_writable") {
         if (transportMode === EXECUTION_TRANSPORT_SHARED && transport?.flush() > 0) {
           renderPort.postMessage({ type: "shared_delta" });
@@ -1977,6 +2019,7 @@ export async function attachSemanticEngine(
     if (resources.byteLength === 0) {
       throw new Error("semantic execution emitted an empty retained resource bundle");
     }
+    if (hasVideo) renderPort.postMessage({ type: "video_assets", assets: videoAssets });
     renderPort.postMessage({ type: "retained_resources", bytes: resources }, [resources.buffer]);
     // A shared mailbox may already contain its initial snapshot when setup is
     // received. Install resources before exposing that mailbox to the renderer.
@@ -1990,6 +2033,7 @@ export async function attachSemanticEngine(
     }
     if (prepared !== null || (sourceFinished && !completedStaticSource)) send(player.initialDeltaJson());
     else await publishCallbackPhase(player.initialCallbackPhaseJson(), { initial: true });
+    sendVideoDemands();
     controlPort.start();
     renderPort.start();
     continuationActive = continuation !== null && !sourceFinished;
@@ -2040,7 +2084,7 @@ export async function attachSemanticEngine(
       try {
         observePreparedWaiting("prefix-delivery");
         if (hasAudio && currentPlayerPlaying() && typeof player.audioAnchorJsonAt === "function") {
-          publishPreparedAudioState();
+          publishBoundedAudioState();
         }
         if (diagnosticReady) observeExecution(state("state"));
         observeExecutionWake(performance.now());

@@ -1,7 +1,9 @@
 """Real CPython extension and native GPU proof; run with PYTHONPATH=build/python."""
 import asyncio
+import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,6 +16,42 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NativePythonTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(_noon_native.Context, "createVideo"),
+                         "requires a native extension built with --video")
+    def test_video_uses_ordinary_scene_membership_and_finite_export(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch)
+            clip, silent = directory / "clip.mp4", directory / "silent.mp4"
+            fixture = ROOT / "crates/noon-export/tests/fixtures/video-pts-and-click.ffmpeg"
+            subprocess.run(["ffmpeg", *fixture.read_text().splitlines(), str(clip)], check=True)
+            subprocess.run([
+                "ffmpeg", "-v", "error", "-i", str(clip),
+                "-map", "0:v:0", "-c", "copy", str(silent),
+            ], check=True)
+            for path, tracks in [(clip, {"video", "audio"}), (silent, {"video"})]:
+                with self.subTest(tracks=tracks):
+                    source = f"""
+from pathlib import Path
+from noon import Scene
+
+result = Scene()
+video = result.video(Path({str(path)!r}), start_time=0.1, source_start=0.125, source_end=0.75)
+assert result.mobjects == [video] and result.time == 0.0
+video.set_opacity(0.85)
+"""
+                    scene = asyncio.run(run_source(source, retain_history=True))
+                    view = prepare_view(scene)
+                    destination = path.with_suffix(".export.mp4")
+                    try:
+                        output = view.export_mp4(destination, fps=30, width=128, height=72)
+                    finally:
+                        view.close()
+                    self.assertEqual(output.frames, 22)
+                    probe = subprocess.check_output([
+                        "ffprobe", "-v", "error", "-show_streams", "-of", "json", str(destination),
+                    ])
+                    self.assertEqual({item["codec_type"] for item in json.loads(probe)["streams"]}, tracks)
+
     def test_published_paired_examples_execute_without_a_browser(self):
         self.assertIn(Path(_noon_native.__file__).suffix, {".so", ".pyd"})
         for name in ("ordinary_affine_play", "ordinary_composition_play",

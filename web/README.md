@@ -213,6 +213,34 @@ Transform semantics are authored in Rust and lowered into renderer-independent e
 
 `node scripts/manim-typst-authoring-smoke.mjs` qualifies native Text, multiline text, Rust-owned layout, Typst/MathTypst font scaling, and mixed painter order through shared execution and actual glyph rendering. Its optional `NOON_TEXT_AUTHORING_REPORT` contains read-only runtime observations; the harness does not export an authored scene document.
 
+## Video objects
+
+Choose **Video file** in the playground, paste the scene below, and select **Run**.
+The file stays in the browser. Noon supports local H.264 MP4 clips with optional
+AAC audio, up to 60 seconds and 128 MiB.
+
+```python
+from noon import LEFT, Scene, VideoSource
+
+result = Scene()
+clip = await VideoSource.from_upload()
+video = result.video(clip, start_time=0.25, source_start=0, source_end=2, height=5)
+video.shift(LEFT)
+result.wait(2.5)
+```
+
+This example uses at least two seconds of source footage. The existing slider
+scrubs silently when paused. Select **Play with sound** to start an audible clip.
+
+For MP4 export, save this example as `scene.py` and omit the final `wait` line.
+The trimmed clip supplies the finite duration. Run the existing exporter after
+building the browser package.
+
+```bash
+node scripts/export-python-scene.mjs scene.py /tmp/noon-video-capture \
+  --video clip.mp4 --mp4 scene.mp4 --fps 30000/1001
+```
+
 ## Live authoring
 
 Edit **Python scene source** and click **Run** to author and attach a shared semantic execution session. Turn on **Auto-run** to submit edits after a 500 ms pause. Both use the same full scene restart. Within a running session, shared Rust semantics own object identity and mutations.

@@ -41,3 +41,18 @@ and its platform build dependencies. Offscreen PNG/MP4 output is provided by
 ## License
 
 MIT. See LICENSE. Third-party resources retain their original notices.
+
+
+## Video objects
+
+Use the `video-decode` and `audio` features to preview a local MP4:
+
+```sh
+cargo run -p noon-native --features video-decode,audio --example video_object -- clip.mp4
+```
+
+Install `ffmpeg` and `ffprobe` on PATH. This profile accepts one H.264 video track
+and optional AAC sound within 60 seconds, 128 MiB and a 1920 × 1080 pixel budget.
+`Scene::video` places the clip on the finite scene timeline. The usual playback
+controls include Space to pause or resume, the arrow keys to seek, and Home to
+restart. Export the same scene through `noon_export::output::export_scene_file`.

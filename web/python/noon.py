@@ -1606,6 +1606,15 @@ class Scene:
             gain=gain, fade_in=fade_in, fade_out=fade_out,
         )
 
+    def video(
+        self, source: object, *, start_time: float = 0.0, source_start: float = 0.0,
+        source_end: float | None = None, height: float = 6.0,
+    ) -> Mobject:
+        """Place native MP4 or a prepared browser VideoSource on the timeline."""
+        return _scene_operations()._canonical_video(
+            self, source, start_time, source_start, source_end, height,
+        )
+
     def on_click_playback(self, target: Mobject, action: object) -> Scene:
         """Declare a finite viewer control through the normal shared Rust picker."""
         from _noon_audio import on_click_playback
@@ -1823,6 +1832,7 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 _PUBLIC_EXPORTS = {
     "AudioSource": "_noon_audio",
+    "VideoSource": "_noon_video",
     "AudioClip": "_noon_audio",
     "PlaybackControl": "_noon_audio",
     "typing": "_manim_typing",

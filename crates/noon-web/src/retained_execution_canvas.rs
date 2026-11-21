@@ -221,6 +221,16 @@ mod wasm {
         preload_bytes_uploaded: usize,
     }
 
+    enum BrowserVideoPixels {
+        External(wgpu::ExternalImageSource),
+        Rgba(js_sys::Uint8Array),
+    }
+
+    type BrowserRasterFrame = (
+        noon_core::RasterImageResourceHandle,
+        Option<(usize, BrowserVideoPixels)>,
+    );
+
     /// Render-worker endpoint for `noon.execution.retained`.
     ///
     /// The immutable resource bundle is installed exactly once at construction.
@@ -241,6 +251,8 @@ mod wasm {
         working_profile: noon_core::ViewColorProfile,
         mirror: InstalledRetainedExecutionMirror,
         pending_frame: bool,
+        video_frame_provider: Option<js_sys::Function>,
+        video_uses_cpu_pixels: bool,
         pending_changes: FrameChanges,
         // Renderer-side capability bit, derived only from admitted worker rows.
         // Ordinary no-glow sessions retain the original zero-extra-work path.
@@ -406,6 +418,10 @@ mod wasm {
                 preload_bytes_uploaded,
             } = build_retained_gpu_state(&mirror, &device, &queue, config.format)?;
 
+            // Software WebGPU can accept a hardware-backed ImageBitmap copy
+            // without making its pixels available to the software texture.
+            let video_uses_cpu_pixels = backend == wgpu::Backend::BrowserWebGpu
+                && device.adapter_info().device_type == wgpu::DeviceType::Cpu;
             let mut result = Self {
                 instance,
                 surface,
@@ -419,6 +435,8 @@ mod wasm {
                 working_profile: noon_core::ViewColorProfile::Compatibility,
                 mirror,
                 pending_frame: false,
+                video_frame_provider: None,
+                video_uses_cpu_pixels,
                 pending_changes: FrameChanges::default(),
                 glow_transport_seen: false,
                 preparer,
@@ -953,6 +971,19 @@ mod wasm {
             Ok(())
         }
 
+        /// The codec host lends ready pixels for a Rust-selected frame.
+        #[wasm_bindgen(js_name = setVideoFrameProvider)]
+        pub fn set_video_frame_provider(&mut self, provider: js_sys::Function) {
+            self.video_frame_provider = Some(provider);
+        }
+
+        /// Repaint the selected publication for explicit export readback.
+        #[wasm_bindgen(js_name = renderExportFrame)]
+        pub fn render_export_frame(&mut self) -> Result<bool, JsValue> {
+            self.pending_frame = true;
+            self.render()
+        }
+
         pub fn render(&mut self) -> Result<bool, JsValue> {
             self.require_webgpu_device()?;
             if self.webgl_context_lifecycle.is_lost()
@@ -963,6 +994,10 @@ mod wasm {
             if !self.drawable || !self.pending_frame {
                 return Ok(false);
             }
+
+            let Some(video_frames) = self.prepare_video_frames()? else {
+                return Ok(false);
+            };
 
             self.prepare_working_profile()?;
 
@@ -1182,11 +1217,37 @@ mod wasm {
                 &self.queue,
                 self.selection_overlay,
             );
+            let mut video_bytes = 0usize;
+            for (handle, frame) in video_frames {
+                let bytes = match frame {
+                    Some((index, BrowserVideoPixels::Rgba(pixels))) => {
+                        if self.renderer.has_video_frame(handle, index) {
+                            Ok(0)
+                        } else {
+                            self.renderer.write_rgba_video_frame(
+                                &self.queue,
+                                handle,
+                                index,
+                                &pixels.to_vec(),
+                            )
+                        }
+                    }
+                    Some((index, BrowserVideoPixels::External(image))) => self
+                        .renderer
+                        .write_external_video_frame(&self.queue, handle, Some((index, image))),
+                    None => self
+                        .renderer
+                        .write_external_video_frame(&self.queue, handle, None),
+                }
+                .map_err(js_error)?;
+                video_bytes = video_bytes.saturating_add(bytes);
+            }
             self.last_bytes_uploaded = upload
                 .bytes_uploaded()
                 .saturating_add(spatial_upload.bytes_uploaded())
                 .saturating_add(transient_upload.bytes_uploaded)
-                .saturating_add(overlay_upload.bytes_uploaded);
+                .saturating_add(overlay_upload.bytes_uploaded)
+                .saturating_add(video_bytes);
             if let (Some(started), Some(timings)) = (upload_started, substage_timings.as_mut()) {
                 timings.upload_cpu_wall_ms = performance_now_ms() - started;
             }
@@ -1674,6 +1735,54 @@ mod wasm {
                 .map_err(js_error)?;
             self.renderer.set_camera(&self.queue, camera);
             Ok(())
+        }
+    }
+
+    impl WasmRetainedExecutionCanvasRenderer {
+        fn prepare_video_frames(&self) -> Result<Option<Vec<BrowserRasterFrame>>, JsValue> {
+            let mut frames = Vec::new();
+            let mut ready = true;
+            let time = self.time();
+            for (origin, handle, video) in self.mirror.resources().video_rasters() {
+                let source = video.source();
+                let frame = if let Some(index) = video.timing().frame_at(source.frame_index(), time)
+                {
+                    let provider = self
+                        .video_frame_provider
+                        .as_ref()
+                        .ok_or_else(|| js_message("video raster requires a frame provider"))?;
+                    let asset_id = source
+                        .external_asset_id()
+                        .ok_or_else(|| js_message("video raster has no browser asset identity"))?;
+                    let clip = format!("{}:{}", origin.arena, origin.id);
+                    let pixels = provider.call4(
+                        &JsValue::NULL,
+                        &asset_id.into(),
+                        &clip.into(),
+                        &(index as u32).into(),
+                        &self.video_uses_cpu_pixels.into(),
+                    )?;
+                    if pixels.is_null() || pixels.is_undefined() {
+                        ready = false;
+                        continue;
+                    }
+                    let pixels = if self.video_uses_cpu_pixels {
+                        BrowserVideoPixels::Rgba(pixels.dyn_into::<js_sys::Uint8Array>().map_err(
+                            |_| js_message("software WebGPU requires RGBA video pixels"),
+                        )?)
+                    } else {
+                        let bitmap = pixels.dyn_into::<web_sys::ImageBitmap>().map_err(|_| {
+                            js_message("browser video provider returned an invalid bitmap")
+                        })?;
+                        BrowserVideoPixels::External(wgpu::ExternalImageSource::ImageBitmap(bitmap))
+                    };
+                    Some((index, pixels))
+                } else {
+                    None
+                };
+                frames.push((handle, frame));
+            }
+            Ok(ready.then_some(frames))
         }
     }
 

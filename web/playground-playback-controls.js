@@ -37,6 +37,7 @@ export class PlaygroundPlaybackControls {
   #nativeEndpointRange = null;
   #nativeEndpointCoordinate = null;
   #buffering = false;
+  #videoReadyUntil = null;
   #preparing = false;
   #seekNotice = null;
   #confirmedTimeSeconds = 0;
@@ -176,6 +177,7 @@ export class PlaygroundPlaybackControls {
         this.#seekRange = state.seekRange;
         this.#durationSeconds = state.durationSeconds;
         this.#buffering = state.buffering;
+        this.#videoReadyUntil = state.videoReadyUntil ?? null;
         this.#preparing = state.preparing === true;
         this.#hasAudio = state.hasAudio === true;
         this.#audioReady = state.audioReady === true;
@@ -195,6 +197,7 @@ export class PlaygroundPlaybackControls {
       sourcePlaybackControllable: state.sourcePlaybackControllable,
       hasAudio: state.hasAudio, audioReady: state.audioReady, audioMuted: state.audioMuted,
       audioVolume: state.audioVolume, sections: state.sections, sectionState: state.sectionState,
+      buffering: state.buffering, videoReadyUntil: state.videoReadyUntil,
       ...(state.hasAudio ? { durationSeconds: state.durationSeconds } : {}),
     });
   }
@@ -284,6 +287,8 @@ export class PlaygroundPlaybackControls {
       this.#buffering = state.buffering;
       this.#preparing = state.preparing === true;
     }
+    if (!prepared && typeof state.buffering === "boolean") this.#buffering = state.buffering;
+    this.#videoReadyUntil = Number.isFinite(state.videoReadyUntil) ? state.videoReadyUntil : null;
     this.#confirmedTimeSeconds = this.#controllable && duration !== null ? Math.min(time, duration) : time;
     this.#timeSeconds = this.#confirmedTimeSeconds;
     this.#playing = playing;
@@ -593,6 +598,7 @@ export class PlaygroundPlaybackControls {
       this.#seekRange = result.seekRange;
       this.#durationSeconds = result.durationSeconds;
       this.#buffering = result.buffering;
+      this.#videoReadyUntil = result.videoReadyUntil ?? null;
       this.#preparing = result.preparing === true;
     }
     const receipt = result.presentationReceipt;
@@ -755,6 +761,9 @@ export class PlaygroundPlaybackControls {
     const buffered = openRail ? (hasReadyRange ? "open" : "empty")
       : hasReadyRange ? "complete" : "none";
     if (this.#root.dataset.buffered !== buffered) this.#root.dataset.buffered = buffered;
+    const ready = this.#videoReadyUntil === null || !hasReadyRange ? 1 :
+      Math.min(1, Math.max(position, (this.#videoReadyUntil - range.start) / (range.end - range.start)));
+    this.#scrubber.style.setProperty("--ready-through", `${100 * ready}%`);
     this.#scrubber.setAttribute(
       "aria-valuetext",
       known
@@ -768,8 +777,8 @@ export class PlaygroundPlaybackControls {
     const readout = !known && this.#unavailableReason !== null && !this.#forwardPlayback
       ? `${formatTime(time)} s · completed` : `${formatTime(time)} / ${endTime} s`;
     this.#timeOutput.value = readout;
-    const title = bufferedTime === null ? ""
-      : `Buffered through ${bufferedTime} s · total duration unknown`;
+    const title = this.#videoReadyUntil !== null ? `Video ready through ${formatTime(this.#videoReadyUntil)} s`
+      : bufferedTime === null ? "" : `Buffered through ${bufferedTime} s · total duration unknown`;
     if (this.#timeOutput.title !== title) this.#timeOutput.title = title;
     if (this.#gestureRange === null) {
       // Reserve room for the longest playhead time on this rail. Changing
@@ -1027,7 +1036,8 @@ function installStyles() {
       min-width: 0;
       height: 1.5rem;
       margin: 0;
-      background: linear-gradient(to right, var(--accent-strong) var(--played, 0%), var(--ready-color) 0)
+      background: linear-gradient(to right, var(--accent-strong) var(--played, 0%), var(--ready-color) 0,
+        var(--ready-color) var(--ready-through, 100%), #30394a 0)
         center / calc(100% - var(--thumb-size)) var(--rail-height) no-repeat;
       cursor: pointer;
     }
@@ -1186,6 +1196,9 @@ function formatTime(seconds) {
 
 function validatePreparedState(state) {
   const { time, preparedFrontier, durationSeconds, buffering, seekRange } = state;
+  const videoReadyUntil = state.videoReadyUntil ?? null;
+  const videoRangeValid = videoReadyUntil === null ||
+    (Number.isFinite(videoReadyUntil) && videoReadyUntil >= time && videoReadyUntil <= preparedFrontier);
   const rangeValid = seekRange === null || (seekRange !== undefined &&
     Number.isFinite(seekRange.start) && seekRange.start >= 0 &&
     Number.isFinite(seekRange.end) && seekRange.end >= seekRange.start &&
@@ -1195,9 +1208,9 @@ function validatePreparedState(state) {
       !Number.isFinite(preparedFrontier) || preparedFrontier < 0 ||
       (preparedFrontier === 0 && durationSeconds !== 0) ||
       !Number.isFinite(time) || time < 0 || time > preparedFrontier ||
-      !rangeValid || typeof buffering !== "boolean" ||
+      !rangeValid || !videoRangeValid || typeof buffering !== "boolean" ||
       (durationSeconds !== null && (!Number.isFinite(durationSeconds) ||
-       durationSeconds !== preparedFrontier || buffering || seekRange === null ||
+       durationSeconds !== preparedFrontier || (buffering && videoReadyUntil === null) || seekRange === null ||
        seekRange.end !== durationSeconds))) {
     throw new TypeError("prepared playback state requires valid selectable bounds, frontier, terminal duration and buffering status");
   }

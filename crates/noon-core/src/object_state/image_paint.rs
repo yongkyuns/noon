@@ -378,6 +378,9 @@ impl ImageMapping {
         local_size: [f64; 2],
         point: [f64; 2],
     ) -> Result<[f64; 4], ImagePaintError> {
+        if image.video().is_some() {
+            return Err(ImagePaintError::MissingResource);
+        }
         let Some(uv) = self.image_uv(point, local_size, [image.width(), image.height()])? else {
             return Ok([0.0; 4]);
         };

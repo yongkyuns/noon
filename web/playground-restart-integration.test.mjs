@@ -52,7 +52,7 @@ function navigationFixture() {
       context.patchStatus.dataset.state = state;
     },
     __NOON_PLAYGROUND_TEST_HOOKS__: { authoringRunOptions: () => ({ preparedPlayback: false }) },
-    window, performance, selectedExampleId: "one", sceneSourceEditor: { value: "source" },
+    window, performance, selectedExampleId: "one", sceneSourceEditor: { value: "source" }, videoFileInput: null,
     autoRunTimer: null, autoRunEpoch: 0, clearTimeout,
     generations: new PlaygroundGeneration(), status: { dataset: {} }, patchStatus: { dataset: {} },
     player: null, playerNeedsRestart: false, playbackControls: null, runtimePreparation: null,

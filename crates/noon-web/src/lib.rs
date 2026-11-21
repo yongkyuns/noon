@@ -98,6 +98,7 @@ mod canonical_authoring_scene;
 ))]
 mod click_glow_pulse_smoke;
 mod clock;
+mod video_asset;
 #[cfg(any(target_arch = "wasm32", test))]
 mod worker_audio;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]

@@ -42,7 +42,7 @@ _SOURCE_CONSTRUCTORS = frozenset("""
 Scene Circle Ellipse Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
 Dot Line Arrow DoubleArrow DashedLine Underline VMobject VGroup Group Text MarkupText Code MathTypst FunctionGraph
 Intersection Union Exclusion Difference
-Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform AudioSource
+Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform AudioSource VideoSource
 ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes ThreeDScene MovingCameraScene LinearTransformationScene
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
@@ -73,7 +73,7 @@ isinstance len list map max min next range reversed round set slice sorted str
 sum tuple type zip ValueError RuntimeError
 """.split())
 _SOURCE_MEMBERS = frozenset("""
-add remove clear play wait audio on_click set_drag_targets set_viewer_draggable next_section
+add remove clear play wait audio video on_click set_drag_targets set_viewer_draggable next_section
 add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace replace_content
 value_tracker bind_position bind_opacity bind_sampled
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
@@ -1364,6 +1364,7 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.admitted_image_loads = set()
         self.admitted_image_paint_loads = set()
         self.admitted_scene_audio_calls = set()
+        self.admitted_scene_video_calls = set()
         self.admitted_audio_factory_attributes = set()
         self.admitted_svg_from_string_attributes = set()
         self.admitted_numpy_attributes = set()
@@ -3348,7 +3349,52 @@ class _SceneOnlySource(ast.NodeVisitor):
                 return length
         raise _OpaqueSource(node, "unproven_text_compiler")
 
+    @staticmethod
+    def _uploaded_video_await(node):
+        return (isinstance(node, ast.Await) and isinstance(call := node.value, ast.Call)
+                and isinstance(call.func, ast.Attribute) and call.func.attr == "from_upload"
+                and isinstance(call.func.value, ast.Name) and call.func.value.id == "VideoSource"
+                and not call.args and not call.keywords)
+
+    def visit_Module(self, node):
+        if self._trusted_noon_binding("Scene"):
+            self._prepare_video_calls(node.body, None)
+        self.generic_visit(node)
+
+    def _prepare_video_calls(self, body, receiver):
+        bindings = _SourceBindings()
+        for statement in body:
+            bindings.visit(statement)
+        scenes = set() if receiver is None else {receiver}
+        sources = set()
+        started = set()
+        for statement in body:
+            value = statement.value if isinstance(statement, (ast.Assign, ast.Expr)) else None
+            if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                    and isinstance(target := statement.targets[0], ast.Name)
+                    and bindings.binding_counts.get(target.id) == 1):
+                if (receiver is None and isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                        and value.func.id == "Scene"):
+                    scenes.add(target.id)
+                if self._uploaded_video_await(value):
+                    sources.add(target.id)
+            if (isinstance(value, ast.Call) and isinstance(call := value.func, ast.Attribute)
+                    and isinstance(call.value, ast.Name) and call.value.id in scenes
+                    and call.attr == "video" and call.value.id not in started and len(value.args) == 1
+                    and all(k.arg in {"start_time", "source_start", "source_end", "height"} for k in value.keywords)):
+                argument = value.args[0]
+                if self._uploaded_video_await(argument) or (isinstance(argument, ast.Name) and argument.id in sources):
+                    self.admitted_scene_video_calls.add(id(call))
+            started.update(child.func.value.id for child in _walk_scope([statement])
+                           if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+                           and child.func.attr in {"play", "wait"} and isinstance(child.func.value, ast.Name))
+
     def visit_Await(self, node):
+        if self._uploaded_video_await(node):
+            if not self._trusted_noon_binding("VideoSource"):
+                raise _OpaqueSource(node, "unproven_video_source")
+            self.visit(node.value.func.value)
+            return
         call = node.value
         if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
                 and call.func.id in _SOURCE_RESOURCE_PREPARATIONS):
@@ -3616,6 +3662,8 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(node, "unproven_numpy_value")
         if not isinstance(node.ctx, ast.Load) or node.attr not in self.members:
             raise _OpaqueSource(node, "unsupported_member" if isinstance(node.ctx, ast.Load) else "unproven_member_write")
+        if node.attr == "video" and id(node) not in self.admitted_scene_video_calls:
+            raise _OpaqueSource(node, "unproven_video_declaration")
         if node.attr == "audio" and id(node) not in self.admitted_scene_audio_calls:
             raise _OpaqueSource(node, "unproven_audio_declaration")
         if node.attr == "small_discovery" and id(node) not in self.admitted_audio_factory_attributes:
@@ -4527,6 +4575,10 @@ class _SceneOnlySource(ast.NodeVisitor):
             raise _OpaqueSource(constructs[1], "unproven_audio_declaration")
         if constructs:
             self._prepare_scene_audio_calls(constructs[0])
+            if (node.bases[0].id == "Scene" and self._trusted_noon_binding("Scene")
+                    and self._simple_construct(constructs[0])
+                    and not any(getattr(member, "name", None) == "video" for member in node.body)):
+                self._prepare_video_calls(constructs[0].body, "self")
         # Methods resolve module globals, not names in their class dictionary.
         previous_members = self.members
         previous_module_scope = self.scopes[0]
@@ -4935,7 +4987,7 @@ async def await_source_checkpoint(value=None, *, condition=False):
 # Known Scene calls, with suspension handled only at the explicit barriers above.
 # Unknown methods (including super().construct()) keep their original host path.
 _SCENE_CALLS = frozenset({
-    "play", "wait", "audio", "add", "remove", "clear", "on_click", "set_drag_targets", "set_viewer_draggable",
+    "play", "wait", "audio", "video", "add", "remove", "clear", "on_click", "set_drag_targets", "set_viewer_draggable",
     "add_foreground_mobject", "add_foreground_mobjects",
     "activate_zooming", "get_zoomed_display_pop_out_animation",
     "bring_to_front", "bring_to_back", "replace", "replace_content", "next_section",

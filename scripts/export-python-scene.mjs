@@ -9,9 +9,11 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
+import { MAX_VIDEO_FILE_BYTES } from "../web/video-source.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const USAGE = `Usage: node scripts/export-python-scene.mjs SOURCE.py CAPTURE_DIRECTORY [options]
+  --video INPUT.mp4      Local file for VideoSource.from_upload()
   --mp4 OUTPUT.mp4       Finalize the capture through the native MP4 sink
   --encoder PATH        Built encode_prepared_capture binary (otherwise cargo run)
   --overwrite           Explicitly replace an existing MP4 after successful export
@@ -52,7 +54,7 @@ function argumentsFor(argv) {
   const config = {
     sourcePath: path.resolve(argv[0]), directory: path.resolve(argv[1]),
     width: 640, height: 360, backend: "webgpu", transport: "transferable",
-    output: null, encoder: null, overwrite: false,
+    output: null, encoder: null, video: null, overwrite: false,
     frameOptions: {
       frame_rate: { numerator: 30, denominator: 1 }, start_frame: 0,
       stop: { kind: "source_end" }, max_frames: 18_000,
@@ -69,6 +71,7 @@ function argumentsFor(argv) {
     const value = argv[++index];
     if (value === undefined) throw new Error(`missing value for ${flag}`);
     switch (flag) {
+      case "--video": config.video = path.resolve(value); break;
       case "--mp4": config.output = path.resolve(value); break;
       case "--encoder": config.encoder = path.resolve(value); break;
       case "--width": config.width = integer(value, flag, 2); break;
@@ -132,6 +135,12 @@ async function run(config) {
   const sourceInfo = await stat(config.sourcePath);
   if (!sourceInfo.isFile() || sourceInfo.size > 8 * 1024 * 1024) throw new Error("Python source must be a regular file within 8 MiB");
   const source = await readFile(config.sourcePath, "utf8");
+  if (config.video !== null) {
+    const input = await stat(config.video);
+    if (!input.isFile() || input.size === 0 || input.size > MAX_VIDEO_FILE_BYTES) {
+      throw new Error("--video requires a nonempty regular MP4 file up to 128 MiB");
+    }
+  }
   await requireNew(config.directory);
   if (config.output !== null && !config.overwrite) await requireNew(config.output);
   const sourceHash = createHash("sha256").update(source).digest("hex");
@@ -154,6 +163,16 @@ async function run(config) {
     page.on("pageerror", error => errors.push(String(error)));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
+    if (config.video !== null) {
+      await page.evaluate(() => {
+        const video = document.createElement("input");
+        video.type = "file";
+        video.id = "capture-video-file";
+        video.hidden = true;
+        document.body.append(video);
+      });
+      await page.locator("#capture-video-file").setInputFiles(config.video);
+    }
     const start = await deadline(page.evaluate(async ({ source, width, height, frameOptions, transport }) => {
       const { PythonAuthoringClient } = await import("./authoring-client.js");
       const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
@@ -164,7 +183,10 @@ async function run(config) {
       const execution = new AuthoringExecutionClient(canvas, { onError: error => { throw error; } });
       window.noonFiniteCapture = { authoring, execution };
       const runtimeBuildIdentity = await authoring.ready();
-      const authored = await authoring.run(source, {});
+      const input = document.querySelector("#capture-video-file");
+      const videoFile = input?.files[0] ?? null;
+      input?.remove();
+      const authored = await authoring.run(source, {}, { videoFile });
       if (!authored.semanticExecution || authored.semanticExecution.continuationGeneration !== undefined) {
         throw new Error("export requires a complete immutable Python scene without a live continuation");
       }
@@ -172,17 +194,10 @@ async function run(config) {
         authoringClient: authoring, initiallyPaused: true, transportMode: transport,
         loopDurationSeconds: Math.max(authored.duration, 1),
       });
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const plan = await execution.beginFiniteExport(frameOptions);
       if (authored.duration > plan.source_end) {
         throw new Error(`finite export does not yet support a trailing authored interval beyond retained tracks/audio (${authored.duration} > ${plan.source_end} seconds)`);
       }
-      const copy = document.createElement("canvas");
-      copy.width = width; copy.height = height;
-      const context = copy.getContext("2d", { willReadFrequently: true, alpha: false });
-      if (context === null) throw new Error("RGBA readback canvas is unavailable");
-      window.noonFiniteCapture.copy = copy;
-      window.noonFiniteCapture.context = context;
       window.noonFiniteCapture.base64 = bytes => {
         let encoded = "";
         for (let first = 0; first < bytes.length; first += 32_768) {
@@ -208,7 +223,11 @@ async function run(config) {
     while (status.kind !== "complete") {
       if (interrupted) throw new Error("Python capture cancelled");
       assert.equal(status.kind, "needs_sample");
-      const sample = await deadline(page.evaluate(() => window.noonFiniteCapture.execution.sampleFiniteExport()), "renderer sample");
+      const sample = await deadline(page.evaluate(async () => {
+        const { execution, base64 } = window.noonFiniteCapture;
+        const { pixels, ...sample } = await execution.sampleFiniteExport();
+        return { ...sample, rgba: pixels === undefined ? null : base64(pixels) };
+      }), "renderer sample");
       assert.equal(sample.kind, "sample");
       const observation = sample.observation;
       manifestBytes += Buffer.byteLength(JSON.stringify(observation)) + 1;
@@ -216,19 +235,7 @@ async function run(config) {
       samples.push(observation);
       if (sample.frame !== null) {
         assert.equal(sample.frame.pts, frames);
-        const base64 = await deadline(page.evaluate(async ({ width, height }) => {
-          // The worker command already waited for the matching retained
-          // presentation. Let its OffscreenCanvas placeholder reach the page,
-          // then synchronously copy pixels before acknowledging that sample.
-          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-          const { execution, context, base64 } = window.noonFiniteCapture;
-          if (execution.canvas.width !== width || execution.canvas.height !== height) {
-            throw new Error("renderer dimensions changed during finite capture");
-          }
-          context.drawImage(execution.canvas, 0, 0);
-          return base64(context.getImageData(0, 0, width, height).data);
-        }, { width: config.width, height: config.height }), "RGBA readback");
-        const rgba = Buffer.from(base64, "base64");
+        const rgba = Buffer.from(sample.rgba, "base64");
         assert.equal(rgba.length, frameBytes);
         await framesFile.writeFile(rgba);
         frames += 1;

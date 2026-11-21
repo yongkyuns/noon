@@ -115,6 +115,7 @@ py-modules = [
     "_noon_shaders",
     "_noon_source",
     "_noon_spatial",
+    "_noon_video",
     "noon",
     "noon_native",
 ]

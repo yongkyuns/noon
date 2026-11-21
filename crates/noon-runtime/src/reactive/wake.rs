@@ -101,6 +101,26 @@ impl SceneInstance {
         self.timeline_scheduler.live_group_count() != 0 || self.has_replay_interval()
     }
 
+    pub fn video_rasters(
+        &self,
+    ) -> &[(
+        noon_core::RasterImageResourceHandle,
+        noon_core::VideoRasterResource,
+    )] {
+        self.timeline_scheduler.video_rasters()
+    }
+
+    pub(crate) fn invalidate_video_frame(&mut self, previous_time: f64) {
+        if self
+            .timeline_scheduler
+            .next_video_frame(previous_time)
+            .is_some_and(|boundary| boundary <= self.frame.time)
+        {
+            self.changes
+                .accumulate(crate::FrameChanges::presentation_redraw());
+        }
+    }
+
     /// Current runtime-owned dirty/deadline/completion state for platform hosts.
     pub fn wake_state(&self) -> RuntimeWakeState {
         RuntimeWakeState {
@@ -112,6 +132,11 @@ impl SceneInstance {
         } else {
             TimelineWakeState::Continuous
         })
+        .with_additional_timeline(
+            self.timeline_scheduler
+                .next_video_frame(self.frame.time)
+                .map_or(TimelineWakeState::Quiescent, TimelineWakeState::Deadline),
+        )
         .with_additional_timeline(
             self.next_replay_revision_time()
                 .map_or(TimelineWakeState::Quiescent, TimelineWakeState::Deadline),

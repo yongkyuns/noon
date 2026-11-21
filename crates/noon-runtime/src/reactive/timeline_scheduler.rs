@@ -86,7 +86,7 @@ struct TimelineEventKey {
 enum EventOccurrence {
     Track(TrackId),
     CameraMotion(usize),
-    AudioClip,
+    Media,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,7 +98,7 @@ struct ScheduledTrackGroup {
 enum ScheduledTimelineTarget {
     Track(CompiledChannelKey),
     FamilyAnimation(usize),
-    AudioClip,
+    Media,
 }
 
 /// Event-driven scheduler with stable channel slots.
@@ -114,6 +114,10 @@ pub struct TimelineEventScheduler {
     events: BTreeMap<TimelineEventKey, EventKind>,
     group_events: Vec<Vec<TimelineEventKey>>,
     time: f64,
+    video_rasters: Vec<(
+        noon_core::RasterImageResourceHandle,
+        noon_core::VideoRasterResource,
+    )>,
     active_counts: Vec<u32>,
     active_groups: Vec<usize>,
     active_positions: Vec<usize>,
@@ -134,6 +138,7 @@ impl TimelineEventScheduler {
             events: BTreeMap::new(),
             group_events: Vec::new(),
             time: f64::NEG_INFINITY,
+            video_rasters: Vec::new(),
             active_counts: Vec::new(),
             active_groups: Vec::new(),
             active_positions: Vec::new(),
@@ -189,11 +194,38 @@ impl TimelineEventScheduler {
             scheduler.append_family_animation(index, start_time, end_time);
         }
         for clip in compiled.audio_clips() {
+            scheduler.append_media_interval(
+                clip.definition().start_time(),
+                clip.definition().end_time(),
+            );
+        }
+        for (handle, video) in compiled.video_rasters() {
             scheduler
-                .append_audio_clip(clip.definition().start_time(), clip.definition().end_time());
+                .append_media_interval(video.timing().scene_start(), video.timing().scene_end());
+            scheduler.video_rasters.push((handle, video.clone()));
         }
         scheduler.last_stats = TimelineSchedulerStats::default();
         scheduler
+    }
+
+    pub(crate) fn next_video_frame(&self, time: f64) -> Option<f64> {
+        self.video_rasters
+            .iter()
+            .filter_map(|(_, video)| {
+                video
+                    .timing()
+                    .next_boundary(video.source().frame_index(), time)
+            })
+            .min_by(f64::total_cmp)
+    }
+
+    pub(crate) fn video_rasters(
+        &self,
+    ) -> &[(
+        noon_core::RasterImageResourceHandle,
+        noon_core::VideoRasterResource,
+    )] {
+        &self.video_rasters
     }
 
     pub const fn last_stats(&self) -> TimelineSchedulerStats {
@@ -505,23 +537,17 @@ impl TimelineEventScheduler {
         }
     }
 
-    fn append_audio_clip(&mut self, start_time: f64, end_time: f64) {
-        let group = self.allocate_group(ScheduledTimelineTarget::AudioClip);
-        // The device realizes this immutable interval. Its boundaries wake the
-        // existing runtime, but it needs no continuously evaluated property or
-        // active-group slot between them. Static visuals can therefore sleep.
+    fn append_media_interval(&mut self, start_time: f64, end_time: f64) {
+        let group = self.allocate_group(ScheduledTimelineTarget::Media);
+        // The host realizes the media. Include its duration in the shared timeline
+        // and leave room for static scenes to sleep between presentation boundaries.
         self.insert_event(
             group,
-            EventOccurrence::AudioClip,
+            EventOccurrence::Media,
             start_time,
             EventKind::Instant,
         );
-        self.insert_event(
-            group,
-            EventOccurrence::AudioClip,
-            end_time,
-            EventKind::Instant,
-        );
+        self.insert_event(group, EventOccurrence::Media, end_time, EventKind::Instant);
     }
 
     /// Rebuild scheduler state for direct seek. Direct seek is intentionally
@@ -670,7 +696,7 @@ impl TimelineEventScheduler {
                 ScheduledTimelineTarget::FamilyAnimation(index) => {
                     requested_family_animations.push(index)
                 }
-                ScheduledTimelineTarget::AudioClip => {}
+                ScheduledTimelineTarget::Media => {}
             }
         }
         TimelineAdvancePreview {
@@ -821,7 +847,7 @@ impl TimelineEventScheduler {
             ScheduledTimelineTarget::FamilyAnimation(index) => {
                 self.requested_family_animations.push(index)
             }
-            ScheduledTimelineTarget::AudioClip => {}
+            ScheduledTimelineTarget::Media => {}
         }
     }
 

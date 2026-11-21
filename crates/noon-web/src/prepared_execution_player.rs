@@ -6,6 +6,7 @@
 use crate::browser_pointer_input::BrowserPointerBinding;
 use crate::prepared_canvas_playback::PreparedCanvasPlayback;
 use crate::semantic_execution_player::WasmExecutionWake;
+use crate::video_asset::readiness::BrowserVideoReadiness;
 use crate::worker_pointer_presentation::{WorkerPointerInput, WorkerPointerPresentation};
 use crate::{
     BrowserExecutionCadence, BrowserExecutionWakeClock, BrowserExecutionWakePlan, BrowserHostWake,
@@ -49,6 +50,7 @@ pub struct PreparedExecutionPlayer {
     playback: PreparedCanvasPlayback,
     section_navigation: noon::SceneSectionNavigation,
     clock: BrowserExecutionWakeClock,
+    video: BrowserVideoReadiness,
     encoder: RetainedFamilyExecutionDeltaEncoder,
     snapshot_sent: bool,
     last_selection: Option<noon::integration::PointerSelectionPresentation>,
@@ -70,6 +72,7 @@ impl PreparedExecutionPlayer {
             playback: PreparedCanvasPlayback::new(reader),
             section_navigation: noon::SceneSectionNavigation::default(),
             clock: BrowserExecutionWakeClock::default(),
+            video: BrowserVideoReadiness::default(),
             encoder: RetainedFamilyExecutionDeltaEncoder::new(transport_session),
             snapshot_sent: false,
             last_selection: None,
@@ -205,6 +208,23 @@ impl PreparedExecutionPlayer {
         Ok(())
     }
 
+    fn wake_state(&self) -> noon_runtime::RuntimeWakeState {
+        let wake = self.playback.wake_state();
+        if self.video.waiting() {
+            return wake.without_timeline_wake();
+        }
+        if self.playback.advancing() {
+            if let Some(deadline) = self.video.next_preload(
+                self.playback.reader.video_rasters(),
+                self.playback.reader.frame().time,
+            ) {
+                return wake
+                    .with_additional_timeline(noon_runtime::TimelineWakeState::Deadline(deadline));
+            }
+        }
+        wake
+    }
+
     fn observe_clock(
         &mut self,
         wall_time_ms: f64,
@@ -212,7 +232,7 @@ impl PreparedExecutionPlayer {
         Self::validate_wall_time(wall_time_ms)?;
         self.clock
             .directive(
-                BrowserExecutionWakePlan::from_runtime(self.playback.wake_state()),
+                BrowserExecutionWakePlan::from_runtime(self.wake_state()),
                 wall_time_ms,
                 self.playback.reader.frame().time,
             )
@@ -220,30 +240,39 @@ impl PreparedExecutionPlayer {
     }
 
     fn tick(&mut self, wall_time_ms: f64) -> Result<(), String> {
-        let plan = BrowserExecutionWakePlan::from_runtime(self.playback.wake_state());
+        let plan = BrowserExecutionWakePlan::from_runtime(self.wake_state());
         let directive = self.observe_clock(wall_time_ms)?;
-        let target = match (directive.wake(), plan.cadence()) {
-            (BrowserHostWake::AnimationFrame, BrowserExecutionCadence::AnimationFrame) => Some(
-                self.clock
-                    .scene_time_at(wall_time_ms)
-                    .ok_or("missing prepared playback epoch")?,
-            ),
-            (
-                BrowserHostWake::TimerAfterMilliseconds(delay),
-                BrowserExecutionCadence::TimerAtSceneTime(deadline),
-            ) if delay <= 0.0 => Some(
-                self.clock
-                    .scene_time_at(wall_time_ms)
-                    .ok_or("missing prepared playback epoch")?
-                    .max(deadline),
-            ),
-            _ => None,
+        let target = if self.video.pending.is_some() {
+            self.video.pending
+        } else {
+            match (directive.wake(), plan.cadence()) {
+                (BrowserHostWake::AnimationFrame, BrowserExecutionCadence::AnimationFrame) => Some(
+                    self.clock
+                        .scene_time_at(wall_time_ms)
+                        .ok_or("missing prepared playback epoch")?,
+                ),
+                (
+                    BrowserHostWake::TimerAfterMilliseconds(delay),
+                    BrowserExecutionCadence::TimerAtSceneTime(deadline),
+                ) if delay <= 0.0 => Some(
+                    self.clock
+                        .scene_time_at(wall_time_ms)
+                        .ok_or("missing prepared playback epoch")?
+                        .max(deadline),
+                ),
+                _ => None,
+            }
         };
         if let Some(target) = target {
-            self.playback
-                .advance_clock_sample(target)
-                .map_err(|error| error.to_string())?;
-            if self.playback.take_clock_reanchor() {
+            let current = self.playback.reader.frame().time;
+            let selected = self.playback.time_from_clock(target);
+            let videos = self.playback.reader.video_rasters();
+            if videos.is_empty() || self.video.allow_sample(videos, current, target, selected) {
+                self.playback
+                    .advance_clock_sample(target)
+                    .map_err(|error| error.to_string())?;
+            }
+            if self.playback.take_clock_reanchor() && !self.video.awaiting_picture {
                 self.clock
                     .reanchor(wall_time_ms, self.playback.reader.frame().time)
                     .ok_or("prepared playback loop cannot re-anchor its clock")?;
@@ -362,6 +391,7 @@ impl PreparedExecutionPlayer {
         self.last_selection = None;
         self.last_publication = None;
         self.no_change_presentation = None;
+        self.video = BrowserVideoReadiness::default();
         self.clock = BrowserExecutionWakeClock::default();
         Ok(())
     }
@@ -417,14 +447,22 @@ impl PreparedExecutionPlayer {
         if !sampled_epoch_ms.is_finite() {
             return Err("audio anchor requires a finite host timestamp".into());
         }
+        let horizon = self
+            .playback
+            .reader
+            .end_time()
+            .unwrap_or_else(|| self.playback.reader.frontier());
+        let authorized = self
+            .video
+            .boundary(self.playback.reader.video_rasters(), time)
+            .map_or(horizon, |limit| horizon.min(limit));
         Ok(serde_json::json!({
             "session": self.encoder.session(),
             "time": time,
             "playing": self.playback.playing(),
-            "buffering": self.playback.buffering() || self.playback.preparing(),
+            "buffering": self.prepared_buffering() || self.playback.preparing(),
             "sampledEpochMs": sampled_epoch_ms,
-            "authorizedUntil": self.playback.reader.end_time()
-                .unwrap_or_else(|| self.playback.reader.frontier()),
+            "authorizedUntil": authorized,
         })
         .to_string())
     }
@@ -436,6 +474,8 @@ impl PreparedExecutionPlayer {
                 "prepared transport has already started; initial delta cannot be repeated".into(),
             );
         }
+        self.video
+            .demand(self.playback.reader.video_rasters(), self.prepared_time());
         serde_json::to_string(
             &self
                 .delta(true)?
@@ -473,10 +513,52 @@ impl PreparedExecutionPlayer {
         self.drain_delta_transport_json()
     }
 
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setVideoWindow))]
+    pub fn set_video_window(
+        &mut self,
+        clip: &str,
+        start: usize,
+        end: usize,
+    ) -> Result<bool, String> {
+        self.video
+            .update(self.playback.reader.video_rasters(), clip, start, end)
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = videoReadyUntil))]
+    pub fn video_ready_until(&self) -> f64 {
+        let reader = &self.playback.reader;
+        let horizon = reader.end_time().unwrap_or_else(|| reader.frontier());
+        self.video
+            .boundary(reader.video_rasters(), self.prepared_time())
+            .map_or(horizon, |limit| horizon.min(limit))
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = videoBuffering))]
+    pub fn video_buffering(&self) -> bool {
+        self.video.pending.is_some()
+    }
+
+    /// Finish the existing presentation barrier after a blocked video sample.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = acknowledgeVideoPresentation))]
+    pub fn acknowledge_video_presentation(&mut self, wall_time_ms: f64) -> Result<(), String> {
+        Self::validate_wall_time(wall_time_ms)?;
+        if std::mem::take(&mut self.video.awaiting_picture) {
+            self.clock
+                .reanchor(wall_time_ms, self.prepared_time())
+                .ok_or("video presentation cannot re-anchor the prepared clock")?;
+        }
+        Ok(())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = takeVideoDemands))]
+    pub fn take_video_demands(&mut self) -> Option<String> {
+        self.video.take_demands()
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = executionWake))]
     pub fn execution_wake(&mut self, wall_time_ms: f64) -> Result<WasmExecutionWake, String> {
         let directive = self.observe_clock(wall_time_ms)?;
-        let wake = self.playback.wake_state();
+        let wake = self.wake_state();
         let wake = if !self.playback.preparing() && self.playback.reader.interactions_active() {
             wake.with_additional_timeline(noon_runtime::TimelineWakeState::Continuous)
         } else {
@@ -498,6 +580,9 @@ impl PreparedExecutionPlayer {
         self.playback
             .seek(time)
             .map_err(|error| error.to_string())?;
+        self.video.clear_selection();
+        self.video
+            .demand(self.playback.reader.video_rasters(), time);
         self.clock = BrowserExecutionWakeClock::default();
         self.delta(false)?
             .map(|delta| serde_json::to_string(&delta).map_err(|error| error.to_string()))
@@ -507,6 +592,7 @@ impl PreparedExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPreparedPlaying))]
     pub fn set_prepared_playing(&mut self, playing: bool) {
         if self.playback.set_playing(playing) {
+            self.video.clear_selection();
             self.clock = BrowserExecutionWakeClock::default();
         }
     }
@@ -579,7 +665,7 @@ impl PreparedExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedBuffering))]
     pub fn prepared_buffering(&self) -> bool {
-        self.playback.buffering()
+        self.playback.buffering() || self.video.waiting()
     }
 
     /// One coherent Rust-owned observation for status and qualification traces.
@@ -587,8 +673,11 @@ impl PreparedExecutionPlayer {
     pub fn prepared_playback_state_json(&self, wall_time_ms: f64) -> Result<String, String> {
         Self::validate_wall_time(wall_time_ms)?;
         let held_presentation = self.held_presentation(wall_time_ms);
+        let mut observation = self.playback.observation();
+        observation.buffering = self.prepared_buffering();
+        observation.advancing &= !observation.buffering;
         serde_json::to_string(&PreparedPlaybackState {
-            observation: self.playback.observation(),
+            observation,
             held_presentation,
         })
         .map_err(|error| error.to_string())
@@ -596,8 +685,7 @@ impl PreparedExecutionPlayer {
 
     fn held_presentation(&self, wall_time_ms: f64) -> Option<PreparedHeldPresentation> {
         let publication = self.last_publication?;
-        let wake = self.playback.wake_state();
-        let plan = BrowserExecutionWakePlan::from_runtime(wake);
+        let plan = BrowserExecutionWakePlan::from_runtime(self.wake_state());
         let BrowserExecutionCadence::TimerAtSceneTime(valid_until) = plan.cadence() else {
             return None;
         };
@@ -640,7 +728,7 @@ impl PreparedExecutionPlayer {
         Self::validate_wall_time(wall_time_ms)?;
         let current = self.prepared_time();
         let BrowserExecutionCadence::TimerAtSceneTime(deadline) =
-            BrowserExecutionWakePlan::from_runtime(self.playback.wake_state()).cadence()
+            BrowserExecutionWakePlan::from_runtime(self.wake_state()).cadence()
         else {
             return Ok(current);
         };
@@ -654,7 +742,12 @@ impl PreparedExecutionPlayer {
         {
             return Ok(self.playback.time_from_clock(observed));
         }
-        Ok(observed.min(deadline).max(current))
+        let limit = self
+            .video
+            .boundary(self.playback.reader.video_rasters(), current)
+            .unwrap_or(deadline)
+            .min(deadline);
+        Ok(observed.min(limit).max(current))
     }
 
     /// Preserve elapsed interior static-wait time before pausing, without a
@@ -664,9 +757,17 @@ impl PreparedExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = pausePreparedAt))]
     pub fn pause_prepared_at(&mut self, wall_time_ms: f64) -> Result<(), String> {
         let time = self.prepared_playback_time_at(wall_time_ms)?;
+        if self
+            .video
+            .boundary(self.playback.reader.video_rasters(), self.prepared_time())
+            .is_some_and(|limit| limit <= time)
+        {
+            self.set_prepared_playing(false);
+            return Ok(());
+        }
         let looping = self.playback.loop_duration().is_some()
             && self.playback.reader.end_time().is_some_and(|end| end > 0.0);
-        if looping {
+        if looping && self.video.pending.is_none() {
             if let Some(requested) = self.clock.scene_time_at(wall_time_ms) {
                 self.playback
                     .advance_clock_sample(requested)

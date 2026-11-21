@@ -180,6 +180,8 @@
 
       .actions {
         display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
         align-items: center;
         gap: 0.38rem;
       }
@@ -495,6 +497,8 @@
           <div class="pane-toolbar">
             <span class="file-label">main.py</span>
             <div class="actions">
+              <input id="video-file" type="file" accept=".mp4,video/mp4" hidden>
+              <button id="choose-video-file" type="button" class="secondary-button">Video file</button>
               <label class="auto-run-option">
                 <input id="auto-run" type="checkbox" autocomplete="off">
                 Auto-run

@@ -1136,3 +1136,70 @@ fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
     assert_eq!(f.player.playback.reader.frame(), &frame);
     assert!(!f.player.prepared_playing());
 }
+
+#[test]
+fn prepared_video_wait_holds_the_shared_clock_and_mixer_at_the_same_pts_boundary() {
+    let mut scene = Scene::new();
+    let clip =
+        crate::video_asset::BrowserVideoSource::new(17, 16, 9, vec![0.0, 0.25, 0.5, 0.75], 1.0)
+            .unwrap();
+    let pcm =
+        noon_core::AudioResource::from_interleaved(8_000, 1, vec![0.25; 8_000], 32_000).unwrap();
+    noon::integration::place_video(
+        &mut scene,
+        std::sync::Arc::new(clip),
+        Some((&pcm, 0.0)),
+        0.0,
+        0.0..1.0,
+        2.0,
+    )
+    .unwrap();
+    let mut source = noon::integration::scene_execution::lower(&scene).unwrap();
+    source
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let segment = source.wait_segment(1.25).unwrap();
+    source.advance_to(segment.end_time()).unwrap();
+    let (_, reader) = source.create_prepared_prefix(segment).unwrap();
+    let mut player = PreparedExecutionPlayer::from_reader(reader, 952);
+    let [(handle, _)] = player.playback.reader.video_rasters() else {
+        panic!("video missing from history")
+    };
+    let clip_key = crate::video_asset::readiness::clip_key(*handle);
+    player.initial_delta_json().unwrap();
+    assert!(player.set_video_window(&clip_key, 0, 1).unwrap());
+    player.execution_wake(1_000.0).unwrap();
+
+    let anchor = |player: &PreparedExecutionPlayer, wall| {
+        serde_json::from_str::<serde_json::Value>(&player.audio_anchor_json_at(wall, wall).unwrap())
+            .unwrap()
+    };
+    assert_eq!(anchor(&player, 1_000.0)["authorizedUntil"], 0.25);
+    assert!(player.tick_delta_json(1_250.0).unwrap().is_none());
+    assert!(player.prepared_playing());
+    assert!(player.video_buffering());
+    assert!(player
+        .execution_wake(4_000.0)
+        .unwrap()
+        .timer_after_milliseconds()
+        .is_none());
+    assert_eq!(player.prepared_time(), 0.0);
+    assert_eq!(anchor(&player, 4_000.0)["buffering"], true);
+    assert_eq!(anchor(&player, 4_000.0)["authorizedUntil"], 0.25);
+
+    assert!(player.set_video_window(&clip_key, 0, 3).unwrap());
+    let delta = player.tick_delta_json(4_000.0).unwrap().unwrap();
+    assert_eq!(decode(&delta).retained.time, 0.25);
+    assert_eq!(anchor(&player, 4_000.0)["time"], 0.25);
+    assert_eq!(anchor(&player, 4_000.0)["buffering"], true);
+    assert_eq!(player.prepared_playback_time_at(4_125.0).unwrap(), 0.25);
+    player.acknowledge_video_presentation(4_150.0).unwrap();
+    assert_eq!(anchor(&player, 4_150.0)["buffering"], false);
+    assert_eq!(anchor(&player, 4_150.0)["authorizedUntil"], 0.75);
+    assert_eq!(player.prepared_playback_time_at(4_275.0).unwrap(), 0.375);
+
+    player.pause_prepared_at(4_275.0).unwrap();
+    player.seek_delta_json(0.0).unwrap();
+    assert_eq!(anchor(&player, 4_500.0)["time"], 0.0);
+    assert_eq!(anchor(&player, 4_500.0)["playing"], false);
+}

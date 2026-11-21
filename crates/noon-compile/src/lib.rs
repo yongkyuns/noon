@@ -1975,6 +1975,15 @@ impl CompiledScene {
         &self.resources
     }
 
+    pub fn video_rasters(
+        &self,
+    ) -> impl Iterator<Item = (RasterImageResourceHandle, &noon_core::VideoRasterResource)> {
+        self.resources
+            .images
+            .iter()
+            .filter_map(|(&handle, image)| image.video().map(|video| (handle, video)))
+    }
+
     pub fn text_resources(&self) -> &impl TextResourceLookup {
         &self.resources
     }

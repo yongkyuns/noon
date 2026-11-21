@@ -2035,9 +2035,11 @@ dependencies = [
  "noon-typst",
  "num-bigint",
  "pollster",
+ "serde",
  "serde_json",
  "swash",
  "syntect",
+ "tempfile",
  "two-face 0.5.2+bat-0.26.1",
  "typst-assets",
  "usvg 0.48.1",
@@ -2071,6 +2073,7 @@ dependencies = [
  "pollster",
  "serde",
  "serde_json",
+ "tempfile",
  "wgpu",
 ]
 
@@ -3734,6 +3737,19 @@ name = "target-lexicon"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
+
+[[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "getrandom 0.4.3",
+ "once_cell",
+ "rustix 1.1.5",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "termcolor"

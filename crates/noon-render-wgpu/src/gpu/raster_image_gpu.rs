@@ -44,6 +44,8 @@ struct TextureResidency {
     binding: wgpu::BindGroup,
     references: usize,
     pixel_bytes: usize,
+    video: bool,
+    video_frame: Option<usize>,
 }
 #[derive(Debug)]
 struct ObjectResidency {
@@ -435,6 +437,11 @@ impl RasterImageGpuRenderer {
                 height: resource.height(),
                 depth_or_array_layers: 1,
             };
+            let video = resource.video().is_some();
+            let mut usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
+            if cfg!(target_arch = "wasm32") && video {
+                usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
+            }
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Noon immutable raster image"),
                 size,
@@ -442,24 +449,13 @@ impl RasterImageGpuRenderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                usage,
                 view_formats: &[],
             });
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                resource.rgba8(),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(size.width * 4),
-                    rows_per_image: Some(size.height),
-                },
-                size,
-            );
+            if !video {
+                write_pixels(queue, &texture, resource.rgba8());
+                stats.pixel_bytes_uploaded += resource.rgba8().len();
+            }
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Noon image texture binding"),
@@ -469,18 +465,101 @@ impl RasterImageGpuRenderer {
                     resource: wgpu::BindingResource::TextureView(&view),
                 }],
             });
-            let pixel_bytes = resource.rgba8().len();
+            let pixel_bytes = size.width as usize * size.height as usize * 4;
             stats.textures_uploaded += 1;
-            stats.pixel_bytes_uploaded += pixel_bytes;
             self.pixel_bytes += pixel_bytes;
             TextureResidency {
                 _texture: texture,
                 binding,
                 references: 0,
                 pixel_bytes,
+                video,
+                video_frame: None,
             }
         });
         texture.references += 1;
+    }
+
+    pub(super) fn write_video_frame(
+        &mut self,
+        queue: &wgpu::Queue,
+        handle: RasterImageResourceHandle,
+        frame: Option<(usize, &[u8])>,
+    ) -> std::io::Result<usize> {
+        let Some(texture) = self.textures.get_mut(&handle) else {
+            return Ok(0);
+        };
+        if !texture.video {
+            return Err(std::io::Error::other(
+                "video samples require a video raster texture",
+            ));
+        }
+        if texture.video_frame == frame.map(|(index, _)| index) {
+            return Ok(0);
+        }
+        if let Some((index, pixels)) = frame {
+            if pixels.len() != texture.pixel_bytes {
+                return Err(std::io::Error::other("decoded video dimensions changed"));
+            }
+            write_pixels(queue, &texture._texture, pixels);
+            texture.video_frame = Some(index);
+            Ok(pixels.len())
+        } else {
+            texture.video_frame = None;
+            Ok(0)
+        }
+    }
+
+    #[cfg(all(target_arch = "wasm32", feature = "web"))]
+    pub(super) fn has_video_frame(&self, handle: RasterImageResourceHandle, index: usize) -> bool {
+        self.textures
+            .get(&handle)
+            .is_some_and(|texture| texture.video_frame == Some(index))
+    }
+
+    #[cfg(all(target_arch = "wasm32", feature = "web"))]
+    pub(super) fn write_external_video_frame(
+        &mut self,
+        queue: &wgpu::Queue,
+        handle: RasterImageResourceHandle,
+        frame: Option<(usize, wgpu::ExternalImageSource)>,
+    ) -> std::io::Result<usize> {
+        let Some((index, source)) = frame else {
+            return self.write_video_frame(queue, handle, None);
+        };
+        let Some(texture) = self.textures.get_mut(&handle) else {
+            return Ok(0);
+        };
+        if !texture.video {
+            return Err(std::io::Error::other(
+                "video samples require a video raster texture",
+            ));
+        }
+        if texture.video_frame == Some(index) {
+            return Ok(0);
+        }
+        let texture_size = texture._texture.size();
+        if (source.width(), source.height()) != (texture_size.width, texture_size.height) {
+            return Err(std::io::Error::other("decoded video dimensions changed"));
+        }
+        queue.copy_external_image_to_texture(
+            &wgpu::CopyExternalImageSourceInfo {
+                source,
+                origin: wgpu::Origin2d::ZERO,
+                flip_y: false,
+            },
+            wgpu::CopyExternalImageDestInfo {
+                texture: &texture._texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+                color_space: wgpu::PredefinedColorSpace::Srgb,
+                premultiplied_alpha: false,
+            },
+            texture_size,
+        );
+        texture.video_frame = Some(index);
+        Ok(texture.pixel_bytes)
     }
 
     pub(super) fn texture_binding(
@@ -534,6 +613,9 @@ impl RasterImageGpuRenderer {
             .textures
             .get(&row.resource)
             .ok_or(RasterImageDrawError::MissingObject(index))?;
+        if texture.video && texture.video_frame.is_none() {
+            return Ok(false);
+        }
         pass.set_pipeline(if sample_count == 1 {
             &self.pipeline
         } else {
@@ -545,6 +627,24 @@ impl RasterImageGpuRenderer {
         pass.draw(0..6, 0..1);
         Ok(true)
     }
+}
+
+fn write_pixels(queue: &wgpu::Queue, texture: &wgpu::Texture, pixels: &[u8]) {
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(texture.width() * 4),
+            rows_per_image: Some(texture.height()),
+        },
+        texture.size(),
+    );
 }
 
 fn uniform_layout(

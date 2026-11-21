@@ -538,6 +538,11 @@ fn supported_pcm(format: SampleFormat) -> bool {
 }
 
 fn choose_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, NativeHostError> {
+    // Mixing already resamples to the device rate. Prefer the configured rate
+    // so starting or seeking a scene need not renegotiate the hardware clock.
+    let preferred_rate = device
+        .default_output_config()
+        .map_or(48_000, |config| config.sample_rate());
     let configs = device
         .supported_output_configs()
         .map_err(|error| NativeHostError::Audio(error.to_string()))?;
@@ -546,13 +551,13 @@ fn choose_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, N
         .filter_map(|range| {
             let min = range.min_sample_rate().max(8_000);
             let max = range.max_sample_rate().min(192_000);
-            (min <= max).then(|| range.with_sample_rate(48_000_u32.clamp(min, max)))
+            (min <= max).then(|| range.with_sample_rate(preferred_rate.clamp(min, max)))
         })
         .max_by_key(|config| {
             (
+                config.sample_rate() == preferred_rate,
                 config.channels(),
                 config.sample_format() == SampleFormat::F32,
-                config.sample_rate() == 48_000,
             )
         })
         .ok_or_else(|| {

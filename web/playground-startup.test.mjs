@@ -22,7 +22,7 @@ for (const loadGalleryManifest of [
   const nodes = new Map();
   const node = selector => {
     if (!nodes.has(selector)) nodes.set(selector, {
-      dataset: {}, value: "—", textContent: "Loading…", parentElement: {},
+      dataset: {}, value: "—", textContent: "Loading…", parentElement: {}, addEventListener() {},
     });
     return nodes.get(selector);
   };

@@ -6,6 +6,7 @@ mod image;
 mod layout;
 pub(crate) mod object_edits;
 mod sections;
+pub(crate) mod video;
 use crate::{
     AuthoringError, ExecutionSession, LiveSession, Mobject, MobjectFamily, MobjectTarget,
     SceneMembershipRequest, ValueTracker,

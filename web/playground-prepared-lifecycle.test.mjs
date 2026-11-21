@@ -155,6 +155,7 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
       resetButton, gallerySearch, categorySelect, paritySelect, previousGalleryPage, nextGalleryPage,
       galleryGrid, previousPreview, diagnosticPanel, metricObjects, metricTime, recoverButton } = env;
     const globalThis = { __NOON_PLAYGROUND_TEST_HOOKS__: env.hooks };
+    const videoFileInput = null;
     const SCENE_EXAMPLES = [env.example];
     const console = { warn() {}, debug() {}, error() {} };
     let canvas = env.initialCanvas, player = null, preparedPlaybackPlayer = null, playbackControls = null;
