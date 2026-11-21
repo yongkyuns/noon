@@ -56,6 +56,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
   const browserWindow = {
     __noonNoJspiWorkerWrapped: true,
     __noonExampleGallery: gallery,
+    getComputedStyle: () => ({ touchAction: "pinch-zoom" }),
     addEventListener: (type, listener) => { if (type === "wheel") wheelListeners.push(listener); },
   };
   const browserDocument = { querySelector: (selector) => {
