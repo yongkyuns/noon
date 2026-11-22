@@ -33,6 +33,27 @@ impl CaptureView {
         let insets = session
             .inset_2d_views()
             .map_err(|e| CaptureError::View(e.to_string()))?;
+        Self::from_views(camera, insets, options)
+    }
+
+    #[cfg(feature = "prepared-prefix")]
+    pub(super) fn from_prefix(
+        reader: &noon::PrefixReader,
+        options: &CaptureOptions,
+    ) -> Result<Self, CaptureError> {
+        let camera = reader
+            .camera_2d()
+            .map_err(|error| CaptureError::View(error.to_string()))?
+            .unwrap_or_default();
+        // The prepared source domain excludes inset views.
+        Self::from_views(camera, Vec::new(), options)
+    }
+
+    fn from_views(
+        camera: Camera2DState,
+        insets: Vec<Inset2DViewState>,
+        options: &CaptureOptions,
+    ) -> Result<Self, CaptureError> {
         let aspect = options.width as f32 / options.height as f32;
         let primary = camera
             .viewport_bounds(aspect)

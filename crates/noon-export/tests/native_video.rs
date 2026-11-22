@@ -17,16 +17,7 @@ use noon_export::{
 fn native_video_seek_and_export_preserve_pts_and_soundtrack() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("vfr.mp4");
-    let output = Command::new("ffmpeg")
-        .args(include_str!("fixtures/video-pts-and-click.ffmpeg").lines())
-        .arg(&path)
-        .output()
-        .expect("run FFmpeg fixture generator");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    generate_fixture(&path);
 
     let asset = NativeVideoAsset::open(&path).unwrap();
     assert_eq!(asset.dimensions(), (96, 54));
@@ -153,40 +144,147 @@ fn native_video_seek_and_export_preserve_pts_and_soundtrack() {
         .unwrap();
         assert_eq!(export.capture.sampling.frames, 37 - start_frame);
 
-        let samples = decode_output(&path, &["-vn", "-ac", "1", "-ar", "48000", "-f", "f32le"]);
-        let first_click = samples
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .position(|bytes| f32::from_le_bytes(*bytes).abs() > 0.12)
-            .unwrap();
-        let actual = first_click as f64 / 48_000.0;
-        let expected = 0.225 - start_frame as f64 * (1001.0 / 30_000.0);
-        assert!(
-            (actual - expected).abs() < 0.012,
-            "click {actual}s, expected {expected}s"
-        );
-
-        let video = decode_output(&path, &["-an", "-pix_fmt", "rgb24", "-f", "rawvideo"]);
-        let (frames, remainder) = video.as_chunks::<{ 128 * 72 * 3 }>();
-        assert!(remainder.is_empty());
-        let mut frames = frames.iter();
-        let first = frames.next().unwrap();
-        assert_eq!(first.iter().any(|&pixel| pixel > 25), start_frame != 0);
-        let flash = frames
-            .position(|frame| {
-                frame[(36 * 128 + 64) * 3..][..3]
-                    .iter()
-                    .all(|&pixel| pixel > 170)
-            })
-            .expect("source flash must appear in the rendered clip")
-            + 1;
-        let visual_time = flash as f64 * (1001.0 / 30_000.0);
-        assert!(
-            (visual_time - actual).abs() < 1001.0 / 30_000.0,
-            "flash at {visual_time}s and audio click at {actual}s"
-        );
+        assert_synced_movie(&path, start_frame, 37);
     }
+}
+
+#[cfg(feature = "prepared-prefix")]
+#[test]
+#[ignore = "requires the native renderer and FFmpeg media tools"]
+fn completed_play_wait_exports_a_synced_movie() {
+    use noon::{AnimationOptions, RateFunction};
+    use noon_export::output::export_completed_prefix_file;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("vfr.mp4");
+    generate_fixture(&path);
+    let mut scene = Scene::new();
+    let video = scene
+        .video(
+            Arc::new(NativeVideoAsset::open(path).unwrap()),
+            0.1,
+            0.125..1.25,
+            8.0,
+        )
+        .unwrap();
+    scene.scale(&video, 0.5, 0.5).unwrap();
+    scene.shift(&video, Vec2::new(1.0, 0.0)).unwrap();
+    scene.set_opacity(&video, 0.8).unwrap();
+    let mut marker = scene.circle(0.3).unwrap();
+    marker.set_translation(-3.0, 0.0).unwrap();
+    marker.set_fill(1.0, 0.0, 0.0, 1.0).unwrap();
+    scene.add(&marker).unwrap();
+    let mut target = scene.circle(0.3).unwrap();
+    target.set_translation(-3.0, 2.0).unwrap();
+    target.set_fill(1.0, 0.0, 0.0, 1.0).unwrap();
+
+    let mut source = scene.into_execution().unwrap();
+    source
+        .session_mut()
+        .begin_replay_retention(Default::default())
+        .unwrap();
+    let play = source
+        .live()
+        .declare_and_activate_transform_to(
+            &marker,
+            &target,
+            AnimationOptions::new()
+                .run_time(0.4)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    source.session_mut().advance_to(play.end_time()).unwrap();
+    source.live().complete_segment(play).unwrap();
+    let (mut publisher, mut reader) = source.session().create_prepared_prefix(play).unwrap();
+    let wait = source.live().wait_segment(0.925).unwrap();
+    source.session_mut().advance_to(wait.end_time()).unwrap();
+    source.live().complete_segment(wait).unwrap();
+    source.session_mut().seal_replay().unwrap();
+    let terminal = source
+        .session()
+        .finish_prepared_prefix(wait, &mut publisher)
+        .unwrap();
+    reader.reserve_append_capacity(&terminal).unwrap();
+    reader.append(terminal).unwrap();
+    let runtime = reader.runtime_identity();
+    drop(source);
+
+    for start_frame in [0, 4] {
+        reader.seek(0.0).unwrap();
+        let path = directory.path().join(format!("history-{start_frame}.mp4"));
+        let export = export_completed_prefix_file(
+            &mut reader,
+            ExportFrameOptions {
+                frame_rate: FrameRate::new(30_000, 1_001).unwrap(),
+                start_frame,
+                stop: ExportStop::SourceEnd,
+                max_frames: 64,
+                max_transitions_per_sample: 32,
+                final_hold_seconds: 0.0,
+            },
+            CaptureOptions::new(128, 72),
+            OutputOptions::mp4(&path),
+        )
+        .unwrap();
+        assert_eq!(reader.runtime_identity(), runtime);
+        assert_eq!(export.capture.sampling.frames, 40 - start_frame);
+        assert_eq!(export.capture.sampling.source_end, Some(wait.end_time()));
+        assert_synced_movie(&path, start_frame, 40);
+    }
+}
+
+fn generate_fixture(path: &Path) {
+    let output = Command::new("ffmpeg")
+        .args(include_str!("fixtures/video-pts-and-click.ffmpeg").lines())
+        .arg(path)
+        .output()
+        .expect("run FFmpeg fixture generator");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn assert_synced_movie(path: &Path, start_frame: u64, uncut_frames: usize) {
+    let samples = decode_output(path, &["-vn", "-ac", "1", "-ar", "48000", "-f", "f32le"]);
+    let first_click = samples
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .position(|bytes| f32::from_le_bytes(*bytes).abs() > 0.12)
+        .unwrap();
+    let actual = first_click as f64 / 48_000.0;
+    let expected = 0.225 - start_frame as f64 * (1001.0 / 30_000.0);
+    assert!(
+        (actual - expected).abs() < 0.012,
+        "click {actual}s, expected {expected}s"
+    );
+
+    let video = decode_output(path, &["-an", "-pix_fmt", "rgb24", "-f", "rawvideo"]);
+    let (frames, remainder) = video.as_chunks::<{ 128 * 72 * 3 }>();
+    assert!(remainder.is_empty());
+    assert_eq!(frames.len(), uncut_frames - start_frame as usize);
+    let mut frames = frames.iter();
+    let first = frames.next().unwrap();
+    let center = (36 * 128 + 64) * 3;
+    assert_eq!(
+        first[center..][..3].iter().any(|&pixel| pixel > 25),
+        start_frame != 0
+    );
+    let flash = frames
+        .position(|frame| {
+            frame[(36 * 128 + 64) * 3..][..3]
+                .iter()
+                .all(|&pixel| pixel > 170)
+        })
+        .expect("source flash must appear in the rendered clip")
+        + 1;
+    let visual_time = flash as f64 * (1001.0 / 30_000.0);
+    assert!(
+        (visual_time - actual).abs() < 1001.0 / 30_000.0,
+        "flash at {visual_time}s and audio click at {actual}s"
+    );
 }
 
 fn decode_output(path: &Path, args: &[&str]) -> Vec<u8> {

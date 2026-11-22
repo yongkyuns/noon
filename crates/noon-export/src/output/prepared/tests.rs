@@ -62,7 +62,10 @@ fn manifest(options: ExportFrameOptions, end: f64, audio: bool) -> PreparedCaptu
                         FrameEpoch::new(epoch),
                     ),
                 };
-                samples.push(sample.into());
+                samples.push(PreparedSample {
+                    runtime_identity: Some("17".into()),
+                    ..sample.into()
+                });
                 previous_time = published_time;
                 policy.observe(sample, requested_time >= end).unwrap();
             }
@@ -74,6 +77,11 @@ fn manifest(options: ExportFrameOptions, end: f64, audio: bool) -> PreparedCaptu
     }
     PreparedCaptureManifest {
         format: PreparedCaptureManifest::FORMAT.into(),
+        source: Some(PreparedCaptureSource {
+            kind: PreparedCaptureSourceKind::Immutable,
+            runtime_identity: "17".into(),
+            admission: samples[0].publication.clone(),
+        }),
         width: 4,
         height: 4,
         source_end: end,
@@ -290,7 +298,7 @@ fn schema_budgets_and_unknown_fields_fail_before_encoding() {
         assert!(read_manifest(&root.0, limits).is_err());
     }
     let mut wrong_version = valid.clone();
-    wrong_version.format = "noon-prepared-capture-v2".into();
+    wrong_version.format = "noon-prepared-capture-v3".into();
     write_manifest(&root.0, &wrong_version);
     assert!(read_manifest(&root.0, PreparedCaptureLimits::default()).is_err());
     for location in ["root", "frame_options", "stop", "sample", "publication"] {
@@ -502,4 +510,36 @@ fn pcm_cancellation_is_observed_between_bounded_blocks() {
     .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::Interrupted);
     assert_eq!(writer.bytes, MAX_AUDIO_MIX_BLOCK_FRAMES * CHANNELS * 4);
+}
+
+#[test]
+fn completed_capture_accepts_history_revisions_and_checks_the_runtime() {
+    let mut manifest = manifest(options(), 0.6, false);
+    let revision = (u64::MAX - 1).to_string();
+    for sample in &mut manifest.samples {
+        sample.publication.execution_revision.clone_from(&revision);
+    }
+    let source = manifest.source.as_mut().unwrap();
+    source.kind = PreparedCaptureSourceKind::CompletedHistory;
+    source.admission.execution_revision = revision;
+    for sample in &mut manifest.samples[2..] {
+        sample.publication.execution_revision = u64::MAX.to_string();
+    }
+    let cancellation = CaptureCancellation::default();
+    assert!(walk_samples(&manifest, &cancellation, |_| Ok(())).is_ok());
+    manifest.samples[2].runtime_identity = Some("18".into());
+    assert!(walk_samples(&manifest, &cancellation, |_| Ok(())).is_err());
+    manifest.samples[2].runtime_identity = Some("17".into());
+    manifest.source.as_mut().unwrap().kind = PreparedCaptureSourceKind::Immutable;
+    assert!(walk_samples(&manifest, &cancellation, |_| Ok(())).is_err());
+
+    // Captures saved before completed-history support still import as immutable.
+    let mut legacy = manifest;
+    legacy.format = "noon-prepared-capture-v1".into();
+    legacy.source = None;
+    for sample in &mut legacy.samples {
+        sample.runtime_identity = None;
+        sample.publication.execution_revision = u64::MAX.to_string();
+    }
+    assert!(walk_samples(&legacy, &cancellation, |_| Ok(())).is_ok());
 }

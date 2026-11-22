@@ -199,18 +199,19 @@ An interval shorter than one audio sample can contain no presented audio frames.
 PNG sequences are explicitly visual-only and omit authored audio. The existing
 `export_file` live-program MP4 path still rejects audio until live execution is
 qualified. Finite Python scenes can use the browser capture and native media
-import described below. In-process native CPython audio bindings, live/history audio
-export and narration remain separate work tracked by #1874 and #2263.
+import described below. Native hosts with the `prepared-prefix` feature can pass a terminal-adopted
+`PrefixReader` at time zero to `output::export_completed_prefix_file`. The same
+reader supplies pixels and authored audio after the producer has finished.
+Crops keep the original sample phase, and terminal picture holds are silent.
 
-## Finite Python scenes and prepared media import
+## Python scenes and prepared media import
 
-The complete finite Python profile runs the normal Pyodide authoring worker,
-shared Rust execution session and browser retained renderer. The worker owns
-the only runtime. Shared `ExportFramePolicy` selects each source sample; the host
-waits for that publication's renderer completion before copying its canvas
-pixels and acknowledging it. The shared Rust mixer supplies the soundtrack on
-the same absolute cropped grid. JavaScript copies media and transports receipts;
-it does not plan animation frames or reconstruct a scene.
+The normal Pyodide worker and browser renderer capture immutable scenes and
+completed deterministic `play()`/`wait()` scenes. For the latter, the worker
+finishes the original source once with the reader paused, then renders its
+retained history. Shared Rust selects each frame and mixes the soundtrack
+on the same cropped time grid. The browser waits for each displayed publication
+before copying pixels, and the native encoder finalizes the MP4.
 
 Install the browser-test Playwright dependency and Chromium. Build the browser
 package and export from the repository root:
@@ -231,16 +232,11 @@ exclusive; omitting both uses the finite source end. `--max-frames` defaults to
 `--backend webgl` and `--transport shared` select the existing browser paths.
 Run `--help` for all options.
 
-The source must produce a complete finite immutable `result = Scene()` at time
-zero. Callbacks, live source continuations and retained source history are
-rejected before export. Completion must be retained by a visual/scalar track or
-audio clip. A trailing authored wait beyond those retained endpoints is rejected
-explicitly instead of silently shortening the movie; a general completed
-authoring horizon remains outside this finite profile. The script compares the
-canonical authoring duration with the shared runtime's admitted endpoint without
-overriding either. Scene playback controls cannot mutate an active export.
-The browser is the pixel producer; this path does not use the native CPython
-binding or native WGPU rendering.
+A source returns `result = Scene()`. Ordinary trailing waits are retained
+through their exact endpoint. Sources requiring observed callbacks or input
+are rejected. For immutable scenes, declared visual or audio tracks still
+have to cover the authored duration. The preparation cap applies before
+advancing a pending source segment.
 
 Omit `--mp4` to retain only the prepared capture, or supply `--encoder PATH` to use
 an already built `encode_prepared_capture` executable. Without that option, the
@@ -262,7 +258,7 @@ explicit. The capture directory must always be new.
 
 ### Capture format and timing
 
-A completed `noon-prepared-capture-v1` directory contains:
+A completed `noon-prepared-capture-v2` directory contains:
 
 | File | Contents |
 | --- | --- |
@@ -274,7 +270,11 @@ The JSON shape is explicit and rejects unknown fields:
 
 ```json
 {
-  "format": "noon-prepared-capture-v1",
+  "format": "noon-prepared-capture-v2",
+  "source": {
+    "kind": "immutable", "runtime_identity": "7",
+    "admission": { "scene_revision": "1", "execution_revision": "1", "frame_epoch": "0" }
+  },
   "width": 640,
   "height": 360,
   "source_end": 30.0,
@@ -289,6 +289,7 @@ The JSON shape is explicit and rejects unknown fields:
   "audio": true,
   "samples": [
     {
+      "runtime_identity": "7",
       "requested_time": 0.0,
       "published_time": 0.0,
       "publication": {
@@ -296,6 +297,7 @@ The JSON shape is explicit and rejects unknown fields:
       }
     },
     {
+      "runtime_identity": "7",
       "requested_time": 0.03333333333333333,
       "published_time": 0.03333333333333333,
       "publication": {
@@ -303,6 +305,7 @@ The JSON shape is explicit and rejects unknown fields:
       }
     },
     {
+      "runtime_identity": "7",
       "requested_time": 0.06666666666666667,
       "published_time": 0.06666666666666667,
       "publication": {
@@ -324,15 +327,16 @@ Only output observations have RGBA bytes. Thus this two-frame example contains
 three observations, two images and 3,200 stereo audio frames. The importer
 replays the shared policy, requires the exact requested and published times,
 rejects missing or extra receipts, and freezes publication identity during
-terminal holds. Scene and execution revisions stay fixed; a changed published
-time requires a newer frame epoch. Receipt validation checks the media contract,
-but cannot prove that an arbitrary producer actually rendered those pixels.
+terminal holds. An `immutable` source fixes its scene and execution revisions.
+A `completed_history` source permits ordered execution revisions within the same
+scene and runtime. A changed published time requires a newer frame epoch.
+Existing v1 captures still import with their immutable receipt rules.
 
 For `F` output video frames at rational rate `N/D`, the PCM file contains exactly
 `ceil(F * D * 48000 / N)` audio frames, or eight times that many bytes. Shared
 `ExportAudioGrid` computes this with integer arithmetic. Audio frame `k` samples
 absolute scene time `start_time + k / 48000`; cropping does not restart clips or
-fades. Samples at or after the policy's exclusive end are zero. The native sink
+fades. Samples at or after the completed source or exclusive output endpoint are zero. The native sink
 applies the same natural-end versus explicit-stop/hold timing rules described
 above, including exact final partial video duration and AAC presentation bounds.
 The importer requires finite PCM in `[-1, 1]`, correct silent padding, exact file

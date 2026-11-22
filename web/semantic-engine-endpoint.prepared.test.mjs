@@ -940,3 +940,30 @@ test("video readiness wakes a held prepared player and waits for its picture", {
     assert.equal(confirmed, true);
   } finally { f.close(); }
 });
+
+test("completed-history export cancellation releases a pending renderer barrier", { timeout: 3000 }, async () => {
+  const f = fixture("transferable", { initiallyPaused: true });
+  let active = false;
+  f.player.finiteExportActive = () => active;
+  f.player.beginFiniteExportJson = () => { active = true; return "{}"; };
+  f.player.finiteExportStatusJson = () => '{"kind":"needs_sample"}';
+  f.player.observeFiniteExportJson = () => {
+    f.observe(0.5);
+    f.player.pausePreparedAt(0);
+    f.makeDirty();
+    return '{"kind":"sample","observation":{"published_time":0.5}}';
+  };
+  f.player.cancelFiniteExport = () => { active = false; };
+  try {
+    await f.attach();
+    f.acknowledge();
+    await f.present();
+    await f.request("begin_finite_export", { frameOptions: {} });
+    const sample = f.request("sample_finite_export");
+    await f.when(() => f.deltas.length === 2);
+    assert.equal(f.replies.some(reply => reply.type === "sample_finite_export"), false);
+    assert.equal((await f.request("cancel_finite_export")).type, "cancel_finite_export");
+    assert.match((await sample).message, /cancelled before presentation/);
+    assert.equal(active, false);
+  } finally { f.close(); }
+});

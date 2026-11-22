@@ -119,6 +119,15 @@ fn compatible_revisions(left: PublicationContext, right: PublicationContext) -> 
 }
 
 impl ExecutionSession {
+    /// A retained pointer contact/gesture, including a press on empty space.
+    /// This is a constant-size query of existing input state; selection, hover
+    /// and animated effects are separate observations.
+    pub fn pointer_gesture_active(&self) -> bool {
+        self.pointer_selection.pending.is_some()
+            || self.pointer_selection.buttons.iter().any(|word| *word != 0)
+            || self.translation_drag_active()
+    }
+
     /// Enable transient selection of all supported visible analytic fills with
     /// primary button 0. The maximum radial excursion is measured in logical
     /// surface pixels, inclusively, independently of camera scale.

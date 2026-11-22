@@ -31,6 +31,13 @@ impl CanonicalAuthoringScene {
         self.active_live_player()?
             .begin_observed_prefix_source(publisher, reader, playing, finished)
     }
+    pub fn pending_prepared_segment_end(&mut self) -> Result<f64, String> {
+        self.active_live_player()
+            .map_err(|error| error.to_string())?
+            .live_segment()
+            .map(|segment| segment.end_time())
+    }
+
     /// Initial admission only: keep the original pending segment and player for
     /// observed execution, retaining bounded history for completed replay admission.
     pub fn begin_observed_prepared_source(

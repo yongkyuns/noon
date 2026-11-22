@@ -198,6 +198,8 @@ mod signal_trains_smoke;
 mod webgl_context_lifecycle;
 mod worker_pointer_presentation;
 pub use worker_pointer_presentation::PointerPresentationView;
+mod export_wire;
+pub use export_wire::export_source_preparation_limit_json;
 mod semantic_execution_player;
 #[cfg(target_arch = "wasm32")]
 mod text_colors;

@@ -1269,14 +1269,28 @@ export async function attachSemanticEngine(
           case "sample_finite_export": {
             latestTick = null;
             finiteExport = JSON.parse(player.finiteExportStatusJson());
+            let publication = null;
             if (finiteExport.kind === "needs_sample") {
-              // A held terminal frame must retain the exact completed epoch.
-              if (finiteExport.target_time !== player.time()) {
-                await advanceToAuthoredTime(finiteExport.target_time);
+              if (prepared !== null) {
+                const before = player.preparedTime();
+                finiteExport = JSON.parse(player.observeFiniteExportJson());
+                if (finiteExport.observation.published_time !== before) {
+                  publication = drainAndSendDelta();
+                  if (publication === null) throw new Error("history export lost its selected publication");
+                }
+              } else {
+                // A held terminal frame retains the exact completed epoch.
+                if (finiteExport.target_time !== player.time()) {
+                  await advanceToAuthoredTime(finiteExport.target_time);
+                }
+                finiteExport = JSON.parse(player.observeFiniteExportJson());
               }
-              finiteExport = JSON.parse(player.observeFiniteExportJson());
             }
-            presentationReceipt = await awaitPresentation(null);
+            presentationReceipt = await awaitPresentation(publication);
+            if (prepared !== null && finiteExport.kind === "sample" &&
+                presentationReceipt?.time !== finiteExport.observation.published_time) {
+              throw new Error("history export requires the exact displayed sample");
+            }
             break;
           }
           case "acknowledge_finite_export":
@@ -1546,7 +1560,7 @@ export async function attachSemanticEngine(
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
         if (stopped) break;
-        if (prepared !== null) prepared.wakeSource();
+        if (prepared !== null && !FINITE_EXPORT_CONTROLS.has(message.type)) prepared.wakeSource();
         if (hasAudio && ["pause", "resume", "seek", "seek_section", "restart_playback"].includes(message.type)) {
           // A control changes both outputs at one accepted Rust clock sample.
           // Presentation precedes the new device anchor; no device clock drives
@@ -1606,7 +1620,7 @@ export async function attachSemanticEngine(
         // An opaque callback failure/interruption is terminal in the retained
         // session. Do not emit repeated errors or retry its externally visible
         // side effects while this player is retained for recovery.
-        if (callbackFault === null) {
+        if (callbackFault === null && !player?.finiteExportActive?.()) {
           try {
             if (prepared !== null) {
               // The render timestamp is a wake opportunity only. The prepared
@@ -1858,14 +1872,28 @@ export async function attachSemanticEngine(
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
         }
-        if (prepared !== null && !PREPARED_PLAYBACK_CONTROLS.has(message.type)) {
+        if (prepared !== null && !PREPARED_PLAYBACK_CONTROLS.has(message.type) && !FINITE_EXPORT_CONTROLS.has(message.type)) {
           throw new Error(`prepared playback does not support ${message.type}`);
         }
         if (player?.finiteExportActive?.() && !FINITE_EXPORT_CONTROLS.has(message.type) && message.type !== "debug_frame") {
           throw new Error("finite export owns paused execution until capture completes");
         }
-        if (((continuation !== null && !sourceFinished) || completedStaticSource) && FINITE_EXPORT_CONTROLS.has(message.type)) {
+        if (prepared === null && ((continuation !== null && !sourceFinished) || completedStaticSource) && FINITE_EXPORT_CONTROLS.has(message.type)) {
           throw new Error("finite export requires a completed immutable Python scene");
+        }
+        if (message.type === "cancel_finite_export" && player?.finiteExportActive?.()) {
+          player.cancelFiniteExport();
+          latestTick = null;
+          for (let index = controls.length - 1; index >= 0; index -= 1) {
+            const queued = controls[index];
+            if (!FINITE_EXPORT_CONTROLS.has(queued.type)) continue;
+            controls.splice(index, 1);
+            fail(new Error("finite export cancelled"), queued.requestId);
+          }
+          rejectPendingPresentation(new Error("finite export cancelled before presentation"));
+          observeExecutionWake(performance.now(), true);
+          post({ requestId: message.requestId, ...state(message.type) });
+          return;
         }
         if (replayUnavailable !== null && REPLAY_DEPENDENT_CONTROLS.has(message.type)) {
           throw new Error(`Replay unavailable: ${replayUnavailable}`);
