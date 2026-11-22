@@ -255,6 +255,7 @@ fn materialize_semantic_projection(
             effects: object.effects.clone(),
             click_indicate: object.click_indicate.clone(),
             viewer_draggable: object.viewer_draggable,
+            viewer_group: object.viewer_group,
             id: object.execution_id,
             content,
             text_bounds,
@@ -432,6 +433,7 @@ fn materialize_semantic_projection(
         family_order,
         family_ranks,
         live_object_count: objects.len(),
+        viewer_groups: CompiledScene::index_viewer_groups(&objects),
         viewer_drag_target_count: objects
             .iter()
             .filter(|object| object.viewer_draggable)

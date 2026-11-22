@@ -5,7 +5,7 @@
 
 use noon_core::{
     GeometryRef, GeometryResource, GeometryResourceLookup, NativePointerInput, PublicationContext,
-    SemanticNodeId, Vec2,
+    SemanticNodeId, StrokeWidthMode, Transform2D, Vec2,
 };
 use noon_runtime::{FrameState, SpatialQueryStats};
 
@@ -123,8 +123,8 @@ impl ExecutionSession {
         Ok(result)
     }
 
-    /// Pick in painter order, using visual bounds for content without an
-    /// analytic fill. The viewer can click inside an outline above a solid fill.
+    /// Pick in painter order. Open strokes use their revealed contour, and
+    /// the viewer can click inside a closed outline above a solid fill.
     pub(super) fn pick_viewer_target(&mut self, point: Vec2) -> Option<SemanticNodeId> {
         self.sync_spatial_index();
         for &slot in self.spatial_index.hit_test(point).slots() {
@@ -138,13 +138,12 @@ impl ExecutionSession {
                 continue;
             };
             let frame = self.runtime.frame();
-            let row = &frame.objects[index];
             if !viewer_row_visible(frame, index) {
                 continue;
             }
-            if row.style.fill.is_some_and(|color| color.alpha > 0.0)
-                && effective_fill_contains(frame, index, point, self.runtime.geometry_resources())
-                    == Ok(false)
+            if ViewerHitGeometry::for_row(frame, index, self.runtime.geometry_resources())
+                .and_then(|shape| shape.hit(point, 0.0))
+                == Some(false)
             {
                 continue;
             }
@@ -212,6 +211,119 @@ impl ExecutionSession {
     }
 }
 
+/// Geometry for the candidate-local portion of a viewer hit. An open path
+/// must not intercept clicks through the unpainted area of its bounds.
+#[derive(PartialEq)]
+pub(super) enum ViewerHitGeometry {
+    Fill(GeometryRef, Transform2D),
+    Stroke {
+        geometry: GeometryRef,
+        transform: Transform2D,
+        radius: f32,
+        width_mode: StrokeWidthMode,
+        reveal: f32,
+    },
+}
+
+impl ViewerHitGeometry {
+    pub(super) fn for_row(
+        frame: &FrameState,
+        index: usize,
+        resources: &(impl GeometryResourceLookup + ?Sized),
+    ) -> Option<Self> {
+        let geometry = match frame.render_geometry(index)? {
+            GeometryRef::External(id) => match resources.get(resources.current_handle(*id)?)? {
+                GeometryResource::VectorPath(path) => GeometryRef::VectorPath(path.clone()),
+                GeometryResource::Mesh(_) => return None,
+            },
+            geometry => geometry.clone(),
+        };
+        let style = frame.objects[index].style;
+        let transform = frame.render_transform(index);
+        let reveal = frame.reveal(index);
+        let filled = style.fill.is_some_and(|color| color.alpha > 0.0);
+        if frame.morph(index) != 0.0 {
+            return None;
+        }
+        if matches!(geometry, GeometryRef::Line { .. })
+            || (!filled && matches!(geometry, GeometryRef::VectorPath(_)))
+        {
+            let width = if style.stroke.is_some_and(|color| color.alpha > 0.0) {
+                style.stroke_width
+            } else {
+                0.0
+            };
+            let background = if style
+                .background_stroke
+                .is_some_and(|color| color.alpha > 0.0)
+            {
+                style.background_stroke_width
+            } else {
+                0.0
+            };
+            Some(Self::Stroke {
+                geometry,
+                transform,
+                radius: width.max(background) * 0.5,
+                width_mode: style.stroke_width_mode,
+                reveal,
+            })
+        } else {
+            (filled && reveal == 1.0).then_some(Self::Fill(geometry, transform))
+        }
+    }
+
+    pub(super) fn hit(&self, point: Vec2, slop: f64) -> Option<bool> {
+        match self {
+            Self::Fill(geometry, transform) => {
+                geometry_fill_contains(Some(geometry), *transform, point, None).ok()
+            }
+            Self::Stroke {
+                geometry,
+                transform,
+                radius,
+                width_mode,
+                reveal,
+            } => {
+                if *radius <= 0.0 {
+                    return Some(false);
+                }
+                let Some(mut point) = local_fill_point(*transform, point) else {
+                    return Some(false);
+                };
+                let mut scale = [1.0; 2];
+                let mut radius = f64::from(*radius);
+                if *width_mode == StrokeWidthMode::ScreenSpace {
+                    radius += slop;
+                    scale = [f64::from(transform.scale.x), f64::from(transform.scale.y)];
+                    point = [point[0] * scale[0], point[1] * scale[1]];
+                } else {
+                    radius +=
+                        slop / f64::from(transform.scale.x.abs().min(transform.scale.y.abs()));
+                }
+                match geometry {
+                    GeometryRef::Line { start, end } => {
+                        if *reveal <= 0.0 {
+                            return Some(false);
+                        }
+                        let a = [f64::from(start.x) * scale[0], f64::from(start.y) * scale[1]];
+                        let b = [f64::from(end.x) * scale[0], f64::from(end.y) * scale[1]];
+                        let t = f64::from(*reveal);
+                        let b = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+                        Some(noon_geometry::point_near_stroke_segment(
+                            point, a, b, radius,
+                        ))
+                    }
+                    GeometryRef::VectorPath(path) => {
+                        noon_geometry::open_path_stroke_hit(path, point, scale, radius, *reveal)
+                    }
+                    _ => unreachable!("only open-capable geometry enters stroke picking"),
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn viewer_row_visible(frame: &FrameState, index: usize) -> bool {
     let row = &frame.objects[index];
     frame.is_drawable(index)
@@ -274,23 +386,8 @@ pub(super) fn geometry_fill_contains(
     point: Vec2,
     external_path: Option<&noon_core::VectorPath>,
 ) -> Result<bool, PointerFillUnsupported> {
-    if transform.scale.x == 0.0
-        || transform.scale.y == 0.0
-        || !transform.scale.x.is_finite()
-        || !transform.scale.y.is_finite()
-        || !transform.rotation.is_finite()
-        || !transform.translation.x.is_finite()
-        || !transform.translation.y.is_finite()
-    {
-        return Err(PointerFillUnsupported::DegenerateGeometry);
-    }
-    // Widen before subtraction/division so valid f32 coordinates and very small
-    // invertible scales do not overflow during geometric observation.
-    let dx = f64::from(point.x) - f64::from(transform.translation.x);
-    let dy = f64::from(point.y) - f64::from(transform.translation.y);
-    let (sin, cos) = f64::from(transform.rotation).sin_cos();
-    let x = (cos * dx + sin * dy) / f64::from(transform.scale.x);
-    let y = (-sin * dx + cos * dy) / f64::from(transform.scale.y);
+    let [x, y] =
+        local_fill_point(transform, point).ok_or(PointerFillUnsupported::DegenerateGeometry)?;
     match geometry {
         Some(GeometryRef::Circle { radius }) if radius.is_finite() && *radius != 0.0 => {
             Ok(x.hypot(y) <= f64::from(radius.abs()))
@@ -313,6 +410,27 @@ pub(super) fn geometry_fill_contains(
             .ok_or(PointerFillUnsupported::Content),
         _ => Err(PointerFillUnsupported::Content),
     }
+}
+
+fn local_fill_point(transform: Transform2D, point: Vec2) -> Option<[f64; 2]> {
+    if transform.scale.x == 0.0
+        || transform.scale.y == 0.0
+        || !transform.scale.x.is_finite()
+        || !transform.scale.y.is_finite()
+        || !transform.rotation.is_finite()
+        || !transform.translation.x.is_finite()
+        || !transform.translation.y.is_finite()
+    {
+        return None;
+    }
+    // Widen before subtraction/division so valid f32 coordinates and very small
+    // invertible scales do not overflow during geometric observation.
+    let dx = f64::from(point.x) - f64::from(transform.translation.x);
+    let dy = f64::from(point.y) - f64::from(transform.translation.y);
+    let (sin, cos) = f64::from(transform.rotation).sin_cos();
+    let x = (cos * dx + sin * dy) / f64::from(transform.scale.x);
+    let y = (-sin * dx + cos * dy) / f64::from(transform.scale.y);
+    Some([x, y])
 }
 
 #[cfg(test)]

@@ -370,6 +370,9 @@ impl SemanticExecutionIndex {
                 effects: state.effects,
                 click_indicate: state.click_indicate,
                 viewer_draggable: state.viewer_draggable,
+                viewer_group: super::viewer_groups::committed(store, semantic_id, |node| {
+                    roots.contains(&node)
+                }),
                 execution_id: self.ensure_object(semantic_id),
                 content: SemanticExecutionContent::Object(state.content),
                 base_transform: state.base_transform,
@@ -477,6 +480,7 @@ pub struct SemanticExecutionObject {
     pub effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
     /// Authored eligibility for presentation-only drag.
     pub viewer_draggable: bool,
+    pub viewer_group: Option<SemanticNodeId>,
     /// Authored native action lowered with the object's time-qualified values.
     pub click_indicate: Option<std::sync::Arc<noon_core::SemanticClickIndicate>>,
     /// Authoritative scene-global semantic identity.

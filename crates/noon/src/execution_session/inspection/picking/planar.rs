@@ -2,17 +2,18 @@
 
 use std::sync::Arc;
 
-use noon_core::{GeometryRef, GeometryResource, ObjectId, Rect, Transform2D, Vec2};
+use noon_core::{ObjectId, Rect, SemanticNodeId, Vec2};
 use noon_runtime::{frame_object_conservative_bounds_with_resources, RendererPublication};
 
 use super::{PickContents, PickNode, PickRow};
-use crate::execution_session::picking::{geometry_fill_contains, viewer_row_visible};
+use crate::execution_session::picking::{viewer_row_visible, ViewerHitGeometry};
 
 #[derive(PartialEq)]
 struct PlanarRow {
     object: ObjectId,
+    group: Option<SemanticNodeId>,
     bounds: Rect,
-    fill: Option<(GeometryRef, Transform2D)>,
+    geometry: Option<ViewerHitGeometry>,
 }
 
 impl PickRow for PlanarRow {
@@ -31,12 +32,16 @@ impl PickRow for PlanarRow {
 }
 
 impl PickNode<PlanarRow> {
-    fn pick(&self, point: Vec2) -> Option<ObjectId> {
-        if point.x < self.bounds.min.x
-            || point.y < self.bounds.min.y
-            || point.x > self.bounds.max.x
-            || point.y > self.bounds.max.y
-        {
+    fn pick(&self, point: Vec2, stroke_slop: f64) -> Option<(ObjectId, Option<SemanticNodeId>)> {
+        let contains = |slop| {
+            let x = f64::from(point.x);
+            let y = f64::from(point.y);
+            x >= f64::from(self.bounds.min.x) - slop
+                && x <= f64::from(self.bounds.max.x) + slop
+                && y >= f64::from(self.bounds.min.y) - slop
+                && y <= f64::from(self.bounds.max.y) + slop
+        };
+        if !contains(stroke_slop) {
             return None;
         }
         match &self.contents {
@@ -44,23 +49,29 @@ impl PickNode<PlanarRow> {
                 .iter()
                 .rev()
                 .flatten()
-                .find_map(|child| child.pick(point)),
-            PickContents::Leaf(row) => {
-                let misses_fill = row.fill.as_ref().is_some_and(|(geometry, transform)| {
-                    geometry_fill_contains(Some(geometry), *transform, point, None) == Ok(false)
-                });
-                (!misses_fill).then_some(row.object)
-            }
+                .find_map(|child| child.pick(point, stroke_slop)),
+            PickContents::Leaf(row) => row
+                .geometry
+                .as_ref()
+                .and_then(|shape| shape.hit(point, stroke_slop))
+                .unwrap_or_else(|| contains(0.0))
+                .then_some((row.object, row.group)),
         }
     }
 }
 
 #[derive(Clone)]
-pub struct PlanarPickFrame(Option<Arc<PickNode<PlanarRow>>>);
+pub struct PlanarPickFrame {
+    root: Option<Arc<PickNode<PlanarRow>>>,
+    stroke_slop: f64,
+}
 
 impl PlanarPickFrame {
-    pub(in crate::execution_session::inspection) fn pick(&self, point: Vec2) -> Option<ObjectId> {
-        self.0.as_ref()?.pick(point)
+    pub(in crate::execution_session::inspection) fn pick(
+        &self,
+        point: Vec2,
+    ) -> Option<(ObjectId, Option<SemanticNodeId>)> {
+        self.root.as_ref()?.pick(point, self.stroke_slop)
     }
 }
 
@@ -78,6 +89,7 @@ impl PlanarPickCache {
         &mut self,
         publication: &RendererPublication<'_>,
         snapshot: bool,
+        world_units_per_pixel: f64,
     ) -> PlanarPickFrame {
         let order = publication.painter_order();
         let frame = publication.frame();
@@ -88,30 +100,11 @@ impl PlanarPickCache {
                 return None;
             }
             let bounds = frame_object_conservative_bounds_with_resources(frame, index, resources)?;
-            let fill = if frame.reveal(index) == 1.0
-                && frame.morph(index) == 0.0
-                && row.style.fill.is_some_and(|fill| fill.alpha > 0.0)
-            {
-                let geometry = match frame.render_geometry(index) {
-                    Some(GeometryRef::External(id)) => resources
-                        .current_handle(*id)
-                        .and_then(|handle| resources.get(handle))
-                        .and_then(|resource| match resource {
-                            GeometryResource::VectorPath(path) => {
-                                Some(GeometryRef::VectorPath(Arc::clone(path)))
-                            }
-                            GeometryResource::Mesh(_) => None,
-                        }),
-                    geometry => geometry.cloned(),
-                };
-                geometry.map(|geometry| (geometry, frame.render_transform(index)))
-            } else {
-                None
-            };
             Some(PlanarRow {
                 object: row.id,
+                group: publication.viewer_group(row.id),
                 bounds,
-                fill,
+                geometry: ViewerHitGeometry::for_row(frame, index, resources),
             })
         };
         let changes = publication.changes();
@@ -151,6 +144,9 @@ impl PlanarPickCache {
             }
         }
         self.len = order.len();
-        PlanarPickFrame(self.root.clone())
+        PlanarPickFrame {
+            root: self.root.clone(),
+            stroke_slop: world_units_per_pixel * 2.0,
+        }
     }
 }

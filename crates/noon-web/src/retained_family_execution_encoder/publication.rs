@@ -196,18 +196,49 @@ fn compose_viewer_indicate(
     row: &mut crate::RetainedTransportObjectState,
     effect: noon::ViewerIndication,
 ) {
+    let scale_about = |value: f64, center: f64| center + (value - center) * effect.scale;
     let scale_planar = |pose: &mut noon_core::Transform2D| {
         let scaled = pose.scale * effect.scale as f32;
-        if scaled.x.is_finite() && scaled.y.is_finite() {
+        let translation = effect.center.map_or(pose.translation, |center| {
+            noon_core::Vec2::new(
+                scale_about(f64::from(pose.translation.x), center.x) as f32,
+                scale_about(f64::from(pose.translation.y), center.y) as f32,
+            )
+        });
+        if scaled.x.is_finite()
+            && scaled.y.is_finite()
+            && translation.x.is_finite()
+            && translation.y.is_finite()
+        {
             pose.scale = scaled;
+            pose.translation = translation;
         }
     };
     if let Some(spatial) = row.spatial.as_mut().filter(|spatial| {
         spatial.composition_domain != noon_core::SemanticSpatialCompositionDomain::FixedFrame
     }) {
         let scaled = spatial.scale.map(|value| value * effect.scale);
-        if scaled.iter().all(|value| value.is_finite()) {
+        let translate = |point| {
+            effect.center.map_or(point, |center| {
+                let [x, y, z] = point;
+                [
+                    scale_about(x, center.x),
+                    scale_about(y, center.y),
+                    scale_about(z, center.z),
+                ]
+            })
+        };
+        let translation = translate(spatial.translation);
+        let anchor = spatial.fixed_orientation_center.map(translate);
+        if scaled
+            .iter()
+            .chain(&translation)
+            .chain(anchor.iter().flatten())
+            .all(|value| value.is_finite())
+        {
             spatial.scale = scaled;
+            spatial.translation = translation;
+            spatial.fixed_orientation_center = anchor;
         }
     } else {
         scale_planar(&mut row.transform);

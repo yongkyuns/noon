@@ -111,21 +111,7 @@ impl PickRow for PickMesh {
     type Bounds = MeshBounds3D;
 
     fn bounds(&self) -> Option<MeshBounds3D> {
-        let bounds = self.mesh.bounds();
-        let mut world_bounds = None;
-        for x in [bounds.min.x, bounds.max.x] {
-            for y in [bounds.min.y, bounds.max.y] {
-                for z in [bounds.min.z, bounds.max.z] {
-                    let point = self.world.transform_point(Vec3::new(x, y, z))?;
-                    let corner = MeshBounds3D {
-                        min: point,
-                        max: point,
-                    };
-                    world_bounds = Some(world_bounds.map_or(corner, |old| Self::join(old, corner)));
-                }
-            }
-        }
-        world_bounds
+        mesh_world_bounds(&self.mesh, self.world)
     }
 
     fn join(a: MeshBounds3D, b: MeshBounds3D) -> MeshBounds3D {
@@ -142,6 +128,27 @@ impl PickRow for PickMesh {
             ),
         }
     }
+}
+
+pub(super) fn mesh_world_bounds(
+    mesh: &MeshResource,
+    world: SemanticWorldTransform3D,
+) -> Option<MeshBounds3D> {
+    let bounds = mesh.bounds();
+    let mut world_bounds = None;
+    for x in [bounds.min.x, bounds.max.x] {
+        for y in [bounds.min.y, bounds.max.y] {
+            for z in [bounds.min.z, bounds.max.z] {
+                let point = world.transform_point(Vec3::new(x, y, z))?;
+                let corner = MeshBounds3D {
+                    min: point,
+                    max: point,
+                };
+                world_bounds = Some(world_bounds.map_or(corner, |old| PickMesh::join(old, corner)));
+            }
+        }
+    }
+    world_bounds
 }
 
 impl PickNode<PickMesh> {

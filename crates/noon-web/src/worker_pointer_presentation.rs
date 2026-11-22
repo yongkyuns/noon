@@ -324,7 +324,13 @@ mod admission {
                 .spatial_cache
                 .capture(publication, camera_override, snapshot);
             let planar = if planar_enabled && spatial.is_none() {
-                Some(self.planar_cache.capture(publication, snapshot))
+                let view = mapping.view();
+                let world_units_per_pixel =
+                    f64::from(view.camera().height) / f64::from(view.viewport().y);
+                Some(
+                    self.planar_cache
+                        .capture(publication, snapshot, world_units_per_pixel),
+                )
             } else {
                 self.planar_cache = noon::PlanarPickCache::default();
                 None

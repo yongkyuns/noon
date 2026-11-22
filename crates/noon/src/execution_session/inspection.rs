@@ -7,7 +7,8 @@
 use std::collections::BTreeMap;
 
 use noon_core::{
-    Camera2DState, Color, NativePointerId, ObjectId, RateFunction, SemanticClickIndicate, Vec2,
+    Camera2DState, Color, NativePointerId, ObjectId, RateFunction, SemanticClickIndicate,
+    SemanticNodeId, SemanticVec3, Vec2,
 };
 
 use super::{
@@ -46,6 +47,13 @@ pub struct ViewerIndication {
     pub scale: f64,
     pub color: Color,
     pub strength: f32,
+    pub center: Option<SemanticVec3>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ViewerIndicateTarget {
+    Family(SemanticNodeId),
+    Object(ObjectId),
 }
 
 #[derive(Debug)]
@@ -68,7 +76,7 @@ pub enum PlanarViewerPointer {
 struct PlanarPress {
     pointer: NativePointerId,
     surface: Vec2,
-    target: Option<ObjectId>,
+    target: Option<(ObjectId, Option<SemanticNodeId>)>,
 }
 
 #[derive(Debug, Default)]
@@ -78,7 +86,7 @@ pub(super) struct SessionInspectionView {
     reset: Option<InspectionReset>,
     spatial_gestures: SpatialGestures,
     planar_press: Option<PlanarPress>,
-    indications: BTreeMap<ObjectId, ViewerIndicate>,
+    indications: BTreeMap<ViewerIndicateTarget, ViewerIndicate>,
     revision: u64,
 }
 
@@ -273,6 +281,8 @@ impl ExecutionSession {
                     })
                     .and_then(|press| press.target);
                 if let Some((object, binding)) = target
+                    .filter(|&(object, group)| self.runtime.viewer_group(object) == group)
+                    .map(|(object, _)| object)
                     .filter(|&object| {
                         self.runtime
                             .frame_index_for_object(object)
@@ -299,10 +309,14 @@ impl ExecutionSession {
         object: ObjectId,
         binding: SemanticClickIndicate,
     ) -> bool {
+        let target = self.runtime.viewer_group(object).map_or(
+            ViewerIndicateTarget::Object(object),
+            ViewerIndicateTarget::Family,
+        );
         let effect = self
             .inspection
             .indications
-            .entry(object)
+            .entry(target)
             .or_insert(ViewerIndicate {
                 binding,
                 origin: None,
@@ -317,20 +331,102 @@ impl ExecutionSession {
         true
     }
 
-    /// Presentation parameters in object order, with no changes to authored rows.
+    /// Sample restoring feedback against the current effective poses. Group
+    /// members share one clock and a pivot from their current drawn bounds.
     pub fn viewer_indications(&self) -> Vec<ViewerIndication> {
-        self.inspection
-            .indications
-            .iter()
-            .filter_map(|(&object, effect)| {
-                (effect.progress > 0.0).then_some(ViewerIndication {
-                    object,
-                    scale: 1.0 + (effect.binding.scale_factor() - 1.0) * f64::from(effect.progress),
-                    color: effect.binding.color(),
-                    strength: effect.progress,
-                })
-            })
-            .collect()
+        let mut output = Vec::new();
+        for (&target, effect) in &self.inspection.indications {
+            if effect.progress <= 0.0 {
+                continue;
+            }
+            let indication = |object, center| ViewerIndication {
+                object,
+                scale: 1.0 + (effect.binding.scale_factor() - 1.0) * f64::from(effect.progress),
+                color: effect.binding.color(),
+                strength: effect.progress,
+                center,
+            };
+            match target {
+                ViewerIndicateTarget::Object(object) => output.push(indication(object, None)),
+                ViewerIndicateTarget::Family(group) => {
+                    let Some(members) = self.runtime.viewer_group_members(group) else {
+                        continue;
+                    };
+                    let visible = || {
+                        members.iter().filter_map(|&object| {
+                            let index = self.runtime.frame_index_for_object(object)?;
+                            super::picking::viewer_row_visible(self.frame(), index)
+                                .then_some((object, index))
+                        })
+                    };
+                    let mut planar = None;
+                    let mut spatial = None;
+                    for (object, index) in visible() {
+                        if let Some(world) = self.frame().objects[index].world_transform() {
+                            let (min, max) = self.viewer_spatial_bounds(index, world);
+                            extend_indicate_bounds(&mut spatial, min, max);
+                        } else if let Some(bounds) = self.runtime.effective_object_bounds(object) {
+                            let point =
+                                |p: Vec2| SemanticVec3::new(f64::from(p.x), f64::from(p.y), 0.0);
+                            extend_indicate_bounds(
+                                &mut planar,
+                                point(bounds.min),
+                                point(bounds.max),
+                            );
+                        }
+                    }
+                    let center = |bounds: Option<(SemanticVec3, SemanticVec3)>| {
+                        bounds.map(|(min, max)| {
+                            SemanticVec3::new(
+                                (min.x * 0.5) + (max.x * 0.5),
+                                (min.y * 0.5) + (max.y * 0.5),
+                                (min.z * 0.5) + (max.z * 0.5),
+                            )
+                        })
+                    };
+                    let planar = center(planar);
+                    let spatial = center(spatial);
+                    for (object, index) in visible() {
+                        let center = if self.frame().objects[index].world_transform().is_some() {
+                            spatial
+                        } else {
+                            planar
+                        };
+                        output.push(indication(object, center));
+                    }
+                }
+            }
+        }
+        // A topology change may join a previously pulsing individual to a
+        // family already in flight. The shared family sample wins that row.
+        output.sort_by_key(|effect| effect.object);
+        output.dedup_by_key(|effect| effect.object);
+        output
+    }
+
+    fn viewer_spatial_bounds(
+        &self,
+        index: usize,
+        world: noon_core::SemanticWorldTransform3D,
+    ) -> (SemanticVec3, SemanticVec3) {
+        use noon_core::{GeometryRef, GeometryResource, GeometryResourceLookup};
+        let mesh_bounds = self.frame().objects[index]
+            .content
+            .geometry()
+            .and_then(|geometry| {
+                let GeometryRef::External(id) = geometry else {
+                    return None;
+                };
+                let resources = self.runtime.geometry_resources();
+                let GeometryResource::Mesh(mesh) = resources.get(resources.current_handle(*id)?)?
+                else {
+                    return None;
+                };
+                picking::mesh_world_bounds(mesh, world)
+            });
+        mesh_bounds.map_or((world.translation, world.translation), |bounds| {
+            (bounds.min, bounds.max)
+        })
     }
 
     /// Schedule view and click animations even when the authored clock is paused.
@@ -349,8 +445,14 @@ impl ExecutionSession {
             return Err(InspectionNavigationError::InvalidSpatialMotion);
         }
         let runtime = &self.runtime;
-        self.inspection.indications.retain(|&object, effect| {
-            if runtime.effective_object(object).is_none() {
+        self.inspection.indications.retain(|&target, effect| {
+            let present = match target {
+                ViewerIndicateTarget::Object(object) => runtime.effective_object(object).is_some(),
+                ViewerIndicateTarget::Family(group) => {
+                    runtime.viewer_group_members(group).is_some()
+                }
+            };
+            if !present {
                 return false;
             }
             let origin = *effect.origin.get_or_insert(wall_time_seconds);
@@ -605,4 +707,17 @@ mod tests;
 
 fn within_click_slop(a: Vec2, b: Vec2) -> bool {
     (f64::from(a.x) - f64::from(b.x)).hypot(f64::from(a.y) - f64::from(b.y)) <= 4.0
+}
+
+fn extend_indicate_bounds(
+    bounds: &mut Option<(SemanticVec3, SemanticVec3)>,
+    min: SemanticVec3,
+    max: SemanticVec3,
+) {
+    *bounds = Some(bounds.map_or((min, max), |(lower, upper)| {
+        (
+            SemanticVec3::new(lower.x.min(min.x), lower.y.min(min.y), lower.z.min(min.z)),
+            SemanticVec3::new(upper.x.max(max.x), upper.y.max(max.y), upper.z.max(max.z)),
+        )
+    }));
 }

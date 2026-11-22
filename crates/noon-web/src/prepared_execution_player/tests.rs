@@ -1488,6 +1488,91 @@ fn spatial_click_indicates_the_front_mesh_and_restores_while_paused() {
 }
 
 #[test]
+fn viewer_indicates_the_selected_historical_outer_family_about_one_center() {
+    let mut scene = Scene::new();
+    let mut tick = scene.circle(0.5).unwrap();
+    let mut other_axis = scene.circle(0.5).unwrap();
+    tick.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
+    other_axis.set_fill(0.0, 1.0, 0.0, 1.0).unwrap();
+    other_axis.set_translation(2.0, 0.0).unwrap();
+    scene.add(&tick).unwrap();
+    scene.add(&other_axis).unwrap();
+    let mut source = scene.into_execution().unwrap();
+    source
+        .session_mut()
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let first = source.session_mut().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(1.0).unwrap();
+    let (mut publisher, reader) = source.session().create_prepared_prefix(first).unwrap();
+    let mut player = PreparedExecutionPlayer::from_reader(reader, 320);
+    player.set_prepared_playing(false);
+    player.enable_default_viewer_selection();
+    player
+        .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
+        .unwrap();
+    let (mut mirror, mut receipt) = ready(&mut player);
+
+    let ticks = source.scene_mut().family(&[(&tick).into()]).unwrap();
+    let axes = source
+        .scene_mut()
+        .family(&[(&ticks).into(), (&other_axis).into()])
+        .unwrap();
+    source.scene_mut().add_many(&[(&axes).into()]).unwrap();
+    let second = source.session_mut().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(2.0).unwrap();
+    let batch = source
+        .session()
+        .publish_prepared_prefix(second, &mut publisher)
+        .unwrap();
+    player
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    player.preflight_append(&batch).unwrap();
+    player.append(batch).unwrap();
+
+    for (time, expected_count) in [(1.25, 2), (0.5, 1)] {
+        let selected = player.seek_delta_json(time).unwrap().unwrap();
+        receive(&mut mirror, &selected);
+        receipt.sequence = decode(&selected).retained.sequence;
+        receipt.presentation += 1;
+        assert!(player
+            .note_pointer_presentation_json(&serde_json::to_string(&receipt).unwrap())
+            .unwrap());
+        let original = mirror.frame().unwrap().clone();
+        let canonical = player.playback.reader.frame().clone();
+        assert!(input(&mut player, "press", receipt, 1));
+        assert!(input(&mut player, "release", receipt, 1));
+        let wall = 10_000.0 + 4_000.0 * f64::from(receipt.presentation as u32);
+        assert!(player.tick_delta_json(wall).unwrap().is_none());
+        let pulsed = player.tick_delta_json(wall + 500.0).unwrap().unwrap();
+        let rows = decode(&pulsed).retained.objects;
+        assert_eq!(rows.len(), expected_count);
+        assert!(rows
+            .iter()
+            .all(|row| row.style.fill == Some(noon_core::YELLOW)));
+        if expected_count == 2 {
+            let mut positions = rows
+                .iter()
+                .map(|row| row.transform.translation.x)
+                .collect::<Vec<_>>();
+            positions.sort_by(f32::total_cmp);
+            assert!((positions[0] + 0.2).abs() < 1e-5);
+            assert!((positions[1] - 2.2).abs() < 1e-5);
+        } else {
+            assert_eq!(rows[0].transform.translation.x, 0.0);
+        }
+        receive(&mut mirror, &pulsed);
+        receive(
+            &mut mirror,
+            &player.tick_delta_json(wall + 1000.0).unwrap().unwrap(),
+        );
+        assert_eq!(mirror.frame().unwrap(), &original);
+        assert_eq!(player.playback.reader.frame(), &canonical);
+    }
+}
+
+#[test]
 fn planar_viewer_indicate_scales_an_image_without_changing_its_paint() {
     let mut scene = Scene::new();
     let picture = scene.image_rgba8(1, 1, vec![22, 100, 180, 255]).unwrap();

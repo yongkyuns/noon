@@ -736,6 +736,7 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
     validate_mutations(prepared.mutations(), handled_scalar_signals, Some(prepared))?;
     let (mut values, mut resource_additions, numeric_text) =
         lower_semantic_publication(prepared, index, reachability, handled_scalar_signals)?;
+    super::viewer_groups::prepare(prepared, reachability, &mut values)?;
     let inset_updates = prepare_inset_updates(prepared)?;
     // Existing display updates precede removals. Entry relations are installed
     // after their CreateObject patch below; pending identities are already planned.
@@ -1480,6 +1481,7 @@ fn lower_prepared_entry(
     compiled.draw_enabled = state.draw_enabled();
     compiled.click_indicate = lowered.click_indicate;
     compiled.viewer_draggable = lowered.viewer_draggable;
+    compiled.viewer_group = super::viewer_groups::proposed(prepared, object, reachability);
     let numeric_text = lower_numeric_text_driver(&state, prepared.store(), resource_additions)?;
     let inset_view = inset_updates
         .get(&object)
