@@ -122,7 +122,11 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       if (!name) throw new Error(`unexpected screenshot read after ${capture} planned captures`);
       events.push(`capture:${name}`);
       if (name === captureFailure) throw new Error(`capture failed: ${name}`);
-      return captures[capture++];
+      const bytes = captures[capture];
+      if (!(name === "selected" && selectedPixels <= 500) && !(name === "cleared" && clearPixels !== 0)) {
+        capture += 1;
+      }
+      return bytes;
     },
   };
   const browserContext = new EventEmitter();
@@ -265,7 +269,7 @@ function assertRetained(result, names) {
   return JSON.parse(result.writes.get("result.json"));
 }
 
-test("successful legacy clear and source-declared indication retain their captures and measurements", async () => {
+test("successful default and source-declared indication retain their captures and measurements", async () => {
   const result = await runSmoke();
   assert.equal(result.error, undefined);
   const report = assertRetained(result, ["baseline", "selected", "cleared", "authoredBaseline", "indicated", "restored", "repeated",
@@ -400,13 +404,13 @@ test("21 differing pixels still fail but retain all original evidence", async ()
   assert.equal(result.error.expected, 0);
   const report = assertRetained(result, ["baseline", "selected", "cleared"]);
   assert.equal(report.clearDifference, 21);
-  assert.match(report.error, /background clear must restore/);
+  assert.match(report.error, /default viewer Indicate did not restore/);
   assert.ok(!result.events.includes("passed"));
 });
 
 test("insufficient selection preserves only the captures actually taken", async () => {
   const result = await runSmoke({ selectedPixels: 500 });
-  assert.match(result.error?.message, /selection changed only 500 pixels/);
+  assert.match(result.error?.message, /default viewer Indicate changed only 500 pixels/);
   const report = assertRetained(result, ["baseline", "selected"]);
   assert.equal(report.selectedChanged, 500);
   assert.equal(report.clearDifference, undefined);

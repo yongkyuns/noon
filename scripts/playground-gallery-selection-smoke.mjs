@@ -107,7 +107,10 @@ async function waitForExactPixels(canvas, baseline, label) {
     if (changedPixels(baseline, last) === 0) return last;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  const error = new Error(`${label} did not restore the exact baseline pixels`);
+  const error = new assert.AssertionError({
+    message: `${label} did not restore the exact baseline pixels`,
+    actual: changedPixels(baseline, last), expected: 0, operator: "strictEqual",
+  });
   error.capture = last;
   throw error;
 }
@@ -178,21 +181,37 @@ try {
   captures.baseline = baseline;
 
   const waitChanged = async (surface, before, label) => {
+    let image;
+    let difference;
     for (let attempt = 0; attempt < 40; attempt += 1) {
-      const image = await surface.screenshot();
-      if (changedPixels(before, image) > 500) return image;
+      image = await surface.screenshot();
+      difference = changedPixels(before, image);
+      if (difference > 500) return image;
       await page.waitForTimeout(25);
     }
-    throw new Error(`${label} did not change trusted canvas pixels`);
+    const error = new Error(`${label} changed only ${difference} pixels`);
+    error.capture = image;
+    throw error;
   };
   await tap(page,
     box.x + box.width / 2 - box.height / 4,
     box.y + box.height / 2,
   );
-  captures.selected = await waitChanged(canvas, baseline, "default viewer Indicate");
-  report.selectedChanged = changedPixels(baseline, captures.selected);
-  captures.cleared = await waitForExactPixels(canvas, baseline, "default viewer Indicate");
-  report.clearDifference = changedPixels(baseline, captures.cleared);
+  let capture = "selected";
+  try {
+    captures.selected = await waitChanged(canvas, baseline, "default viewer Indicate");
+    capture = "cleared";
+    captures.cleared = await waitForExactPixels(canvas, baseline, "default viewer Indicate");
+  } catch (error) {
+    if (error.capture) {
+      captures[capture] = error.capture;
+      delete error.capture;
+    }
+    throw error;
+  } finally {
+    if (captures.selected) report.selectedChanged = changedPixels(baseline, captures.selected);
+    if (captures.cleared) report.clearDifference = changedPixels(baseline, captures.cleared);
+  }
   await assertSettled(page, "default viewer Indicate");
   assert.deepEqual(errors, []);
 
