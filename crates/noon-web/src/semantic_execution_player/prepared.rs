@@ -62,7 +62,7 @@ impl SemanticExecutionPlayer {
         if playing && !finished {
             self.resume();
         } else {
-            self.pause();
+            self.pause_clock();
         }
         Ok(())
     }
@@ -204,7 +204,7 @@ impl SemanticExecutionPlayer {
                 .session_mut()
                 .begin_observed_prepared_source(noon::ContinuationEffects::SceneOnly)
                 .map_err(prefix_error)?;
-            self.pause();
+            self.pause_clock();
             return Ok(None);
         }
         if !self.source.session().replay_scope_active() {
