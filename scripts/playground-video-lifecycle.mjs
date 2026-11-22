@@ -10,7 +10,10 @@ const [asset] = process.argv.slice(2);
 const server = await serveRepository(resolve(fileURLToPath(new URL("..", import.meta.url))), 0);
 let browser;
 try {
-  browser = await chromium.launch({ channel: "chromium", args: browserArgs("webgpu") });
+  browser = await chromium.launch({
+    channel: process.env.NOON_VIDEO_CHROMIUM_CHANNEL ?? "chromium",
+    args: browserArgs("webgpu"),
+  });
   const page = await browser.newPage({ viewport: { width: 960, height: 720 } });
   await page.addInitScript(() => {
     window.audioOffsets = [];

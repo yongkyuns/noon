@@ -158,7 +158,11 @@ async function run(config) {
   try {
     await mkdir(config.directory);
     directoryOwned = true;
-    browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs(config.backend) });
+    browser = await playwright.chromium.launch({
+      channel: process.env.NOON_VIDEO_CHROMIUM_CHANNEL ?? "chromium",
+      headless: true,
+      args: browserArgs(config.backend),
+    });
     page = await browser.newPage({ viewport: { width: Math.max(config.width, 640), height: Math.max(config.height, 360) }, deviceScaleFactor: 1 });
     page.on("pageerror", error => errors.push(String(error)));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -304,7 +308,7 @@ async function run(config) {
       const args = [config.directory, config.output, ...(config.overwrite ? ["--overwrite"] : [])];
       const executable = config.encoder ?? "cargo";
       const nativeArgs = config.encoder === null
-        ? ["run", "--locked", "-p", "noon-export", "--example", "encode_prepared_capture", "--", ...args]
+        ? ["run", "--locked", "-p", "noon-export", "--no-default-features", "--example", "encode_prepared_capture", "--", ...args]
         : args;
       let stdout = "";
       await new Promise((resolve, reject) => {
