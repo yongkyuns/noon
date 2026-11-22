@@ -1561,8 +1561,9 @@ export async function attachSemanticEngine(
             // Unavailable mappings cannot be presented. Acknowledging their
             // registration authorizes no input and must not block the reveal
             // command behind an impossible surface-presentation barrier.
-            if (message.type === "browser_pointer_view" &&
-                message.view.width > 0 && message.view.height > 0) {
+            if ((message.type === "browser_pointer_view" &&
+                 message.view.width > 0 && message.view.height > 0) ||
+                (message.type === "pointer_fill_selection" && message.viewerDefault === true)) {
               await awaitPresentation(publication);
             } else if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES &&
                        player.interactionsActive() && publication !== null) {

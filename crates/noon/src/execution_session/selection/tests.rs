@@ -1082,7 +1082,14 @@ fn default_viewer_indicates_the_outline_above_a_solid_fill() {
     assert_eq!(indication.strength, 1.0);
     assert_eq!(indication.color, noon_core::YELLOW);
     assert_eq!(indication.scale, 1.2);
-    session.advance_viewer_inspection(11.0).unwrap();
+    session.advance_viewer_inspection(10.8).unwrap();
+    let fading = session.viewer_indications()[0].strength;
+    click(&mut store, &mut session, 2, 0.0);
+    session.advance_viewer_inspection(10.8).unwrap();
+    assert!((session.viewer_indications()[0].strength - fading).abs() < 1e-6);
+    session.advance_viewer_inspection(11.1).unwrap();
+    assert_eq!(session.viewer_indications()[0].strength, 1.0);
+    session.advance_viewer_inspection(11.7).unwrap();
     assert_eq!(session.frame(), &before);
     assert!(session.viewer_indications().is_empty());
 
@@ -1095,7 +1102,7 @@ fn default_viewer_indicates_the_outline_above_a_solid_fill() {
     session
         .apply_semantic_transaction(&mut store, transaction)
         .unwrap();
-    click(&mut store, &mut session, 2, 0.0);
+    click(&mut store, &mut session, 4, 0.0);
     session.advance_viewer_inspection(20.0).unwrap();
     session.advance_viewer_inspection(20.5).unwrap();
     assert_eq!(

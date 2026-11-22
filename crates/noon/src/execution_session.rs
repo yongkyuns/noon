@@ -21,8 +21,8 @@ pub use input::{
     PointerFrameError, PointerFrameSnapshot, PointerFrameView,
 };
 pub use inspection::{
-    InspectionNavigationError, SpatialPickCache, SpatialPickFrame, SpatialPointerInput,
-    SpatialPointerPhase, ViewerIndication,
+    InspectionNavigationError, PlanarPickCache, PlanarPickFrame, PlanarViewerPointer,
+    SpatialPickCache, SpatialPickFrame, SpatialPointerInput, SpatialPointerPhase, ViewerIndication,
 };
 pub use translation_drag::{TranslationDragError, TranslationDragReceipt, TranslationDragUndo};
 mod hover;

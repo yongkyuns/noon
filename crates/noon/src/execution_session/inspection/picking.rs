@@ -9,7 +9,9 @@ use noon_core::{
 };
 use noon_runtime::RendererPublication;
 
-#[derive(Clone, PartialEq)]
+mod planar;
+pub use planar::{PlanarPickCache, PlanarPickFrame};
+
 struct PickMesh {
     id: ObjectId,
     world: SemanticWorldTransform3D,
@@ -20,30 +22,37 @@ struct PickMesh {
 /// A displayed frame retains an immutable root and shared mesh resources.
 #[derive(Default)]
 pub struct SpatialPickCache {
-    root: Option<Arc<PickNode>>,
+    root: Option<Arc<PickNode<PickMesh>>>,
     capacity: usize,
 }
 
 #[derive(Clone)]
 pub struct SpatialPickFrame {
     camera: SemanticCamera3D,
-    root: Option<Arc<PickNode>>,
+    root: Option<Arc<PickNode<PickMesh>>>,
 }
 
-struct PickNode {
-    bounds: MeshBounds3D,
-    contents: PickContents,
+trait PickRow: Sized + PartialEq {
+    type Bounds: Copy;
+
+    fn bounds(&self) -> Option<Self::Bounds>;
+    fn join(a: Self::Bounds, b: Self::Bounds) -> Self::Bounds;
 }
 
-enum PickContents {
-    Branch([Option<Arc<PickNode>>; 2]),
-    Mesh(PickMesh),
+struct PickNode<Row: PickRow> {
+    bounds: Row::Bounds,
+    contents: PickContents<Row>,
 }
 
-impl PickNode {
+enum PickContents<Row: PickRow> {
+    Branch([Option<Arc<PickNode<Row>>>; 2]),
+    Leaf(Row),
+}
+
+impl<Row: PickRow> PickNode<Row> {
     fn branch(children: [Option<Arc<Self>>; 2]) -> Option<Arc<Self>> {
         let bounds = match &children {
-            [Some(left), Some(right)] => join_bounds(left.bounds, right.bounds),
+            [Some(left), Some(right)] => Row::join(left.bounds, right.bounds),
             [Some(child), None] | [None, Some(child)] => child.bounds,
             [None, None] => return None,
         };
@@ -53,49 +62,28 @@ impl PickNode {
         }))
     }
 
-    /// Replace only the leaf's ancestor path. Unchanged subtrees can stay
-    /// shared with any frame whose presentation receipt is still retained.
+    /// Replace only the leaf's ancestor path, sharing unchanged subtrees.
     fn update(
         old: Option<&Arc<Self>>,
         width: usize,
         index: usize,
-        row: Option<PickMesh>,
+        row: Option<Row>,
     ) -> Option<Arc<Self>> {
         if width == 1 {
             let row = row?;
             if let Some(old) = old {
-                if let PickContents::Mesh(mesh) = &old.contents {
-                    if row.id == mesh.id
-                        && row.world == mesh.world
-                        && Arc::ptr_eq(&row.mesh, &mesh.mesh)
-                    {
-                        return Some(Arc::clone(old));
-                    }
-                }
-            }
-            let bounds = row.mesh.bounds();
-            let mut world_bounds = None;
-            for x in [bounds.min.x, bounds.max.x] {
-                for y in [bounds.min.y, bounds.max.y] {
-                    for z in [bounds.min.z, bounds.max.z] {
-                        let point = row.world.transform_point(Vec3::new(x, y, z))?;
-                        let corner = MeshBounds3D {
-                            min: point,
-                            max: point,
-                        };
-                        world_bounds =
-                            Some(world_bounds.map_or(corner, |other| join_bounds(other, corner)));
-                    }
+                if matches!(&old.contents, PickContents::Leaf(previous) if *previous == row) {
+                    return Some(Arc::clone(old));
                 }
             }
             return Some(Arc::new(Self {
-                bounds: world_bounds?,
-                contents: PickContents::Mesh(row),
+                bounds: row.bounds()?,
+                contents: PickContents::Leaf(row),
             }));
         }
         let half = width / 2;
         let side = usize::from(index >= half);
-        let children = match old.map(|node| &node.contents) {
+        let mut children = match old.map(|node| &node.contents) {
             Some(PickContents::Branch(children)) => children.clone(),
             _ => [None, None],
         };
@@ -108,11 +96,55 @@ impl PickNode {
         {
             return old.cloned();
         }
-        let mut children = children;
         children[side] = next;
         Self::branch(children)
     }
+}
 
+impl PartialEq for PickMesh {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.world == other.world && Arc::ptr_eq(&self.mesh, &other.mesh)
+    }
+}
+
+impl PickRow for PickMesh {
+    type Bounds = MeshBounds3D;
+
+    fn bounds(&self) -> Option<MeshBounds3D> {
+        let bounds = self.mesh.bounds();
+        let mut world_bounds = None;
+        for x in [bounds.min.x, bounds.max.x] {
+            for y in [bounds.min.y, bounds.max.y] {
+                for z in [bounds.min.z, bounds.max.z] {
+                    let point = self.world.transform_point(Vec3::new(x, y, z))?;
+                    let corner = MeshBounds3D {
+                        min: point,
+                        max: point,
+                    };
+                    world_bounds = Some(world_bounds.map_or(corner, |old| Self::join(old, corner)));
+                }
+            }
+        }
+        world_bounds
+    }
+
+    fn join(a: MeshBounds3D, b: MeshBounds3D) -> MeshBounds3D {
+        MeshBounds3D {
+            min: Vec3::new(
+                a.min.x.min(b.min.x),
+                a.min.y.min(b.min.y),
+                a.min.z.min(b.min.z),
+            ),
+            max: Vec3::new(
+                a.max.x.max(b.max.x),
+                a.max.y.max(b.max.y),
+                a.max.z.max(b.max.z),
+            ),
+        }
+    }
+}
+
+impl PickNode<PickMesh> {
     fn pick(&self, ray: &Ray, near: f64, best: &mut f64, target: &mut Option<ObjectId>) {
         if !ray.intersects_bounds(self.bounds.min, self.bounds.max, near, *best) {
             return;
@@ -124,7 +156,7 @@ impl PickNode {
                 }
                 return;
             }
-            PickContents::Mesh(row) => row,
+            PickContents::Leaf(row) => row,
         };
         let Some(ray) = Ray::in_mesh(ray.origin, ray.direction, row.world) else {
             return;
@@ -144,21 +176,6 @@ impl PickNode {
                 *target = Some(row.id);
             }
         }
-    }
-}
-
-fn join_bounds(a: MeshBounds3D, b: MeshBounds3D) -> MeshBounds3D {
-    MeshBounds3D {
-        min: Vec3::new(
-            a.min.x.min(b.min.x),
-            a.min.y.min(b.min.y),
-            a.min.z.min(b.min.z),
-        ),
-        max: Vec3::new(
-            a.max.x.max(b.max.x),
-            a.max.y.max(b.max.y),
-            a.max.z.max(b.max.z),
-        ),
     }
 }
 
@@ -389,7 +406,7 @@ mod tests {
         let left = PickNode::update(None, 4, 0, Some(row(1, 0.0))).unwrap();
         let displayed = PickNode::update(Some(&left), 4, 3, Some(row(2, 7.0))).unwrap();
         let updated = PickNode::update(Some(&displayed), 4, 0, Some(row(1, 3.0))).unwrap();
-        let right = |node: &PickNode| match &node.contents {
+        let right = |node: &PickNode<PickMesh>| match &node.contents {
             PickContents::Branch([_, Some(right)]) => Arc::clone(right),
             _ => panic!("expected two subtrees"),
         };

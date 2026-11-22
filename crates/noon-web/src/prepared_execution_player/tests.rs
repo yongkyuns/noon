@@ -1177,6 +1177,36 @@ fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
         &f.player.tick_delta_json(2_600.0).unwrap().unwrap(),
     );
     assert_eq!(mirror.frame().unwrap(), &original);
+
+    // The render receipt and DOM events travel on independent channels. Keep
+    // the earlier displayed pick after a newer frame has moved the target off
+    // the original cursor, and allow that physical release to finish the click.
+    f.player.set_prepared_playing(true);
+    f.player.execution_wake(3_000.0).unwrap();
+    let moved = decode(&f.player.tick_delta_json(3_500.0).unwrap().unwrap()).retained;
+    assert!(moved.time > 1.6);
+    assert!(
+        f.player
+            .playback
+            .reader
+            .frame()
+            .render_transform(0)
+            .translation
+            .x
+            > 1.0
+    );
+    let newer = WorkerPointerReceipt {
+        sequence: moved.sequence,
+        presentation: receipt.presentation + 1,
+        ..receipt
+    };
+    assert!(f
+        .player
+        .note_pointer_presentation_json(&serde_json::to_string(&newer).unwrap())
+        .unwrap());
+    assert!(input(&mut f.player, "press", receipt, 1));
+    assert!(input(&mut f.player, "release", newer, 1));
+    assert!(f.player.playback.reader.viewer_inspection_active());
 }
 
 #[test]
@@ -1473,12 +1503,21 @@ fn default_planar_viewer_indicates_on_demand_and_pans_without_scene_rows() {
     let (_, reader) = source.session().create_prepared_prefix(segment).unwrap();
     let mut player = PreparedExecutionPlayer::from_reader(reader, 314);
     player.set_prepared_playing(true);
-    player.enable_default_viewer_selection();
-    assert_eq!(player.viewer_pointer_motion(), Some(false));
     player
         .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
         .unwrap();
-    let (mut mirror, original_receipt) = ready(&mut player);
+    let (mut mirror, mut original_receipt) = ready(&mut player);
+    player.enable_default_viewer_selection();
+    assert_eq!(player.viewer_pointer_motion(), Some(false));
+    let enabled = player.drain_delta_json().unwrap().unwrap();
+    receive(&mut mirror, &enabled);
+    let enabled = decode(&enabled).retained;
+    assert!(enabled.objects.is_empty());
+    original_receipt.sequence = enabled.sequence;
+    original_receipt.presentation += 1;
+    assert!(player
+        .note_pointer_presentation_json(&serde_json::to_string(&original_receipt).unwrap())
+        .unwrap());
     assert!(player.tick_delta_json(1_000.0).unwrap().is_none());
     assert!(player.tick_delta_json(1_100.0).unwrap().is_none());
 

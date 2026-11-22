@@ -19,7 +19,7 @@ pub(crate) use prepared::PreparedPrefixAdvance;
 mod provisional_geometry;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
-use crate::browser_pointer_input::BrowserPointerBinding;
+use crate::browser_pointer_input::{BrowserPointerBinding, BrowserPointerTarget};
 use crate::retained_family_execution_encoder::NoChangePresentation;
 use noon::integration::scene_execution::{self, ExecutionSession};
 #[cfg(test)]
@@ -551,10 +551,10 @@ impl SemanticExecutionPlayer {
     }
 
     fn seek_session(&mut self, time: f64) -> Result<(), String> {
-        self.source
-            .seek(time)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        self.source.seek(time).map_err(|error| error.to_string())?;
+        #[cfg(any(target_arch = "wasm32", test))]
+        self.worker_pointer_presentation.retire_viewer_frames();
+        Ok(())
     }
 
     /// Release input-owned state only at an explicit source disposal boundary.
@@ -1474,7 +1474,7 @@ impl SemanticExecutionPlayer {
             .inspection_camera()
             .map_err(|e| e.to_string())?;
         #[cfg(any(target_arch = "wasm32", test))]
-        let (pointer_frame, pointer_refresh) = {
+        let (pointer_frame, pointer_refresh, planar_enabled) = {
             let target = pointer_input::PlayerPointerTarget {
                 source: &mut self.source,
                 translation_drag_undo: &mut self.translation_drag_undo,
@@ -1482,6 +1482,7 @@ impl SemanticExecutionPlayer {
             (
                 self.worker_pointer_presentation.capture(&target)?,
                 self.worker_pointer_presentation.needs_delta(&target),
+                self.finite_export.is_none() && target.uses_planar_viewer_input(),
             )
         };
         #[cfg(not(any(target_arch = "wasm32", test)))]
@@ -1546,10 +1547,11 @@ impl SemanticExecutionPlayer {
                 delta.retained.sequence,
                 pointer_frame,
             );
-            self.worker_pointer_presentation.issue_spatial(
+            self.worker_pointer_presentation.issue_viewer(
                 &publication,
                 spatial_inspection.map(|(_, camera)| camera),
                 delta.retained.snapshot,
+                planar_enabled,
             );
         }
         self.last_sent_selection_overlay = presentation;
@@ -2905,7 +2907,12 @@ impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = enableDefaultViewerSelection))]
     pub fn enable_default_viewer_selection(&mut self) {
-        self.source.session_mut().enable_default_viewer_selection();
+        let session = self.source.session_mut();
+        let already_enabled = session.default_viewer_selection();
+        session.enable_default_viewer_selection();
+        if !already_enabled && !session.has_native_pointer_subscribers() {
+            self.worker_pointer_presentation.refresh_planar_viewer();
+        }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

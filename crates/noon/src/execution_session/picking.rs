@@ -260,7 +260,20 @@ fn analytic_fill_contains_with_external_path(
     if frame.reveal(index) != 1.0 || frame.morph(index) != 0.0 {
         return Err(PointerFillUnsupported::PartialGeometry);
     }
-    let transform = frame.render_transform(index);
+    geometry_fill_contains(
+        frame.render_geometry(index),
+        frame.render_transform(index),
+        point,
+        external_path,
+    )
+}
+
+pub(super) fn geometry_fill_contains(
+    geometry: Option<&GeometryRef>,
+    transform: noon_core::Transform2D,
+    point: Vec2,
+    external_path: Option<&noon_core::VectorPath>,
+) -> Result<bool, PointerFillUnsupported> {
     if transform.scale.x == 0.0
         || transform.scale.y == 0.0
         || !transform.scale.x.is_finite()
@@ -278,7 +291,7 @@ fn analytic_fill_contains_with_external_path(
     let (sin, cos) = f64::from(transform.rotation).sin_cos();
     let x = (cos * dx + sin * dy) / f64::from(transform.scale.x);
     let y = (-sin * dx + cos * dy) / f64::from(transform.scale.y);
-    match frame.render_geometry(index) {
+    match geometry {
         Some(GeometryRef::Circle { radius }) if radius.is_finite() && *radius != 0.0 => {
             Ok(x.hypot(y) <= f64::from(radius.abs()))
         }

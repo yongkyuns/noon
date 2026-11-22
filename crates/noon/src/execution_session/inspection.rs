@@ -6,7 +6,9 @@
 
 use std::collections::BTreeMap;
 
-use noon_core::{Camera2DState, Color, ObjectId, RateFunction, SemanticClickIndicate, Vec2};
+use noon_core::{
+    Camera2DState, Color, NativePointerId, ObjectId, RateFunction, SemanticClickIndicate, Vec2,
+};
 
 use super::{
     ExecutionSession, ExecutionSessionInputError, PointerFrameError, PointerFrameSnapshot,
@@ -21,7 +23,7 @@ mod gesture;
 mod picking;
 
 pub use gesture::{SpatialPointerInput, SpatialPointerPhase};
-pub use picking::{SpatialPickCache, SpatialPickFrame};
+pub use picking::{PlanarPickCache, PlanarPickFrame, SpatialPickCache, SpatialPickFrame};
 
 use gesture::{SpatialGesture, SpatialGestures};
 
@@ -51,6 +53,22 @@ struct ViewerIndicate {
     binding: SemanticClickIndicate,
     origin: Option<f64>,
     progress: f32,
+    phase: f64,
+    start_phase: f64,
+}
+
+pub enum PlanarViewerPointer {
+    Press { surface: Vec2, scene: Vec2 },
+    Move(Vec2),
+    Release(Vec2),
+    Cancel,
+}
+
+#[derive(Debug)]
+struct PlanarPress {
+    pointer: NativePointerId,
+    surface: Vec2,
+    target: Option<ObjectId>,
 }
 
 #[derive(Debug, Default)]
@@ -59,6 +77,7 @@ pub(super) struct SessionInspectionView {
     spatial: InspectionView3D,
     reset: Option<InspectionReset>,
     spatial_gestures: SpatialGestures,
+    planar_press: Option<PlanarPress>,
     indications: BTreeMap<ObjectId, ViewerIndicate>,
     revision: u64,
 }
@@ -76,6 +95,7 @@ impl SessionInspectionView {
 
     pub(super) fn clear_indications(&mut self) {
         self.indications.clear();
+        self.planar_press = None;
     }
 }
 
@@ -215,22 +235,86 @@ impl ExecutionSession {
         }
     }
 
+    /// Viewer-only contact. Picking uses the picture observed at pointer down.
+    /// Release confirms the physical click without requiring the moving object
+    /// to stay underneath the cursor. Authored input never enters this lane.
+    pub fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        kind: PlanarViewerPointer,
+        displayed: Option<&PlanarPickFrame>,
+    ) {
+        use PlanarViewerPointer::{Cancel, Move, Press, Release};
+        let pending = &mut self.inspection.planar_press;
+        if !matches!(kind, Press { .. })
+            && pending
+                .as_ref()
+                .is_some_and(|press| press.pointer != pointer)
+        {
+            return;
+        }
+        match kind {
+            Press { surface, scene } if pending.is_none() => {
+                *pending = Some(PlanarPress {
+                    pointer,
+                    surface,
+                    target: displayed.and_then(|frame| frame.pick(scene)),
+                });
+            }
+            Move(surface)
+                if pending.as_ref().is_some_and(|press| {
+                    press.pointer == pointer && within_click_slop(press.surface, surface)
+                }) => {}
+            Release(surface) => {
+                let target = pending
+                    .take()
+                    .filter(|press| {
+                        press.pointer == pointer && within_click_slop(press.surface, surface)
+                    })
+                    .and_then(|press| press.target);
+                if let Some((object, binding)) = target
+                    .filter(|&object| {
+                        self.runtime
+                            .frame_index_for_object(object)
+                            .is_some_and(|index| {
+                                super::picking::viewer_row_visible(self.frame(), index)
+                            })
+                    })
+                    .and_then(|object| self.interaction_semantic_object_id(object))
+                    .and_then(|node| self.prepare_viewer_indicate(node))
+                {
+                    self.start_viewer_indicate(object, binding);
+                }
+            }
+            Press { .. } | Move(_) | Cancel => *pending = None,
+        }
+    }
+
+    pub fn cancel_planar_viewer_pointer(&mut self) {
+        self.inspection.planar_press = None;
+    }
+
     pub(super) fn start_viewer_indicate(
         &mut self,
         object: ObjectId,
         binding: SemanticClickIndicate,
     ) -> bool {
-        if let std::collections::btree_map::Entry::Vacant(entry) =
-            self.inspection.indications.entry(object)
-        {
-            entry.insert(ViewerIndicate {
+        let effect = self
+            .inspection
+            .indications
+            .entry(object)
+            .or_insert(ViewerIndicate {
                 binding,
                 origin: None,
                 progress: 0.0,
+                phase: 0.0,
+                start_phase: 0.0,
             });
-            return true;
-        }
-        false
+        // Resume from the rising phase with the same strength. A second click
+        // during the return can rise again without a jump to the authored style.
+        effect.start_phase = effect.phase.min(1.0 - effect.phase);
+        effect.origin = None;
+        true
     }
 
     /// Presentation parameters in object order, with no changes to authored rows.
@@ -271,9 +355,9 @@ impl ExecutionSession {
             }
             let origin = *effect.origin.get_or_insert(wall_time_seconds);
             let elapsed = (wall_time_seconds - origin).max(0.0);
-            effect.progress = RateFunction::ThereAndBack
-                .evaluate((elapsed / effect.binding.run_time()).clamp(0.0, 1.0) as f32);
-            elapsed < effect.binding.run_time()
+            effect.phase = (effect.start_phase + elapsed / effect.binding.run_time()).min(1.0);
+            effect.progress = RateFunction::ThereAndBack.evaluate(effect.phase as f32);
+            effect.phase < 1.0
         });
         let Some(mut reset) = self.inspection.reset else {
             return Ok(());
@@ -511,9 +595,14 @@ impl ExecutionSession {
         self.retire_pointer_view_binding();
         self.inspection.adjustment = next;
         self.inspection.revision = revision;
+        self.cancel_planar_viewer_pointer();
         Ok(true)
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+fn within_click_slop(a: Vec2, b: Vec2) -> bool {
+    (f64::from(a.x) - f64::from(b.x)).hypot(f64::from(a.y) - f64::from(b.y)) <= 4.0
+}
