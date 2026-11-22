@@ -1022,7 +1022,9 @@ impl SemanticExecutionPlayer {
         if !matches!(self.live_segment, Some(LiveSegmentReceipt::Completed(_))) {
             return Err("source completion requires its completed continuation segment".into());
         }
-        self.pause();
+        // Source completion already owns its displayed boundary. A viewer-only
+        // receipt refresh would publish the intermediate completion state.
+        self.pause_clock();
         Ok(())
     }
 
@@ -3343,7 +3345,7 @@ impl SemanticExecutionPlayer {
             .set_loop_duration(duration)
             .map_err(|error| error.to_string())
     }
-    pub fn pause(&mut self) {
+    fn pause_clock(&mut self) {
         if self.video.waiting() {
             self.clock
                 .seek(self.time())
@@ -3351,6 +3353,9 @@ impl SemanticExecutionPlayer {
         }
         self.video.clear_selection();
         self.clock.pause();
+    }
+    pub fn pause(&mut self) {
+        self.pause_clock();
         #[cfg(any(target_arch = "wasm32", test))]
         self.worker_pointer_presentation.refresh_paused_viewer(
             &pointer_input::PlayerPointerTarget {

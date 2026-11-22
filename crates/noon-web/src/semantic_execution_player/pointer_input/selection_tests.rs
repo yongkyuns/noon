@@ -85,6 +85,28 @@ fn paused_click_and_clear_use_transport_sequence_without_authored_dirtiness() {
 }
 
 #[test]
+fn quiet_source_completion_keeps_its_displayed_frame_until_the_viewer_pauses() {
+    let mut player = player();
+    player.enable_default_viewer_selection();
+    player
+        .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
+        .unwrap();
+    assert_eq!(drain(&mut player).retained.time, 0.0);
+
+    player.live_wait(0.25).unwrap();
+    player.live_advance_segment_to(0.25).unwrap();
+    player.live_complete_segment().unwrap();
+    assert!(player.drain_delta_json().unwrap().is_none());
+    player.finish_source_playback().unwrap();
+    assert!(player.drain_delta_json().unwrap().is_none());
+
+    player.pause();
+    let refreshed = drain(&mut player).retained;
+    assert_eq!(refreshed.time, 0.25);
+    assert!(refreshed.objects.is_empty());
+}
+
+#[test]
 fn same_selection_out_and_back_and_rejected_configuration_emit_no_delta() {
     let mut p = player();
     click(&mut p, 400.0);
