@@ -289,6 +289,33 @@ impl ExecutionSession {
         }
     }
 
+    pub(super) fn prepare_viewer_indicate(
+        &self,
+        node: SemanticNodeId,
+    ) -> Result<Option<PreparedTransientAnimation>, ExecutionSessionInputError> {
+        let Some(object) = self.interaction_execution_object_id(node) else {
+            return Ok(None);
+        };
+        if self.pending_callback.is_some() || self.interaction_bindings.bindings.contains_key(&node)
+        {
+            return Ok(None);
+        }
+        let options = crate::IndicateOptions::default();
+        let binding = self
+            .runtime
+            .click_indicate_binding(object)
+            .unwrap_or_else(|| {
+                noon_core::SemanticClickIndicate::new(
+                    options.scale_factor,
+                    options.color,
+                    noon_core::AnimationDefaults::MANIM.run_time,
+                )
+            });
+        self.runtime
+            .prepare_viewer_indicate(object, binding)
+            .map_err(ExecutionSessionInputError::Interaction)
+    }
+
     pub(super) fn prepare_click_action(
         &self,
         click: Option<PointerSelectionClick>,

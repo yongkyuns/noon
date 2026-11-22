@@ -107,7 +107,10 @@ async function waitForExactPixels(canvas, baseline, label) {
     if (changedPixels(baseline, last) === 0) return last;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  const error = new Error(`${label} did not restore the exact baseline pixels`);
+  const error = new assert.AssertionError({
+    message: `${label} did not restore the exact baseline pixels`,
+    actual: changedPixels(baseline, last), expected: 0, operator: "strictEqual",
+  });
   error.capture = last;
   throw error;
 }
@@ -177,30 +180,39 @@ try {
   const baseline = await canvas.screenshot();
   captures.baseline = baseline;
 
-  const beforeSelect = await page.evaluate(async () =>
-    Number((await window.__noonExampleGallery.executionMetrics()).metrics.presentedFrames),
-  );
+  const waitChanged = async (surface, before, label) => {
+    let image;
+    let difference;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      image = await surface.screenshot();
+      difference = changedPixels(before, image);
+      if (difference > 500) return image;
+      await page.waitForTimeout(25);
+    }
+    const error = new Error(`${label} changed only ${difference} pixels`);
+    error.capture = image;
+    throw error;
+  };
   await tap(page,
     box.x + box.width / 2 - box.height / 4,
     box.y + box.height / 2,
   );
-  await waitForPresentation(page, beforeSelect);
-  const selected = await canvas.screenshot();
-  captures.selected = selected;
-  const selectedChanged = changedPixels(baseline, selected);
-  report.selectedChanged = selectedChanged;
-  assert.ok(selectedChanged > 500, `selection changed only ${selectedChanged} pixels`);
-
-  const beforeClear = await page.evaluate(async () =>
-    Number((await window.__noonExampleGallery.executionMetrics()).metrics.presentedFrames),
-  );
-  await tap(page, box.x + 18, box.y + 18);
-  await waitForPresentation(page, beforeClear);
-  const cleared = await canvas.screenshot();
-  captures.cleared = cleared;
-  const clearDifference = changedPixels(baseline, cleared);
-  report.clearDifference = clearDifference;
-  assert.equal(clearDifference, 0, "background clear must restore the authored image exactly");
+  let capture = "selected";
+  try {
+    captures.selected = await waitChanged(canvas, baseline, "default viewer Indicate");
+    capture = "cleared";
+    captures.cleared = await waitForExactPixels(canvas, baseline, "default viewer Indicate");
+  } catch (error) {
+    if (error.capture) {
+      captures[capture] = error.capture;
+      delete error.capture;
+    }
+    throw error;
+  } finally {
+    if (captures.selected) report.selectedChanged = changedPixels(baseline, captures.selected);
+    if (captures.cleared) report.clearDifference = changedPixels(baseline, captures.cleared);
+  }
+  await assertSettled(page, "default viewer Indicate");
   assert.deepEqual(errors, []);
 
   report.legacyRenderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
@@ -282,23 +294,15 @@ try {
     authoredBox.x + authoredBox.width * 0.36,
     authoredBox.y + authoredBox.height * 0.5,
   );
-  const waitChanged = async (baseline, label) => {
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const image = await authoredCanvas.screenshot();
-      if (changedPixels(baseline, image) > 500) return image;
-      await page.waitForTimeout(25);
-    }
-    throw new Error(`${label} did not change trusted canvas pixels`);
-  };
   await clickCircle();
-  const indicated = await waitChanged(authoredBaseline, "first authored click");
+  const indicated = await waitChanged(authoredCanvas, authoredBaseline, "first authored click");
   captures.indicated = indicated;
   report.indicatedChanged = changedPixels(authoredBaseline, indicated);
   const restored = await waitForExactPixels(authoredCanvas, authoredBaseline, "first authored click");
   captures.restored = restored;
   await assertSettled(page, "first authored click");
   await clickCircle();
-  const repeated = await waitChanged(authoredBaseline, "repeated authored click");
+  const repeated = await waitChanged(authoredCanvas, authoredBaseline, "repeated authored click");
   captures.repeated = repeated;
   await waitForExactPixels(authoredCanvas, authoredBaseline, "repeated authored click");
   await assertSettled(page, "repeated authored click");
@@ -374,7 +378,7 @@ try {
   report.zoomChanged = changedPixels(authoredBaseline, zoomed);
   assert.ok(report.zoomChanged > 500, "gallery wheel must change the composed view");
   await tap(page, authoredBox.x + authoredBox.width * 0.22, authoredBox.y + authoredBox.height * 0.5);
-  captures.zoomIndicated = await waitChanged(zoomed, "click through zoomed gallery view");
+  captures.zoomIndicated = await waitChanged(authoredCanvas, zoomed, "click through zoomed gallery view");
   captures.zoomRestored = await waitForExactPixels(authoredCanvas, zoomed, "zoomed authored click");
   await assertSettled(page, "zoomed authored click");
   const beforeZoomOut = await presentedFrames(page);

@@ -32,8 +32,8 @@ const LIFECYCLE_CANCELLED_MESSAGE =
 // Local lifecycle cancellation, never a remote callback/runtime error. Input
 // callers still receive rejection; DOM collectors can retire without an alert.
 export class ExecutionTransitionCancelled extends Error {
-  constructor() {
-    super("execution engine transitioning to semantic");
+  constructor(message = "execution engine transitioning to semantic") {
+    super(message);
   }
 }
 
@@ -1026,7 +1026,7 @@ export class ExecutionWorkerClient {
   async #requestNativeInput(type, payload) {
     this.#requireStarted();
     if (this.#candidateEngineWorker !== null || this.#fatalOwner !== null) {
-      throw new Error("native input requires a stable, non-transitioning execution endpoint");
+      throw new ExecutionTransitionCancelled("native input requires a stable, non-transitioning execution endpoint");
     }
     if (this.#nativeInputsInFlight >= MAX_IN_FLIGHT_NATIVE_INPUTS) {
       throw new Error("native input in-flight capacity is full; wait for acknowledgement before retrying");
@@ -1042,7 +1042,7 @@ export class ExecutionWorkerClient {
       if (worker !== this.#engineWorker || ready !== this.#ready ||
           generation !== this.#lifecycleGeneration ||
           this.#candidateEngineWorker !== null || this.#fatalOwner !== null) {
-        throw new Error("native input belongs to a retired or transitioning execution endpoint");
+        throw new ExecutionTransitionCancelled("native input belongs to a retired or transitioning execution endpoint");
       }
       return await this.#request(worker, "engine", engineEnvelope, type, snapshot);
     } finally {

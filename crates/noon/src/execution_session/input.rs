@@ -453,14 +453,18 @@ impl ExecutionSession {
         suppress_click_action: bool,
     ) -> Result<PreparedNativePointerPublication, ExecutionSessionInputError> {
         let previous = self.preflight_native_pointer_input(token, input)?;
-        let mut selection = self.prepare_pointer_selection(token, input)?;
-        let action = (!suppress_click_action)
-            .then(|| self.prepare_click_action(selection.click))
-            .transpose()?
-            .flatten();
-
-        if self.default_viewer_selection() && action.is_some() {
-            self.keep_current_viewer_selection(&mut selection);
+        let selection = self.prepare_pointer_selection(token, input)?;
+        let mut action = None;
+        if !suppress_click_action {
+            action = self.prepare_click_action(selection.click)?;
+            if action.is_none() {
+                if let Some(target) = selection.viewer_target {
+                    action = self
+                        .prepare_viewer_indicate(target)?
+                        .map(Box::new)
+                        .map(super::interactions::PreparedClickAction::Animation);
+                }
+            }
         }
 
         let mut inputs = if matches!(input.kind(), NativePointerInputKind::Cancel(_)) {

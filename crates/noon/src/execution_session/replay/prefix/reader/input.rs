@@ -159,10 +159,6 @@ impl PrefixReader {
         self.session.move_spatial_inspection(motion)
     }
 
-    pub fn spatial_inspection_highlight(&self) -> Option<crate::SpatialInspectionHighlight> {
-        self.session.spatial_inspection_highlight()
-    }
-
     pub fn viewer_inspection_active(&self) -> bool {
         self.session.viewer_inspection_active()
     }

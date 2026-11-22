@@ -255,7 +255,7 @@ Finite native Rust audio retains the compiled immutable clip/resource closure th
 
 Finite Python file export borrows that same paused immutable worker session. Shared `ExportFramePolicy` owns prefix, output, completion and frozen-hold samples; the browser host waits for matching renderer presentation and copies only selected RGBA output. The shared mixer supplies bounded PCM blocks on the exact rational output grid. Across the genuine browser/process boundary, a prepared media capture carries pixels, PCM and publication receipts, never a serialized scene or a reconstructed execution owner. The native importer validates complete policy receipts, lengths, revisions, PCM and endpoint before the existing MP4 sink publishes output. It uses the same encoder, timing finalization and destination owner as native Rust export. This does not establish an in-process native CPython binding or native device playback.
 
-Inspection navigation is a constant-size session adjustment composed with the current effective camera in shared Rust. Rendering, visibility and picking consume that same composed view, qualified by a monotonic inspection revision and the existing displayed-frame receipt. A wheel action changes neither the authored camera nor authored time; it can coexist with an independent object animation. Platform hosts normalize wheel units. The browser gallery enables inspection for every scene. Its viewer selection runs on press and release, and authored pointer subscriptions govern idle motion delivery. Stale receipts and excess outstanding input are rejected explicitly. New sessions reset inspection; same-session seeks preserve it. This viewer adjustment is excluded from ordinary authored export and replay.
+Inspection navigation is a constant-size session adjustment composed with the current effective camera in shared Rust. Rendering, visibility and picking consume that same composed view, qualified by a monotonic inspection revision and the existing displayed-frame receipt. A wheel action changes neither the authored camera nor authored time; it can coexist with an independent object animation. Platform hosts normalize wheel units. The browser gallery enables inspection for every scene. Its click picking runs on press and release, and authored pointer subscriptions govern idle motion delivery. A default click runs a restoring Indicate on the existing interaction clock, including while paused. Authored click bindings and active property drivers retain precedence. Stale receipts and excess outstanding input are rejected explicitly. New sessions reset inspection; same-session seeks preserve it. This viewer adjustment is excluded from ordinary authored export and replay.
 
 3D browser inspection composes relative orbit, pan and zoom with the effective
 spatial camera. The adjusted pose and projection use the existing retained
@@ -265,8 +265,8 @@ Shared Rust distinguishes click, drag and double-click. Camera return uses
 monotonic interaction time and follows the authored camera at each sample,
 including while playback is paused. A click ray uses the camera and immutable
 mesh bounds from its displayed-frame receipt. Sparse mesh changes update only
-affected bounds paths. Selection stores the object's semantic identity and
-tints its current effective fill at presentation.
+affected bounds paths. The frontmost mesh uses the same restoring Indicate
+with a world-scale channel and the available material channels.
 
 Pointer capture has split ownership: the platform shell owns OS/DOM capture mechanics, while `InteractiveSession` owns the semantic captured target and gesture lifecycle. Release, cancellation, lost platform capture, target retirement/replacement, seek/reload policy and stale generations must terminate or reconcile the gesture deterministically.
 

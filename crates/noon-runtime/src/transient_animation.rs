@@ -7,11 +7,12 @@ use crate::{
 };
 use noon_compile::{
     lower_indicate_channels_with_bindings, CompiledChannelKey, EffectiveAnimationProperties,
-    LoweredAffineChannel,
+    LoweredAffineChannel, SemanticAnimationCompletion,
 };
 use noon_core::{
     ObjectId, Property, PublicationContext, RateFunction, SemanticClickGlowPulse,
-    SemanticClickIndicate, SemanticNodeId, SemanticVec3, Style, Transform2D,
+    SemanticClickIndicate, SemanticNodeId, SemanticObjectProperty, SemanticVec3,
+    SemanticWorldTransform3D, Style, TrackValues, Transform2D, WorldTransformTrackEndpoint,
 };
 use std::collections::BTreeMap;
 
@@ -21,6 +22,7 @@ pub struct PreparedTransientAnimation {
     runtime: RuntimeIdentity,
     channels: Vec<LoweredAffineChannel>,
     transform: Transform2D,
+    world: Option<SemanticWorldTransform3D>,
     style: Style,
     duration: f64,
     publication: PublicationContext,
@@ -146,6 +148,23 @@ impl SceneInstance {
         object: ObjectId,
         binding: SemanticClickIndicate,
     ) -> Result<Option<PreparedTransientAnimation>, String> {
+        self.prepare_indicate(object, binding, false)
+    }
+
+    pub fn prepare_viewer_indicate(
+        &self,
+        object: ObjectId,
+        binding: SemanticClickIndicate,
+    ) -> Result<Option<PreparedTransientAnimation>, String> {
+        self.prepare_indicate(object, binding, true)
+    }
+
+    fn prepare_indicate(
+        &self,
+        object: ObjectId,
+        binding: SemanticClickIndicate,
+        viewer_default: bool,
+    ) -> Result<Option<PreparedTransientAnimation>, String> {
         if self.transient_animations.active.contains_key(&object) {
             return Ok(None);
         }
@@ -157,10 +176,10 @@ impl SceneInstance {
             .frame_index_for_object(object)
             .ok_or("interaction target is not live")?;
         let row = &self.frame.objects[index];
-        let channels = lower_indicate_channels_with_bindings(
+        let mut channels = lower_indicate_channels_with_bindings(
             &[],
             EffectiveAnimationProperties {
-                fill_paint: row.fill_paint.clone(),
+                fill_paint: (!viewer_default).then(|| row.fill_paint.clone()).flatten(),
                 effects: row.effects.clone(),
                 z_index: row.z_index,
                 transform: row.transform,
@@ -179,6 +198,47 @@ impl SceneInstance {
             ),
         )
         .map_err(|error| format!("invalid click Indicate: {error:?}"))?;
+        let world = row.world_transform();
+        if viewer_default && row.fill_paint.is_some() {
+            channels.retain(|channel| channel.property != Property::Fill);
+        }
+        if let Some(from) = world {
+            channels.retain(|channel| {
+                !matches!(channel.property, Property::Position | Property::Scale)
+            });
+            if binding.scale_factor() != 1.0 {
+                let factor = binding.scale_factor();
+                let to = SemanticWorldTransform3D {
+                    scale: SemanticVec3::new(
+                        from.scale.x * factor,
+                        from.scale.y * factor,
+                        from.scale.z * factor,
+                    ),
+                    ..from
+                };
+                channels.push(LoweredAffineChannel {
+                    property: Property::WorldTransform,
+                    conflict_property: SemanticObjectProperty::Translation,
+                    completion: SemanticAnimationCompletion::Release,
+                    values: TrackValues::WorldTransform {
+                        from: WorldTransformTrackEndpoint::from_world(from),
+                        to: WorldTransformTrackEndpoint::from_world(to),
+                    },
+                });
+            }
+        }
+        if viewer_default {
+            // If an object is itself being animated, the available lanes can
+            // still indicate it without taking over authored motion or paint.
+            channels.retain(|channel| {
+                !self.interaction_channel_conflict(
+                    object,
+                    index,
+                    std::slice::from_ref(channel),
+                    self.frame.time,
+                )
+            });
+        }
         if channels.is_empty()
             || self.interaction_channel_conflict(object, index, &channels, self.frame.time)
         {
@@ -186,15 +246,6 @@ impl SceneInstance {
         }
         let mut endpoint = FrameRowState::from_frame(&self.frame, index);
         for channel in &channels {
-            if !matches!(
-                channel.property,
-                noon_core::Property::Position
-                    | noon_core::Property::Scale
-                    | noon_core::Property::Fill
-                    | noon_core::Property::Stroke
-            ) {
-                return Err("unsupported transient animation channel".into());
-            }
             let value = interpolate_track_values(&channel.values, 1.0)
                 .ok_or("invalid transient channel")?;
             apply_evaluated_value(
@@ -204,22 +255,18 @@ impl SceneInstance {
                 false,
             );
         }
-        self.prepare_effective_property_batch(&[
-            EffectivePropertyWrite::Transform {
-                object,
-                transform: endpoint.transform,
-            },
-            EffectivePropertyWrite::Style {
-                object,
-                style: endpoint.style,
-            },
-        ])
-        .map_err(|error| error.to_string())?;
+        let writes = channels
+            .iter()
+            .map(|channel| indicate_write(object, channel.property, &endpoint))
+            .collect::<Vec<_>>();
+        self.prepare_effective_property_batch(&writes)
+            .map_err(|error| error.to_string())?;
         Ok(Some(PreparedTransientAnimation {
             object,
             runtime: self.identity,
             channels,
             transform: row.transform,
+            world,
             style: row.style,
             duration: binding.run_time(),
             publication: self.publication,
@@ -300,6 +347,7 @@ impl SceneInstance {
             runtime: self.identity,
             channels: Vec::new(),
             transform: row.transform,
+            world: None,
             style: row.style,
             duration: binding.run_time(),
             publication,
@@ -358,6 +406,9 @@ impl SceneInstance {
                                     }
                                     Property::Scale => {
                                         row.transform.scale == prepared.transform.scale
+                                    }
+                                    Property::WorldTransform => {
+                                        row.world_transform() == prepared.world
                                     }
                                     Property::Fill => row.style.fill == prepared.style.fill,
                                     Property::Stroke => row.style.stroke == prepared.style.stroke,
@@ -513,6 +564,9 @@ impl SceneInstance {
             let elapsed = wall_time - driver.origin.unwrap_or(wall_time);
             let mut row = FrameRowState::from_frame(&self.frame, index);
             row.transform = driver.transform;
+            if let Some((spatial, world)) = row.spatial.as_mut().zip(driver.world) {
+                spatial.world = world;
+            }
             row.style = driver.style;
             if !retire && elapsed < driver.duration {
                 let progress =
@@ -530,27 +584,12 @@ impl SceneInstance {
             } else {
                 completed.push(object);
             }
-            for channel in &driver.channels {
-                writes.push(match channel.property {
-                    Property::Position => EffectivePropertyWrite::Translation {
-                        object,
-                        translation: row.transform.translation,
-                    },
-                    Property::Scale => EffectivePropertyWrite::Scale {
-                        object,
-                        scale: row.transform.scale,
-                    },
-                    Property::Fill => EffectivePropertyWrite::Fill {
-                        object,
-                        fill: row.style.fill,
-                    },
-                    Property::Stroke => EffectivePropertyWrite::Stroke {
-                        object,
-                        stroke: row.style.stroke,
-                    },
-                    _ => unreachable!("prepared supported interaction channel"),
-                });
-            }
+            writes.extend(
+                driver
+                    .channels
+                    .iter()
+                    .map(|channel| indicate_write(object, channel.property, &row)),
+            );
         }
         if (!writes.is_empty() || !stale.is_empty())
             && self.publication.frame_epoch().checked_next().is_none()
@@ -873,6 +912,40 @@ impl TransientAnimations {
                     .iter()
                     .any(|channel| channel.property == property)
         })
+    }
+}
+
+fn indicate_write(
+    object: ObjectId,
+    property: Property,
+    row: &FrameRowState,
+) -> EffectivePropertyWrite {
+    match property {
+        Property::Position => EffectivePropertyWrite::Translation {
+            object,
+            translation: row.transform.translation,
+        },
+        Property::Scale => EffectivePropertyWrite::Scale {
+            object,
+            scale: row.transform.scale,
+        },
+        Property::WorldTransform => EffectivePropertyWrite::WorldTransform {
+            object,
+            world: row
+                .spatial
+                .as_ref()
+                .expect("prepared spatial channel")
+                .world,
+        },
+        Property::Fill => EffectivePropertyWrite::Fill {
+            object,
+            fill: row.style.fill,
+        },
+        Property::Stroke => EffectivePropertyWrite::Stroke {
+            object,
+            stroke: row.style.stroke,
+        },
+        _ => unreachable!("prepared supported interaction channel"),
     }
 }
 

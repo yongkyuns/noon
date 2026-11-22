@@ -428,16 +428,31 @@ mod admission {
             // through this same session-owned query. Admission still validates
             // every collected receipt; no stale frame is relabelled as current.
             self.refresh_pending
-                || (target.has_native_pointer_subscribers()
-                    && self.issued.as_ref().is_some_and(|issued| {
-                        target
-                            .validate_pointer_frame(
-                                &issued.frame,
-                                issued.frame.view(),
-                                crate::browser_pointer_input::PointerFrameValidation::Input,
-                            )
-                            .is_err_and(|e| browser_pointer_input::recoverable_frame_error(&e))
-                    }))
+                || (target.has_native_pointer_subscribers() && self.issued_frame_is_stale(target))
+        }
+
+        /// Pausing can advance a quiet timeline without changing its pixels.
+        /// Present the new pointer publication at this control boundary so the
+        /// first click can use it without requiring receipt-only playback ticks.
+        pub(crate) fn refresh_paused_viewer(
+            &mut self,
+            target: &(impl BrowserPointerTarget + ?Sized),
+        ) {
+            if target.default_viewer_selection() && self.issued_frame_is_stale(target) {
+                self.refresh_pending = true;
+            }
+        }
+
+        fn issued_frame_is_stale(&self, target: &(impl BrowserPointerTarget + ?Sized)) -> bool {
+            self.issued.as_ref().is_some_and(|issued| {
+                target
+                    .validate_pointer_frame(
+                        &issued.frame,
+                        issued.frame.view(),
+                        crate::browser_pointer_input::PointerFrameValidation::Input,
+                    )
+                    .is_err_and(|error| browser_pointer_input::recoverable_frame_error(&error))
+            })
         }
 
         pub(crate) fn retire_planar_binding_if_changed(

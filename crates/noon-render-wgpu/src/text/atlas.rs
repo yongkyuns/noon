@@ -459,6 +459,15 @@ impl GpuGlyphAtlas {
         self.generation
     }
 
+    pub(super) fn recycle_all_pages(&mut self) -> Result<(), GlyphAtlasError> {
+        for plane in [GlyphAtlasPlane::Mask, GlyphAtlasPlane::Color] {
+            for page in 0..self.page_count(plane) {
+                self.recycle_page(plane, page)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
