@@ -615,6 +615,9 @@ impl PreparedExecutionPlayer {
         if self.playback.set_playing(playing) {
             self.video.clear_selection();
             self.clock = BrowserExecutionWakeClock::default();
+            if !playing {
+                self.pointer.refresh_paused_viewer(&self.playback.reader);
+            }
         }
     }
 

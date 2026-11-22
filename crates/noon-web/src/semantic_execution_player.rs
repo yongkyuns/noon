@@ -3351,6 +3351,13 @@ impl SemanticExecutionPlayer {
         }
         self.video.clear_selection();
         self.clock.pause();
+        #[cfg(any(target_arch = "wasm32", test))]
+        self.worker_pointer_presentation.refresh_paused_viewer(
+            &pointer_input::PlayerPointerTarget {
+                source: &mut self.source,
+                translation_drag_undo: &mut self.translation_drag_undo,
+            },
+        );
     }
     pub fn resume(&mut self) {
         // A sealed snapshot has no authored interval. Native interactions still
