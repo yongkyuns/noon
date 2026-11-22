@@ -53,13 +53,19 @@ try {
   await page.goto(server.baseUrl + "/web/index.html");
   await run();
   await page.locator("#video-file").setInputFiles(asset);
-  await run(`from noon import Scene, VideoSource
+  await run(`from noon import Circle, RIGHT, Scene, UP, VideoSource
 result = Scene()
 media = await VideoSource.from_upload()
 result.video(media, start_time=0.1, source_start=0.125, source_end=1.95, height=8)
-result.declare_wait(2.1)
+marker = Circle(radius=0.15, fill_opacity=1).shift(UP * 3)
+result.add(marker)
+result.play(marker.animate.shift(RIGHT), run_time=0.4)
+result.wait(1.7)
 `);
   assert.equal(await page.locator(".playback-scrubber").getAttribute("max"), "2.1");
+  assert.ok(await page.evaluate(() => window.__noonExampleGallery?.executionDiagnostics?.events.some(
+    event => event.stage === "terminal-adopted" && event.profile === "incremental"
+  )), "ordinary video playback must adopt the prepared history");
 
   // Delay real decoder pixels in the render worker, keeping transport, audio
   // output and the Rust clock on their normal production paths.
