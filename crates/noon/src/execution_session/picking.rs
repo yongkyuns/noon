@@ -123,9 +123,9 @@ impl ExecutionSession {
         Ok(result)
     }
 
-    /// Use visual bounds for text, images, strokes and other content that has
-    /// no analytic fill test. This is a viewer affordance only.
-    pub(super) fn pick_viewer_bounds(&mut self, point: Vec2) -> Option<SemanticNodeId> {
+    /// Pick in painter order, using visual bounds for content without an
+    /// analytic fill. The viewer can click inside an outline above a solid fill.
+    pub(super) fn pick_viewer_target(&mut self, point: Vec2) -> Option<SemanticNodeId> {
         self.sync_spatial_index();
         for &slot in self.spatial_index.hit_test(point).slots() {
             let Some(object) = self.slots.object_for_slot(slot) else {

@@ -4,7 +4,9 @@
 //! here. A caller presents the returned shared view and retains its snapshot only
 //! after successful presentation, exactly as for ordinary pointer frames.
 
-use noon_core::{Camera2DState, Vec2};
+use std::collections::BTreeMap;
+
+use noon_core::{Camera2DState, Color, ObjectId, RateFunction, SemanticClickIndicate, Vec2};
 
 use super::{
     ExecutionSession, ExecutionSessionInputError, PointerFrameError, PointerFrameSnapshot,
@@ -35,21 +37,45 @@ struct InspectionReset {
     origin: Option<f64>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+/// One restoring viewer effect sampled independently of the authored timeline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewerIndication {
+    pub object: ObjectId,
+    pub scale: f64,
+    pub color: Color,
+    pub strength: f32,
+}
+
+#[derive(Debug)]
+struct ViewerIndicate {
+    binding: SemanticClickIndicate,
+    origin: Option<f64>,
+    progress: f32,
+}
+
+#[derive(Debug, Default)]
 pub(super) struct SessionInspectionView {
     adjustment: InspectionView2D,
     spatial: InspectionView3D,
     reset: Option<InspectionReset>,
     spatial_gestures: SpatialGestures,
+    indications: BTreeMap<ObjectId, ViewerIndicate>,
     revision: u64,
 }
 
 impl SessionInspectionView {
-    pub(super) fn without_gestures(self) -> Self {
+    pub(super) fn without_gestures(&self) -> Self {
         Self {
-            spatial_gestures: SpatialGestures::default(),
-            ..self
+            adjustment: self.adjustment,
+            spatial: self.spatial,
+            reset: self.reset,
+            revision: self.revision,
+            ..Self::default()
         }
+    }
+
+    pub(super) fn clear_indications(&mut self) {
+        self.indications.clear();
     }
 }
 
@@ -177,17 +203,10 @@ impl ExecutionSession {
                 else {
                     return Ok(false);
                 };
-                let Some(animation) = self
-                    .prepare_viewer_indicate(target)
-                    .map_err(InspectionNavigationError::Input)?
-                else {
+                let Some((object, binding)) = self.prepare_viewer_indicate(target) else {
                     return Ok(false);
                 };
-                self.runtime
-                    .start_transient_animation(animation)
-                    .map_err(ExecutionSessionInputError::Interaction)
-                    .map_err(InspectionNavigationError::Input)?;
-                Ok(true)
+                Ok(self.start_viewer_indicate(object, binding))
             }
             SpatialGesture::Reset => self.move_spatial_inspection(SpatialInspectionMotion {
                 reset: true,
@@ -196,22 +215,69 @@ impl ExecutionSession {
         }
     }
 
-    /// Request presentations while a camera return is active, including at a
-    /// paused or otherwise static point on the authored timeline.
+    pub(super) fn start_viewer_indicate(
+        &mut self,
+        object: ObjectId,
+        binding: SemanticClickIndicate,
+    ) -> bool {
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            self.inspection.indications.entry(object)
+        {
+            entry.insert(ViewerIndicate {
+                binding,
+                origin: None,
+                progress: 0.0,
+            });
+            return true;
+        }
+        false
+    }
+
+    /// Presentation parameters in object order, with no changes to authored rows.
+    pub fn viewer_indications(&self) -> Vec<ViewerIndication> {
+        self.inspection
+            .indications
+            .iter()
+            .filter_map(|(&object, effect)| {
+                (effect.progress > 0.0).then_some(ViewerIndication {
+                    object,
+                    scale: 1.0 + (effect.binding.scale_factor() - 1.0) * f64::from(effect.progress),
+                    color: effect.binding.color(),
+                    strength: effect.progress,
+                })
+            })
+            .collect()
+    }
+
+    /// Schedule view and click animations even when the authored clock is paused.
     pub fn viewer_inspection_active(&self) -> bool {
-        self.inspection.reset.is_some()
+        self.inspection.reset.is_some() || !self.inspection.indications.is_empty()
     }
 
     pub fn advance_viewer_inspection(
         &mut self,
         wall_time_seconds: f64,
     ) -> Result<(), InspectionNavigationError> {
-        let Some(mut reset) = self.inspection.reset else {
+        if !self.viewer_inspection_active() {
             return Ok(());
-        };
+        }
         if !wall_time_seconds.is_finite() || wall_time_seconds < 0.0 {
             return Err(InspectionNavigationError::InvalidSpatialMotion);
         }
+        let runtime = &self.runtime;
+        self.inspection.indications.retain(|&object, effect| {
+            if runtime.effective_object(object).is_none() {
+                return false;
+            }
+            let origin = *effect.origin.get_or_insert(wall_time_seconds);
+            let elapsed = (wall_time_seconds - origin).max(0.0);
+            effect.progress = RateFunction::ThereAndBack
+                .evaluate((elapsed / effect.binding.run_time()).clamp(0.0, 1.0) as f32);
+            elapsed < effect.binding.run_time()
+        });
+        let Some(mut reset) = self.inspection.reset else {
+            return Ok(());
+        };
         let origin = *reset.origin.get_or_insert(wall_time_seconds);
         let progress = ((wall_time_seconds - origin) / 0.35).clamp(0.0, 1.0);
         let eased = progress * progress * (3.0 - 2.0 * progress);
@@ -443,11 +509,8 @@ impl ExecutionSession {
         // All fallible arithmetic, native evaluation and publication precedes
         // this bounded commit. Neither identity allocator nor semantic state changes.
         self.retire_pointer_view_binding();
-        self.inspection = SessionInspectionView {
-            adjustment: next,
-            revision,
-            ..self.inspection
-        };
+        self.inspection.adjustment = next;
+        self.inspection.revision = revision;
         Ok(true)
     }
 }

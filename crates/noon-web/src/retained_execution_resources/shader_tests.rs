@@ -87,6 +87,7 @@ fn encode(
             &session.take_renderer_publication(),
             camera,
             None,
+            &[],
             snapshot,
             false,
         )

@@ -22,7 +22,7 @@ pub use input::{
 };
 pub use inspection::{
     InspectionNavigationError, SpatialPickCache, SpatialPickFrame, SpatialPointerInput,
-    SpatialPointerPhase,
+    SpatialPointerPhase, ViewerIndication,
 };
 pub use translation_drag::{TranslationDragError, TranslationDragReceipt, TranslationDragUndo};
 mod hover;
@@ -5389,6 +5389,7 @@ impl ExecutionSession {
             }?;
             if requires_seek {
                 self.pointer_selection.reset();
+                self.inspection.clear_indications();
             } else {
                 self.reconcile_pointer_selection();
             }
@@ -5410,6 +5411,7 @@ impl ExecutionSession {
         self.signal_timeline.commit(preview);
         if requires_seek {
             self.pointer_selection.reset();
+            self.inspection.clear_indications();
         } else {
             self.reconcile_pointer_selection();
         }

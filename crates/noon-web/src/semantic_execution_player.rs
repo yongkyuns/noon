@@ -1063,7 +1063,7 @@ impl SemanticExecutionPlayer {
         }
         if !self.clock.is_playing() {
             let mut wake = self.source.session().wake_state().without_timeline_wake();
-            if self.source.session().interactions_active() {
+            if self.interactions_active_wasm() {
                 wake = wake.with_additional_timeline(TimelineWakeState::Continuous);
             }
             return Ok(WasmExecutionWake::from_plan(
@@ -1071,7 +1071,16 @@ impl SemanticExecutionPlayer {
                 None,
             ));
         }
-        let plan = BrowserExecutionWakePlan::from_pending_segment(self.source.session(), segment);
+        let plan = if self.interactions_active_wasm() {
+            BrowserExecutionWakePlan::from_runtime(
+                self.source
+                    .session()
+                    .wake_state()
+                    .with_additional_timeline(TimelineWakeState::Continuous),
+            )
+        } else {
+            BrowserExecutionWakePlan::from_pending_segment(self.source.session(), segment)
+        };
         let directive = self
             .live_wake_clock
             .directive(plan, wall_time_ms, self.source.session().frame().time)
@@ -1238,7 +1247,11 @@ impl SemanticExecutionPlayer {
             .source
             .session()
             .initial_continuous_segment_sample(segment, requested_time);
-        self.live_drive_segment_to(segment, requested_time, true)
+        let drive = self.live_drive_segment_to(segment, requested_time, true)?;
+        if drive.callback_phase_json.is_none() && self.interactions_active_wasm() {
+            self.advance_native_interactions(wall_time_ms / 1_000.0)?;
+        }
+        Ok(drive)
     }
 
     /// Drive the active continuation segment toward one externally supplied
@@ -1486,11 +1499,17 @@ impl SemanticExecutionPlayer {
                 .inspection_spatial_camera()
                 .map_err(|error| error.to_string())?
         };
+        let viewer_indications = if self.finite_export.is_none() {
+            self.source.session().viewer_indications()
+        } else {
+            Vec::new()
+        };
         let publication = self.source.session_mut().take_renderer_publication();
         let Some(mut delta) = self.encoder.encode_renderer_publication(
             &publication,
             camera,
             spatial_inspection,
+            &viewer_indications,
             snapshot || !self.snapshot_sent,
             self.finite_export.is_some()
                 || presentation != self.last_sent_selection_overlay

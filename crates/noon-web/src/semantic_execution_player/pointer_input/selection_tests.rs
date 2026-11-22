@@ -107,6 +107,46 @@ fn quiet_source_completion_keeps_its_displayed_frame_until_the_viewer_pauses() {
 }
 
 #[test]
+fn viewer_indicate_wakes_a_quiet_continuation_during_play_and_pause() {
+    let mut player = player();
+    player.enable_default_viewer_selection();
+    player.live_wait(2.0).unwrap();
+    player.resume();
+    assert_eq!(
+        player.live_segment_wake(1_000.0).unwrap().cadence(),
+        "timer"
+    );
+
+    click(&mut player, 400.0);
+    assert_eq!(
+        player.live_segment_wake(1_000.0).unwrap().cadence(),
+        "animation_frame"
+    );
+    player.live_drive_segment_from_wall_time(1_000.0).unwrap();
+    player.live_drive_segment_from_wall_time(1_500.0).unwrap();
+    let pulse = drain(&mut player).retained;
+    assert_eq!(pulse.time, 0.5);
+    assert_eq!(pulse.objects[0].style.fill, Some(noon_core::YELLOW));
+
+    player.pause();
+    assert_eq!(
+        player.live_segment_wake(1_750.0).unwrap().cadence(),
+        "animation_frame"
+    );
+    let restored = player
+        .advance_interactions_delta_json(2_000.0)
+        .unwrap()
+        .unwrap();
+    let delta: RetainedFamilyExecutionDeltaEnvelope = serde_json::from_str(&restored).unwrap();
+    assert_eq!(delta.retained.time, 0.5);
+    assert_eq!(
+        delta.retained.objects[0].style.fill,
+        Some(noon_core::Color::rgb(0.0, 0.0, 1.0))
+    );
+    assert_eq!(player.live_segment_wake(2_000.0).unwrap().cadence(), "idle");
+}
+
+#[test]
 fn same_selection_out_and_back_and_rejected_configuration_emit_no_delta() {
     let mut p = player();
     click(&mut p, 400.0);

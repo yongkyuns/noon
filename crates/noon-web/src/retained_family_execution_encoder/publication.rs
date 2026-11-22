@@ -18,6 +18,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         publication: &RendererPublication<'_>,
         camera: Camera2DState,
         spatial_inspection: Option<(usize, noon_core::SemanticCamera3D)>,
+        viewer_indications: &[noon::ViewerIndication],
         snapshot: bool,
         presentation_changed: bool,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
@@ -37,6 +38,16 @@ impl RetainedFamilyExecutionDeltaEncoder {
             }) {
                 changes.accumulate(noon_runtime::FrameChanges::objects(vec![index]));
             }
+        }
+        let indication_changed = self.viewer_indications != viewer_indications;
+        if indication_changed {
+            let indices = self
+                .viewer_indications
+                .iter()
+                .chain(viewer_indications)
+                .filter_map(|effect| publication.object_index(effect.object))
+                .collect();
+            changes.accumulate(noon_runtime::FrameChanges::objects(indices));
         }
         if changes.is_empty() && (presentation_changed || self.planar_camera != Some(camera)) {
             changes = noon_runtime::FrameChanges::presentation_redraw();
@@ -159,14 +170,65 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 spatial.camera_projection = Some(camera.projection.into());
             }
         }
+        if !viewer_indications.is_empty() {
+            for row in &mut delta.retained.objects {
+                if let Ok(index) =
+                    viewer_indications.binary_search_by_key(&row.object, |effect| effect.object)
+                {
+                    compose_viewer_indicate(row, viewer_indications[index]);
+                }
+            }
+        }
         debug_assert_eq!(delta.retained.publication_context, publication_context);
         delta
             .replace_transient_presentations(frame, publication.transient_presentations())
             .map_err(|error| error.to_string())?;
         self.planar_camera = Some(camera);
         self.spatial_inspection = spatial_inspection;
+        if indication_changed {
+            self.viewer_indications = viewer_indications.to_vec();
+        }
         Ok(Some(delta))
     }
+}
+
+fn compose_viewer_indicate(
+    row: &mut crate::RetainedTransportObjectState,
+    effect: noon::ViewerIndication,
+) {
+    let scale_planar = |pose: &mut noon_core::Transform2D| {
+        let scaled = pose.scale * effect.scale as f32;
+        if scaled.x.is_finite() && scaled.y.is_finite() {
+            pose.scale = scaled;
+        }
+    };
+    if let Some(spatial) = row.spatial.as_mut().filter(|spatial| {
+        spatial.composition_domain != noon_core::SemanticSpatialCompositionDomain::FixedFrame
+    }) {
+        let scaled = spatial.scale.map(|value| value * effect.scale);
+        if scaled.iter().all(|value| value.is_finite()) {
+            spatial.scale = scaled;
+        }
+    } else {
+        scale_planar(&mut row.transform);
+        if let Some(pose) = &mut row.render_transform {
+            scale_planar(pose);
+        }
+    }
+
+    let mix = |from, to| from * (1.0 - effect.strength) + to * effect.strength;
+    let recolor = |color: noon_core::Color| {
+        noon_core::Color::rgba(
+            mix(color.red, effect.color.red),
+            mix(color.green, effect.color.green),
+            mix(color.blue, effect.color.blue),
+            color.alpha,
+        )
+    };
+    if row.fill_paint.is_none() {
+        row.style.fill = row.style.fill.map(recolor);
+    }
+    row.style.stroke = row.style.stroke.map(recolor);
 }
 
 impl RetainedFamilyExecutionDeltaEnvelope {

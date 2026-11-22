@@ -172,11 +172,17 @@ impl PreparedExecutionPlayer {
         let spatial_inspection = reader
             .inspection_spatial_camera()
             .map_err(|error| error.to_string())?;
+        let viewer_indications = if self.finite_export.is_none() {
+            reader.viewer_indications()
+        } else {
+            Vec::new()
+        };
         let publication = reader.take_renderer_publication();
         let Some(mut delta) = self.encoder.encode_renderer_publication(
             &publication,
             camera,
             spatial_inspection,
+            &viewer_indications,
             snapshot || !self.snapshot_sent,
             refresh || selection != self.last_selection || self.finite_export.is_some(),
         )?

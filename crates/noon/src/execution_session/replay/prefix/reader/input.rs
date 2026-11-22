@@ -159,6 +159,10 @@ impl PrefixReader {
         self.session.move_spatial_inspection(motion)
     }
 
+    pub fn viewer_indications(&self) -> Vec<crate::ViewerIndication> {
+        self.session.viewer_indications()
+    }
+
     pub fn viewer_inspection_active(&self) -> bool {
         self.session.viewer_inspection_active()
     }
