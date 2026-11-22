@@ -248,7 +248,7 @@ impl Scene {
         linear: bool,
         rows: Vec<f32>,
     ) -> Result<(), AuthoringError> {
-        use noon_core::{SemanticSignalBindingError, SignalSamples, ValueKind};
+        use noon_core::{GeometryResource, SemanticSignalBindingError, SignalSamples, ValueKind};
         self.require_signal_setup()?;
         self.require_object(object)?;
         tracker.require_store(self.integration_store())?;
@@ -256,6 +256,7 @@ impl Scene {
             "position" => (SemanticObjectProperty::Translation, ValueKind::Vec2),
             "scale" => (SemanticObjectProperty::Scale, ValueKind::Vec2),
             "rotation" => (SemanticObjectProperty::RotationZ, ValueKind::Scalar),
+            "reveal" => (SemanticObjectProperty::Reveal, ValueKind::Scalar),
             "opacity" => (SemanticObjectProperty::ObjectOpacity, ValueKind::Scalar),
             "stroke_width" => (SemanticObjectProperty::StrokeWidth, ValueKind::Scalar),
             _ => {
@@ -264,6 +265,17 @@ impl Scene {
                 ))
             }
         };
+        if property == SemanticObjectProperty::Reveal
+            && rows
+                .iter()
+                .skip(1)
+                .step_by(2)
+                .any(|value| !(0.0..=1.0).contains(value))
+        {
+            return Err(AuthoringError::InvalidAnimationDeclaration(
+                "reveal samples must be between zero and one",
+            ));
+        }
         let samples = SignalSamples::new(kind, linear, rows).ok_or(
             AuthoringError::InvalidAnimationDeclaration(
                 "sample rows must be finite with strictly increasing input values",
@@ -271,8 +283,21 @@ impl Scene {
         )?;
         let target = object.node_id();
         let mut store = self.integration_store().borrow_mut();
-        if let Some(existing) = store
-            .semantic_object_state_checked(target)?
+        let state = store.semantic_object_state_checked(target)?;
+        if property == SemanticObjectProperty::Reveal {
+            let geometry = state
+                .content
+                .geometry()
+                .and_then(noon_core::StoredGeometry::resource_handle)
+                .and_then(|handle| store.geometry_resources().get(handle));
+            if !matches!(geometry, Some(GeometryResource::VectorPath(path)) if path.has_drawable_segments())
+            {
+                return Err(AuthoringError::InvalidAnimationDeclaration(
+                    "sampled reveal requires a drawable vector path",
+                ));
+            }
+        }
+        if let Some(existing) = state
             .signal_bindings()
             .iter()
             .find(|binding| binding.property() == property)
@@ -453,6 +478,58 @@ mod tests {
             noon_core::Vec2::new(0.0, 1.5)
         );
         assert_eq!(session.frame().objects[0].style.opacity, 0.0);
+    }
+
+    #[test]
+    fn sampled_reveal_follows_uneven_motion_keys_when_seeking_backwards() {
+        let mut scene = Scene::new();
+        let path = noon_core::VectorPath::new()
+            .move_to(noon_core::Vec2::ZERO)
+            .line_to(noon_core::Vec2::new(1.0, 0.0))
+            .line_to(noon_core::Vec2::new(1.0, 2.0));
+        let trace = scene.path(path, Default::default()).unwrap();
+        let pen = scene.circle(0.1).unwrap();
+        scene.add(&trace).unwrap();
+        scene.add(&pen).unwrap();
+        let phase = scene.value_tracker(0.0).unwrap();
+        let reveal = vec![0.0, 0.0, 0.25, 0.5, 1.0, 1.0];
+        assert!(scene
+            .bind_sampled(&pen, &phase, "reveal", true, reveal.clone())
+            .is_err());
+        assert!(scene
+            .bind_sampled(&trace, &phase, "reveal", true, vec![0.0, -0.1])
+            .is_err());
+        scene
+            .bind_sampled(&trace, &phase, "reveal", true, reveal)
+            .unwrap();
+        scene
+            .bind_sampled(
+                &pen,
+                &phase,
+                "position",
+                true,
+                vec![0.0, 0.0, 0.0, 0.25, 1.0, 0.0, 1.0, 1.0, 2.0],
+            )
+            .unwrap();
+        scene
+            .play_value(&phase, 1.0)
+            .rate_func(RateFunction::Linear)
+            .run_time(1.0)
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        for (time, fraction, x, y) in [
+            (1.0, 1.0, 1.0, 2.0),
+            (0.625, 0.75, 1.0, 1.0),
+            (0.125, 0.25, 0.5, 0.0),
+            (0.0, 0.0, 0.0, 0.0),
+        ] {
+            session.seek(time).unwrap();
+            assert_eq!(session.frame().reveal(0), fraction);
+            assert_eq!(
+                session.frame().objects[1].transform.translation,
+                noon_core::Vec2::new(x, y)
+            );
+        }
     }
 
     #[test]

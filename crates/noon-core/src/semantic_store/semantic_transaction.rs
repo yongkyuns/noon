@@ -2828,7 +2828,10 @@ impl SemanticMutationTransaction {
                     property,
                     value,
                 } => {
-                    if *property == SemanticObjectProperty::Presence {
+                    if matches!(
+                        property,
+                        SemanticObjectProperty::Presence | SemanticObjectProperty::Reveal
+                    ) {
                         return Err(SemanticMutationTransactionError::UnsupportedPropertyWrite {
                             index,
                             object: *object,
@@ -4509,8 +4512,8 @@ fn object_property_value(
     property: SemanticObjectProperty,
 ) -> SemanticSignalValue {
     match property {
-        SemanticObjectProperty::Presence => {
-            unreachable!("presence is currently authored only through a typed signal binding")
+        SemanticObjectProperty::Presence | SemanticObjectProperty::Reveal => {
+            unreachable!("binding-only properties have no authored value")
         }
         SemanticObjectProperty::Translation => {
             SemanticSignalValue::Vec3(state.transform.translation)
@@ -4595,8 +4598,8 @@ fn apply_object_property(
     value: SemanticSignalValue,
 ) {
     match (property, value) {
-        (SemanticObjectProperty::Presence, _) => {
-            unreachable!("presence property writes are rejected during transaction preflight")
+        (SemanticObjectProperty::Presence | SemanticObjectProperty::Reveal, _) => {
+            unreachable!("binding-only property writes are rejected during transaction preflight")
         }
         (SemanticObjectProperty::Translation, SemanticSignalValue::Vec3(value)) => {
             let mut transform = state.transform;

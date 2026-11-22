@@ -555,7 +555,12 @@ impl SceneInstance {
         }
     }
 
-    pub(crate) fn reapply_reactive_to_row(&self, object_index: usize, mut row: FrameRowMut<'_>) {
+    pub(crate) fn reapply_reactive_to_row(
+        &self,
+        object_index: usize,
+        mut row: FrameRowMut<'_>,
+        mut should_apply: impl FnMut(Property) -> bool,
+    ) {
         if !self.object_slot_is_live(object_index) {
             return;
         }
@@ -567,25 +572,15 @@ impl SceneInstance {
         };
         for target_index in target_indices {
             let target = reactive.targets[*target_index];
+            if !should_apply(target.property) {
+                continue;
+            }
             let value = reactive
                 .state
                 .value(target.signal)
                 .expect("lowered reactive target references a valid signal");
             apply_reactive_value_to_row(&mut row, target.property, value);
         }
-    }
-
-    pub(crate) fn reactive_properties_for_object(&self, object_index: usize) -> Vec<Property> {
-        let Some(reactive) = self.reactive.as_ref() else {
-            return Vec::new();
-        };
-        reactive
-            .targets_by_object
-            .get(object_index)
-            .into_iter()
-            .flatten()
-            .map(|&index| reactive.targets[index].property)
-            .collect()
     }
 }
 

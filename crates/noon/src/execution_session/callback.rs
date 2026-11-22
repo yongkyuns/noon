@@ -624,7 +624,8 @@ fn native_write_domain(property: SemanticObjectProperty) -> u16 {
         SemanticObjectProperty::ObjectOpacity => CALLBACK_OPACITY,
         SemanticObjectProperty::FillOpacity
         | SemanticObjectProperty::StrokeOpacity
-        | SemanticObjectProperty::Emission => 0,
+        | SemanticObjectProperty::Emission
+        | SemanticObjectProperty::Reveal => 0,
     }
 }
 

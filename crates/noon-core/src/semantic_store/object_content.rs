@@ -308,6 +308,8 @@ impl SemanticObjectRole {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SemanticObjectProperty {
     Presence,
+    /// Fraction of a retained vector path revealed in drawable-curve order.
+    Reveal,
     Translation,
     Scale,
     RotationZ,
@@ -323,7 +325,8 @@ impl SemanticObjectProperty {
         match self {
             Self::Presence => SemanticSignalValueKind::Bool,
             Self::Translation | Self::Scale => SemanticSignalValueKind::Vec3,
-            Self::RotationZ
+            Self::Reveal
+            | Self::RotationZ
             | Self::FillOpacity
             | Self::StrokeOpacity
             | Self::StrokeWidth

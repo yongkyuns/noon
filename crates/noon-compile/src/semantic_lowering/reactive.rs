@@ -830,6 +830,7 @@ fn lower_property(
     }
     match property {
         SemanticObjectProperty::Presence => Ok(Property::Presence),
+        SemanticObjectProperty::Reveal => Ok(Property::Reveal),
         SemanticObjectProperty::Translation => Ok(Property::Position),
         SemanticObjectProperty::Scale => Ok(Property::Scale),
         SemanticObjectProperty::RotationZ => Ok(Property::Rotation),
