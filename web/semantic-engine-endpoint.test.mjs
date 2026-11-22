@@ -3261,6 +3261,11 @@ test("finite audio prepares silently and anchors resume/seek only after matching
     assert.ok(sought.commandTiming.presentationSettledEpochMs >= sought.commandTiming.acceptedEpochMs);
     assert.deepEqual(sought.presentationReceipt, { session: 7, sequence: delta.sequence,
       time: 1.25, unchanged: false });
+    assert.equal((await request(f.control.port2, "state", 3)).presentationReceipt, undefined);
+    await request(f.control.port2, "pause", 4);
+    const paused = await request(f.control.port2, "state", 5);
+    assert.equal(paused.presentationReceipt?.sequence, delta.sequence);
+    assert.equal(paused.presentationReceipt?.time, 1.25);
     assert.equal(f.stats().created, 1, "the original player remains sole execution owner");
   } finally { endpoint?.stop(); f.close(); }
 });

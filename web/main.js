@@ -448,11 +448,12 @@ const feedbackReview = installPlaygroundFeedback(document.querySelector("#previe
     const run = activeRunIdentity;
     const example = currentExample();
     const client = authoringWorkers.activeClient;
+    const prepared = isPreparedPlayback(active);
     if (!active || !client || (run?.outcome !== "complete" && run?.outcome !== "running") ||
         !example || run.exampleId !== example.id ||
-        !isPreparedPlayback(active) || !isCurrentRun(run.token) || busyDepth > 0 ||
+        (!prepared && run.outcome !== "complete") || !isCurrentRun(run.token) || busyDepth > 0 ||
         playerNeedsRestart || runtimeRecoveryPromise !== null) {
-      throw new Error("Run a scene and wait for prepared playback before adding feedback.");
+      throw new Error("Run a scene and wait for seekable playback before adding feedback.");
     }
     cancelAutoRun();
     const capturedCanvas = canvas;
@@ -462,11 +463,12 @@ const feedbackReview = installPlaygroundFeedback(document.querySelector("#previe
       !playerNeedsRestart && runtimeRecoveryPromise === null;
     return {
       player: active, canvas: capturedCanvas, source: run.source,
+      checkReplay: !prepared,
       runGeneration: run.token.runGeneration,
       buildIdentity: () => client.ready(),
       isCurrent,
       findTargets(capture, { x, y, width, height }) {
-        if (!isCurrent() || capture.viewRevision === null) return null;
+        if (!isCurrent() || !isPreparedPlayback(active) || capture.viewRevision === null) return null;
         return active.feedbackTargets({ ...capture.presentationReceipt, viewRevision: capture.viewRevision,
           region: [x, y, width, height] });
       },
