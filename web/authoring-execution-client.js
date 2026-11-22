@@ -653,7 +653,9 @@ export class AuthoringExecutionClient {
           kind: "cancel", source_id: lastInput.source_id, pointer_id: lastInput.pointer_id,
           view_revision: lastInput.view_revision, surface_x: null, surface_y: null,
         });
-      } catch (cancellationError) { report(cancellationError); }
+      } catch (cancellationError) {
+        if (!(cancellationError instanceof ExecutionTransitionCancelled)) report(cancellationError);
+      }
     };
     const submit = input => {
       if (signal.aborted || this.#player !== player || this.#transition !== null) return;
@@ -680,7 +682,9 @@ export class AuthoringExecutionClient {
       viewRevision: () => this.#pointerViewRevision,
       presentation: () => player.pointerPresentation,
       send: input => current() && player.moveSpatialInspection(input),
-      onError: error => { if (current()) report(error); },
+      onError: error => {
+        if (current() && !(error instanceof ExecutionTransitionCancelled)) report(error);
+      },
     });
     this.#pointerCollector = attachBrowserPointerInput(canvas, {
       signal,

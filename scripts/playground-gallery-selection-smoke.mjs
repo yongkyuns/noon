@@ -177,30 +177,23 @@ try {
   const baseline = await canvas.screenshot();
   captures.baseline = baseline;
 
-  const beforeSelect = await page.evaluate(async () =>
-    Number((await window.__noonExampleGallery.executionMetrics()).metrics.presentedFrames),
-  );
+  const waitChanged = async (surface, before, label) => {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const image = await surface.screenshot();
+      if (changedPixels(before, image) > 500) return image;
+      await page.waitForTimeout(25);
+    }
+    throw new Error(`${label} did not change trusted canvas pixels`);
+  };
   await tap(page,
     box.x + box.width / 2 - box.height / 4,
     box.y + box.height / 2,
   );
-  await waitForPresentation(page, beforeSelect);
-  const selected = await canvas.screenshot();
-  captures.selected = selected;
-  const selectedChanged = changedPixels(baseline, selected);
-  report.selectedChanged = selectedChanged;
-  assert.ok(selectedChanged > 500, `selection changed only ${selectedChanged} pixels`);
-
-  const beforeClear = await page.evaluate(async () =>
-    Number((await window.__noonExampleGallery.executionMetrics()).metrics.presentedFrames),
-  );
-  await tap(page, box.x + 18, box.y + 18);
-  await waitForPresentation(page, beforeClear);
-  const cleared = await canvas.screenshot();
-  captures.cleared = cleared;
-  const clearDifference = changedPixels(baseline, cleared);
-  report.clearDifference = clearDifference;
-  assert.equal(clearDifference, 0, "background clear must restore the authored image exactly");
+  captures.selected = await waitChanged(canvas, baseline, "default viewer Indicate");
+  report.selectedChanged = changedPixels(baseline, captures.selected);
+  captures.cleared = await waitForExactPixels(canvas, baseline, "default viewer Indicate");
+  report.clearDifference = changedPixels(baseline, captures.cleared);
+  await assertSettled(page, "default viewer Indicate");
   assert.deepEqual(errors, []);
 
   report.legacyRenderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
@@ -282,23 +275,15 @@ try {
     authoredBox.x + authoredBox.width * 0.36,
     authoredBox.y + authoredBox.height * 0.5,
   );
-  const waitChanged = async (baseline, label) => {
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const image = await authoredCanvas.screenshot();
-      if (changedPixels(baseline, image) > 500) return image;
-      await page.waitForTimeout(25);
-    }
-    throw new Error(`${label} did not change trusted canvas pixels`);
-  };
   await clickCircle();
-  const indicated = await waitChanged(authoredBaseline, "first authored click");
+  const indicated = await waitChanged(authoredCanvas, authoredBaseline, "first authored click");
   captures.indicated = indicated;
   report.indicatedChanged = changedPixels(authoredBaseline, indicated);
   const restored = await waitForExactPixels(authoredCanvas, authoredBaseline, "first authored click");
   captures.restored = restored;
   await assertSettled(page, "first authored click");
   await clickCircle();
-  const repeated = await waitChanged(authoredBaseline, "repeated authored click");
+  const repeated = await waitChanged(authoredCanvas, authoredBaseline, "repeated authored click");
   captures.repeated = repeated;
   await waitForExactPixels(authoredCanvas, authoredBaseline, "repeated authored click");
   await assertSettled(page, "repeated authored click");
@@ -374,7 +359,7 @@ try {
   report.zoomChanged = changedPixels(authoredBaseline, zoomed);
   assert.ok(report.zoomChanged > 500, "gallery wheel must change the composed view");
   await tap(page, authoredBox.x + authoredBox.width * 0.22, authoredBox.y + authoredBox.height * 0.5);
-  captures.zoomIndicated = await waitChanged(zoomed, "click through zoomed gallery view");
+  captures.zoomIndicated = await waitChanged(authoredCanvas, zoomed, "click through zoomed gallery view");
   captures.zoomRestored = await waitForExactPixels(authoredCanvas, zoomed, "zoomed authored click");
   await assertSettled(page, "zoomed authored click");
   const beforeZoomOut = await presentedFrames(page);

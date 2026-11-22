@@ -1053,7 +1053,7 @@ fn presented_hover_observation_does_not_open_a_pending_callback_barrier() {
 }
 
 #[test]
-fn default_viewer_bounds_highlight_clears_when_the_stroke_becomes_invisible() {
+fn default_viewer_indicates_stroke_only_targets_and_ignores_invisible_rows() {
     let mut store = SemanticStore::new();
     let root = store.insert_family();
     let mut shape = SemanticObjectState::new(StoredGeometry::Rectangle {
@@ -1068,12 +1068,20 @@ fn default_viewer_bounds_highlight_clears_when_the_stroke_becomes_invisible() {
     session.enable_default_viewer_selection();
     assert!(!session.has_native_pointer_subscribers());
 
+    let before = session.frame().clone();
     let selection = click(&mut store, &mut session, 0, 0.0);
-    assert!(selection.selection_changed());
+    assert!(!selection.selection_changed());
     assert_eq!(selection.selection_click().unwrap().target(), None);
-    let highlight = session.pointer_selection_highlight().unwrap();
-    assert_eq!(highlight.target, target);
-    assert!(matches!(highlight.geometry, GeometryRef::Rectangle { .. }));
+    assert!(session.pointer_selection_highlight().is_none());
+    session.advance_interactions(&mut store, 10.0).unwrap();
+    session.advance_interactions(&mut store, 10.5).unwrap();
+    assert_eq!(
+        session.frame().objects[0].style.stroke,
+        Some(noon_core::YELLOW)
+    );
+    assert!((session.frame().objects[0].transform.scale.x - 1.2).abs() < 1e-5);
+    session.advance_interactions(&mut store, 11.0).unwrap();
+    assert_eq!(session.frame(), &before);
 
     let mut transaction = SemanticMutationTransaction::new();
     transaction.set_property(
@@ -1084,7 +1092,8 @@ fn default_viewer_bounds_highlight_clears_when_the_stroke_becomes_invisible() {
     session
         .apply_semantic_transaction(&mut store, transaction)
         .unwrap();
-    assert!(session.pointer_selection_highlight().is_none());
+    click(&mut store, &mut session, 2, 0.0);
+    assert!(!session.interactions_active());
 }
 
 #[test]

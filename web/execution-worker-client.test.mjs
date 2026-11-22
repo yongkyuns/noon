@@ -10,7 +10,7 @@ globalThis.HTMLCanvasElement = FakeCanvas;
 globalThis.Worker = FakeWorker;
 globalThis.window = { devicePixelRatio: 1 };
 
-const { ExecutionWorkerClient, MAX_IN_FLIGHT_NATIVE_INPUTS } = await import("./execution-worker-client.js");
+const { ExecutionTransitionCancelled, ExecutionWorkerClient, MAX_IN_FLIGHT_NATIVE_INPUTS } = await import("./execution-worker-client.js");
 const { resetRenderHostSelectionForTests } = await import("./render-host-selection.js");
 
 
@@ -701,6 +701,8 @@ test("drops duplicate issued responses but keeps owner-local future IDs fatal", 
   assert.equal(client.diagnostics.render.staleResponses, 0);
   assert.equal(errors.length, 1);
   assert.match(errors[0], /render: render worker returned unissued request ID 4/);
+  await assert.rejects(client.submitBrowserPointerInput(pointerInput), ExecutionTransitionCancelled);
+  assert.equal(errors.length, 1);
   client.terminate();
 });
 

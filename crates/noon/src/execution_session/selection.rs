@@ -113,6 +113,7 @@ pub(super) struct PreparedPointerSelection {
     pub state: PointerSelectionState,
     pub query: Option<PointerFillQuery>,
     pub click: Option<PointerSelectionClick>,
+    pub viewer_target: Option<SemanticNodeId>,
     pub changed: bool,
 }
 
@@ -164,6 +165,7 @@ impl ExecutionSession {
     pub fn enable_default_viewer_selection(&mut self) {
         self.pointer_selection.max_movement.get_or_insert(4.0);
         self.pointer_selection.viewer_default = true;
+        self.pointer_selection.selected = None;
     }
 
     pub fn default_viewer_selection(&self) -> bool {
@@ -214,38 +216,18 @@ impl ExecutionSession {
             return None;
         }
         let transform = frame.render_transform(index);
-        let overlay = frame.render_geometry(index).filter(|geometry| {
+        let geometry = frame.render_geometry(index).filter(|geometry| {
             matches!(
                 geometry,
                 GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. }
             ) && state.style.fill.is_some_and(|color| color.alpha > 0.0)
                 && super::picking::analytic_fill_contains(frame, index, transform.translation)
                     == Ok(true)
-        });
-        let (geometry, transform) = if let Some(geometry) = overlay {
-            (geometry.clone(), transform)
-        } else if self.pointer_selection.viewer_default
-            && super::picking::viewer_row_visible(frame, index)
-        {
-            let bounds = self.runtime.effective_object_bounds(object)?;
-            let size = bounds.max - bounds.min;
-            if size.x <= 0.0 || size.y <= 0.0 {
-                return None;
-            }
-            (
-                GeometryRef::Rectangle { size },
-                Transform2D {
-                    translation: bounds.center(),
-                    ..Transform2D::default()
-                },
-            )
-        } else {
-            return None;
-        };
+        })?;
         Some(PointerSelectionHighlight {
             target,
             publication: self.publication_context(),
-            geometry,
+            geometry: geometry.clone(),
             transform,
         })
     }
@@ -261,11 +243,6 @@ impl ExecutionSession {
                 transform: highlight.transform,
                 color: pointer_selection_overlay_color(),
             })
-    }
-
-    pub(super) fn keep_current_viewer_selection(&self, prepared: &mut PreparedPointerSelection) {
-        prepared.state.selected = self.pointer_selection.selected;
-        prepared.changed = false;
     }
 
     fn viewer_target(
@@ -294,6 +271,7 @@ impl ExecutionSession {
             state: self.pointer_selection,
             query: None,
             click: None,
+            viewer_target: None,
             changed: false,
         };
         let Some(max_movement) = prepared.state.max_movement.or_else(|| {
@@ -366,8 +344,7 @@ impl ExecutionSession {
                     if self.default_viewer_selection() {
                         let target = self.viewer_target(input, outcome);
                         if target == pending.viewer_target {
-                            prepared.state.selected = target;
-                            prepared.changed = target != previous_selection;
+                            prepared.viewer_target = target;
                         }
                     }
                     if outcome == pending.outcome {

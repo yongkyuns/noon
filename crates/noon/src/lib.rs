@@ -348,8 +348,7 @@ pub use execution_session::{
     TranslationDragReceipt, TranslationDragUndo,
 };
 pub use execution_session::{
-    SpatialInspectionHighlight, SpatialPickCache, SpatialPickFrame, SpatialPointerInput,
-    SpatialPointerPhase,
+    SpatialPickCache, SpatialPickFrame, SpatialPointerInput, SpatialPointerPhase,
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};

@@ -23,14 +23,6 @@ pub use picking::{SpatialPickCache, SpatialPickFrame};
 
 use gesture::{SpatialGesture, SpatialGestures};
 
-/// Effective display tint for a selected mesh. The authored fill remains in
-/// the execution frame, including any concurrent material animation.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SpatialInspectionHighlight {
-    pub object: noon_core::ObjectId,
-    pub fill: noon_core::Color,
-}
-
 #[derive(Clone, Copy, Debug)]
 enum InspectionStart {
     Planar(InspectionView2D),
@@ -49,7 +41,6 @@ pub(super) struct SessionInspectionView {
     spatial: InspectionView3D,
     reset: Option<InspectionReset>,
     spatial_gestures: SpatialGestures,
-    spatial_selected: Option<noon_core::SemanticNodeId>,
     revision: u64,
 }
 
@@ -166,39 +157,6 @@ impl ExecutionSession {
             .ok_or(InspectionNavigationError::InvalidSpatialMotion)
     }
 
-    /// The current selected mesh remains bound to its semantic identity as its
-    /// authored transform and material advance.
-    pub fn spatial_inspection_highlight(&self) -> Option<SpatialInspectionHighlight> {
-        let object = self.interaction_execution_object_id(self.inspection.spatial_selected?)?;
-        let row = self.runtime.effective_object(object)?;
-        let color = row.style.fill?;
-        let accent = if color.red + color.green - color.blue > 1.4 {
-            noon_core::Color::BLUE_A
-        } else {
-            noon_core::Color::YELLOW
-        };
-        let blend = |value, target| value * 0.18 + target * 0.82;
-        Some(SpatialInspectionHighlight {
-            object,
-            fill: noon_core::Color::rgba(
-                blend(color.red, accent.red),
-                blend(color.green, accent.green),
-                blend(color.blue, accent.blue),
-                color.alpha,
-            ),
-        })
-    }
-
-    fn select_spatial_mesh(&mut self, object: Option<noon_core::ObjectId>) -> bool {
-        let selected = object.and_then(|object| self.interaction_semantic_object_id(object));
-        if object.is_some() && selected.is_none() {
-            return false;
-        }
-        let changed = selected != self.inspection.spatial_selected;
-        self.inspection.spatial_selected = selected;
-        changed
-    }
-
     pub fn cancel_spatial_pointer_gestures(&mut self) {
         self.inspection.spatial_gestures = SpatialGestures::default();
     }
@@ -212,8 +170,25 @@ impl ExecutionSession {
         match self.inspection.spatial_gestures.submit(input) {
             SpatialGesture::None => Ok(false),
             SpatialGesture::Motion(motion) => self.move_spatial_inspection(motion),
-            SpatialGesture::Click(position) => Ok(displayed
-                .is_some_and(|frame| self.select_spatial_mesh(frame.pick(position, aspect)))),
+            SpatialGesture::Click(position) => {
+                let Some(target) = displayed
+                    .and_then(|frame| frame.pick(position, aspect))
+                    .and_then(|object| self.interaction_semantic_object_id(object))
+                else {
+                    return Ok(false);
+                };
+                let Some(animation) = self
+                    .prepare_viewer_indicate(target)
+                    .map_err(InspectionNavigationError::Input)?
+                else {
+                    return Ok(false);
+                };
+                self.runtime
+                    .start_transient_animation(animation)
+                    .map_err(ExecutionSessionInputError::Interaction)
+                    .map_err(InspectionNavigationError::Input)?;
+                Ok(true)
+            }
             SpatialGesture::Reset => self.move_spatial_inspection(SpatialInspectionMotion {
                 reset: true,
                 ..SpatialInspectionMotion::default()

@@ -172,13 +172,11 @@ impl PreparedExecutionPlayer {
         let spatial_inspection = reader
             .inspection_spatial_camera()
             .map_err(|error| error.to_string())?;
-        let spatial_highlight = reader.spatial_inspection_highlight();
         let publication = reader.take_renderer_publication();
         let Some(mut delta) = self.encoder.encode_renderer_publication(
             &publication,
             camera,
             spatial_inspection,
-            spatial_highlight,
             snapshot || !self.snapshot_sent,
             refresh || selection != self.last_selection || self.finite_export.is_some(),
         )?

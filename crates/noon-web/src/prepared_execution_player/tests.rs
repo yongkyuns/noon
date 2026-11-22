@@ -1291,7 +1291,7 @@ fn spatial_inspection_republishes_only_the_camera_and_survives_seek() {
 }
 
 #[test]
-fn spatial_click_highlights_the_front_mesh_without_mutating_its_authored_style() {
+fn spatial_click_indicates_the_front_mesh_and_restores_while_paused() {
     use noon_core::{
         MeshResource, SemanticCamera3D, SemanticProjection3D, SemanticRotation3D, SemanticVec3,
         SemanticWorldTransform3D,
@@ -1376,46 +1376,47 @@ fn spatial_click_highlights_the_front_mesh_without_mutating_its_authored_style()
         .iter()
         .find(|row| row.id == target)
         .unwrap()
-        .style
-        .fill;
+        .clone();
     assert!(!player
         .move_spatial_inspection_json(&sample("press", 0, 1.0))
         .unwrap());
     assert!(player
         .move_spatial_inspection_json(&sample("release", 10, 1.0))
         .unwrap());
-    let json = player.drain_delta_json().unwrap().unwrap();
+    assert_eq!(
+        player.execution_wake(1_000.0).unwrap().cadence(),
+        "animation_frame"
+    );
+    assert!(player.tick_delta_json(1_000.0).unwrap().is_none());
+    let json = player.tick_delta_json(1_500.0).unwrap().unwrap();
     let delta = decode(&json).retained;
     assert_eq!(delta.objects.len(), 1);
     assert_eq!(delta.objects[0].object, target);
-    assert_ne!(delta.objects[0].style.fill, original);
+    assert_eq!(
+        delta.objects[0].style.fill.unwrap().red,
+        noon_core::YELLOW.red
+    );
+    assert_eq!(delta.objects[0].spatial.as_ref().unwrap().scale, [1.2; 3]);
     assert_eq!(delta.time, 0.0);
     receive(&mut mirror, &json);
-    assert_eq!(
-        source
-            .session()
-            .frame()
-            .objects
-            .iter()
-            .find(|row| row.id == target)
-            .unwrap()
-            .style
-            .fill,
-        original,
+    receive(
+        &mut mirror,
+        &player.tick_delta_json(2_000.0).unwrap().unwrap(),
     );
-    // A background click clears the tint using the original retained style.
-    assert!(!player
-        .move_spatial_inspection_json(&sample("press", 500, 0.1))
-        .unwrap());
-    assert!(player
-        .move_spatial_inspection_json(&sample("release", 510, 0.1))
-        .unwrap());
-    let delta = decode(&player.drain_delta_json().unwrap().unwrap()).retained;
-    assert_eq!(delta.objects[0].style.fill, original);
+    let restored = mirror
+        .frame()
+        .unwrap()
+        .objects
+        .iter()
+        .find(|row| row.id == target)
+        .unwrap();
+    assert_eq!(restored.style, original.style);
+    assert_eq!(restored.world_transform(), original.world_transform());
+    assert_eq!(player.execution_wake(2_000.0).unwrap().cadence(), "idle");
 }
 
 #[test]
-fn default_planar_viewer_selects_on_demand_and_pans_without_scene_rows() {
+fn default_planar_viewer_indicates_on_demand_and_pans_without_scene_rows() {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.75).unwrap();
     circle.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
@@ -1439,10 +1440,28 @@ fn default_planar_viewer_selects_on_demand_and_pans_without_scene_rows() {
     assert!(player.tick_delta_json(1_000.0).unwrap().is_none());
     assert!(input(&mut player, "press", receipt, 1));
     assert!(input(&mut player, "release", receipt, 1));
-    let selected = player.drain_delta_json().unwrap().unwrap();
-    assert!(decode(&selected).selection_overlay.is_some());
-    receive(&mut mirror, &selected);
     assert!(player.tick_delta_json(1_100.0).unwrap().is_none());
+    let indicated = player.tick_delta_json(1_600.0).unwrap().unwrap();
+    let delta = decode(&indicated);
+    assert!(delta.selection_overlay.is_none());
+    assert_eq!(delta.retained.time, 0.0);
+    assert_eq!(
+        delta.retained.objects[0].style.fill,
+        Some(noon_core::YELLOW)
+    );
+    assert!((delta.retained.objects[0].transform.scale.x - 1.2).abs() < 1e-5);
+    receive(&mut mirror, &indicated);
+    let restored = player.tick_delta_json(2_100.0).unwrap().unwrap();
+    let delta = decode(&restored);
+    assert_eq!(
+        delta.retained.objects[0].style.fill,
+        Some(noon_core::Color::rgb(0.0, 0.0, 1.0))
+    );
+    assert_eq!(
+        delta.retained.objects[0].transform.scale,
+        noon_core::Vec2::ONE
+    );
+    receive(&mut mirror, &restored);
 
     assert!(player
         .move_spatial_inspection_json(
@@ -1462,14 +1481,14 @@ fn default_planar_viewer_selects_on_demand_and_pans_without_scene_rows() {
         )
         .unwrap());
     assert_eq!(
-        player.execution_wake(1_110.0).unwrap().cadence(),
+        player.execution_wake(2_110.0).unwrap().cadence(),
         "animation_frame"
     );
-    assert!(player.tick_delta_json(1_120.0).unwrap().is_none());
-    let middle = decode(&player.tick_delta_json(1_295.0).unwrap().unwrap()).retained;
+    assert!(player.tick_delta_json(2_120.0).unwrap().is_none());
+    let middle = decode(&player.tick_delta_json(2_295.0).unwrap().unwrap()).retained;
     assert_eq!(middle.time, 0.0);
     assert_eq!(middle.camera.center, noon_core::Vec2::new(-1.0, 0.5));
-    let restored = decode(&player.tick_delta_json(1_500.0).unwrap().unwrap()).retained;
+    let restored = decode(&player.tick_delta_json(2_500.0).unwrap().unwrap()).retained;
     assert_eq!(restored.camera, noon_core::Camera2DState::default());
-    assert_eq!(player.execution_wake(1_500.0).unwrap().cadence(), "idle");
+    assert_eq!(player.execution_wake(2_500.0).unwrap().cadence(), "idle");
 }
