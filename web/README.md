@@ -215,31 +215,26 @@ Transform semantics are authored in Rust and lowered into renderer-independent e
 
 ## Video objects
 
-Choose **Video file** in the playground, paste the scene below, and select **Run**.
+Choose **Video file** in the playground, paste
+[`video_object.py`](python/examples/video_object.py), and select **Run**.
 The file stays in the browser. Noon supports local H.264 MP4 clips with optional
 AAC audio, up to 60 seconds and 128 MiB.
 
-```python
-from noon import LEFT, Scene, VideoSource
+The clip moves right in two seconds using the same tracker binding as the
+[native Rust example](../crates/noon-native/examples/video_object.rs).
+The slider scrubs silently when paused. Select **Play with sound** to start
+audible playback. Use `start_time`, `source_start`, and `source_end` on
+`Scene.video` to place and trim a clip in seconds.
 
-result = Scene()
-clip = await VideoSource.from_upload()
-video = result.video(clip, start_time=0.25, source_start=0, source_end=2, height=5)
-video.shift(LEFT)
-result.wait(2.5)
-```
-
-This example uses at least two seconds of source footage. The existing slider
-scrubs silently when paused. Select **Play with sound** to start an audible clip.
-
-For MP4 export, save this example as `scene.py` and omit the final `wait` line.
-The trimmed clip supplies the finite duration. Run the existing exporter after
-building the browser package.
+After building the browser package, export the example with the same clip:
 
 ```bash
-node scripts/export-python-scene.mjs scene.py /tmp/noon-video-capture \
-  --video clip.mp4 --mp4 scene.mp4 --fps 30000/1001
+node scripts/export-python-scene.mjs web/python/examples/video_object.py /tmp/noon-video-capture \
+  --video clip.mp4 --mp4 python-video.mp4 --fps 30000/1001
 ```
+
+The command also exports deterministic scenes with ordinary `play()` and
+`wait()` calls, including a trailing wait after the clip ends.
 
 ## Live authoring
 
