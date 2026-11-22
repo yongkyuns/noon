@@ -19,7 +19,7 @@ pub(crate) use prepared::PreparedPrefixAdvance;
 mod provisional_geometry;
 use crate::authoring_error::AuthoringFailure;
 #[cfg(any(target_arch = "wasm32", test))]
-use crate::browser_pointer_input::BrowserPointerBinding;
+use crate::browser_pointer_input::{BrowserPointerBinding, BrowserPointerTarget};
 use crate::retained_family_execution_encoder::NoChangePresentation;
 use noon::integration::scene_execution::{self, ExecutionSession};
 #[cfg(test)]
@@ -551,10 +551,10 @@ impl SemanticExecutionPlayer {
     }
 
     fn seek_session(&mut self, time: f64) -> Result<(), String> {
-        self.source
-            .seek(time)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        self.source.seek(time).map_err(|error| error.to_string())?;
+        #[cfg(any(target_arch = "wasm32", test))]
+        self.worker_pointer_presentation.retire_viewer_frames();
+        Ok(())
     }
 
     /// Release input-owned state only at an explicit source disposal boundary.
@@ -1063,7 +1063,7 @@ impl SemanticExecutionPlayer {
         }
         if !self.clock.is_playing() {
             let mut wake = self.source.session().wake_state().without_timeline_wake();
-            if self.source.session().interactions_active() {
+            if self.interactions_active_wasm() {
                 wake = wake.with_additional_timeline(TimelineWakeState::Continuous);
             }
             return Ok(WasmExecutionWake::from_plan(
@@ -1071,7 +1071,16 @@ impl SemanticExecutionPlayer {
                 None,
             ));
         }
-        let plan = BrowserExecutionWakePlan::from_pending_segment(self.source.session(), segment);
+        let plan = if self.interactions_active_wasm() {
+            BrowserExecutionWakePlan::from_runtime(
+                self.source
+                    .session()
+                    .wake_state()
+                    .with_additional_timeline(TimelineWakeState::Continuous),
+            )
+        } else {
+            BrowserExecutionWakePlan::from_pending_segment(self.source.session(), segment)
+        };
         let directive = self
             .live_wake_clock
             .directive(plan, wall_time_ms, self.source.session().frame().time)
@@ -1238,7 +1247,11 @@ impl SemanticExecutionPlayer {
             .source
             .session()
             .initial_continuous_segment_sample(segment, requested_time);
-        self.live_drive_segment_to(segment, requested_time, true)
+        let drive = self.live_drive_segment_to(segment, requested_time, true)?;
+        if drive.callback_phase_json.is_none() && self.interactions_active_wasm() {
+            self.advance_native_interactions(wall_time_ms / 1_000.0)?;
+        }
+        Ok(drive)
     }
 
     /// Drive the active continuation segment toward one externally supplied
@@ -1461,7 +1474,7 @@ impl SemanticExecutionPlayer {
             .inspection_camera()
             .map_err(|e| e.to_string())?;
         #[cfg(any(target_arch = "wasm32", test))]
-        let (pointer_frame, pointer_refresh) = {
+        let (pointer_frame, pointer_refresh, planar_enabled) = {
             let target = pointer_input::PlayerPointerTarget {
                 source: &mut self.source,
                 translation_drag_undo: &mut self.translation_drag_undo,
@@ -1469,6 +1482,7 @@ impl SemanticExecutionPlayer {
             (
                 self.worker_pointer_presentation.capture(&target)?,
                 self.worker_pointer_presentation.needs_delta(&target),
+                self.finite_export.is_none() && target.uses_planar_viewer_input(),
             )
         };
         #[cfg(not(any(target_arch = "wasm32", test)))]
@@ -1486,11 +1500,17 @@ impl SemanticExecutionPlayer {
                 .inspection_spatial_camera()
                 .map_err(|error| error.to_string())?
         };
+        let viewer_indications = if self.finite_export.is_none() {
+            self.source.session().viewer_indications()
+        } else {
+            Vec::new()
+        };
         let publication = self.source.session_mut().take_renderer_publication();
         let Some(mut delta) = self.encoder.encode_renderer_publication(
             &publication,
             camera,
             spatial_inspection,
+            &viewer_indications,
             snapshot || !self.snapshot_sent,
             self.finite_export.is_some()
                 || presentation != self.last_sent_selection_overlay
@@ -1527,10 +1547,11 @@ impl SemanticExecutionPlayer {
                 delta.retained.sequence,
                 pointer_frame,
             );
-            self.worker_pointer_presentation.issue_spatial(
+            self.worker_pointer_presentation.issue_viewer(
                 &publication,
                 spatial_inspection.map(|(_, camera)| camera),
                 delta.retained.snapshot,
+                planar_enabled,
             );
         }
         self.last_sent_selection_overlay = presentation;
@@ -2886,7 +2907,12 @@ impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = enableDefaultViewerSelection))]
     pub fn enable_default_viewer_selection(&mut self) {
-        self.source.session_mut().enable_default_viewer_selection();
+        let session = self.source.session_mut();
+        let already_enabled = session.default_viewer_selection();
+        session.enable_default_viewer_selection();
+        if !already_enabled && !session.has_native_pointer_subscribers() {
+            self.worker_pointer_presentation.refresh_planar_viewer();
+        }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]

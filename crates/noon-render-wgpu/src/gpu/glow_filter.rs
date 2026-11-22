@@ -316,6 +316,7 @@ impl EffectCaptureTile {
             max: original.max.map(|v| v + f64::from(padding_pixels)),
         };
         let mut support_radius = 0_u32;
+        let mut capture_margin = [f64::from(padding_pixels) + 2.0; 2];
         let mut active = false;
         let texel_bytes = capture_texel_bytes(parameters.working_format)?;
         let mut cost_per_pixel = texel_bytes;
@@ -352,6 +353,7 @@ impl EffectCaptureTile {
             support_radius += support;
             let input = if mask { original } else { extent };
             for (axis, offset) in offset.into_iter().enumerate() {
+                capture_margin[axis] += f64::from(support) + offset.abs().ceil();
                 extent.min[axis] =
                     extent.min[axis].min(input.min[axis] + offset.min(0.0) - f64::from(support));
                 extent.max[axis] =
@@ -361,6 +363,22 @@ impl EffectCaptureTile {
         cost_per_pixel += if silhouette { texel_bytes } else { 0 };
         if !isolate && !original_by_parent && (!active || parameters.scope_opacity == 0.0) {
             return Ok(None);
+        }
+        if !required_by_parent {
+            // The planar operators sample finite kernels or one pixel. Keep
+            // their cumulative input support and raster fringe around the view.
+            // Parent captures may consume pixels outside that view.
+            for (axis, pixels) in viewport.into_iter().enumerate() {
+                let edge = f64::from(pixels);
+                let margin = capture_margin[axis];
+                if extent.max[axis] - extent.min[axis] > edge + 2.0 * margin
+                    && extent.min[axis] < edge
+                    && extent.max[axis] > 0.0
+                {
+                    extent.min[axis] = extent.min[axis].max(-margin);
+                    extent.max[axis] = extent.max[axis].min(edge + margin);
+                }
+            }
         }
         let mut start = [0_i64; 2];
         let mut end = [0_i64; 2];

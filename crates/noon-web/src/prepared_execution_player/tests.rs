@@ -13,18 +13,24 @@ struct Fixture {
 
 impl Fixture {
     fn new(session: u32) -> Self {
+        Self::with_click_binding(session, true)
+    }
+
+    fn with_click_binding(session: u32, click_indicate: bool) -> Self {
         let mut scene = Scene::new();
         let mut target = scene.circle(0.65).unwrap();
         target.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
         target.set_stroke_width(0.0).unwrap();
         scene.add(&target).unwrap();
-        scene
-            .on_click_indicate(
-                &target,
-                IndicateOptions::default(),
-                AnimationOptions::new().run_time(0.5),
-            )
-            .unwrap();
+        if click_indicate {
+            scene
+                .on_click_indicate(
+                    &target,
+                    IndicateOptions::default(),
+                    AnimationOptions::new().run_time(0.5),
+                )
+                .unwrap();
+        }
         let mut source = scene.into_execution().unwrap();
         source
             .session_mut()
@@ -1092,13 +1098,16 @@ fn prepared_worker_static_time_controls_reject_invalid_wall_time_atomically() {
 
 #[test]
 fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
-    let mut f = Fixture::new(87);
+    let mut f = Fixture::with_click_binding(87, false);
+    f.player.enable_default_viewer_selection();
+    let (mut mirror, original_receipt) = ready(&mut f.player);
     let segment = {
         let target = f.source.scene_mut().target_editor(&f.target).unwrap();
         f.source
             .scene_mut()
             .set_translation(&target, 2.0, 0.0)
             .unwrap();
+        f.source.scene_mut().set_rotation(&target, 0.4).unwrap();
         let segment = f
             .source
             .live()
@@ -1123,7 +1132,17 @@ fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
         .publish_prepared_prefix(segment, &mut f.publisher)
         .unwrap();
     f.deliver(batch);
-    f.player.seek_delta_json(1.25).unwrap();
+    let selected = f.player.seek_delta_json(1.25).unwrap().unwrap();
+    receive(&mut mirror, &selected);
+    let receipt = WorkerPointerReceipt {
+        sequence: decode(&selected).retained.sequence,
+        presentation: original_receipt.presentation + 1,
+        ..original_receipt
+    };
+    assert!(f
+        .player
+        .note_pointer_presentation_json(&serde_json::to_string(&receipt).unwrap())
+        .unwrap());
     f.player.set_prepared_playing(true);
     assert_eq!(
         f.player.execution_wake(1_000.0).unwrap().cadence(),
@@ -1135,6 +1154,59 @@ fn prepared_worker_active_animation_observation_keeps_the_coherent_sample() {
     assert_eq!(f.player.prepared_time(), 1.25);
     assert_eq!(f.player.playback.reader.frame(), &frame);
     assert!(!f.player.prepared_playing());
+
+    let original = mirror.frame().unwrap().clone();
+    assert!(input(&mut f.player, "press", receipt, 1));
+    assert!(input(&mut f.player, "release", receipt, 1));
+    assert!(f.player.tick_delta_json(1_600.0).unwrap().is_none());
+    let indicated = f.player.tick_delta_json(2_100.0).unwrap().unwrap();
+    receive(&mut mirror, &indicated);
+    let pulsed = mirror.frame().unwrap();
+    assert_eq!(pulsed.objects[0].style.fill, Some(noon_core::YELLOW));
+    assert_eq!(
+        pulsed.render_transform(0).translation,
+        original.render_transform(0).translation
+    );
+    assert!(
+        (pulsed.render_transform(0).scale.x / original.render_transform(0).scale.x - 1.2).abs()
+            < 1e-5
+    );
+    assert_eq!(f.player.playback.reader.frame(), &frame);
+    receive(
+        &mut mirror,
+        &f.player.tick_delta_json(2_600.0).unwrap().unwrap(),
+    );
+    assert_eq!(mirror.frame().unwrap(), &original);
+
+    // The render receipt and DOM events travel on independent channels. Keep
+    // the earlier displayed pick after a newer frame has moved the target off
+    // the original cursor, and allow that physical release to finish the click.
+    f.player.set_prepared_playing(true);
+    f.player.execution_wake(3_000.0).unwrap();
+    let moved = decode(&f.player.tick_delta_json(3_500.0).unwrap().unwrap()).retained;
+    assert!(moved.time > 1.6);
+    assert!(
+        f.player
+            .playback
+            .reader
+            .frame()
+            .render_transform(0)
+            .translation
+            .x
+            > 1.0
+    );
+    let newer = WorkerPointerReceipt {
+        sequence: moved.sequence,
+        presentation: receipt.presentation + 1,
+        ..receipt
+    };
+    assert!(f
+        .player
+        .note_pointer_presentation_json(&serde_json::to_string(&newer).unwrap())
+        .unwrap());
+    assert!(input(&mut f.player, "press", receipt, 1));
+    assert!(input(&mut f.player, "release", newer, 1));
+    assert!(f.player.playback.reader.viewer_inspection_active());
 }
 
 #[test]
@@ -1416,6 +1488,132 @@ fn spatial_click_indicates_the_front_mesh_and_restores_while_paused() {
 }
 
 #[test]
+fn viewer_indicates_the_selected_historical_outer_family_about_one_center() {
+    let mut scene = Scene::new();
+    let mut tick = scene.circle(0.5).unwrap();
+    let mut other_axis = scene.circle(0.5).unwrap();
+    tick.set_fill(0.0, 0.0, 1.0, 1.0).unwrap();
+    other_axis.set_fill(0.0, 1.0, 0.0, 1.0).unwrap();
+    other_axis.set_translation(2.0, 0.0).unwrap();
+    scene.add(&tick).unwrap();
+    scene.add(&other_axis).unwrap();
+    let mut source = scene.into_execution().unwrap();
+    source
+        .session_mut()
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let first = source.session_mut().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(1.0).unwrap();
+    let (mut publisher, reader) = source.session().create_prepared_prefix(first).unwrap();
+    let mut player = PreparedExecutionPlayer::from_reader(reader, 320);
+    player.set_prepared_playing(false);
+    player.enable_default_viewer_selection();
+    player
+        .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
+        .unwrap();
+    let (mut mirror, mut receipt) = ready(&mut player);
+
+    let ticks = source.scene_mut().family(&[(&tick).into()]).unwrap();
+    let axes = source
+        .scene_mut()
+        .family(&[(&ticks).into(), (&other_axis).into()])
+        .unwrap();
+    source.scene_mut().add_many(&[(&axes).into()]).unwrap();
+    let second = source.session_mut().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(2.0).unwrap();
+    let batch = source
+        .session()
+        .publish_prepared_prefix(second, &mut publisher)
+        .unwrap();
+    player
+        .reserve_object_capacity(batch.required_object_capacity())
+        .unwrap();
+    player.preflight_append(&batch).unwrap();
+    player.append(batch).unwrap();
+
+    for (time, expected_count) in [(1.25, 2), (0.5, 1)] {
+        let selected = player.seek_delta_json(time).unwrap().unwrap();
+        receive(&mut mirror, &selected);
+        receipt.sequence = decode(&selected).retained.sequence;
+        receipt.presentation += 1;
+        assert!(player
+            .note_pointer_presentation_json(&serde_json::to_string(&receipt).unwrap())
+            .unwrap());
+        let original = mirror.frame().unwrap().clone();
+        let canonical = player.playback.reader.frame().clone();
+        assert!(input(&mut player, "press", receipt, 1));
+        assert!(input(&mut player, "release", receipt, 1));
+        let wall = 10_000.0 + 4_000.0 * f64::from(receipt.presentation as u32);
+        assert!(player.tick_delta_json(wall).unwrap().is_none());
+        let pulsed = player.tick_delta_json(wall + 500.0).unwrap().unwrap();
+        let rows = decode(&pulsed).retained.objects;
+        assert_eq!(rows.len(), expected_count);
+        assert!(rows
+            .iter()
+            .all(|row| row.style.fill == Some(noon_core::YELLOW)));
+        if expected_count == 2 {
+            let mut positions = rows
+                .iter()
+                .map(|row| row.transform.translation.x)
+                .collect::<Vec<_>>();
+            positions.sort_by(f32::total_cmp);
+            assert!((positions[0] + 0.2).abs() < 1e-5);
+            assert!((positions[1] - 2.2).abs() < 1e-5);
+        } else {
+            assert_eq!(rows[0].transform.translation.x, 0.0);
+        }
+        receive(&mut mirror, &pulsed);
+        receive(
+            &mut mirror,
+            &player.tick_delta_json(wall + 1000.0).unwrap().unwrap(),
+        );
+        assert_eq!(mirror.frame().unwrap(), &original);
+        assert_eq!(player.playback.reader.frame(), &canonical);
+    }
+}
+
+#[test]
+fn planar_viewer_indicate_scales_an_image_without_changing_its_paint() {
+    let mut scene = Scene::new();
+    let picture = scene.image_rgba8(1, 1, vec![22, 100, 180, 255]).unwrap();
+    scene.add(&picture).unwrap();
+    let mut source = scene.into_execution().unwrap();
+    source
+        .session_mut()
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let segment = source.session_mut().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(1.0).unwrap();
+    let (_, reader) = source.session().create_prepared_prefix(segment).unwrap();
+    let mut player = PreparedExecutionPlayer::from_reader(reader, 316);
+    player.set_prepared_playing(false);
+    player.enable_default_viewer_selection();
+    player
+        .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
+        .unwrap();
+    let (mut mirror, receipt) = ready(&mut player);
+    let original = mirror.frame().unwrap().clone();
+    assert!(input(&mut player, "press", receipt, 1));
+    assert!(input(&mut player, "release", receipt, 1));
+    assert!(player.tick_delta_json(1_200.0).unwrap().is_none());
+    receive(
+        &mut mirror,
+        &player.tick_delta_json(1_700.0).unwrap().unwrap(),
+    );
+    let pulsed = mirror.frame().unwrap();
+    assert_eq!(pulsed.objects[0].style, original.objects[0].style);
+    assert_eq!(
+        pulsed.render_transform(0).scale,
+        original.render_transform(0).scale * 1.2
+    );
+    receive(
+        &mut mirror,
+        &player.tick_delta_json(2_200.0).unwrap().unwrap(),
+    );
+    assert_eq!(mirror.frame().unwrap(), &original);
+}
+
+#[test]
 fn default_planar_viewer_indicates_on_demand_and_pans_without_scene_rows() {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.75).unwrap();
@@ -1431,12 +1629,21 @@ fn default_planar_viewer_indicates_on_demand_and_pans_without_scene_rows() {
     let (_, reader) = source.session().create_prepared_prefix(segment).unwrap();
     let mut player = PreparedExecutionPlayer::from_reader(reader, 314);
     player.set_prepared_playing(true);
-    player.enable_default_viewer_selection();
-    assert_eq!(player.viewer_pointer_motion(), Some(false));
     player
         .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
         .unwrap();
-    let (mut mirror, original_receipt) = ready(&mut player);
+    let (mut mirror, mut original_receipt) = ready(&mut player);
+    player.enable_default_viewer_selection();
+    assert_eq!(player.viewer_pointer_motion(), Some(false));
+    let enabled = player.drain_delta_json().unwrap().unwrap();
+    receive(&mut mirror, &enabled);
+    let enabled = decode(&enabled).retained;
+    assert!(enabled.objects.is_empty());
+    original_receipt.sequence = enabled.sequence;
+    original_receipt.presentation += 1;
+    assert!(player
+        .note_pointer_presentation_json(&serde_json::to_string(&original_receipt).unwrap())
+        .unwrap());
     assert!(player.tick_delta_json(1_000.0).unwrap().is_none());
     assert!(player.tick_delta_json(1_100.0).unwrap().is_none());
 

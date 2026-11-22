@@ -348,7 +348,8 @@ pub use execution_session::{
     TranslationDragReceipt, TranslationDragUndo,
 };
 pub use execution_session::{
-    SpatialPickCache, SpatialPickFrame, SpatialPointerInput, SpatialPointerPhase,
+    PlanarPickCache, PlanarPickFrame, PlanarViewerPointer, SpatialPickCache, SpatialPickFrame,
+    SpatialPointerInput, SpatialPointerPhase, ViewerIndication,
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};

@@ -34,6 +34,7 @@ impl InteractionBindings {
 pub(super) enum PreparedClickAction {
     // Keep queued control metadata small as captured material state grows.
     Animation(Box<PreparedTransientAnimation>),
+    ViewerIndicate(noon_core::ObjectId, noon_core::SemanticClickIndicate),
     GlowPulse {
         target: SemanticNodeId,
         binding: noon_core::SemanticClickGlowPulse,
@@ -292,13 +293,14 @@ impl ExecutionSession {
     pub(super) fn prepare_viewer_indicate(
         &self,
         node: SemanticNodeId,
-    ) -> Result<Option<PreparedTransientAnimation>, ExecutionSessionInputError> {
-        let Some(object) = self.interaction_execution_object_id(node) else {
-            return Ok(None);
-        };
+    ) -> Option<(noon_core::ObjectId, noon_core::SemanticClickIndicate)> {
         if self.pending_callback.is_some() || self.interaction_bindings.bindings.contains_key(&node)
         {
-            return Ok(None);
+            return None;
+        }
+        let object = self.interaction_execution_object_id(node)?;
+        if self.runtime.object_has_transient_animation(object) {
+            return None;
         }
         let options = crate::IndicateOptions::default();
         let binding = self
@@ -311,9 +313,7 @@ impl ExecutionSession {
                     noon_core::AnimationDefaults::MANIM.run_time,
                 )
             });
-        self.runtime
-            .prepare_viewer_indicate(object, binding)
-            .map_err(ExecutionSessionInputError::Interaction)
+        Some((object, binding))
     }
 
     pub(super) fn prepare_click_action(

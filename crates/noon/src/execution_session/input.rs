@@ -456,13 +456,18 @@ impl ExecutionSession {
         let selection = self.prepare_pointer_selection(token, input)?;
         let mut action = None;
         if !suppress_click_action {
-            action = self.prepare_click_action(selection.click)?;
+            let authored_click = selection.click.filter(|click| {
+                !self.default_viewer_selection() || click.target() == selection.viewer_target
+            });
+            action = self.prepare_click_action(authored_click)?;
             if action.is_none() {
-                if let Some(target) = selection.viewer_target {
-                    action = self
-                        .prepare_viewer_indicate(target)?
-                        .map(Box::new)
-                        .map(super::interactions::PreparedClickAction::Animation);
+                if let Some((object, binding)) = selection
+                    .viewer_target
+                    .and_then(|target| self.prepare_viewer_indicate(target))
+                {
+                    action = Some(super::interactions::PreparedClickAction::ViewerIndicate(
+                        object, binding,
+                    ));
                 }
             }
         }
@@ -650,6 +655,10 @@ impl ExecutionSession {
                 self.runtime
                     .start_transient_animation(*animation)
                     .expect("admitted native input cannot change authored revision or time");
+                None
+            }
+            Some(super::interactions::PreparedClickAction::ViewerIndicate(object, binding)) => {
+                self.start_viewer_indicate(object, binding);
                 None
             }
             Some(super::interactions::PreparedClickAction::Playback(control)) => Some(control),

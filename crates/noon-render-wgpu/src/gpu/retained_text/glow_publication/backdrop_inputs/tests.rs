@@ -98,7 +98,7 @@ fn local_prefix_work_is_bounded_with_twenty_thousand_rows_and_many_unrelated_tar
     scene.take_renderer_publication();
     assert_eq!(cache.refresh(&mut scene), QueryStats::default());
     cache.presented();
-    let untouched = cache.inputs.entries[&20_099].source_epoch;
+    let untouched = cache.inputs.entries[&20_099].source_revision;
     let mut style = scene.frame().objects[10].style;
     style.fill = Some(Color::rgba(0.4, 0.2, 0.7, 1.0));
     scene
@@ -113,7 +113,7 @@ fn local_prefix_work_is_bounded_with_twenty_thousand_rows_and_many_unrelated_tar
     assert_eq!(local.footprints, 0);
     assert!(local.candidates < 12, "{local:?}");
     assert_eq!(cache.state.dirty, [20_000].into_iter().collect());
-    assert_eq!(cache.inputs.entries[&20_099].source_epoch, untouched);
+    assert_eq!(cache.inputs.entries[&20_099].source_revision, untouched);
     cache.presented();
     scene
         .apply_execution_patch(&ExecutionPatch::SetEffects {
@@ -121,11 +121,11 @@ fn local_prefix_work_is_bounded_with_twenty_thousand_rows_and_many_unrelated_tar
             effects: stack(1, true, 1.99),
         })
         .unwrap();
-    let epoch = cache.inputs.entries[&20_000].source_epoch;
+    let epoch = cache.inputs.entries[&20_000].source_revision;
     let parameter = cache.refresh(&mut scene);
     assert_eq!(parameter.queries, 0);
     assert_eq!(parameter.footprints, 1);
-    assert_eq!(cache.inputs.entries[&20_000].source_epoch, epoch);
+    assert_eq!(cache.inputs.entries[&20_000].source_revision, epoch);
 }
 #[test]
 fn complete_filtered_scope_halos_and_earlier_backdrop_changes_join_the_strict_prefix() {

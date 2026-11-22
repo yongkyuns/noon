@@ -45,6 +45,7 @@ fn fixture() -> Result<Fixture, String> {
                         &program.take_renderer_publication(),
                         camera,
                         None,
+                        &[],
                         snapshot,
                         false,
                     )? {
@@ -77,6 +78,7 @@ fn fixture() -> Result<Fixture, String> {
             &program.take_renderer_publication(),
             camera,
             None,
+            &[],
             snapshot,
             false,
         )? {
