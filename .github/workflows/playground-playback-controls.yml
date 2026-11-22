@@ -14,7 +14,6 @@ on:
       - "scripts/build-web-demo.sh"
       - "scripts/playground-playback-controls-smoke.mjs"
       - "scripts/playground-rectangle-feedback-smoke.mjs"
-      - "tools/noon-mcp/src/*feedback*.mjs"
       - "scripts/playground-playback-rerun-stress.mjs"
       - "scripts/playground-playback-morph-regression.mjs"
       - "scripts/playground-wait-clock-regression.mjs"
@@ -57,7 +56,6 @@ on:
       - "web/playground-playback-controls*"
       - "web/playground-feedback*"
       - "scripts/playground-rectangle-feedback-smoke.mjs"
-      - "tools/noon-mcp/src/*feedback*.mjs"
       - "web/semantic-engine-endpoint*"
       - "web/main.js"
       - "web/browser-pointer-input*"
@@ -192,9 +190,7 @@ jobs:
           NOON_PLAYGROUND_PLAYBACK_ARTIFACTS: browser-smoke-artifacts/playground-playback-controls
         run: node scripts/playground-playback-controls-smoke.mjs
       - name: Verify rectangle feedback on a real lesson
-        run: |
-          npm ci --prefix tools/noon-mcp --ignore-scripts --no-audit --no-fund
-          node scripts/playground-rectangle-feedback-smoke.mjs
+        run: node scripts/playground-rectangle-feedback-smoke.mjs
       - name: Stress reruns across playback states
         env:
           NOON_PLAYGROUND_RERUN_STRESS_ARTIFACTS: browser-smoke-artifacts/playground-playback-rerun-stress
