@@ -1051,3 +1051,58 @@ fn presented_hover_observation_does_not_open_a_pending_callback_barrier() {
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn default_viewer_bounds_highlight_clears_when_the_stroke_becomes_invisible() {
+    let mut store = SemanticStore::new();
+    let root = store.insert_family();
+    let mut shape = SemanticObjectState::new(StoredGeometry::Rectangle {
+        size: Vec2::new(2.0, 2.0),
+    });
+    shape.style.fill = None;
+    shape.style.stroke = Some(noon_core::SemanticPaint::Solid(noon_core::Color::WHITE));
+    shape.style.stroke_width = 0.2;
+    let target = attach(&mut store, root, shape);
+    let mut session = session(&store, root);
+    session.disable_pointer_fill_selection().unwrap();
+    session.enable_default_viewer_selection();
+    assert!(!session.has_native_pointer_subscribers());
+
+    let selection = click(&mut store, &mut session, 0, 0.0);
+    assert!(selection.selection_changed());
+    assert_eq!(selection.selection_click().unwrap().target(), None);
+    let highlight = session.pointer_selection_highlight().unwrap();
+    assert_eq!(highlight.target, target);
+    assert!(matches!(highlight.geometry, GeometryRef::Rectangle { .. }));
+
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.set_property(
+        target,
+        SemanticObjectProperty::StrokeWidth,
+        SemanticSignalValue::Scalar(0.0),
+    );
+    session
+        .apply_semantic_transaction(&mut store, transaction)
+        .unwrap();
+    assert!(session.pointer_selection_highlight().is_none());
+}
+
+#[test]
+fn authored_indicate_handles_click_feedback_with_default_viewer_selection_enabled() {
+    let (mut store, target, mut session) = authored_indicate_fixture();
+    session.enable_default_viewer_selection();
+    let before = session.frame().clone();
+    assert_eq!(
+        click(&mut store, &mut session, 0, 0.0)
+            .selection_click()
+            .unwrap()
+            .target(),
+        Some(target)
+    );
+    assert!(session.interactions_active());
+    assert!(session.pointer_selection_presentation().is_none());
+    session.advance_interactions(&mut store, 10.0).unwrap();
+    session.advance_interactions(&mut store, 10.5).unwrap();
+    assert_eq!(session.frame(), &before);
+    assert!(session.pointer_selection_presentation().is_none());
+}

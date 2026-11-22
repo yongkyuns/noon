@@ -47,6 +47,7 @@ function navigationFixture() {
     SCENE_EXAMPLES: [{ id: "one", title: "One", parityStatus: "candidate" }],
     activeRunIdentity: null,
     updateDraftStatus() {},
+    updateSpatialInspection() {},
     setRunPatchStatus(_token, message, state) {
       context.patchStatus.value = message;
       context.patchStatus.dataset.state = state;

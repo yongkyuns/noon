@@ -608,6 +608,16 @@ mod wasm {
                 .session()
                 .is_some_and(|session| session != delta.retained.session);
 
+            // Viewer camera and highlight changes can publish spatial rows
+            // with the same authored runtime context and a new retained sequence.
+            let updates_spatial_inspection = self.mirror.publication_context()
+                == delta.retained.publication_context
+                && delta
+                    .retained
+                    .objects
+                    .iter()
+                    .any(|row| row.spatial.is_some());
+
             // Stale packets cannot change the current overlay. Validate a fresh
             // presentation before resource preparation or mirror admission.
             let overlay = if stale {
@@ -763,9 +773,11 @@ mod wasm {
                     // The admitted worker source is authoritative. Retain this
                     // preparation path for subsequent removal/cleanup frames.
                     self.glow_transport_seen |= received_glow;
+                    if replaces_session || updates_spatial_inspection {
+                        self.renderer.reset_spatial_publication_context();
+                    }
                     if replaces_session {
                         self.effect_program_task.cancel();
-                        self.renderer.reset_spatial_publication_context();
                         // A previous glow session can already have returned to
                         // the no-effect fast path. Its retained preparer's last
                         // publication epoch must still be retired before a new

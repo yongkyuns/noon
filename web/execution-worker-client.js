@@ -780,13 +780,13 @@ export class ExecutionWorkerClient {
   }
 
   // Session/editor policy, ordered with pointer input and never auto-replayed.
-  async setPointerFillSelection(maxMovement) {
+  async setPointerFillSelection(maxMovement, viewerDefault = false) {
     this.#requireStarted();
     if (maxMovement !== null &&
         (typeof maxMovement !== "number" || !Number.isFinite(maxMovement) || maxMovement < 0)) {
       throw new TypeError("selection tolerance must be a finite nonnegative number or null");
     }
-    return this.#requestNativeInput("pointer_fill_selection", { maxMovement });
+    return this.#requestNativeInput("pointer_fill_selection", { maxMovement, ...(viewerDefault ? { viewerDefault } : {}) });
   }
 
   // Platform view registration is not proof of presentation. Retire the locally
@@ -858,6 +858,11 @@ export class ExecutionWorkerClient {
     return this.#requestNativeInput("inspection_scroll", {
       input, presentation: this.pointerPresentation,
     });
+  }
+
+  async moveSpatialInspection(input) {
+    this.#requireStarted();
+    return this.#requestNativeInput("spatial_inspection", { input });
   }
 
   // Forward one normalized semantic native-event source to the canonical session.

@@ -1,3 +1,4 @@
+import { attachSpatialInspectionInput } from "./spatial-inspection-input.js";
 import { ExecutionWorkerClient, ExecutionTransitionCancelled } from "./execution-worker-client.js";
 import { attachBrowserPointerInput, MAX_BROWSER_POINTER_SAMPLES } from "./browser-pointer-input.js";
 import { DEFAULT_SHARED_SLOT_CAPACITY } from "./execution-transport.js";
@@ -36,6 +37,10 @@ export class AuthoringExecutionClient {
   #pointerSourceSequence = 0;
   #pointerCollector = null;
   #inspectionZoom = false;
+  #viewerInspection = false;
+  #viewerPointerMotion = true;
+  #spatialInspection = false;
+  #spatialInput = null;
   #pointerViewport = null;
   #transition = null;
   #lifecycleGeneration = 0;
@@ -246,7 +251,11 @@ export class AuthoringExecutionClient {
   }
 
   async state() {
-    return this.#withStablePlayer((player) => player.state());
+    return this.#withStablePlayer(async player => {
+      const state = await player.state();
+      if (typeof state.viewerPointerMotion === "boolean") this.#viewerPointerMotion = state.viewerPointerMotion;
+      return state;
+    });
   }
 
   async feedbackTargets(query) {
@@ -326,9 +335,28 @@ export class AuthoringExecutionClient {
     return this.#withInputPlayer((player) => player.setPointerFillSelection(maxMovement));
   }
 
+  async enableViewerInspection() {
+    this.#viewerInspection = true;
+    this.#inspectionZoom = true;
+    this.#canvas.toggleAttribute?.("data-viewer-inspection", true);
+    const state = await this.#withInputPlayer(player => player.setPointerFillSelection(null, true));
+    if (typeof state.viewerPointerMotion === "boolean") this.#viewerPointerMotion = state.viewerPointerMotion;
+  }
+
   setInspectionZoom(enabled) {
     if (typeof enabled !== "boolean") throw new TypeError("inspectionZoom must be a boolean");
     this.#inspectionZoom = enabled;
+  }
+
+  setSpatialInspection(enabled) {
+    if (this.#spatialInspection === enabled) return;
+    this.#spatialInspection = enabled;
+    this.#canvas.toggleAttribute?.("data-spatial-inspection", enabled);
+    if (!enabled) this.#spatialInput?.cancel();
+  }
+
+  resetSpatialInspection() {
+    this.#spatialInput?.reset();
   }
 
   async emitNativeEvent(source) {
@@ -583,6 +611,7 @@ export class AuthoringExecutionClient {
     this.#pointerAbortController?.abort();
     this.#pointerAbortController = null;
     this.#pointerCollector = null;
+    this.#spatialInput = null;
   }
 
   #attachPointerInput(registeredView = null) {
@@ -639,11 +668,25 @@ export class AuthoringExecutionClient {
         }
       }).catch(error => fault(error, preceding));
     };
+    const current = () => this.#player === player && this.#lifecycleGeneration === generation &&
+      this.#transition === null;
+    canvas.toggleAttribute?.("data-spatial-inspection", this.#spatialInspection);
+    canvas.toggleAttribute?.("data-viewer-inspection", this.#viewerInspection);
+    this.#spatialInput = attachSpatialInspectionInput(canvas, {
+      signal,
+      enabled: () => current() && (this.#spatialInspection || this.#viewerInspection),
+      spatial: () => this.#spatialInspection,
+      beginPlanarGesture: () => this.#pointerCollector?.cancel(),
+      viewRevision: () => this.#pointerViewRevision,
+      presentation: () => player.pointerPresentation,
+      send: input => current() && player.moveSpatialInspection(input),
+      onError: error => { if (current()) report(error); },
+    });
     this.#pointerCollector = attachBrowserPointerInput(canvas, {
       signal,
       registeredView: registeredView?.revision === this.#pointerViewRevision ? registeredView : null,
-      isCurrent: () => this.#player === player && this.#lifecycleGeneration === generation &&
-        this.#transition === null,
+      isCurrent: current,
+      collectHover: () => !this.#viewerInspection || this.#viewerPointerMotion,
       send: submit,
       sendMotionBatch: submit,
       allocateSource: () => {

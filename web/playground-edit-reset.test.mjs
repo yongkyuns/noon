@@ -6,7 +6,7 @@ import vm from "node:vm";
 const main = await readFile(new URL("./main.js", import.meta.url), "utf8");
 const runStatusStart = main.indexOf("function updateDraftStatus(");
 const runStatusEnd = main.indexOf("function setRunPatchStatus(", runStatusStart);
-const setRunStatusEnd = main.indexOf("async function applyExampleInteraction(", runStatusEnd);
+const setRunStatusEnd = main.indexOf("async function applyViewerInteraction(", runStatusEnd);
 const resetStart = main.indexOf('resetButton.addEventListener("click"');
 const resetEnd = main.indexOf('sceneSourceEditor.addEventListener(\n  "focus"', resetStart);
 const editorStart = main.indexOf("let sourceComposing = false;");

@@ -54,7 +54,7 @@ function fixture() {
     performance: { now: () => wall },
     formatBytes: String,
     playbackControls: { observe: value => observations.push({ ...value }) },
-    showError: error => errors.push(error), clearTimeout() {},
+    showError: error => errors.push(error), updateSpatialInspection() {}, clearTimeout() {},
   };
   for (const key of ["metricObjects", "metricDraws", "metricUpload", "metricTime", "metricFps", "metricFrameGap"]) context[key] = { value: "—" };
   const api = vm.runInNewContext(`${source}\n({ poll: updateWorkerMetrics, stop: stopMetricsPolling })`, context);

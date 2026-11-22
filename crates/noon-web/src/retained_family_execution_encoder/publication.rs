@@ -17,14 +17,40 @@ impl RetainedFamilyExecutionDeltaEncoder {
         &mut self,
         publication: &RendererPublication<'_>,
         camera: Camera2DState,
+        spatial_inspection: Option<(usize, noon_core::SemanticCamera3D)>,
+        spatial_highlight: Option<noon::SpatialInspectionHighlight>,
         snapshot: bool,
         presentation_changed: bool,
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
         let mut changes = publication.changes().clone();
-        if changes.is_empty() && presentation_changed {
+        let frame = publication.frame();
+        if spatial_inspection != self.spatial_inspection {
+            // Switching inspection off must republish the authored pose. A
+            // removed or recycled non-camera slot is already handled by runtime changes.
+            let index = spatial_inspection
+                .or(self.spatial_inspection)
+                .map(|(index, _)| index);
+            if let Some(index) = index.filter(|&index| {
+                frame
+                    .objects
+                    .get(index)
+                    .is_some_and(|row| row.camera_projection().is_some())
+            }) {
+                changes.accumulate(noon_runtime::FrameChanges::objects(vec![index]));
+            }
+        }
+        let highlighted_object = spatial_highlight.map(|highlight| highlight.object);
+        if highlighted_object != self.spatial_highlight {
+            let indices = [self.spatial_highlight, highlighted_object]
+                .into_iter()
+                .flatten()
+                .filter_map(|id| publication.object_index(id))
+                .collect();
+            changes.accumulate(noon_runtime::FrameChanges::objects(indices));
+        }
+        if changes.is_empty() && (presentation_changed || self.planar_camera != Some(camera)) {
             changes = noon_runtime::FrameChanges::presentation_redraw();
         }
-        let frame = publication.frame();
         let publication_context = publication.context();
         let planned = publication.planned_family_frame();
         let plans = publication.family_animation_plans();
@@ -124,10 +150,42 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 }
             })
         });
+        // Reuse the normal camera slot. The renderer consumes the same pose
+        // for world projection, depth ordering and fixed-orientation objects.
+        if let Some((index, camera)) = spatial_inspection {
+            let id = frame.objects[index].id;
+            if let Some(row) = delta
+                .retained
+                .objects
+                .iter_mut()
+                .find(|row| row.object == id)
+            {
+                let spatial = row
+                    .spatial
+                    .as_mut()
+                    .expect("spatial inspection targets a camera");
+                spatial.translation = [camera.position.x, camera.position.y, camera.position.z];
+                spatial.rotation_wxyz = camera.orientation.components();
+                spatial.camera_projection = Some(camera.projection.into());
+            }
+        }
+        if let Some(highlight) = spatial_highlight {
+            if let Some(row) = delta
+                .retained
+                .objects
+                .iter_mut()
+                .find(|row| row.object == highlight.object)
+            {
+                row.style.fill = Some(highlight.fill);
+            }
+        }
         debug_assert_eq!(delta.retained.publication_context, publication_context);
         delta
             .replace_transient_presentations(frame, publication.transient_presentations())
             .map_err(|error| error.to_string())?;
+        self.planar_camera = Some(camera);
+        self.spatial_inspection = spatial_inspection;
+        self.spatial_highlight = highlighted_object;
         Ok(Some(delta))
     }
 }

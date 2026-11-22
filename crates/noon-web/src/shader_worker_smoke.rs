@@ -44,6 +44,8 @@ fn fixture() -> Result<Fixture, String> {
                     if let Some(delta) = encoder.encode_renderer_publication(
                         &program.take_renderer_publication(),
                         camera,
+                        None,
+                        None,
                         snapshot,
                         false,
                     )? {
@@ -75,6 +77,8 @@ fn fixture() -> Result<Fixture, String> {
         if let Some(delta) = encoder.encode_renderer_publication(
             &program.take_renderer_publication(),
             camera,
+            None,
+            None,
             snapshot,
             false,
         )? {

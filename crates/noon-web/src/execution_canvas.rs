@@ -519,9 +519,11 @@ mod wasm {
         }
     }
 
+    // Keep the scene state off the renderer initialization stack while the
+    // WebGL backend validates its shaders.
     enum DirectSourceAuthority {
         Session {
-            session: SceneExecution,
+            session: Box<SceneExecution>,
             callbacks: RustHostCallbackTable,
         },
         Program(Box<dyn DirectLiveProgram>),
@@ -538,7 +540,10 @@ mod wasm {
     impl DirectExecutionSource {
         fn from_scene_execution(session: SceneExecution, callbacks: RustHostCallbackTable) -> Self {
             Self {
-                authority: DirectSourceAuthority::Session { session, callbacks },
+                authority: DirectSourceAuthority::Session {
+                    session: Box::new(session),
+                    callbacks,
+                },
                 next_native_event_sequence: 0,
                 browser_pointer_binding: None,
             }
@@ -637,7 +642,7 @@ mod wasm {
 
         fn pointer_target(&self) -> &dyn BrowserPointerTarget {
             match &self.authority {
-                DirectSourceAuthority::Session { session, .. } => session,
+                DirectSourceAuthority::Session { session, .. } => session.as_ref(),
                 DirectSourceAuthority::Program(program) => program.as_ref(),
                 #[cfg(feature = "prepared-prefix")]
                 DirectSourceAuthority::Prepared(playback) => &playback.reader,
@@ -1044,7 +1049,7 @@ mod wasm {
             let sequence = &mut self.next_native_event_sequence;
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
-                    presentation.submit(session, binding, sequence, input)
+                    presentation.submit(session.as_mut(), binding, sequence, input)
                 }
                 DirectSourceAuthority::Program(program) => {
                     presentation.submit(program.as_mut(), binding, sequence, input)
@@ -1067,9 +1072,14 @@ mod wasm {
         ) -> Result<Option<bool>, JsValue> {
             let binding = &mut self.browser_pointer_binding;
             match &mut self.authority {
-                DirectSourceAuthority::Session { session, .. } => {
-                    presentation.scroll(session, binding, revision, viewport, surface, delta_pixels)
-                }
+                DirectSourceAuthority::Session { session, .. } => presentation.scroll(
+                    session.as_mut(),
+                    binding,
+                    revision,
+                    viewport,
+                    surface,
+                    delta_pixels,
+                ),
                 DirectSourceAuthority::Program(program) => presentation.scroll(
                     program.as_mut(),
                     binding,
@@ -1097,7 +1107,7 @@ mod wasm {
             match &mut self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
                     browser_pointer_input::cancel_browser_pointer_input(
-                        session,
+                        session.as_mut(),
                         binding,
                         sequence,
                         retire_source,
