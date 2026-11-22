@@ -1,5 +1,5 @@
 use noon_core::{
-    GraphEdgeId, ObjectContentRef, ObjectId, Property, Rect, SemanticClickIndicate,
+    GraphEdgeId, ObjectContentRef, ObjectId, Property, Rect, SemanticClickIndicate, SemanticNodeId,
     SemanticTransform, Style, TrackDefinition, TrackId, Transform2D,
 };
 
@@ -98,6 +98,10 @@ pub enum ExecutionPatch {
         enabled: bool,
     },
     /// Set viewer drag eligibility for this retained object revision.
+    SetViewerGroup {
+        object: ObjectId,
+        group: Option<SemanticNodeId>,
+    },
     SetViewerDraggable {
         object: ObjectId,
         enabled: bool,

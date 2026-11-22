@@ -43,9 +43,16 @@ impl crate::SceneInstance {
 pub trait ObjectIndexLookup {
     fn object_index(&self, object: noon_core::ObjectId) -> Option<usize>;
     fn painter_rank(&self, index: usize) -> Option<usize>;
+    fn viewer_group(&self, _object: noon_core::ObjectId) -> Option<noon_core::SemanticNodeId> {
+        None
+    }
 }
 
 impl ObjectIndexLookup for crate::SceneInstance {
+    fn viewer_group(&self, object: noon_core::ObjectId) -> Option<noon_core::SemanticNodeId> {
+        self.compiled.viewer_group(object)
+    }
+
     fn painter_rank(&self, index: usize) -> Option<usize> {
         self.painter_rank(index).map(|rank| rank as usize)
     }
@@ -335,6 +342,10 @@ impl<'a> RendererPublication<'a> {
                 .get(index)
                 .is_some_and(|row| row.id == object)
         })
+    }
+
+    pub fn viewer_group(&self, object: noon_core::ObjectId) -> Option<noon_core::SemanticNodeId> {
+        self.object_indices.viewer_group(object)
     }
 
     pub fn painter_rank(&self, index: usize) -> Option<usize> {

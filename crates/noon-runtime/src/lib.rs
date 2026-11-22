@@ -433,6 +433,17 @@ impl SceneInstance {
         &self.frame
     }
 
+    pub fn viewer_group(&self, object: ObjectId) -> Option<noon_core::SemanticNodeId> {
+        self.compiled.viewer_group(object)
+    }
+
+    pub fn viewer_group_members(
+        &self,
+        group: noon_core::SemanticNodeId,
+    ) -> Option<&std::collections::BTreeSet<ObjectId>> {
+        self.compiled.viewer_group_members(group)
+    }
+
     /// Current effective visual bounds for one live retained object.
     pub fn effective_object_bounds(&self, id: ObjectId) -> Option<noon_core::Rect> {
         let index = self.frame_index_for_object(id)?;
@@ -887,6 +898,15 @@ impl SceneInstance {
         patch: &ExecutionPatch,
     ) -> Result<&FrameState, CompilePatchError> {
         self.last_patch_stats = RuntimePatchStats::default();
+        if let ExecutionPatch::SetViewerGroup { object, .. } = patch {
+            self.compiled.apply_execution_patch(patch)?;
+            let index = self
+                .compiled
+                .object_index(*object)
+                .expect("validated viewer group row");
+            self.changes.insert(index as usize);
+            return Ok(&self.frame);
+        }
         if matches!(
             patch,
             ExecutionPatch::SetClickIndicate { .. } | ExecutionPatch::SetViewerDraggable { .. }

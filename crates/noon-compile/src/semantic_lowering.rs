@@ -31,3 +31,5 @@ pub use publication::*;
 pub use reachability::*;
 pub use reactive::*;
 pub use root_order::*;
+
+mod viewer_groups;

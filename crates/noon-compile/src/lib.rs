@@ -33,7 +33,7 @@ mod transform;
 
 use std::cmp::Ordering;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -52,8 +52,8 @@ use noon_core::{
     FontFaceIdentity, FontResource, FontResourceArena, FontResourceHandle, FontResourceKey,
     FontResourceLookup, GeometryId, GeometryResource, GeometryResourceArena,
     GeometryResourceHandle, GeometryResourceLookup, ObjectContentRef, Rect,
-    RetainedFamilyAnimationPlan, SemanticOrientation, SemanticStore, SemanticTransform,
-    SemanticVec3, TextResource, TextResourceHandle, TextResourceLookup,
+    RetainedFamilyAnimationPlan, SemanticNodeId, SemanticOrientation, SemanticStore,
+    SemanticTransform, SemanticVec3, TextResource, TextResourceHandle, TextResourceLookup,
 };
 use transform::{compile_transform_geometry_plan, TransformCompileFailure};
 
@@ -150,6 +150,8 @@ pub struct CompiledObject {
     /// Ordinary rows allocate no binding payload.
     pub click_indicate: Option<Arc<SemanticClickIndicate>>,
     pub viewer_draggable: bool,
+    /// The unambiguous outer authored family in this execution projection.
+    pub viewer_group: Option<SemanticNodeId>,
     /// Persistent leaf glow in the execution projection; ordinary objects allocate none.
     pub effects: Option<Arc<CompiledEffectStack>>,
     pub id: ObjectId,
@@ -312,6 +314,7 @@ impl CompiledObject {
             draw_enabled: true,
             click_indicate: None,
             viewer_draggable: false,
+            viewer_group: None,
             id,
             content: content.into(),
             text_bounds: None,
@@ -1128,6 +1131,7 @@ pub struct CompiledScene {
     /// Derived interest aggregate; the binding itself belongs to its compiled row.
     click_indicate_count: usize,
     viewer_drag_target_count: usize,
+    viewer_groups: BTreeMap<SemanticNodeId, BTreeSet<ObjectId>>,
     /// Tracks are segmented by stable execution channel. Mutating one channel never
     /// relocates payloads belonging to another channel. Each channel vector remains
     /// sorted by start time and TrackId for deterministic evaluation.
@@ -1743,6 +1747,7 @@ impl CompiledScene {
             .iter()
             .filter(|object| object.click_indicate.is_some())
             .count();
+        let viewer_groups = Self::index_viewer_groups(&objects);
         let mut painter_order = (0..objects.len() as u32).collect::<Vec<_>>();
         painter_order.sort_by(|&a, &b| {
             objects[a as usize]
@@ -1772,6 +1777,7 @@ impl CompiledScene {
             live_object_count,
             click_indicate_count,
             viewer_drag_target_count,
+            viewer_groups,
             tracks: tracks_by_channel,
             track_count,
             object_indices,
@@ -1824,6 +1830,49 @@ impl CompiledScene {
     }
 
     /// Resolve authored drag eligibility in the currently selected execution revision.
+    fn index_viewer_groups(
+        objects: &[CompiledObject],
+    ) -> BTreeMap<SemanticNodeId, BTreeSet<ObjectId>> {
+        let mut groups = BTreeMap::<_, BTreeSet<_>>::new();
+        for object in objects {
+            if let Some(group) = object.viewer_group.filter(|_| object.live) {
+                groups.entry(group).or_default().insert(object.id);
+            }
+        }
+        groups
+    }
+
+    pub fn viewer_group(&self, object: ObjectId) -> Option<SemanticNodeId> {
+        let index = self.object_index(object)?;
+        self.objects[index as usize].viewer_group
+    }
+
+    pub fn viewer_group_members(&self, group: SemanticNodeId) -> Option<&BTreeSet<ObjectId>> {
+        self.viewer_groups.get(&group)
+    }
+
+    fn update_viewer_group(
+        &mut self,
+        object: ObjectId,
+        old: Option<SemanticNodeId>,
+        new: Option<SemanticNodeId>,
+    ) {
+        if old == new {
+            return;
+        }
+        if let Some(group) = old {
+            if let Some(members) = self.viewer_groups.get_mut(&group) {
+                members.remove(&object);
+                if members.is_empty() {
+                    self.viewer_groups.remove(&group);
+                }
+            }
+        }
+        if let Some(group) = new {
+            self.viewer_groups.entry(group).or_default().insert(object);
+        }
+    }
+
     pub fn viewer_draggable(&self, object: ObjectId) -> bool {
         self.object_index(object)
             .is_some_and(|index| self.objects[index as usize].viewer_draggable)
@@ -2244,6 +2293,9 @@ impl CompiledScene {
             ExecutionPatch::SetDrawEnabled { object, enabled } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].draw_enabled != *enabled),
+            ExecutionPatch::SetViewerGroup { object, group } => self
+                .object_index(*object)
+                .is_none_or(|index| self.objects[index as usize].viewer_group != *group),
             ExecutionPatch::SetViewerDraggable { object, enabled } => self
                 .object_index(*object)
                 .is_none_or(|index| self.objects[index as usize].viewer_draggable != *enabled),
@@ -2399,6 +2451,7 @@ impl CompiledScene {
                 if let Some(index) = self.retired_object_indices.remove(&object.id) {
                     self.click_indicate_count += usize::from(object.click_indicate.is_some());
                     self.viewer_drag_target_count += usize::from(object.viewer_draggable);
+                    self.update_viewer_group(object.id, None, object.viewer_group);
                     self.objects[index as usize] = object;
                     let spatial = self.objects[index as usize].spatial.as_deref().cloned();
                     self.update_spatial_anchor_group(index, None, spatial.as_ref());
@@ -2419,6 +2472,7 @@ impl CompiledScene {
                 self.click_indicate_count += usize::from(object.click_indicate.is_some());
                 self.viewer_drag_target_count += usize::from(object.viewer_draggable);
                 self.object_indices.insert(object.id, index);
+                self.update_viewer_group(object.id, None, object.viewer_group);
                 self.objects.push(object);
                 let spatial = self.objects[index as usize].spatial.as_deref().cloned();
                 self.update_spatial_anchor_group(index, None, spatial.as_ref());
@@ -2452,6 +2506,7 @@ impl CompiledScene {
                     }
                 }
 
+                self.update_viewer_group(*id, self.objects[index as usize].viewer_group, None);
                 let object = &mut self.objects[index as usize];
                 debug_assert!(object.live);
                 self.click_indicate_count -= usize::from(object.click_indicate.is_some());
@@ -2520,6 +2575,15 @@ impl CompiledScene {
                     .object_index(*object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 self.objects[index as usize].draw_enabled = *enabled;
+            }
+            ExecutionPatch::SetViewerGroup { object, group } => {
+                let index = self
+                    .object_index(*object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?
+                    as usize;
+                let previous = self.objects[index].viewer_group;
+                self.update_viewer_group(*object, previous, *group);
+                self.objects[index].viewer_group = *group;
             }
             ExecutionPatch::SetViewerDraggable { object, enabled } => {
                 let index = self

@@ -211,7 +211,12 @@ impl RetainedEffectPublication {
         {
             return Err(EffectPrepareError::PublicationMismatch);
         }
-        if self.context == Some(context) && !publication.changes().is_all() && !self.sync_failed {
+        // Viewer-only edits can replace retained source rows at the same
+        // authored epoch. A clean redraw has neither row nor topology changes.
+        if self.context == Some(context)
+            && !publication.changes().has_stable_changes()
+            && !self.sync_failed
+        {
             return Ok(());
         }
         let frame = publication.frame();
@@ -911,7 +916,7 @@ impl GpuRenderer {
                         super::super::source_capture::PainterPrefixCaptureRequest {
                             anchor: prefix.anchor,
                             candidates: prefix.candidates,
-                            source_revision: prefix.source_epoch.get(),
+                            source_revision: prefix.source_revision,
                             origin: prefix.window.origin,
                             size: prefix.window.size,
                             clear_color,

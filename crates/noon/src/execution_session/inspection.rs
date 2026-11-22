@@ -4,7 +4,12 @@
 //! here. A caller presents the returned shared view and retains its snapshot only
 //! after successful presentation, exactly as for ordinary pointer frames.
 
-use noon_core::{Camera2DState, Vec2};
+use std::collections::BTreeMap;
+
+use noon_core::{
+    Camera2DState, Color, NativePointerId, ObjectId, RateFunction, SemanticClickIndicate,
+    SemanticNodeId, SemanticVec3, Vec2,
+};
 
 use super::{
     ExecutionSession, ExecutionSessionInputError, PointerFrameError, PointerFrameSnapshot,
@@ -19,7 +24,7 @@ mod gesture;
 mod picking;
 
 pub use gesture::{SpatialPointerInput, SpatialPointerPhase};
-pub use picking::{SpatialPickCache, SpatialPickFrame};
+pub use picking::{PlanarPickCache, PlanarPickFrame, SpatialPickCache, SpatialPickFrame};
 
 use gesture::{SpatialGesture, SpatialGestures};
 
@@ -35,21 +40,70 @@ struct InspectionReset {
     origin: Option<f64>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+/// One restoring viewer effect sampled independently of the authored timeline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewerIndication {
+    pub object: ObjectId,
+    pub scale: f64,
+    pub color: Color,
+    pub strength: f32,
+    pub center: Option<SemanticVec3>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ViewerIndicateTarget {
+    Family(SemanticNodeId),
+    Object(ObjectId),
+}
+
+#[derive(Debug)]
+struct ViewerIndicate {
+    binding: SemanticClickIndicate,
+    origin: Option<f64>,
+    progress: f32,
+    phase: f64,
+    start_phase: f64,
+}
+
+pub enum PlanarViewerPointer {
+    Press { surface: Vec2, scene: Vec2 },
+    Move(Vec2),
+    Release(Vec2),
+    Cancel,
+}
+
+#[derive(Debug)]
+struct PlanarPress {
+    pointer: NativePointerId,
+    surface: Vec2,
+    target: Option<(ObjectId, Option<SemanticNodeId>)>,
+}
+
+#[derive(Debug, Default)]
 pub(super) struct SessionInspectionView {
     adjustment: InspectionView2D,
     spatial: InspectionView3D,
     reset: Option<InspectionReset>,
     spatial_gestures: SpatialGestures,
+    planar_press: Option<PlanarPress>,
+    indications: BTreeMap<ViewerIndicateTarget, ViewerIndicate>,
     revision: u64,
 }
 
 impl SessionInspectionView {
-    pub(super) fn without_gestures(self) -> Self {
+    pub(super) fn without_gestures(&self) -> Self {
         Self {
-            spatial_gestures: SpatialGestures::default(),
-            ..self
+            adjustment: self.adjustment,
+            spatial: self.spatial,
+            reset: self.reset,
+            revision: self.revision,
+            ..Self::default()
         }
+    }
+
+    pub(super) fn clear_indications(&mut self) {
+        self.indications.clear();
+        self.planar_press = None;
     }
 }
 
@@ -177,17 +231,10 @@ impl ExecutionSession {
                 else {
                     return Ok(false);
                 };
-                let Some(animation) = self
-                    .prepare_viewer_indicate(target)
-                    .map_err(InspectionNavigationError::Input)?
-                else {
+                let Some((object, binding)) = self.prepare_viewer_indicate(target) else {
                     return Ok(false);
                 };
-                self.runtime
-                    .start_transient_animation(animation)
-                    .map_err(ExecutionSessionInputError::Interaction)
-                    .map_err(InspectionNavigationError::Input)?;
-                Ok(true)
+                Ok(self.start_viewer_indicate(object, binding))
             }
             SpatialGesture::Reset => self.move_spatial_inspection(SpatialInspectionMotion {
                 reset: true,
@@ -196,22 +243,227 @@ impl ExecutionSession {
         }
     }
 
-    /// Request presentations while a camera return is active, including at a
-    /// paused or otherwise static point on the authored timeline.
+    /// Viewer-only contact. Picking uses the picture observed at pointer down.
+    /// Release confirms the physical click without requiring the moving object
+    /// to stay underneath the cursor. Authored input never enters this lane.
+    pub fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        kind: PlanarViewerPointer,
+        displayed: Option<&PlanarPickFrame>,
+    ) {
+        use PlanarViewerPointer::{Cancel, Move, Press, Release};
+        let pending = &mut self.inspection.planar_press;
+        if !matches!(kind, Press { .. })
+            && pending
+                .as_ref()
+                .is_some_and(|press| press.pointer != pointer)
+        {
+            return;
+        }
+        match kind {
+            Press { surface, scene } if pending.is_none() => {
+                *pending = Some(PlanarPress {
+                    pointer,
+                    surface,
+                    target: displayed.and_then(|frame| frame.pick(scene)),
+                });
+            }
+            Move(surface)
+                if pending.as_ref().is_some_and(|press| {
+                    press.pointer == pointer && within_click_slop(press.surface, surface)
+                }) => {}
+            Release(surface) => {
+                let target = pending
+                    .take()
+                    .filter(|press| {
+                        press.pointer == pointer && within_click_slop(press.surface, surface)
+                    })
+                    .and_then(|press| press.target);
+                if let Some((object, binding)) = target
+                    .filter(|&(object, group)| self.runtime.viewer_group(object) == group)
+                    .map(|(object, _)| object)
+                    .filter(|&object| {
+                        self.runtime
+                            .frame_index_for_object(object)
+                            .is_some_and(|index| {
+                                super::picking::viewer_row_visible(self.frame(), index)
+                            })
+                    })
+                    .and_then(|object| self.interaction_semantic_object_id(object))
+                    .and_then(|node| self.prepare_viewer_indicate(node))
+                {
+                    self.start_viewer_indicate(object, binding);
+                }
+            }
+            Press { .. } | Move(_) | Cancel => *pending = None,
+        }
+    }
+
+    pub fn cancel_planar_viewer_pointer(&mut self) {
+        self.inspection.planar_press = None;
+    }
+
+    pub(super) fn start_viewer_indicate(
+        &mut self,
+        object: ObjectId,
+        binding: SemanticClickIndicate,
+    ) -> bool {
+        let target = self.runtime.viewer_group(object).map_or(
+            ViewerIndicateTarget::Object(object),
+            ViewerIndicateTarget::Family,
+        );
+        let effect = self
+            .inspection
+            .indications
+            .entry(target)
+            .or_insert(ViewerIndicate {
+                binding,
+                origin: None,
+                progress: 0.0,
+                phase: 0.0,
+                start_phase: 0.0,
+            });
+        // Resume from the rising phase with the same strength. A second click
+        // during the return can rise again without a jump to the authored style.
+        effect.start_phase = effect.phase.min(1.0 - effect.phase);
+        effect.origin = None;
+        true
+    }
+
+    /// Sample restoring feedback against the current effective poses. Group
+    /// members share one clock and a pivot from their current drawn bounds.
+    pub fn viewer_indications(&self) -> Vec<ViewerIndication> {
+        let mut output = Vec::new();
+        for (&target, effect) in &self.inspection.indications {
+            if effect.progress <= 0.0 {
+                continue;
+            }
+            let indication = |object, center| ViewerIndication {
+                object,
+                scale: 1.0 + (effect.binding.scale_factor() - 1.0) * f64::from(effect.progress),
+                color: effect.binding.color(),
+                strength: effect.progress,
+                center,
+            };
+            match target {
+                ViewerIndicateTarget::Object(object) => output.push(indication(object, None)),
+                ViewerIndicateTarget::Family(group) => {
+                    let Some(members) = self.runtime.viewer_group_members(group) else {
+                        continue;
+                    };
+                    let visible = || {
+                        members.iter().filter_map(|&object| {
+                            let index = self.runtime.frame_index_for_object(object)?;
+                            super::picking::viewer_row_visible(self.frame(), index)
+                                .then_some((object, index))
+                        })
+                    };
+                    let mut planar = None;
+                    let mut spatial = None;
+                    for (object, index) in visible() {
+                        if let Some(world) = self.frame().objects[index].world_transform() {
+                            let (min, max) = self.viewer_spatial_bounds(index, world);
+                            extend_indicate_bounds(&mut spatial, min, max);
+                        } else if let Some(bounds) = self.runtime.effective_object_bounds(object) {
+                            let point =
+                                |p: Vec2| SemanticVec3::new(f64::from(p.x), f64::from(p.y), 0.0);
+                            extend_indicate_bounds(
+                                &mut planar,
+                                point(bounds.min),
+                                point(bounds.max),
+                            );
+                        }
+                    }
+                    let center = |bounds: Option<(SemanticVec3, SemanticVec3)>| {
+                        bounds.map(|(min, max)| {
+                            SemanticVec3::new(
+                                (min.x * 0.5) + (max.x * 0.5),
+                                (min.y * 0.5) + (max.y * 0.5),
+                                (min.z * 0.5) + (max.z * 0.5),
+                            )
+                        })
+                    };
+                    let planar = center(planar);
+                    let spatial = center(spatial);
+                    for (object, index) in visible() {
+                        let center = if self.frame().objects[index].world_transform().is_some() {
+                            spatial
+                        } else {
+                            planar
+                        };
+                        output.push(indication(object, center));
+                    }
+                }
+            }
+        }
+        // A topology change may join a previously pulsing individual to a
+        // family already in flight. The shared family sample wins that row.
+        output.sort_by_key(|effect| effect.object);
+        output.dedup_by_key(|effect| effect.object);
+        output
+    }
+
+    fn viewer_spatial_bounds(
+        &self,
+        index: usize,
+        world: noon_core::SemanticWorldTransform3D,
+    ) -> (SemanticVec3, SemanticVec3) {
+        use noon_core::{GeometryRef, GeometryResource, GeometryResourceLookup};
+        let mesh_bounds = self.frame().objects[index]
+            .content
+            .geometry()
+            .and_then(|geometry| {
+                let GeometryRef::External(id) = geometry else {
+                    return None;
+                };
+                let resources = self.runtime.geometry_resources();
+                let GeometryResource::Mesh(mesh) = resources.get(resources.current_handle(*id)?)?
+                else {
+                    return None;
+                };
+                picking::mesh_world_bounds(mesh, world)
+            });
+        mesh_bounds.map_or((world.translation, world.translation), |bounds| {
+            (bounds.min, bounds.max)
+        })
+    }
+
+    /// Schedule view and click animations even when the authored clock is paused.
     pub fn viewer_inspection_active(&self) -> bool {
-        self.inspection.reset.is_some()
+        self.inspection.reset.is_some() || !self.inspection.indications.is_empty()
     }
 
     pub fn advance_viewer_inspection(
         &mut self,
         wall_time_seconds: f64,
     ) -> Result<(), InspectionNavigationError> {
-        let Some(mut reset) = self.inspection.reset else {
+        if !self.viewer_inspection_active() {
             return Ok(());
-        };
+        }
         if !wall_time_seconds.is_finite() || wall_time_seconds < 0.0 {
             return Err(InspectionNavigationError::InvalidSpatialMotion);
         }
+        let runtime = &self.runtime;
+        self.inspection.indications.retain(|&target, effect| {
+            let present = match target {
+                ViewerIndicateTarget::Object(object) => runtime.effective_object(object).is_some(),
+                ViewerIndicateTarget::Family(group) => {
+                    runtime.viewer_group_members(group).is_some()
+                }
+            };
+            if !present {
+                return false;
+            }
+            let origin = *effect.origin.get_or_insert(wall_time_seconds);
+            let elapsed = (wall_time_seconds - origin).max(0.0);
+            effect.phase = (effect.start_phase + elapsed / effect.binding.run_time()).min(1.0);
+            effect.progress = RateFunction::ThereAndBack.evaluate(effect.phase as f32);
+            effect.phase < 1.0
+        });
+        let Some(mut reset) = self.inspection.reset else {
+            return Ok(());
+        };
         let origin = *reset.origin.get_or_insert(wall_time_seconds);
         let progress = ((wall_time_seconds - origin) / 0.35).clamp(0.0, 1.0);
         let eased = progress * progress * (3.0 - 2.0 * progress);
@@ -443,14 +695,29 @@ impl ExecutionSession {
         // All fallible arithmetic, native evaluation and publication precedes
         // this bounded commit. Neither identity allocator nor semantic state changes.
         self.retire_pointer_view_binding();
-        self.inspection = SessionInspectionView {
-            adjustment: next,
-            revision,
-            ..self.inspection
-        };
+        self.inspection.adjustment = next;
+        self.inspection.revision = revision;
+        self.cancel_planar_viewer_pointer();
         Ok(true)
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+fn within_click_slop(a: Vec2, b: Vec2) -> bool {
+    (f64::from(a.x) - f64::from(b.x)).hypot(f64::from(a.y) - f64::from(b.y)) <= 4.0
+}
+
+fn extend_indicate_bounds(
+    bounds: &mut Option<(SemanticVec3, SemanticVec3)>,
+    min: SemanticVec3,
+    max: SemanticVec3,
+) {
+    *bounds = Some(bounds.map_or((min, max), |(lower, upper)| {
+        (
+            SemanticVec3::new(lower.x.min(min.x), lower.y.min(min.y), lower.z.min(min.z)),
+            SemanticVec3::new(upper.x.max(max.x), upper.y.max(max.y), upper.z.max(max.z)),
+        )
+    }));
+}

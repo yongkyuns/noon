@@ -160,17 +160,8 @@ fn point_line_distance(point: Vec2, start: Vec2, end: Vec2) -> f32 {
     // Distance to the finite chord, not its infinite supporting line. Collinear
     // handles outside the endpoints can form a real excursion/backtracking curve.
     // f64 keeps the intermediate dot products finite for all finite f32 inputs.
-    let dx = f64::from(end.x) - f64::from(start.x);
-    let dy = f64::from(end.y) - f64::from(start.y);
-    let px = f64::from(point.x) - f64::from(start.x);
-    let py = f64::from(point.y) - f64::from(start.y);
-    let length_squared = dx * dx + dy * dy;
-    let t = if length_squared == 0. {
-        0.
-    } else {
-        ((px * dx + py * dy) / length_squared).clamp(0., 1.)
-    };
-    (px - t * dx).hypot(py - t * dy) as f32
+    let as_f64 = |v: Vec2| [f64::from(v.x), f64::from(v.y)];
+    stroke_segment_distance(as_f64(point), as_f64(start), as_f64(end)) as f32
 }
 
 fn finite(value: Vec2) -> Result<(), GeometryError> {
@@ -189,6 +180,76 @@ fn require_active(active: bool) -> Result<(), GeometryError> {
     }
 }
 
+/// A view pick against a revealed stroke. Closed-only paths return `None` so
+/// the caller can keep its separate interior-picking policy for outlines.
+pub fn open_path_stroke_hit(
+    path: &VectorPath,
+    point: [f64; 2],
+    scale: [f64; 2],
+    radius: f64,
+    reveal: f32,
+) -> Option<bool> {
+    let contours = flatten_path(path, 0.002).ok()?;
+    if contours.iter().all(|contour| contour.closed) {
+        return None;
+    }
+    let scaled = |p: Vec2| [f64::from(p.x) * scale[0], f64::from(p.y) * scale[1]];
+    let segments = || {
+        contours.iter().flat_map(|contour| {
+            let points = &contour.points;
+            points
+                .windows(2)
+                .map(|w| (scaled(w[0]), scaled(w[1])))
+                .chain(
+                    (contour.closed && points.len() > 1)
+                        .then(|| (scaled(points[points.len() - 1]), scaled(points[0]))),
+                )
+        })
+    };
+    let mut remaining = if reveal >= 1.0 {
+        f64::INFINITY
+    } else {
+        segments()
+            .map(|(a, b)| (b[0] - a[0]).hypot(b[1] - a[1]))
+            .sum::<f64>()
+            * f64::from(reveal.max(0.0))
+    };
+    for (a, mut b) in segments() {
+        if remaining <= 0.0 {
+            break;
+        }
+        let length = (b[0] - a[0]).hypot(b[1] - a[1]);
+        if remaining < length {
+            let fraction = remaining / length;
+            b = [
+                a[0] + (b[0] - a[0]) * fraction,
+                a[1] + (b[1] - a[1]) * fraction,
+            ];
+        }
+        if point_near_stroke_segment(point, a, b, radius) {
+            return Some(true);
+        }
+        remaining -= length;
+    }
+    Some(false)
+}
+
+pub fn point_near_stroke_segment(point: [f64; 2], a: [f64; 2], b: [f64; 2], radius: f64) -> bool {
+    stroke_segment_distance(point, a, b) <= radius
+}
+
+fn stroke_segment_distance(point: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let length_sq = dx * dx + dy * dy;
+    let at = if length_sq == 0.0 {
+        0.0
+    } else {
+        (((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / length_sq).clamp(0.0, 1.0)
+    };
+    (point[0] - a[0] - at * dx).hypot(point[1] - a[1] - at * dy)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +263,23 @@ mod tests {
         let contours = flatten_path(&path, 0.001).unwrap();
         assert!(contours[0].points.iter().any(|p| p.x > 1.));
         assert!(contours[0].points.iter().any(|p| p.x < 0.));
+    }
+    #[test]
+    fn open_stroke_respects_distance_and_partial_reveal() {
+        let path = VectorPath::new()
+            .move_to(Vec2::ZERO)
+            .line_to(Vec2::new(4.0, 4.0));
+        assert_eq!(
+            open_path_stroke_hit(&path, [2.0, 2.0], [1.0; 2], 0.1, 1.0),
+            Some(true)
+        );
+        assert_eq!(
+            open_path_stroke_hit(&path, [2.0, 2.4], [1.0; 2], 0.1, 1.0),
+            Some(false)
+        );
+        assert_eq!(
+            open_path_stroke_hit(&path, [2.0, 2.0], [1.0; 2], 0.1, 0.25),
+            Some(false)
+        );
     }
 }

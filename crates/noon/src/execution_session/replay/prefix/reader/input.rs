@@ -159,6 +159,24 @@ impl PrefixReader {
         self.session.move_spatial_inspection(motion)
     }
 
+    pub fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        kind: crate::PlanarViewerPointer,
+        displayed: Option<&crate::PlanarPickFrame>,
+    ) {
+        self.session
+            .submit_planar_viewer_pointer(pointer, kind, displayed);
+    }
+
+    pub fn cancel_planar_viewer_pointer(&mut self) {
+        self.session.cancel_planar_viewer_pointer();
+    }
+
+    pub fn viewer_indications(&self) -> Vec<crate::ViewerIndication> {
+        self.session.viewer_indications()
+    }
+
     pub fn viewer_inspection_active(&self) -> bool {
         self.session.viewer_inspection_active()
     }

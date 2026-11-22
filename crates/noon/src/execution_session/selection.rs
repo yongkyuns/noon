@@ -245,18 +245,11 @@ impl ExecutionSession {
             })
     }
 
-    fn viewer_target(
-        &mut self,
-        input: NativePointerInput,
-        precise: PointerFillOutcome,
-    ) -> Option<SemanticNodeId> {
+    fn viewer_target(&mut self, input: NativePointerInput) -> Option<SemanticNodeId> {
         if !self.default_viewer_selection() {
             return None;
         }
-        match precise {
-            PointerFillOutcome::Hit(target) => Some(target),
-            _ => self.pick_viewer_bounds(input.position()?.scene()),
-        }
+        self.pick_viewer_target(input.position()?.scene())
     }
 
     /// Prepare on a small copied gesture record. Input evaluation remains the
@@ -325,7 +318,7 @@ impl ExecutionSession {
                     prepared.state.pending = Some(PendingClick {
                         press: input,
                         outcome,
-                        viewer_target: self.viewer_target(input, outcome),
+                        viewer_target: self.viewer_target(input),
                         last_sequence: input.sequence(),
                         eligible: prepared.state.buttons == [1, 0, 0, 0]
                             && (self.default_viewer_selection()
@@ -342,7 +335,7 @@ impl ExecutionSession {
                     let query = self.pick_native_pointer_fill(token, input, |_| true)?;
                     let outcome = query.outcome();
                     if self.default_viewer_selection() {
-                        let target = self.viewer_target(input, outcome);
+                        let target = self.viewer_target(input);
                         if target == pending.viewer_target {
                             prepared.viewer_target = target;
                         }
