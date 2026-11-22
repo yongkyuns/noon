@@ -21,11 +21,6 @@ export function parseFeedbackCliArgs(argv) {
   for (let index = 1; index < argv.length;) {
     const flag = argv[index++];
     const name = flag.replace(/^--/, "");
-    if (flag === "--viewer" && command === "compare") {
-      if (args.viewer) throw new TypeError("duplicate --viewer");
-      args.viewer = true;
-      continue;
-    }
     if (flag !== `--${name}` || !flags.includes(name)) {
       throw new TypeError(`unknown ${command} argument: ${flag}`);
     }
@@ -70,15 +65,6 @@ export async function runFeedbackCli({ argv, cwd = process.cwd() }) {
     "before.png": original.png, "after.png": candidate.png,
     "before-source.txt": original.source.bytes, "after-source.txt": source.bytes,
   };
-  const viewerFilename = "viewer-comparison.json";
-  if (args.viewer) {
-    if (!comparison.before.frame.provenance.sessionId.startsWith("playground:")) {
-      throw new Error("A Playground comparison requires a comment captured in the Playground.");
-    }
-    files[viewerFilename] = jsonBytes({ comparison, beforePngBase64: original.png.toString("base64"),
-      afterPngBase64: candidate.png.toString("base64") }, 23 * 1024 * 1024);
-  }
   await writeBundle(outputDir, files);
-  return Object.freeze({ outputDir, comparisonPath: path.join(outputDir, "comparison.json"), comparison,
-    ...(args.viewer ? { viewerPath: path.join(outputDir, viewerFilename) } : {}) });
+  return Object.freeze({ outputDir, comparisonPath: path.join(outputDir, "comparison.json"), comparison });
 }
