@@ -55,4 +55,13 @@ Install `ffmpeg` and `ffprobe` on PATH. This profile accepts one H.264 video tra
 and optional AAC sound within 60 seconds, 128 MiB and a 1920 × 1080 pixel budget.
 `Scene::video` places the clip on the finite scene timeline. The usual playback
 controls include Space to pause or resume, the arrow keys to seek, and Home to
-restart. Export the same scene through `noon_export::output::export_scene_file`.
+restart. The clip moves right over two seconds, matched by the
+[Python playground example](../../web/python/examples/video_object.py).
+
+Pass a second path to export the same scene to MP4 at 30000/1001 fps:
+
+```sh
+cargo run -p noon-native --features video-decode,audio --example video_object -- clip.mp4 rust-video.mp4
+```
+
+The example uses `noon_export::output::export_scene_file` for file output.
