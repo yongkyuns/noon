@@ -329,6 +329,23 @@ fn prepared_audio_uses_reader_resources_and_never_reports_frontier_as_duration()
     assert_eq!(original[0].resource, mirrored[0].resource);
     assert_eq!(original[0].pcm, mirrored[0].pcm);
     assert_eq!(original[0].source_offset, mirrored[0].source_offset);
+
+    let terminal = source.wait_segment(0.25).unwrap();
+    source.advance_to(terminal.end_time()).unwrap();
+    source.seal_replay().unwrap();
+    player.set_prepared_loop_duration(Some(1.0)).unwrap();
+    let batch = source
+        .finish_prepared_prefix(terminal, &mut publisher)
+        .unwrap();
+    player.append(batch).unwrap();
+    player.set_prepared_playing(true);
+    player.execution_wake(2_000.0).unwrap();
+    player.tick_delta_json(3_125.0).unwrap();
+    let state = playback_state(&player);
+    assert_eq!(state["time"], 1.0);
+    assert_eq!(state["playing"], false);
+    assert_eq!(state["completed"], true);
+    assert_eq!(state["loopCount"], 0);
 }
 
 #[test]

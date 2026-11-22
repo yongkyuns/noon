@@ -138,6 +138,7 @@ impl PreparedCanvasPlayback {
     }
     /// Configure the existing gallery loop policy. It becomes active only after
     /// this reader adopts a closed terminal range; an open prefix never wraps.
+    /// A retained soundtrack plays once through its finite authorization range.
     pub(crate) fn set_loop_duration(&mut self, duration: Option<f64>) -> Result<(), &'static str> {
         if let Some(duration) = duration {
             if !duration.is_finite() || duration <= 0.0 {
@@ -147,7 +148,7 @@ impl PreparedCanvasPlayback {
                 return Err("playback loop duration cannot be shorter than the completed range");
             }
         }
-        self.loop_duration = duration;
+        self.loop_duration = duration.filter(|_| !self.reader.has_audio());
         self.loop_error = None;
         self.last_clock_sample = self.reader.frame().time;
         Ok(())
