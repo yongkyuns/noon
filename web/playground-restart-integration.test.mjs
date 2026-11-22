@@ -63,7 +63,7 @@ function navigationFixture() {
     document: { querySelector: () => diagnostics },
     authoringSourceDocument,
     previousPreview: { hold() {}, showLive() {}, accept() {}, clear() {}, dispose() {} },
-    feedbackReview: { close() { feedbackClosures++; }, dispose() { feedbackDisposals++; } },
+    feedback: { close() { feedbackClosures++; }, dispose() { feedbackDisposals++; } },
     diagnosticPanel: {
       beginRun(document, source) { diagnosticBegins.push({ document, source }); },
       invalidate() { diagnosticInvalidations += 1; },

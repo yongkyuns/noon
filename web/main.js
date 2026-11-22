@@ -430,26 +430,13 @@ let metricsEpoch = 0;
 let autoRunTimer = null;
 let autoRunEpoch = 0;
 
-const feedbackReview = installPlaygroundFeedback(document.querySelector("#preview-comment"), {
-  getDraft: () => ({ id: selectedExampleId, source: sceneSourceEditor.value }),
-  resolveDraft(draft, source) {
-    if (draft.id !== selectedExampleId || draft.source !== sceneSourceEditor.value) {
-      throw new Error("The source changed since this correction was reviewed. Open a comparison for the current draft.");
-    }
-    cancelAutoRun();
-    const example = currentExample();
-    sceneSourceEditor.value = source;
-    rememberSceneDraft(example);
-    updateDraftStatus(example);
-    draftStatus.value = "Correction accepted · feedback marked resolved in source";
-  },
+const feedback = installPlaygroundFeedback(document.querySelector("#preview-comment"), {
   getContext() {
     const active = player;
     const run = activeRunIdentity;
     const example = currentExample();
-    const client = authoringWorkers.activeClient;
     const prepared = isPreparedPlayback(active);
-    if (!active || !client || (run?.outcome !== "complete" && run?.outcome !== "running") ||
+    if (!active || (run?.outcome !== "complete" && run?.outcome !== "running") ||
         !example || run.exampleId !== example.id ||
         (!prepared && run.outcome !== "complete") || !isCurrentRun(run.token) || busyDepth > 0 ||
         playerNeedsRestart || runtimeRecoveryPromise !== null) {
@@ -464,8 +451,6 @@ const feedbackReview = installPlaygroundFeedback(document.querySelector("#previe
     return {
       player: active, canvas: capturedCanvas, source: run.source,
       checkReplay: !prepared,
-      runGeneration: run.token.runGeneration,
-      buildIdentity: () => client.ready(),
       isCurrent,
       findTargets(capture, { x, y, width, height }) {
         if (!isCurrent() || !isPreparedPlayback(active) || capture.viewRevision === null) return null;
@@ -1664,14 +1649,13 @@ async function selectExample(
     }
 
     cancelAutoRun();
-    feedbackReview?.close();
+    feedback?.close();
     if (selectedExampleId && selectedExampleId !== id && sceneSourceEditor.value !== canonicalSource) {
       drafts.set(selectedExampleId, sceneSourceEditor.value);
     }
     selectedExampleId = id;
     canonicalSource = source;
     sceneSourceEditor.value = drafts.get(id) ?? source;
-    feedbackReview?.setReviewSource(sceneSourceEditor.value);
     resetButton.disabled = sceneSourceEditor.value === canonicalSource;
     renderSelectedMetadata();
     renderGallery({ keepSelectedVisible: true });
@@ -1727,10 +1711,9 @@ sceneButton.addEventListener("click", requestSceneRun);
 resetButton.addEventListener("click", () => {
   const example = currentExample();
   if (!example) return;
-  feedbackReview?.close();
+  feedback?.close();
   drafts.delete(example.id);
   sceneSourceEditor.value = canonicalSource;
-  feedbackReview?.setReviewSource(sceneSourceEditor.value);
   resetButton.disabled = true;
   scheduleAutoRun();
   updateDraftStatus(example);
@@ -1777,13 +1760,12 @@ sceneSourceEditor.addEventListener("compositionend", () => {
 });
 function rememberSceneDraft(example) {
   if (example) drafts.set(example.id, sceneSourceEditor.value);
-  feedbackReview?.setReviewSource(sceneSourceEditor.value);
   resetButton.disabled = sceneSourceEditor.value === canonicalSource;
 }
 
 sceneSourceEditor.addEventListener("input", (event) => {
   const example = currentExample();
-  feedbackReview?.close();
+  feedback?.close();
   rememberSceneDraft(example);
   if (example) {
     if (event.isComposing) cancelAutoRun();
@@ -1794,14 +1776,14 @@ sceneSourceEditor.addEventListener("input", (event) => {
 window.addEventListener("popstate", () => {
   const id = requestedExampleId();
   if (id && id !== selectedExampleId) {
-    feedbackReview?.close();
+    feedback?.close();
     void selectExample(id, { run: true, updateUrl: false });
   }
 });
 document.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
-    feedbackReview?.close();
+    feedback?.close();
     void requestSceneRun();
   }
 });
@@ -2010,11 +1992,11 @@ try {
       activeSourceContinuation = null;
       diagnosticPanel.invalidate();
       previousPreview.clear();
-      feedbackReview?.close();
+      feedback?.close();
       if (!event.persisted) {
         diagnosticPanel.dispose();
         previousPreview.dispose();
-        feedbackReview?.dispose();
+        feedback?.dispose();
         disposeFullscreen();
       }
       stopMetricsPolling();
