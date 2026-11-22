@@ -519,10 +519,10 @@ mod wasm {
         }
     }
 
+    // Keep the scene state off the renderer initialization stack while the
+    // WebGL backend validates its shaders.
     enum DirectSourceAuthority {
         Session {
-            // Keep the scene state off the renderer initialization stack while
-            // the WebGL backend validates its shaders.
             session: Box<SceneExecution>,
             callbacks: RustHostCallbackTable,
         },
