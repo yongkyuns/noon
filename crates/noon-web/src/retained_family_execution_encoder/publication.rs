@@ -216,6 +216,11 @@ fn compose_viewer_indicate(
         }
     }
 
+    // Raster content supports alpha through its fill style. Keep the image's
+    // authored colors and use the geometric part of Indicate for feedback.
+    if matches!(row.content, crate::TransportObjectContent::Image { .. }) {
+        return;
+    }
     let mix = |from, to| from * (1.0 - effect.strength) + to * effect.strength;
     let recolor = |color: noon_core::Color| {
         noon_core::Color::rgba(

@@ -129,7 +129,14 @@ impl Fixture {
     }
 
     fn prepare(&mut self, runtime: &mut SceneInstance, submit: bool) -> RetainedEffectStats {
-        let publication = runtime.take_renderer_publication();
+        self.prepare_publication(&runtime.take_renderer_publication(), submit)
+    }
+
+    fn prepare_publication(
+        &mut self,
+        publication: &RendererPublication<'_>,
+        submit: bool,
+    ) -> RetainedEffectStats {
         let mut visible = publication
             .painter_order()
             .iter()
@@ -138,7 +145,7 @@ impl Fixture {
             .collect::<Vec<_>>();
         let expanded = self
             .renderer
-            .effect_source_visibility(&publication, &visible)
+            .effect_source_visibility(publication, &visible)
             .unwrap();
         if publication.frame().objects[1].effects.is_some() && publication.frame().is_present(1) {
             assert_eq!(
@@ -153,7 +160,7 @@ impl Fixture {
         let metrics = TextDeviceMetrics::uniform(10.0).unwrap();
         let prepared = self
             .preparer
-            .prepare_planned_publication_visible(&self.device, &publication, expanded, metrics)
+            .prepare_planned_publication_visible(&self.device, publication, expanded, metrics)
             .unwrap();
         self.last_image_upload = self
             .renderer
@@ -168,7 +175,7 @@ impl Fixture {
                 &mut encoder,
                 &prepared,
                 &self.text,
-                &publication,
+                publication,
                 wgpu::Color::TRANSPARENT,
                 1_000_000,
             )
@@ -182,6 +189,45 @@ impl Fixture {
         visible.clear();
         result
     }
+}
+
+#[test]
+fn same_epoch_viewer_scale_reprepares_the_glowing_source() {
+    let mut fixture = Fixture::new();
+    let mut runtime = runtime(3, true, false);
+    let initial = runtime.take_renderer_publication();
+    let context = initial.context();
+    fixture.prepare_publication(&initial, true);
+
+    let source = &runtime.frame().objects[1];
+    runtime
+        .apply_execution_patch(&ExecutionPatch::SetTransform {
+            object: source.id,
+            transform: Transform2D {
+                scale: Vec2::new(1.2, 1.2),
+                ..source.transform
+            },
+        })
+        .unwrap();
+    let changed = runtime.resource_publication();
+    // A worker viewer pulse edits the transport mirror at the same authored
+    // epoch. Only that source row is dirty, even when its halo is cached.
+    let viewer = RendererPublication::from_validated_transport_frame(
+        context,
+        changed.planned_family_frame(),
+        changed.changes().clone(),
+        changed.text_resources(),
+        changed.font_resources(),
+        changed.geometry_resources(),
+        changed.raster_image_resources(),
+        changed.family_animation_plans(),
+        changed.active_family_animation_indices(),
+        changed.painter_order(),
+        &runtime,
+    );
+    let stats = fixture.prepare_publication(&viewer, true);
+    assert_eq!(stats.rows_examined, 1);
+    assert_eq!(stats.source_passes, 1);
 }
 
 #[test]

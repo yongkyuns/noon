@@ -1488,6 +1488,47 @@ fn spatial_click_indicates_the_front_mesh_and_restores_while_paused() {
 }
 
 #[test]
+fn planar_viewer_indicate_scales_an_image_without_changing_its_paint() {
+    let mut scene = Scene::new();
+    let picture = scene.image_rgba8(1, 1, vec![22, 100, 180, 255]).unwrap();
+    scene.add(&picture).unwrap();
+    let mut source = scene.into_execution().unwrap();
+    source
+        .session_mut()
+        .begin_replay_retention(ReplayLimits::default())
+        .unwrap();
+    let segment = source.session_mut().wait_segment(1.0).unwrap();
+    source.session_mut().advance_to(1.0).unwrap();
+    let (_, reader) = source.session().create_prepared_prefix(segment).unwrap();
+    let mut player = PreparedExecutionPlayer::from_reader(reader, 316);
+    player.set_prepared_playing(false);
+    player.enable_default_viewer_selection();
+    player
+        .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
+        .unwrap();
+    let (mut mirror, receipt) = ready(&mut player);
+    let original = mirror.frame().unwrap().clone();
+    assert!(input(&mut player, "press", receipt, 1));
+    assert!(input(&mut player, "release", receipt, 1));
+    assert!(player.tick_delta_json(1_200.0).unwrap().is_none());
+    receive(
+        &mut mirror,
+        &player.tick_delta_json(1_700.0).unwrap().unwrap(),
+    );
+    let pulsed = mirror.frame().unwrap();
+    assert_eq!(pulsed.objects[0].style, original.objects[0].style);
+    assert_eq!(
+        pulsed.render_transform(0).scale,
+        original.render_transform(0).scale * 1.2
+    );
+    receive(
+        &mut mirror,
+        &player.tick_delta_json(2_200.0).unwrap().unwrap(),
+    );
+    assert_eq!(mirror.frame().unwrap(), &original);
+}
+
+#[test]
 fn default_planar_viewer_indicates_on_demand_and_pans_without_scene_rows() {
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.75).unwrap();
