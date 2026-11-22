@@ -35,6 +35,17 @@ pub(crate) enum PointerFrameValidation {
 /// reference: a historical reader must retain its own readiness boundaries.
 pub(crate) trait BrowserPointerTarget {
     fn cancel_spatial_pointer_gestures(&mut self) {}
+    fn cancel_planar_viewer_pointer(&mut self) {}
+    fn submit_planar_viewer_pointer(
+        &mut self,
+        _pointer: NativePointerId,
+        _kind: noon::PlanarViewerPointer,
+        _displayed: Option<&noon::PlanarPickFrame>,
+    ) {
+    }
+    fn uses_planar_viewer_input(&self) -> bool {
+        self.default_viewer_selection() && !self.has_native_pointer_subscribers()
+    }
     fn default_viewer_selection(&self) -> bool {
         false
     }
@@ -374,7 +385,7 @@ where
 }
 use noon_core::{
     NativeInputModifiers, NativePointerCancellation, NativePointerId, NativePointerInput,
-    NativePointerInputKind, Vec2,
+    NativePointerInputKind, NativePointerPosition, Vec2,
 };
 use serde::Deserialize;
 
@@ -462,6 +473,21 @@ impl BrowserPointerInput {
             BrowserPointerKind::FocusLost => Some(NativePointerCancellation::FocusLost),
             BrowserPointerKind::CaptureLost => Some(NativePointerCancellation::CaptureLost),
             _ => None,
+        }
+    }
+
+    pub(crate) fn positioned_kind(self, position: NativePointerPosition) -> NativePointerInputKind {
+        match self.kind {
+            BrowserPointerKind::Move => NativePointerInputKind::Move(position),
+            BrowserPointerKind::Press => NativePointerInputKind::Press {
+                position,
+                button: self.button.expect("validated edge"),
+            },
+            BrowserPointerKind::Release => NativePointerInputKind::Release {
+                position,
+                button: self.button.expect("validated edge"),
+            },
+            _ => unreachable!("position-free cancellation handled separately"),
         }
     }
 
@@ -665,18 +691,7 @@ fn submit_pointer(
         } else {
             return Err("positional browser input requires a presented frame".into());
         };
-        match wire.kind {
-            BrowserPointerKind::Move => NativePointerInputKind::Move(position),
-            BrowserPointerKind::Press => NativePointerInputKind::Press {
-                position,
-                button: wire.button.expect("validated edge"),
-            },
-            BrowserPointerKind::Release => NativePointerInputKind::Release {
-                position,
-                button: wire.button.expect("validated edge"),
-            },
-            _ => unreachable!("cancellation handled above"),
-        }
+        wire.positioned_kind(position)
     };
     let input = NativePointerInput::new(
         sequence,

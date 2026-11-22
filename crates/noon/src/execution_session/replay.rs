@@ -175,6 +175,7 @@ impl ExecutionSession {
         }
         self.runtime.discard_replay_retention();
         self.pointer_selection.reset();
+        self.inspection.clear_indications();
         self.sync_spatial_index();
         self.release_replay_slots();
     }

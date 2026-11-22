@@ -22,6 +22,21 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         self.source.session().default_viewer_selection()
     }
 
+    fn cancel_planar_viewer_pointer(&mut self) {
+        self.source.session_mut().cancel_planar_viewer_pointer();
+    }
+
+    fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        kind: noon::PlanarViewerPointer,
+        displayed: Option<&noon::PlanarPickFrame>,
+    ) {
+        self.source
+            .session_mut()
+            .submit_planar_viewer_pointer(pointer, kind, displayed);
+    }
+
     fn cancel_spatial_pointer_gestures(&mut self) {
         self.source.session_mut().cancel_spatial_pointer_gestures();
     }

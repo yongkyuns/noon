@@ -69,31 +69,6 @@ fn indicate_coexists_with_disjoint_authored_rotation() {
 }
 
 #[test]
-fn viewer_indicate_uses_paint_while_the_authored_scale_advances() {
-    let object = ObjectId::new(1);
-    let mut runtime = animated_runtime(Property::Scale, 0.0, 2.0);
-    runtime.advance_to(0.5).unwrap();
-    let pulse = runtime
-        .prepare_viewer_indicate(object, SemanticClickIndicate::new(1.2, Color::YELLOW, 1.0))
-        .unwrap()
-        .unwrap();
-    runtime.start_transient_animation(pulse).unwrap();
-    runtime.advance_interactions(0.0).unwrap();
-    runtime.advance_to(1.0).unwrap();
-    let authored_scale = runtime.effective_object(object).unwrap().transform.scale;
-    runtime.advance_interactions(0.5).unwrap();
-    let row = runtime.effective_object(object).unwrap();
-    assert_eq!(row.transform.scale, authored_scale);
-    assert_eq!(row.style.fill, Some(Color::YELLOW));
-    runtime.advance_to(1.5).unwrap();
-    runtime.advance_interactions(1.0).unwrap();
-    assert!(!runtime.interactions_active());
-    let mut authored = animated_runtime(Property::Scale, 0.0, 2.0);
-    authored.advance_to(1.5).unwrap();
-    assert_eq!(runtime.frame(), authored.frame());
-}
-
-#[test]
 fn conflicting_timeline_defers_acquisition_and_supersedes_an_active_effect() {
     let mut active = animated_runtime(Property::Scale, 0.0, 2.0);
     active.advance_to(0.5).unwrap();

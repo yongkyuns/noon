@@ -3,7 +3,7 @@
 //! This host owns one PrefixReader and disposable transport/presentation state,
 //! never source semantics. The same retained codec, pointer admission, evaluator
 //! and clock policy as the existing hosts handle its selected historical frame.
-use crate::browser_pointer_input::BrowserPointerBinding;
+use crate::browser_pointer_input::{BrowserPointerBinding, BrowserPointerTarget};
 use crate::prepared_canvas_playback::PreparedCanvasPlayback;
 use crate::semantic_execution_player::WasmExecutionWake;
 use crate::video_asset::readiness::BrowserVideoReadiness;
@@ -169,14 +169,21 @@ impl PreparedExecutionPlayer {
             .map_err(|error| error.to_string())?;
         let frame = self.pointer.capture(reader)?;
         let refresh = self.pointer.needs_delta(reader);
+        let planar_enabled = self.finite_export.is_none() && reader.uses_planar_viewer_input();
         let spatial_inspection = reader
             .inspection_spatial_camera()
             .map_err(|error| error.to_string())?;
+        let viewer_indications = if self.finite_export.is_none() {
+            reader.viewer_indications()
+        } else {
+            Vec::new()
+        };
         let publication = reader.take_renderer_publication();
         let Some(mut delta) = self.encoder.encode_renderer_publication(
             &publication,
             camera,
             spatial_inspection,
+            &viewer_indications,
             snapshot || !self.snapshot_sent,
             refresh || selection != self.last_selection || self.finite_export.is_some(),
         )?
@@ -199,10 +206,11 @@ impl PreparedExecutionPlayer {
             .retire_planar_binding_if_changed(frame.as_ref(), &mut self.binding);
         self.pointer
             .issue(delta.retained.session, delta.retained.sequence, frame);
-        self.pointer.issue_spatial(
+        self.pointer.issue_viewer(
             &publication,
             spatial_inspection.map(|(_, camera)| camera),
             delta.retained.snapshot,
+            planar_enabled,
         );
         self.snapshot_sent = true;
         self.last_selection = selection;
@@ -601,6 +609,8 @@ impl PreparedExecutionPlayer {
         self.playback
             .seek(time)
             .map_err(|error| error.to_string())?;
+        self.playback.reader.cancel_planar_viewer_pointer();
+        self.pointer.retire_viewer_frames();
         self.video.clear_selection();
         self.video
             .demand(self.playback.reader.video_rasters(), time);
@@ -818,7 +828,12 @@ impl PreparedExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = enableDefaultViewerSelection))]
     pub fn enable_default_viewer_selection(&mut self) {
-        self.playback.reader.enable_default_viewer_selection();
+        let reader = &mut self.playback.reader;
+        let already_enabled = reader.default_viewer_selection();
+        reader.enable_default_viewer_selection();
+        if !already_enabled && reader.uses_planar_viewer_input() {
+            self.pointer.refresh_planar_viewer();
+        }
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = viewerPointerMotion))]
