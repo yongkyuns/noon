@@ -12,6 +12,19 @@ import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs, rasterFixtureSource, resolveQualifiedBackend } from "./manim-raster-support.mjs";
 import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
+
+async function evaluateFrame(page, evaluate, input) {
+  const { promise, reject } = Promise.withResolvers();
+  const timer = setTimeout(() => reject(new Error("paired frame evaluation timed out")), 90_000);
+  // A WASM trap can leave an asynchronous export unresolved after pageerror.
+  page.once("pageerror", reject);
+  try {
+    return await Promise.race([page.evaluate(evaluate, input), promise]);
+  } finally {
+    clearTimeout(timer);
+    page.off("pageerror", reject);
+  }
+}
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 
 export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 0, qualifyLifecycle, qualifyPixels, prepareContext,
@@ -71,7 +84,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
           canvas.style.height = `${height}px`;
         }, fixture.canvasSize);
       }
-      const metrics = await page.evaluate(async ({ label, source, factory, factoryArgs, preparation, duration, sampleTime, playback, boundaries, stopAtSourceCompletion, pythonFrameTimes, sourceReused }) => {
+      const metrics = await evaluateFrame(page, async ({ label, source, factory, factoryArgs, preparation, duration, sampleTime, playback, boundaries, stopAtSourceCompletion, pythonFrameTimes, sourceReused }) => {
         if (label === "python") {
           if (duration > 0) {
             if (pythonFrameTimes) {

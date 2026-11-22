@@ -34,6 +34,10 @@ pub(crate) enum PointerFrameValidation {
 /// Read-only frame operations are capabilities, not an unrestricted session
 /// reference: a historical reader must retain its own readiness boundaries.
 pub(crate) trait BrowserPointerTarget {
+    fn cancel_spatial_pointer_gestures(&mut self) {}
+    fn default_viewer_selection(&self) -> bool {
+        false
+    }
     fn has_native_pointer_subscribers(&self) -> bool;
     fn translation_drag_active(&self) -> bool;
     fn inspection_camera(&self) -> Result<noon_core::Camera2DState, PointerFrameError>;

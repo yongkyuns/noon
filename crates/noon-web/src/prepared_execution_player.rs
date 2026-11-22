@@ -42,6 +42,7 @@ struct PreparedPlaybackState {
 
 use crate::retained_family_execution_encoder::NoChangePresentation as PreparedNoChangePresentation;
 
+mod export;
 pub(crate) mod source;
 use source::SourceDelivery;
 
@@ -61,6 +62,7 @@ pub struct PreparedExecutionPlayer {
     no_change_presentation: Option<PreparedNoChangePresentation>,
     // Optional interpreter delivery cursor; never the source scene/runtime.
     source: Option<SourceDelivery>,
+    finite_export: Option<noon::integration::CompletedPrefixExport>,
 }
 
 impl PreparedExecutionPlayer {
@@ -82,6 +84,7 @@ impl PreparedExecutionPlayer {
             last_publication: None,
             no_change_presentation: None,
             source: None,
+            finite_export: None,
         }
     }
 
@@ -166,12 +169,18 @@ impl PreparedExecutionPlayer {
             .map_err(|error| error.to_string())?;
         let frame = self.pointer.capture(reader)?;
         let refresh = self.pointer.needs_delta(reader);
+        let spatial_inspection = reader
+            .inspection_spatial_camera()
+            .map_err(|error| error.to_string())?;
+        let spatial_highlight = reader.spatial_inspection_highlight();
         let publication = reader.take_renderer_publication();
         let Some(mut delta) = self.encoder.encode_renderer_publication(
             &publication,
             camera,
+            spatial_inspection,
+            spatial_highlight,
             snapshot || !self.snapshot_sent,
-            refresh || selection != self.last_selection,
+            refresh || selection != self.last_selection || self.finite_export.is_some(),
         )?
         else {
             self.no_change_presentation =
@@ -189,7 +198,14 @@ impl PreparedExecutionPlayer {
         delta.selection_overlay = overlay;
         delta.pointer_view = self.pointer.view().filter(|view| view.drawable());
         self.pointer
+            .retire_planar_binding_if_changed(frame.as_ref(), &mut self.binding);
+        self.pointer
             .issue(delta.retained.session, delta.retained.sequence, frame);
+        self.pointer.issue_spatial(
+            &publication,
+            spatial_inspection.map(|(_, camera)| camera),
+            delta.retained.snapshot,
+        );
         self.snapshot_sent = true;
         self.last_selection = selection;
         self.encoder.compact_dense_rows(&mut delta);
@@ -281,6 +297,10 @@ impl PreparedExecutionPlayer {
         self.playback
             .reader
             .advance_interactions(wall_time_ms / 1_000.0)
+            .map_err(|error| error.to_string())?;
+        self.playback
+            .reader
+            .advance_viewer_inspection(wall_time_ms / 1_000.0)
             .map_err(|error| error.to_string())?;
         self.observe_clock(wall_time_ms)?;
         Ok(())
@@ -559,7 +579,10 @@ impl PreparedExecutionPlayer {
     pub fn execution_wake(&mut self, wall_time_ms: f64) -> Result<WasmExecutionWake, String> {
         let directive = self.observe_clock(wall_time_ms)?;
         let wake = self.wake_state();
-        let wake = if !self.playback.preparing() && self.playback.reader.interactions_active() {
+        let wake = if !self.playback.preparing()
+            && (self.playback.reader.interactions_active()
+                || self.playback.reader.viewer_inspection_active())
+        {
             wake.with_additional_timeline(noon_runtime::TimelineWakeState::Continuous)
         } else {
             wake
@@ -696,6 +719,7 @@ impl PreparedExecutionPlayer {
             || !self.playback.playing()
             || self.playback.buffering()
             || self.playback.reader.interactions_active()
+            || self.playback.reader.viewer_inspection_active()
             || plan.present_now()
             || !valid_until.is_finite()
             || !evaluated_time.is_finite()
@@ -791,6 +815,19 @@ impl PreparedExecutionPlayer {
             .map_err(str::to_owned)
     }
 
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = enableDefaultViewerSelection))]
+    pub fn enable_default_viewer_selection(&mut self) {
+        self.playback.reader.enable_default_viewer_selection();
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = viewerPointerMotion))]
+    pub fn viewer_pointer_motion(&self) -> Option<bool> {
+        let session = &self.playback.reader;
+        session
+            .default_viewer_selection()
+            .then(|| session.has_native_pointer_subscribers())
+    }
+
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPointerFillSelection))]
     pub fn set_pointer_fill_selection(&mut self, tolerance: Option<f32>) -> Result<(), String> {
         match tolerance {
@@ -861,6 +898,38 @@ impl PreparedExecutionPlayer {
             envelope.input,
             envelope.presentation,
         )
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = spatialNavigation))]
+    pub fn spatial_navigation(&self) -> bool {
+        self.playback.reader.has_spatial_camera()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = moveSpatialInspectionJson))]
+    pub fn move_spatial_inspection_json(&mut self, json: &str) -> Result<bool, String> {
+        use crate::worker_pointer_presentation::SpatialInput;
+        let Some(input) = self.pointer.spatial_input(json)? else {
+            return Ok(false);
+        };
+        let target = &mut self.playback.reader;
+        match input {
+            SpatialInput::CancelContacts => {
+                target.cancel_spatial_pointer_gestures();
+                Ok(false)
+            }
+            SpatialInput::Motion(motion) => target
+                .move_spatial_inspection(motion)
+                .map_err(|error| error.to_string()),
+            SpatialInput::Pointer(samples, displayed, aspect) => {
+                let mut changed = false;
+                for sample in samples {
+                    changed |= target
+                        .submit_spatial_pointer(sample, displayed, aspect)
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(changed)
+            }
+        }
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = scrollInspectionViewJson))]

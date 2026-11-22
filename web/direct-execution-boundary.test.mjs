@@ -147,8 +147,8 @@ for (const constructor of [
 }
 assert.match(
   directCanvasHost,
-  /enum DirectSourceAuthority\s*\{\s*Session\s*\{\s*session:\s*SceneExecution,/,
-  "the static direct source must retain the canonical SceneExecution owner",
+  /enum DirectSourceAuthority\s*\{\s*Session\s*\{\s*session:\s*Box<SceneExecution>,/,
+  "the static direct source must retain the canonical SceneExecution owner off the WASM stack",
 );
 assert.equal(
   directCanvasHost.includes("let publication = direct.take_renderer_publication();"),

@@ -98,7 +98,7 @@ export class PythonAuthoringClient {
     source,
     context = {},
     { onSemanticContinuation = null, preparedPlayback = false, preparationLookaheadSeconds = 1,
-      diagnosticPreparationTiming = false, loopPlayback = true, videoFile = null } = {},
+      diagnosticPreparationTiming = false, loopPlayback = true, videoFile = null, historyExportOptions = null } = {},
   ) {
     if (typeof source !== "string" || source.trim() === "") {
       throw new TypeError("Python authoring source must be a non-empty string");
@@ -123,6 +123,10 @@ export class PythonAuthoringClient {
     }
     if (preparedPlayback && onSemanticContinuation === null) {
       throw new Error("prepared playback requires a semantic continuation consumer");
+    }
+    if (historyExportOptions !== null && (!preparedPlayback || preparationLookaheadSeconds !== null ||
+        loopPlayback || !isRecord(historyExportOptions))) {
+      throw new Error("history export requires complete nonlooping source preparation");
     }
     if (videoFile !== null && !(videoFile instanceof Blob)) throw new TypeError("videoFile must be a Blob");
     await this.ready();
@@ -150,6 +154,7 @@ export class PythonAuthoringClient {
         ...(videoFile === null ? {} : { videoFile }),
         ...(preparedPlayback ? { preparedPlayback, preparationLookaheadSeconds } : {}),
         ...(preparedPlayback && !loopPlayback ? { loopPlayback } : {}),
+        ...(historyExportOptions === null ? {} : { historyExportOptions }),
         ...(diagnosticPreparationTiming ? { diagnosticPreparationTiming } : {}),
       }),
     );

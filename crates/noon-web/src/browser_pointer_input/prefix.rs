@@ -4,6 +4,14 @@ use super::*;
 use noon::PrefixReader;
 
 impl BrowserPointerTarget for PrefixReader {
+    fn default_viewer_selection(&self) -> bool {
+        PrefixReader::default_viewer_selection(self)
+    }
+
+    fn cancel_spatial_pointer_gestures(&mut self) {
+        PrefixReader::cancel_spatial_pointer_gestures(self);
+    }
+
     fn has_native_pointer_subscribers(&self) -> bool {
         PrefixReader::has_native_pointer_subscribers(self)
     }

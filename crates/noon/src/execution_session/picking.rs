@@ -123,6 +123,49 @@ impl ExecutionSession {
         Ok(result)
     }
 
+    /// Use visual bounds for text, images, strokes and other content that has
+    /// no analytic fill test. This is a viewer affordance only.
+    pub(super) fn pick_viewer_bounds(&mut self, point: Vec2) -> Option<SemanticNodeId> {
+        self.sync_spatial_index();
+        for &slot in self.spatial_index.hit_test(point).slots() {
+            let Some(object) = self.slots.object_for_slot(slot) else {
+                continue;
+            };
+            if Some(object) == self.camera_object {
+                continue;
+            }
+            let Some(index) = self.runtime.frame_index_for_object(object) else {
+                continue;
+            };
+            let frame = self.runtime.frame();
+            let row = &frame.objects[index];
+            if !viewer_row_visible(frame, index) {
+                continue;
+            }
+            if row.style.fill.is_some_and(|color| color.alpha > 0.0)
+                && effective_fill_contains(frame, index, point, self.runtime.geometry_resources())
+                    == Ok(false)
+            {
+                continue;
+            }
+            if self
+                .runtime
+                .effective_object_bounds(object)
+                .is_some_and(|bounds| {
+                    point.x >= bounds.min.x
+                        && point.x <= bounds.max.x
+                        && point.y >= bounds.min.y
+                        && point.y <= bounds.max.y
+                })
+            {
+                if let Some(target) = self.interaction_semantic_object_id(object) {
+                    return Some(target);
+                }
+            }
+        }
+        None
+    }
+
     /// Shared candidate-local query for admitted input and stationary hover.
     pub(super) fn pick_effective_fill(
         &mut self,
@@ -167,6 +210,18 @@ impl ExecutionSession {
         }
         (outcome, spatial_stats, precise_tests)
     }
+}
+
+pub(super) fn viewer_row_visible(frame: &FrameState, index: usize) -> bool {
+    let row = &frame.objects[index];
+    frame.is_drawable(index)
+        && row.appearance > 0.0
+        && row.style.opacity > 0.0
+        && (row.style.fill.is_some_and(|color| color.alpha > 0.0)
+            || (row.style.stroke_width > 0.0
+                && row.style.stroke.is_some_and(|color| color.alpha > 0.0))
+            || row.content.text().is_some()
+            || row.content.image().is_some())
 }
 
 pub(super) fn analytic_fill_contains(

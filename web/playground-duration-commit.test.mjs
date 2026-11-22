@@ -86,6 +86,7 @@ function controlsFixture() {
   const api = new Function("PlaygroundPlaybackControls", "status", "pane", "showPlaybackError", `
     let playbackControls = null, busyDepth = 0, preparedPlaybackPlayer = null;
     const isPreparedPlayback = player => preparedPlaybackPlayer === player;
+    const updateSpatialInspection = () => {};
     const playbackDurationSeconds = 12345;
     const document = { querySelector(selector) {
       if (selector !== ".preview-pane") throw new Error("unexpected controls container");

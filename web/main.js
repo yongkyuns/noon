@@ -37,6 +37,14 @@ videoFileInput?.addEventListener("change", () => {
 });
 const patchButton = document.querySelector("#apply-patch");
 const patchStatus = document.querySelector("#patch-status");
+const resetViewButton = document.querySelector("#preview-reset-view");
+let inspectionPlayer = null;
+function updateSpatialInspection(nextPlayer, spatial) {
+  if (inspectionPlayer !== nextPlayer) inspectionPlayer?.setSpatialInspection(false);
+  inspectionPlayer = nextPlayer;
+  inspectionPlayer?.setSpatialInspection(spatial);
+  resetViewButton.hidden = inspectionPlayer === null;
+}
 const recoverButton = document.querySelector("#preview-recover");
 const sceneSourceEditor = document.querySelector("#python-scene-source");
 const diagnosticPanel = createPlaygroundDiagnostics({
@@ -524,17 +532,10 @@ function setRunPatchStatus(runToken, message, state) {
   patchStatus.dataset.runGeneration = String(runToken.runGeneration);
 }
 
-async function applyExampleInteraction(example, target = player) {
+async function applyViewerInteraction(target = player) {
   if (target === null) return;
-  const interaction = example?.interaction ?? null;
-  target.setInspectionZoom(example?.inspectionZoom === true);
-  // Semantic replacement does not replay pointer configuration. Ordinary
-  // examples therefore remain at the runtime's default-disabled interaction
-  // state; only the explicitly interactive gallery example opts in.
-  if (interaction?.type === "pointer-fill-selection") {
-    await target.setPointerFillSelection(interaction.maxMovement);
-  }
-  status.dataset.interaction = interaction?.type ?? "none";
+  await target.enableViewerInspection();
+  status.dataset.interaction = "viewer";
 }
 
 function setRuntimeStatus(message, state) {
@@ -701,6 +702,7 @@ function createRuntimeClient() {
 }
 
 function updatePlaybackControls({ supported, player: nextPlayer, durationSeconds, playbackState = null }) {
+  updateSpatialInspection(nextPlayer, playbackState?.spatialNavigation === true);
   if (playbackState?.preparedPlayback === true) preparedPlaybackPlayer = nextPlayer;
   else if ((playbackState?.sourceExecution === "observed" || playbackState?.preparedPlayback === false) &&
       isPreparedPlayback(nextPlayer)) preparedPlaybackPlayer = null;
@@ -1378,10 +1380,8 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
             if (result.preparedPlayback === true || result.sourcePlaybackControllable === true) {
               // Only startup owns this busy ticket. Source demand can remain
               // suspended indefinitely while controls and gallery stay usable.
-              if (result.preparedPlayback === true) {
-                await applyExampleInteraction(example, attachedPlayer);
-                interactionConfigured = true;
-              }
+              await applyViewerInteraction(attachedPlayer);
+              interactionConfigured = true;
               if (!isCurrentRun(runToken)) {
                 throw new Error("prepared source was superseded during interaction setup");
               }
@@ -1512,7 +1512,7 @@ async function runScene(sourceSnapshot, exampleIdSnapshot, selectionGenerationSn
       playbackDurationSeconds = authored.duration;
 
       if (result.replaySupported === false) playbackControls?.setUnavailable(result.replayUnavailable);
-      if (!interactionConfigured) await applyExampleInteraction(example);
+      if (!interactionConfigured) await applyViewerInteraction();
       if (!isCurrentRun(runToken)) return recordStale(runToken, "after-interaction-config");
       rendererBackend = player.rendererBackend;
       status.dataset.rendererBackend = rendererBackend;
@@ -1722,6 +1722,7 @@ categorySelect.addEventListener("change", refreshGalleryFilters);
 paritySelect.addEventListener("change", refreshGalleryFilters);
 previousGalleryPage.addEventListener("click", () => moveGalleryPage(-1));
 nextGalleryPage.addEventListener("click", () => moveGalleryPage(1));
+resetViewButton.addEventListener("click", () => inspectionPlayer?.resetSpatialInspection());
 sceneButton.addEventListener("click", requestSceneRun);
 resetButton.addEventListener("click", () => {
   const example = currentExample();
@@ -1832,6 +1833,7 @@ async function updateWorkerMetrics() {
       preparedPlaybackPlayer = null;
       status.dataset.playbackControls = "unavailable";
     }
+    updateSpatialInspection(activePlayer, playbackState.spatialNavigation === true);
     rendererBackend = activePlayer.rendererBackend;
     status.dataset.rendererBackend = rendererBackend;
     status.dataset.executionMode = activePlayer.mode;
@@ -2016,6 +2018,7 @@ try {
         disposeFullscreen();
       }
       stopMetricsPolling();
+      updateSpatialInspection(null, false);
       playbackControls?.destroy();
       playbackControls = null;
       const activeAuthoringClient = authoringWorkers.activeClient;

@@ -10,7 +10,7 @@ const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
 const RELEASE_AFTER_CAPTURE_LOSS_MS = 40;
 
 export function attachBrowserPointerInput(canvas, {
-  signal, isCurrent, send, sendMotionBatch, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, onWheel, asynchronousWheel = false, windowTarget = window, registeredView = null,
+  signal, isCurrent, send, sendMotionBatch, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, onWheel, asynchronousWheel = false, windowTarget = window, registeredView = null, collectHover = () => true,
 }) {
   if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
     throw new RangeError("browser pointer sample capacity must be a positive safe integer");
@@ -183,6 +183,7 @@ export function attachBrowserPointerInput(canvas, {
   };
   const collect = (type, event) => {
     if (!active() || event.isPrimary !== true || event.pointerId === -1) return;
+    if (type === "pointermove" && event.buttons === 0 && !selected?.buttons && !collectHover()) return;
     if (selected !== null && selected.id !== event.pointerId && selected.buttons !== 0) return;
     if (releaseTimer !== null) {
       if (type === "pointermove" || type === "pointerleave" || type === "lostpointercapture") return;
@@ -287,7 +288,7 @@ export function attachBrowserPointerInput(canvas, {
     }
     refresh();
   }
-  return { invalidateView, retireSource(source) {
+  return { invalidateView, cancel, retireSource(source) {
     if (selected?.source === source) retire();
   } };
 }

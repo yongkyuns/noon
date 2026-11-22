@@ -316,23 +316,28 @@ pub enum TransportSpatialMaterial {
     CairoPath,
 }
 
-impl TransportSpatialState {
-    fn from_compiled(value: &noon_compile::CompiledSpatialState) -> Self {
-        let world = value.world;
-        let camera_projection = value.camera_projection.map(|projection| match projection {
+impl From<SemanticProjection3D> for TransportProjection3D {
+    fn from(projection: SemanticProjection3D) -> Self {
+        match projection {
             SemanticProjection3D::Perspective {
                 vertical_fov_radians,
                 near,
                 far,
-            } => TransportProjection3D::Perspective {
+            } => Self::Perspective {
                 vertical_fov_radians,
                 near,
                 far,
             },
             SemanticProjection3D::Orthographic { height, near, far } => {
-                TransportProjection3D::Orthographic { height, near, far }
+                Self::Orthographic { height, near, far }
             }
-        });
+        }
+    }
+}
+
+impl TransportSpatialState {
+    fn from_compiled(value: &noon_compile::CompiledSpatialState) -> Self {
+        let world = value.world;
         Self {
             draw_kind: value.draw_kind,
             composition_domain: value.composition_domain,
@@ -344,7 +349,7 @@ impl TransportSpatialState {
             ],
             rotation_wxyz: world.rotation.components(),
             scale: [world.scale.x, world.scale.y, world.scale.z],
-            camera_projection,
+            camera_projection: value.camera_projection.map(Into::into),
             material: match value.material {
                 SemanticSpatialMaterial::Unlit => TransportSpatialMaterial::Unlit,
                 SemanticSpatialMaterial::PointLit => TransportSpatialMaterial::PointLit,

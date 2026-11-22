@@ -42,6 +42,7 @@ import initNoonWeb, {
   resolveCreateAnimationOptions,
   resolveGlowPulseAnimationOptions,
   resolveTransformAnimationOptions,
+  exportSourcePreparationLimitJson,
 } from "./pkg/noon_web.js";
 import { resolveAnimationOptionsPlain } from "./animation-options.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
@@ -935,9 +936,22 @@ function registerContinuationContext(context) {
   return continuation;
 }
 
+function checkHistoryExportSegment(run, context) {
+  if (run.historyExportLimit === null) return;
+  if (!run.sourceSceneOnly) {
+    throw new Error("history export requires deterministic source preparation");
+  }
+  if (invokePreparedEngine(() => context.pendingPreparedSegmentEnd()) > run.historyExportLimit) {
+    throw new Error("completed-history export source exceeds the --max-frames preparation limit");
+  }
+}
+
 function awaitSemanticContinuation(context, start = null) {
   let continuation;
   try {
+    if (activeAuthoringRun?.continuation === null) {
+      checkHistoryExportSegment(activeAuthoringRun, context);
+    }
     continuation = registerContinuationContext(context);
     if (continuation.terminal) {
       throw new Error("semantic continuation is terminal");
@@ -1033,9 +1047,13 @@ function createPreparedSourceDriver(run) {
     async prepareSegment(context, signal) {
       const continuation = requirePreparedContinuation(run, context, signal);
       if (continuation.observedExecution) return awaitObservedContinuation(continuation);
+      checkHistoryExportSegment(run, context);
       if (!continuation.preparedBootstrapObserved) {
         const requirement = sourceExecutionRequirement(invokePreparedEngine(() => context.beginObservedPreparedSource(run.sourceSceneOnly === true)));
         if (requirement !== null) {
+          if (run.historyExportLimit !== null) {
+            throw new Error(`history export requires deterministic source preparation (${requirement.code})`);
+          }
           semanticContexts.get(continuation.contextId).sourceRequirement = requirement;
           continuation.observedExecution = true;
           // Install the original stack's await before attachment can request its
@@ -1070,8 +1088,12 @@ function createPreparedSourceDriver(run) {
         }
       }
       if (prepared === false) {
-        semanticContexts.get(continuation.contextId).sourceRequirement = sourceExecutionRequirement(
+        const requirement = sourceExecutionRequirement(
           invokePreparedEngine(() => continuation.preparedPlayer.sourceExecutionRequirementJson));
+        if (run.historyExportLimit !== null) {
+          throw new Error(`history export requires deterministic source preparation (${requirement?.code})`);
+        }
+        semanticContexts.get(continuation.contextId).sourceRequirement = requirement;
         // This is still the original suspended play/wait. Only a reader request
         // at the required frontier may activate its normal callback protocol.
         const event = awaitContinuationEvent(continuation);
@@ -1560,6 +1582,8 @@ async function handleRequest(request) {
         sourceTurnStartedAtMs: null,
         sourceSceneOnly: false,
         preparationLookaheadSeconds: request.preparationLookaheadSeconds === undefined ? 1 : request.preparationLookaheadSeconds,
+        historyExportLimit: request.historyExportOptions === undefined ? null :
+          exportSourcePreparationLimitJson(JSON.stringify(request.historyExportOptions)),
         preparedDriver: null, completedPreparedContextId: null,
       };
       activeAuthoringRun = run;
@@ -2250,6 +2274,11 @@ function validateRequest(request) {
     if (request.preparationLookaheadSeconds != null &&
         (!Number.isFinite(request.preparationLookaheadSeconds) || request.preparationLookaheadSeconds <= 0)) {
       throw new Error("preparationLookaheadSeconds must be null or positive and finite");
+    }
+    if (request.historyExportOptions !== undefined &&
+        (request.preparedPlayback !== true || request.preparationLookaheadSeconds !== null ||
+         request.loopPlayback !== false || !isRecord(request.historyExportOptions))) {
+      throw new Error("history export requires complete nonlooping source preparation");
     }
     if (request.loopPlayback !== undefined && typeof request.loopPlayback !== "boolean") {
       throw new Error("loopPlayback must be a boolean");

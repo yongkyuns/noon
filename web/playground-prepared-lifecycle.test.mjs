@@ -194,7 +194,8 @@ function fixture(options = { preparedPlayback: true, preparationLookaheadSeconds
       observation.player === player && observation.epoch === metricsEpoch &&
       observation.runGeneration === generations.diagnostics.runGeneration;
     const updateRendererMetrics = () => {};
-    const applyExampleInteraction = async (_example, target = player) => {
+    const updateSpatialInspection = () => {};
+    const applyViewerInteraction = async (target = player) => {
       target.setInspectionZoom(true); if (env.setupGate) await env.setupGate.promise;
     };
     const recordStale = (token, stage) => { generations.recordStale(token, stage); return { stale: true, stage }; };

@@ -347,6 +347,10 @@ pub use execution_session::{
     SignalTimelineAppendError, StagedEffectPublication, TranslationDragError,
     TranslationDragReceipt, TranslationDragUndo,
 };
+pub use execution_session::{
+    SpatialInspectionHighlight, SpatialPickCache, SpatialPickFrame, SpatialPointerInput,
+    SpatialPointerPhase,
+};
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};
 pub use family_callback_layout::{
@@ -365,7 +369,7 @@ pub use image_authoring::{
 };
 #[cfg(feature = "image-decode")]
 pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
-pub use inspection_view::{InspectionView2D, InspectionViewError};
+pub use inspection_view::{InspectionView2D, InspectionViewError, SpatialInspectionMotion};
 pub use integer_index::IntegerIndex;
 #[cfg(feature = "latex")]
 pub use latex_authoring::{

@@ -15,6 +15,12 @@ impl PrefixReader {
         self.session.runtime.has_viewer_drag_targets()
             || self.session.has_native_pointer_subscribers()
     }
+    pub fn enable_default_viewer_selection(&mut self) {
+        self.session.enable_default_viewer_selection()
+    }
+    pub fn default_viewer_selection(&self) -> bool {
+        self.session.default_viewer_selection()
+    }
     pub fn enable_pointer_fill_selection(
         &mut self,
         max_movement: f32,
@@ -83,6 +89,9 @@ impl PrefixReader {
     pub fn selected_pointer_target(&self) -> Option<SemanticNodeId> {
         self.session.selected_pointer_target()
     }
+    pub fn pointer_gesture_active(&self) -> bool {
+        self.session.pointer_gesture_active()
+    }
     pub fn pointer_selection_highlight(&self) -> Option<PointerSelectionHighlight> {
         self.session.pointer_selection_highlight()
     }
@@ -131,6 +140,54 @@ impl PrefixReader {
     ) -> Result<NativePointerInputToken, PointerFrameError> {
         displayed.input_token(&self.session, view)
     }
+    pub fn has_spatial_camera(&self) -> bool {
+        self.session
+            .camera_3d()
+            .is_ok_and(|camera| camera.is_some())
+    }
+
+    pub fn inspection_spatial_camera(
+        &self,
+    ) -> Result<Option<(usize, noon_core::SemanticCamera3D)>, InspectionNavigationError> {
+        self.session.inspection_spatial_camera()
+    }
+
+    pub fn move_spatial_inspection(
+        &mut self,
+        motion: crate::SpatialInspectionMotion,
+    ) -> Result<bool, InspectionNavigationError> {
+        self.session.move_spatial_inspection(motion)
+    }
+
+    pub fn spatial_inspection_highlight(&self) -> Option<crate::SpatialInspectionHighlight> {
+        self.session.spatial_inspection_highlight()
+    }
+
+    pub fn viewer_inspection_active(&self) -> bool {
+        self.session.viewer_inspection_active()
+    }
+
+    pub fn advance_viewer_inspection(
+        &mut self,
+        wall_time: f64,
+    ) -> Result<(), InspectionNavigationError> {
+        self.session.advance_viewer_inspection(wall_time)
+    }
+
+    pub fn submit_spatial_pointer(
+        &mut self,
+        input: crate::SpatialPointerInput,
+        displayed: Option<&crate::SpatialPickFrame>,
+        aspect: f64,
+    ) -> Result<bool, InspectionNavigationError> {
+        self.session
+            .submit_spatial_pointer(input, displayed, aspect)
+    }
+
+    pub fn cancel_spatial_pointer_gestures(&mut self) {
+        self.session.cancel_spatial_pointer_gestures();
+    }
+
     pub fn inspection_camera(&self) -> Result<Camera2DState, PointerFrameError> {
         self.session.inspection_camera()
     }

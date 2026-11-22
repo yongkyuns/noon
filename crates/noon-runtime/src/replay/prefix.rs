@@ -273,6 +273,12 @@ pub struct PrefixReceiver {
     object_vector_budget_bytes: usize,
 }
 impl PrefixReceiver {
+    /// Read the terminal endpoint only after this reader has adopted it.
+    pub fn completed_end_time(&self, runtime: &SceneInstance) -> Result<f64, PrefixError> {
+        self.validate_runtime(runtime)?;
+        self.end_time().ok_or(PrefixError::NotReady)
+    }
+
     /// Same source/scope/stream, with every extracted suffix already adopted.
     pub fn matches_publisher(&self, publisher: &PrefixPublisher) -> bool {
         Arc::ptr_eq(&self.scope, &publisher.scope)

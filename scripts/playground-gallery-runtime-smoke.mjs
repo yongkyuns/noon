@@ -491,7 +491,7 @@ try {
                   clientX: rect.left + rect.width * .2, clientY: rect.top + rect.height * .2,
                 }));
                 emit('pointerdown', 0, 0); // Unmatched first edge establishes no source.
-                emit('pointermove', 0, 0); // Unchanged label is ordinary hover.
+                emit('pointermove', 0, 0); // The viewer-only scene skips idle hover.
                 emit('pointerdown', 0, 1);
                 emit('pointermove', 0, 1); // Unchanged held label is ordinary motion.
                 emit('pointerup', 0, 0);
@@ -506,7 +506,7 @@ try {
                   state: document.querySelector('#patch-status').dataset.state };
               } finally { ExecutionWorkerClient.prototype.submitBrowserPointerInput = original; }
             });
-            assert.deepEqual(result.pointerProbe.inputs.map(input => input.kind), ['move', 'press', 'move', 'release']);
+            assert.deepEqual(result.pointerProbe.inputs.map(input => input.kind), ['press', 'move', 'release']);
             assert.equal(new Set(result.pointerProbe.inputs.map(input => input.source_id)).size, 1);
             assert.deepEqual(result.pointerProbe.errors, []);
             assert.equal(result.pointerProbe.state, 'applied');

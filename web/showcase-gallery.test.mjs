@@ -92,9 +92,6 @@ test("lessons have unique sources, outcomes, and real-poster destinations", asyn
   assert.ok(pointer.features.includes("Indicate"));
   assert.equal(pointer.interaction, null);
   assert.equal(pointerSource.interaction, undefined);
-  assert.equal(pointer.inspectionZoom, true);
-  assert.match(pointerSource.host_setup, /wheel\/trackpad zoom/);
-  assert.ok(gallery.examples.filter(entry => entry.id !== pointer.id).every(entry => !entry.inspectionZoom));
   assert.equal(parityLabel("noon-showcase"), "Noon showcase");
   assert.equal(parityLabel("parity-qualified"), "Parity qualified");
 });
@@ -110,8 +107,6 @@ test("invalid or misleading publication metadata is rejected", () => {
     (value) => { value.entries[0].beats = []; },
     (value) => { value.entries[0].credits = [{ label: "", url: "https://example.test" }]; },
     (value) => { value.entries[0].credits = [{ label: "Example", url: "javascript:alert(1)" }]; },
-    (value) => { value.entries[0].inspection_zoom = "true"; },
-    (value) => { value.entries[0].inspection_zoom = true; value.entries[0].host_setup = ""; },
   ]) {
     const value = copy();
     mutate(value);

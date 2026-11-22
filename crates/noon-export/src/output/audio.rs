@@ -69,45 +69,77 @@ impl<'a> Soundtrack<'a> {
     /// and its deadlock/backpressure protocol. Memory stays bounded by a block;
     /// private disk usage is eight bytes per 48 kHz stereo frame.
     pub fn stage(&self, directory: &Path, cancellation: &CaptureCancellation) -> io::Result<()> {
-        check_publication_cancellation(cancellation)?;
-        let mut file = BufWriter::new(File::create(directory.join(PCM_FILENAME))?);
-        self.write_pcm(&mut file, cancellation)
+        stage_pcm(directory, self.frames, cancellation, |first, output| {
+            self.mix(first, output)
+        })
     }
 
+    #[cfg(test)]
     fn write_pcm(
         &self,
         file: &mut impl Write,
         cancellation: &CaptureCancellation,
     ) -> io::Result<()> {
-        let mut samples = vec![0.0_f32; MAX_AUDIO_MIX_BLOCK_FRAMES * CHANNELS];
-        let mut bytes = vec![0_u8; samples.len() * 4];
-        let mut first = 0;
-        while first < self.frames {
-            check_publication_cancellation(cancellation)?;
-            let count = (self.frames - first).min(MAX_AUDIO_MIX_BLOCK_FRAMES as u64) as usize;
-            let mix_count = self.mixed_frames.saturating_sub(first).min(count as u64) as usize;
-            let output = &mut samples[..count * CHANNELS];
-            output.fill(0.0);
-            if mix_count > 0 {
-                self.session
-                    .mix_audio_block(
-                        self.scene_start,
-                        first,
-                        AudioMixFormat::STEREO_48_KHZ,
-                        &mut output[..mix_count * CHANNELS],
-                    )
-                    .map_err(invalid)?;
-            }
-            let encoded = &mut bytes[..output.len() * 4];
-            for (sample, bytes) in output.iter().zip(encoded.as_chunks_mut::<4>().0) {
-                bytes.copy_from_slice(&sample.to_le_bytes());
-            }
-            file.write_all(encoded)?;
-            first += count as u64;
-        }
-        file.flush()?;
-        check_publication_cancellation(cancellation)
+        write_pcm(file, self.frames, cancellation, |first, output| {
+            self.mix(first, output)
+        })
     }
+
+    fn mix(&self, first: u64, output: &mut [f32]) -> io::Result<()> {
+        let mixed = self
+            .mixed_frames
+            .saturating_sub(first)
+            .min((output.len() / CHANNELS) as u64) as usize
+            * CHANNELS;
+        output[mixed..].fill(0.0);
+        if mixed == 0 {
+            return Ok(());
+        }
+        self.session
+            .mix_audio_block(
+                self.scene_start,
+                first,
+                AudioMixFormat::STEREO_48_KHZ,
+                &mut output[..mixed],
+            )
+            .map_err(invalid)
+    }
+}
+
+pub(super) fn stage_pcm(
+    directory: &Path,
+    frames: u64,
+    cancellation: &CaptureCancellation,
+    mix: impl FnMut(u64, &mut [f32]) -> io::Result<()>,
+) -> io::Result<()> {
+    check_publication_cancellation(cancellation)?;
+    let mut file = BufWriter::new(File::create(directory.join(PCM_FILENAME))?);
+    write_pcm(&mut file, frames, cancellation, mix)
+}
+
+fn write_pcm(
+    file: &mut impl Write,
+    frames: u64,
+    cancellation: &CaptureCancellation,
+    mut mix: impl FnMut(u64, &mut [f32]) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut samples = vec![0.0_f32; MAX_AUDIO_MIX_BLOCK_FRAMES * CHANNELS];
+    let mut bytes = vec![0_u8; samples.len() * 4];
+    let mut first = 0;
+    while first < frames {
+        check_publication_cancellation(cancellation)?;
+        let count = (frames - first).min(MAX_AUDIO_MIX_BLOCK_FRAMES as u64) as usize;
+        let output = &mut samples[..count * CHANNELS];
+        mix(first, output)?;
+        let encoded = &mut bytes[..output.len() * 4];
+        for (sample, bytes) in output.iter().zip(encoded.as_chunks_mut::<4>().0) {
+            bytes.copy_from_slice(&sample.to_le_bytes());
+        }
+        file.write_all(encoded)?;
+        first += count as u64;
+    }
+    file.flush()?;
+    check_publication_cancellation(cancellation)
 }
 
 impl StagedSoundtrack for Soundtrack<'_> {

@@ -33,7 +33,7 @@ const FINITE_EXPORT_CONTROLS = new Set([
 ]);
 const PREPARED_PLAYBACK_CONTROLS = new Set([
   "pause", "resume", "seek", "seek_section", "restart_playback", "set_loop_duration", "browser_pointer_input",
-  "browser_pointer_view", "pointer_fill_selection", "inspection_scroll", "undo_translation_drag",
+  "browser_pointer_view", "pointer_fill_selection", "inspection_scroll", "spatial_inspection", "undo_translation_drag",
 ]);
 
 function normalizeReplayUnavailableReason(error) {
@@ -128,6 +128,7 @@ export async function attachSemanticEngine(
   let pendingPointerInvalidation = null;
   let pendingPointerPresentation = null;
   let pointerView = null;
+  let defaultViewerSelection = false;
   let continuationActive = false;
   let sourceHandoffRequested = false;
   let sourceFinished = completedStaticSource || continuation?.completed === true;
@@ -520,6 +521,8 @@ export async function attachSemanticEngine(
         heldPresentation: preparedClockAdmitted ? observation.heldPresentation ?? null : null,
         ...(presentationReceipt === null ? {} : { presentationReceipt }),
         replaySupported: true, replayUnavailable: null,
+        ...(player.spatialNavigation === true ? { spatialNavigation: true } : {}),
+        ...(typeof player.viewerPointerMotion === "boolean" ? { viewerPointerMotion: player.viewerPointerMotion } : {}),
         canUndoTranslationDrag: player.canUndoTranslationDrag === true, nextPatchSequence: "0",
       };
     }
@@ -556,6 +559,8 @@ export async function attachSemanticEngine(
       ...(hasVideo ? { buffering: player.videoWaiting(), videoReadyUntil: player.videoReadyUntil() ?? null } : {}),
       ...(hasAudio ? { durationSeconds: player.finiteAudioDuration() } : {}),
       ...(presentationReceipt === null ? {} : { presentationReceipt }),
+      ...(player.spatialNavigation === true ? { spatialNavigation: true } : {}),
+      ...(typeof player.viewerPointerMotion === "boolean" ? { viewerPointerMotion: player.viewerPointerMotion } : {}),
       canUndoTranslationDrag: player.canUndoTranslationDrag,
       ...(sourceFinished && continuation !== null
         ? { preparedPlayback: false, sourcePlaybackControllable: false,
@@ -949,7 +954,10 @@ export async function attachSemanticEngine(
            !Number.isFinite(message.maxMovement) || message.maxMovement < 0)) {
         throw new TypeError("selection tolerance must be a finite nonnegative number or null");
       }
-      player.setPointerFillSelection(message.maxMovement);
+      if (message.viewerDefault === true) {
+        defaultViewerSelection = true;
+        player?.enableDefaultViewerSelection();
+      } else player.setPointerFillSelection(message.maxMovement);
     } else if (message.type === "native_state_input") {
       player.setNativeStateInputJson(JSON.stringify({
         source: message.source,
@@ -971,6 +979,8 @@ export async function attachSemanticEngine(
       // authorizes no input and is applied before the next leased publication.
       player?.setBrowserPointerViewJson(JSON.stringify(view));
       pointerView = Object.freeze({ revision: view.revision, width: view.width, height: view.height });
+    } else if (message.type === "spatial_inspection") {
+      return player.moveSpatialInspectionJson(JSON.stringify(message.input));
     } else if (message.type === "inspection_scroll") {
       return player.scrollInspectionViewJson(JSON.stringify({
         ...message.input, presentation: message.presentation,
@@ -1031,6 +1041,7 @@ export async function attachSemanticEngine(
               controls[0].type === "native_event" ||
               controls[0].type === "browser_pointer_input" ||
               controls[0].type === "inspection_scroll" ||
+              controls[0].type === "spatial_inspection" ||
               controls[0].type === "browser_pointer_view" ||
               controls[0].type === "pointer_fill_selection")) {
         const message = controls.shift();
@@ -1275,14 +1286,28 @@ export async function attachSemanticEngine(
           case "sample_finite_export": {
             latestTick = null;
             finiteExport = JSON.parse(player.finiteExportStatusJson());
+            let publication = null;
             if (finiteExport.kind === "needs_sample") {
-              // A held terminal frame must retain the exact completed epoch.
-              if (finiteExport.target_time !== player.time()) {
-                await advanceToAuthoredTime(finiteExport.target_time);
+              if (prepared !== null) {
+                const before = player.preparedTime();
+                finiteExport = JSON.parse(player.observeFiniteExportJson());
+                if (finiteExport.observation.published_time !== before) {
+                  publication = drainAndSendDelta();
+                  if (publication === null) throw new Error("history export lost its selected publication");
+                }
+              } else {
+                // A held terminal frame retains the exact completed epoch.
+                if (finiteExport.target_time !== player.time()) {
+                  await advanceToAuthoredTime(finiteExport.target_time);
+                }
+                finiteExport = JSON.parse(player.observeFiniteExportJson());
               }
-              finiteExport = JSON.parse(player.observeFiniteExportJson());
             }
-            presentationReceipt = await awaitPresentation(null);
+            presentationReceipt = await awaitPresentation(publication);
+            if (prepared !== null && finiteExport.kind === "sample" &&
+                presentationReceipt?.time !== finiteExport.observation.published_time) {
+              throw new Error("history export requires the exact displayed sample");
+            }
             break;
           }
           case "acknowledge_finite_export":
@@ -1527,6 +1552,7 @@ export async function attachSemanticEngine(
           case "native_event":
           case "browser_pointer_input":
           case "inspection_scroll":
+          case "spatial_inspection":
           case "pointer_fill_selection":
           case "browser_pointer_view": {
             pointerInputAccepted = applyNativeInput(message);
@@ -1552,7 +1578,7 @@ export async function attachSemanticEngine(
           default: throw new Error(`unsupported semantic execution command ${message.type}`);
         }
         if (stopped) break;
-        if (prepared !== null) prepared.wakeSource();
+        if (prepared !== null && !FINITE_EXPORT_CONTROLS.has(message.type)) prepared.wakeSource();
         if (hasAudio && ["pause", "resume", "seek", "seek_section", "restart_playback"].includes(message.type)) {
           // A control changes both outputs at one accepted Rust clock sample.
           // Presentation precedes the new device anchor; no device clock drives
@@ -1612,7 +1638,7 @@ export async function attachSemanticEngine(
         // An opaque callback failure/interruption is terminal in the retained
         // session. Do not emit repeated errors or retry its externally visible
         // side effects while this player is retained for recovery.
-        if (callbackFault === null) {
+        if (callbackFault === null && !player?.finiteExportActive?.()) {
           try {
             if (prepared !== null) {
               // The render timestamp is a wake opportunity only. The prepared
@@ -1860,18 +1886,32 @@ export async function attachSemanticEngine(
         if (receiverFailed) throw new Error("prepared receiver failed; replace the receiver before further controls");
         if (!FINITE_EXPORT_CONTROLS.has(message.type) && !["pause", "resume", "seek", "seek_section", "restart_playback", "undo_translation_drag", "set_loop_duration", "advance_to",
           "sample_to_authored_time", "debug_frame",
-          "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection", "inspection_scroll",
+          "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection", "inspection_scroll", "spatial_inspection",
         ].includes(message.type)) {
           throw new Error(`unsupported semantic execution command ${message.type}`);
         }
-        if (prepared !== null && !PREPARED_PLAYBACK_CONTROLS.has(message.type)) {
+        if (prepared !== null && !PREPARED_PLAYBACK_CONTROLS.has(message.type) && !FINITE_EXPORT_CONTROLS.has(message.type)) {
           throw new Error(`prepared playback does not support ${message.type}`);
         }
         if (player?.finiteExportActive?.() && !FINITE_EXPORT_CONTROLS.has(message.type) && message.type !== "debug_frame") {
           throw new Error("finite export owns paused execution until capture completes");
         }
-        if (((continuation !== null && !sourceFinished) || completedStaticSource) && FINITE_EXPORT_CONTROLS.has(message.type)) {
+        if (prepared === null && ((continuation !== null && !sourceFinished) || completedStaticSource) && FINITE_EXPORT_CONTROLS.has(message.type)) {
           throw new Error("finite export requires a completed immutable Python scene");
+        }
+        if (message.type === "cancel_finite_export" && player?.finiteExportActive?.()) {
+          player.cancelFiniteExport();
+          latestTick = null;
+          for (let index = controls.length - 1; index >= 0; index -= 1) {
+            const queued = controls[index];
+            if (!FINITE_EXPORT_CONTROLS.has(queued.type)) continue;
+            controls.splice(index, 1);
+            fail(new Error("finite export cancelled"), queued.requestId);
+          }
+          rejectPendingPresentation(new Error("finite export cancelled before presentation"));
+          observeExecutionWake(performance.now(), true);
+          post({ requestId: message.requestId, ...state(message.type) });
+          return;
         }
         if (replayUnavailable !== null && REPLAY_DEPENDENT_CONTROLS.has(message.type)) {
           throw new Error(`Replay unavailable: ${replayUnavailable}`);
@@ -1907,7 +1947,8 @@ export async function attachSemanticEngine(
              message.type === "native_event" ||
              message.type === "browser_pointer_input" ||
              message.type === "inspection_scroll" ||
-             message.type === "pointer_fill_selection")) {
+             message.type === "spatial_inspection" ||
+             (message.type === "pointer_fill_selection" && message.viewerDefault !== true))) {
           throw new Error("native input requires an active Python source continuation segment");
         }
         if (message.type === "advance_to" && message.observeRenderer !== undefined &&
@@ -2152,6 +2193,7 @@ export async function attachSemanticEngine(
       sections = JSON.parse(player.sectionsJson());
       try { player.sealReplayForViewer(); }
       catch (error) { replayUnavailable = normalizeReplayUnavailableReason(error); }
+      if (defaultViewerSelection) player.enableDefaultViewerSelection();
       if (pointerView !== null) player.setBrowserPointerViewJson(JSON.stringify(pointerView));
       applyPointerInvalidation();
       if (stopped) throw new Error("source completion lost its pointer presentation");
@@ -2179,6 +2221,7 @@ export async function attachSemanticEngine(
         throw new Error("stale semantic continuation generation");
       }
       player = context.resumeExecutionPlayer();
+      if (defaultViewerSelection) player.enableDefaultViewerSelection();
       if (pointerView !== null) player.setBrowserPointerViewJson(JSON.stringify(pointerView));
       applyPointerInvalidation();
       continuationGeneration = generation;

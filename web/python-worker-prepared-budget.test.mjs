@@ -17,6 +17,7 @@ function section(start, end) {
 const production = [
   section("function failAuthoringWorker(error)", "// A WASM trap"),
   section("function executionDiagnostic(entry, event)", "function registerContinuationContext(context)"),
+  section("function checkHistoryExportSegment(run, context)", "function awaitSemanticContinuation("),
   section("function invokePreparedEngine(callback)", "function continuationEvent("),
   section("function failContinuation(continuation, error)", "function isContinuationControl("),
   section("async function handleRequest(request)", "async function attachSemanticExecutionRequest("),
