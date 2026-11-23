@@ -142,28 +142,15 @@ impl SceneInstance {
         !self.transient_animations.active.is_empty()
     }
 
+    pub fn object_has_transient_animation(&self, object: ObjectId) -> bool {
+        self.transient_animations.active.contains_key(&object)
+    }
+
     /// Prepare before admitting the triggering input. Active targets ignore retriggers.
     pub fn prepare_click_indicate(
         &self,
         object: ObjectId,
         binding: SemanticClickIndicate,
-    ) -> Result<Option<PreparedTransientAnimation>, String> {
-        self.prepare_indicate(object, binding, false)
-    }
-
-    pub fn prepare_viewer_indicate(
-        &self,
-        object: ObjectId,
-        binding: SemanticClickIndicate,
-    ) -> Result<Option<PreparedTransientAnimation>, String> {
-        self.prepare_indicate(object, binding, true)
-    }
-
-    fn prepare_indicate(
-        &self,
-        object: ObjectId,
-        binding: SemanticClickIndicate,
-        viewer_default: bool,
     ) -> Result<Option<PreparedTransientAnimation>, String> {
         if self.transient_animations.active.contains_key(&object) {
             return Ok(None);
@@ -179,7 +166,7 @@ impl SceneInstance {
         let mut channels = lower_indicate_channels_with_bindings(
             &[],
             EffectiveAnimationProperties {
-                fill_paint: (!viewer_default).then(|| row.fill_paint.clone()).flatten(),
+                fill_paint: row.fill_paint.clone(),
                 effects: row.effects.clone(),
                 z_index: row.z_index,
                 transform: row.transform,
@@ -199,9 +186,6 @@ impl SceneInstance {
         )
         .map_err(|error| format!("invalid click Indicate: {error:?}"))?;
         let world = row.world_transform();
-        if viewer_default && row.fill_paint.is_some() {
-            channels.retain(|channel| channel.property != Property::Fill);
-        }
         if let Some(from) = world {
             channels.retain(|channel| {
                 !matches!(channel.property, Property::Position | Property::Scale)
@@ -226,18 +210,6 @@ impl SceneInstance {
                     },
                 });
             }
-        }
-        if viewer_default {
-            // If an object is itself being animated, the available lanes can
-            // still indicate it without taking over authored motion or paint.
-            channels.retain(|channel| {
-                !self.interaction_channel_conflict(
-                    object,
-                    index,
-                    std::slice::from_ref(channel),
-                    self.frame.time,
-                )
-            });
         }
         if channels.is_empty()
             || self.interaction_channel_conflict(object, index, &channels, self.frame.time)

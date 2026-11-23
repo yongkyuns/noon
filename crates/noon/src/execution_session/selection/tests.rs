@@ -1053,16 +1053,17 @@ fn presented_hover_observation_does_not_open_a_pending_callback_barrier() {
 }
 
 #[test]
-fn default_viewer_indicates_stroke_only_targets_and_ignores_invisible_rows() {
+fn default_viewer_indicates_the_outline_above_a_solid_fill() {
     let mut store = SemanticStore::new();
     let root = store.insert_family();
+    let behind = attach(&mut store, root, circle(0.0));
     let mut shape = SemanticObjectState::new(StoredGeometry::Rectangle {
         size: Vec2::new(2.0, 2.0),
     });
     shape.style.fill = None;
     shape.style.stroke = Some(noon_core::SemanticPaint::Solid(noon_core::Color::WHITE));
     shape.style.stroke_width = 0.2;
-    let target = attach(&mut store, root, shape);
+    let square = attach(&mut store, root, shape);
     let mut session = session(&store, root);
     session.disable_pointer_fill_selection().unwrap();
     session.enable_default_viewer_selection();
@@ -1071,29 +1072,43 @@ fn default_viewer_indicates_stroke_only_targets_and_ignores_invisible_rows() {
     let before = session.frame().clone();
     let selection = click(&mut store, &mut session, 0, 0.0);
     assert!(!selection.selection_changed());
-    assert_eq!(selection.selection_click().unwrap().target(), None);
+    assert_eq!(selection.selection_click().unwrap().target(), Some(behind));
     assert!(session.pointer_selection_highlight().is_none());
-    session.advance_interactions(&mut store, 10.0).unwrap();
-    session.advance_interactions(&mut store, 10.5).unwrap();
-    assert_eq!(
-        session.frame().objects[0].style.stroke,
-        Some(noon_core::YELLOW)
-    );
-    assert!((session.frame().objects[0].transform.scale.x - 1.2).abs() < 1e-5);
-    session.advance_interactions(&mut store, 11.0).unwrap();
+    session.advance_viewer_inspection(10.0).unwrap();
+    session.advance_viewer_inspection(10.5).unwrap();
+    let indication = session.viewer_indications()[0];
+    assert_eq!(session.viewer_indications().len(), 1);
+    assert_eq!(Some(indication.object), session.execution_object_id(square));
+    assert_eq!(indication.strength, 1.0);
+    assert_eq!(indication.color, noon_core::YELLOW);
+    assert_eq!(indication.scale, 1.2);
+    session.advance_viewer_inspection(10.8).unwrap();
+    let fading = session.viewer_indications()[0].strength;
+    click(&mut store, &mut session, 2, 0.0);
+    session.advance_viewer_inspection(10.8).unwrap();
+    assert!((session.viewer_indications()[0].strength - fading).abs() < 1e-6);
+    session.advance_viewer_inspection(11.1).unwrap();
+    assert_eq!(session.viewer_indications()[0].strength, 1.0);
+    session.advance_viewer_inspection(11.7).unwrap();
     assert_eq!(session.frame(), &before);
+    assert!(session.viewer_indications().is_empty());
 
     let mut transaction = SemanticMutationTransaction::new();
     transaction.set_property(
-        target,
+        square,
         SemanticObjectProperty::StrokeWidth,
         SemanticSignalValue::Scalar(0.0),
     );
     session
         .apply_semantic_transaction(&mut store, transaction)
         .unwrap();
-    click(&mut store, &mut session, 2, 0.0);
-    assert!(!session.interactions_active());
+    click(&mut store, &mut session, 4, 0.0);
+    session.advance_viewer_inspection(20.0).unwrap();
+    session.advance_viewer_inspection(20.5).unwrap();
+    assert_eq!(
+        Some(session.viewer_indications()[0].object),
+        session.execution_object_id(behind)
+    );
 }
 
 #[test]

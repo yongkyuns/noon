@@ -63,6 +63,24 @@ fn ancestor_original_coverage_is_budgeted_without_an_authored_filter() {
 }
 
 #[test]
+fn zoomed_glow_capture_keeps_only_visible_pixels_and_full_kernel_padding() {
+    let bounds = EffectPixelBounds {
+        min: [-5000.0; 2],
+        max: [5000.0; 2],
+    };
+    let parameters = parameters(3.0);
+    let viewport = [200, 100];
+    let budget = 1_000_000;
+    let tile = EffectCaptureTile::prepare(bounds, viewport, parameters, 1024, budget)
+        .unwrap()
+        .unwrap();
+    assert_eq!(tile.visible_size, viewport);
+    assert_eq!(tile.support_radius, 9);
+    assert_eq!(tile.origin, [-12, -12]);
+    assert_eq!(tile.size, [223, 123]);
+}
+
+#[test]
 fn uniform_layout_and_complete_finite_kernel_are_normalized() {
     assert_eq!(size_of::<GlowUniform>(), 1088);
     assert_eq!(std::mem::offset_of!(GlowUniform, tint), 16);

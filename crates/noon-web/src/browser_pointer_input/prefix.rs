@@ -8,6 +8,19 @@ impl BrowserPointerTarget for PrefixReader {
         PrefixReader::default_viewer_selection(self)
     }
 
+    fn cancel_planar_viewer_pointer(&mut self) {
+        PrefixReader::cancel_planar_viewer_pointer(self);
+    }
+
+    fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        kind: noon::PlanarViewerPointer,
+        displayed: Option<&noon::PlanarPickFrame>,
+    ) {
+        PrefixReader::submit_planar_viewer_pointer(self, pointer, kind, displayed);
+    }
+
     fn cancel_spatial_pointer_gestures(&mut self) {
         PrefixReader::cancel_spatial_pointer_gestures(self);
     }

@@ -3,7 +3,7 @@
 //! footprints, capture selections and reverse links, never authored values.
 use super::*;
 use crate::{EffectCaptureTile, EffectPixelBounds, EffectStackParameters};
-use noon_core::{FrameEpoch, Rect};
+use noon_core::Rect;
 use noon_runtime::{ExecutionSlotId, ExecutionSpatialIndex};
 
 #[derive(Clone, Debug)]
@@ -12,7 +12,7 @@ pub(super) struct BackdropInput {
     pub anchor: ObjectId,
     pub window: EffectCaptureTile,
     pub candidates: Arc<[ObjectId]>,
-    pub source_epoch: FrameEpoch,
+    pub source_revision: u64,
     members: Vec<usize>,
     dependencies: BTreeSet<usize>,
 }
@@ -381,6 +381,7 @@ impl BackdropInputs {
         let view = (camera, viewport);
         if self.context == Some(publication.context())
             && self.view == Some(view)
+            && !publication.changes().has_stable_changes()
             && !state.invalidated
             && !state.sync_failed
         {
@@ -555,7 +556,11 @@ impl BackdropInputs {
                 u32::MAX,
                 DEFAULT_EFFECT_TEXTURE_BUDGET,
                 crate::gpu::glow_filter::CaptureDemand {
-                    required_by_parent: true,
+                    // Other backdrop prefixes may still need this glass
+                    // outside the viewport. An independent glass target can
+                    // bound its capture to the screen and Gaussian padding.
+                    required_by_parent: state.prefix_owners.len() > 1
+                        || state.required_by_parent(publication.frame(), owner, view)?,
                     ..Default::default()
                 },
             )?
@@ -574,9 +579,12 @@ impl BackdropInputs {
             {
                 continue;
             }
-            let epoch = old
-                .filter(|_| !input_changed.contains(&owner))
-                .map_or(publication.context().frame_epoch(), |old| old.source_epoch);
+            let mut source_revision = old.map_or(0, |old| old.source_revision);
+            if input_changed.contains(&owner) {
+                source_revision = source_revision
+                    .checked_add(1)
+                    .ok_or(EffectPrepareError::RevisionExhausted)?;
+            }
             // Include the contributor's raster AA fringe, not just its exact
             // geometric box, when gathering raw physical source candidates.
             let query_window = expanded(
@@ -611,7 +619,7 @@ impl BackdropInputs {
                     anchor,
                     window,
                     candidates,
-                    source_epoch: epoch,
+                    source_revision,
                     members,
                     dependencies,
                 },

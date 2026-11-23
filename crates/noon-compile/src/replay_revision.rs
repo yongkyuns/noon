@@ -137,6 +137,7 @@ impl CompiledScene {
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetDrawEnabled { object, .. }
             | ExecutionPatch::SetViewerDraggable { object, .. }
+            | ExecutionPatch::SetViewerGroup { object, .. }
             | ExecutionPatch::SetClickIndicate { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
             | ExecutionPatch::SetViewColorProfile { object, .. }
@@ -296,6 +297,15 @@ impl CompiledScene {
                 }
             }
             let id = self.objects[index].id;
+            let old_group = current.as_ref().and_then(|row| row.viewer_group);
+            if let Some(next) = saved.object.as_ref().filter(|next| next.id == id) {
+                self.update_viewer_group(id, old_group, next.viewer_group);
+            } else {
+                self.update_viewer_group(id, old_group, None);
+                if let Some(next) = saved.object.as_ref() {
+                    self.update_viewer_group(next.id, None, next.viewer_group);
+                }
+            }
             self.viewer_drag_target_count -=
                 usize::from(self.objects[index].live && self.objects[index].viewer_draggable);
             self.click_indicate_count -= usize::from(
