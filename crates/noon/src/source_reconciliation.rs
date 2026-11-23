@@ -402,16 +402,19 @@ impl SourceReconciler {
         // drivers without asking the authored-mutation lane to acquire them.
         // Scope, revision, generation, and declaration validation still apply.
         let impacts = if changed {
-            scene
-                .apply_semantic_transaction(transaction)
-                .map_err(|error| match error {
-                    AuthoringError::ExecutionPublication(error) => {
-                        SourceReconciliationError::LivePublication(error)
-                    }
-                    other => SourceReconciliationError::Authoring(other),
-                })?
-                .impacts()
-                .len()
+            let result =
+                scene
+                    .apply_semantic_transaction(transaction)
+                    .map_err(|error| match error {
+                        AuthoringError::ExecutionPublication(error) => {
+                            SourceReconciliationError::LivePublication(error)
+                        }
+                        other => SourceReconciliationError::Authoring(other),
+                    })?;
+            if let Some(execution) = scene.running_execution_mut() {
+                execution.retire_source_click_candidates();
+            }
+            result.impacts().len()
         } else {
             0
         };
@@ -482,7 +485,8 @@ fn stage_object_delta(
         || current.transform != candidate.transform
         || current.style != candidate.style
         || current.z_index() != candidate.z_index()
-        || current.click_action() != candidate.click_action();
+        || current.click_action() != candidate.click_action()
+        || current.viewer_draggable() != candidate.viewer_draggable();
     if persistent_change && !current.signal_bindings().is_empty() {
         return Err(SourceReconciliationError::ActiveDeclarationDriver {
             source: source.clone(),
@@ -516,6 +520,10 @@ fn stage_object_delta(
         transaction.set_click_action(object, candidate.click_action());
         changed = true;
     }
+    if current.viewer_draggable() != candidate.viewer_draggable() {
+        transaction.set_viewer_draggable(object, candidate.viewer_draggable());
+        changed = true;
+    }
     Ok(changed)
 }
 
@@ -545,6 +553,264 @@ mod tests {
         }
         candidate
     }
+    #[test]
+    fn changed_source_retires_displayed_click_but_preserves_unchanged_and_failed_contacts() {
+        use crate::{PlanarPickCache, PlanarViewerPointer, Vec2};
+        use noon_core::NativePointerId;
+
+        let mut scene = Scene::new();
+        let mut reconciler = SourceReconciler::new();
+        let initial = candidate(&scene, 1, [("target", 0.0), ("unrelated", 4.0)]);
+        let first = reconciler.reconcile(&mut scene, &initial).unwrap();
+        let target = first.node_for(&key("target")).unwrap();
+        let execution = scene.execution_session().unwrap();
+        scene.install_execution(execution);
+        let pointer = NativePointerId {
+            source: 1,
+            pointer: 1,
+        };
+        let point = Vec2::ZERO;
+        let press = |scene: &mut Scene| {
+            let displayed = PlanarPickCache::default().capture(
+                &scene.owned_execution().resource_publication(),
+                true,
+                0.02,
+            );
+            scene.owned_execution_mut().submit_planar_viewer_pointer(
+                pointer,
+                PlanarViewerPointer::Press {
+                    surface: point,
+                    scene: point,
+                },
+                Some(&displayed),
+            );
+        };
+        let release = |scene: &mut Scene| {
+            scene.owned_execution_mut().submit_planar_viewer_pointer(
+                pointer,
+                PlanarViewerPointer::Release(point),
+                None,
+            );
+            scene.owned_execution().viewer_inspection_active()
+        };
+
+        press(&mut scene);
+        let invalid = candidate(&scene, 2, [("target", 0.0), ("unrelated", f64::NAN)]);
+        assert!(reconciler.reconcile(&mut scene, &invalid).is_err());
+        let unchanged = candidate(&scene, 2, [("target", 0.0), ("unrelated", 4.0)]);
+        assert_eq!(
+            reconciler
+                .reconcile(&mut scene, &unchanged)
+                .unwrap()
+                .mutation_impacts(),
+            0
+        );
+        assert!(release(&mut scene), "the original contact remains valid");
+        scene
+            .owned_execution_mut()
+            .advance_viewer_inspection(0.0)
+            .unwrap();
+        scene
+            .owned_execution_mut()
+            .advance_viewer_inspection(1.1)
+            .unwrap();
+
+        press(&mut scene);
+        let changed = candidate(&scene, 3, [("target", 0.0), ("unrelated", 3.0)]);
+        let result = reconciler.reconcile(&mut scene, &changed).unwrap();
+        assert_eq!(result.node_for(&key("target")), Some(target));
+        assert!(
+            !release(&mut scene),
+            "a pre-edit press cannot initiate a new pulse"
+        );
+        press(&mut scene);
+        assert!(
+            release(&mut scene),
+            "the preserved identity accepts new clicks"
+        );
+    }
+
+    #[test]
+    fn reconciled_bindings_follow_the_keyed_target_and_retire_with_it() {
+        use crate::integration::{NativeInputModifiers, NativePointerPosition, PointerFrameView};
+        use noon_core::{
+            Color, NativePointerId, NativePointerInput, NativePointerInputKind,
+            SemanticClickAction, SemanticClickIndicate, Vec2,
+        };
+
+        let scene = Scene::new();
+        let mut owner = scene.into_execution().unwrap();
+        let mut reconciler = SourceReconciler::new();
+        let declaration = |scene: &Scene, generation, tint, other_x| {
+            let mut target = state(0.0);
+            target.set_click_action(Some(SemanticClickAction::Indicate(
+                SemanticClickIndicate::new(1.2, tint, 0.4),
+            )));
+            let mut candidate = SourceCandidate::new(scene, SourceGeneration::new(generation));
+            candidate
+                .declare(SourceObjectDeclaration::new(key("target"), target))
+                .unwrap();
+            candidate
+                .declare(SourceObjectDeclaration::new(key("other"), state(other_x)))
+                .unwrap();
+            candidate
+        };
+        let initial = declaration(owner.scene(), 1, Color::YELLOW, 3.0);
+        let result = reconciler.reconcile(owner.scene_mut(), &initial).unwrap();
+        let target = result.node_for(&key("target")).unwrap();
+        let session = owner.session_mut();
+        session.enable_pointer_fill_selection(4.0).unwrap();
+        session
+            .configure_native_pointer_input(
+                NativePointerId {
+                    source: 71,
+                    pointer: 2,
+                },
+                1,
+            )
+            .unwrap();
+        let position = NativePointerPosition::new(Vec2::ZERO, Vec2::new(100.0, 100.0)).unwrap();
+        let submit = |owner: &mut crate::SceneExecution, sequence, pressed| {
+            let token = owner.session().native_pointer_input_token().unwrap();
+            let input = NativePointerInput::new(
+                sequence,
+                token.pointer(),
+                token.context(),
+                NativeInputModifiers::default(),
+                if pressed {
+                    NativePointerInputKind::Press {
+                        position,
+                        button: 0,
+                    }
+                } else {
+                    NativePointerInputKind::Release {
+                        position,
+                        button: 0,
+                    }
+                },
+            );
+            owner.submit_native_pointer_input(&token, input).unwrap()
+        };
+        let check_pulse = |owner: &mut crate::SceneExecution, start, tint| {
+            let object = owner.session().execution_object_id(target).unwrap();
+            owner.advance_interactions(start).unwrap();
+            owner.advance_interactions(start + 0.2).unwrap();
+            assert_eq!(
+                owner
+                    .session()
+                    .frame()
+                    .objects
+                    .iter()
+                    .find(|row| row.id == object)
+                    .unwrap()
+                    .style
+                    .fill,
+                Some(tint)
+            );
+            owner.advance_interactions(start + 0.5).unwrap();
+        };
+        submit(&mut owner, 1, true);
+        assert_eq!(
+            submit(&mut owner, 2, false)
+                .selection_click()
+                .unwrap()
+                .target(),
+            Some(target)
+        );
+        check_pulse(&mut owner, 0.0, Color::YELLOW);
+        assert_eq!(owner.session().selected_pointer_target(), Some(target));
+        let view = PointerFrameView::new(
+            1,
+            Vec2::new(200.0, 200.0),
+            owner.session().inspection_camera().unwrap(),
+        )
+        .unwrap();
+        let displayed = owner.session().capture_pointer_frame(view).unwrap();
+        owner
+            .session_mut()
+            .refresh_pointer_hover(&displayed, view)
+            .unwrap();
+        assert_eq!(owner.session().hovered_pointer_target(), Some(target));
+
+        submit(&mut owner, 3, true);
+        let changed = declaration(owner.scene(), 2, Color::BLUE, 4.0);
+        let result = reconciler.reconcile(owner.scene_mut(), &changed).unwrap();
+        assert_eq!(result.node_for(&key("target")), Some(target));
+        assert_eq!(owner.session().selected_pointer_target(), Some(target));
+        assert_eq!(owner.session().hovered_pointer_target(), Some(target));
+        assert!(submit(&mut owner, 4, false).selection_click().is_none());
+        submit(&mut owner, 5, true);
+        submit(&mut owner, 6, false);
+        check_pulse(&mut owner, 1.0, Color::BLUE);
+
+        submit(&mut owner, 7, true);
+        let removed = candidate(owner.scene(), 3, [("other", 4.0)]);
+        reconciler.reconcile(owner.scene_mut(), &removed).unwrap();
+        assert!(submit(&mut owner, 8, false).selection_click().is_none());
+        assert_eq!(owner.session().selected_pointer_target(), None);
+        assert_eq!(owner.session().hovered_pointer_target(), None);
+    }
+
+    #[test]
+    fn source_does_not_remove_draggable_binding_until_held_translation_is_cancelled() {
+        use crate::integration::{NativeInputModifiers, NativePointerPosition};
+        use noon_core::{NativePointerId, NativePointerInput, NativePointerInputKind, Vec2};
+
+        let mut scene = Scene::new();
+        let mut reconciler = SourceReconciler::new();
+        let initial = candidate(&scene, 1, [("target", 0.0)]);
+        let result = reconciler.reconcile(&mut scene, &initial).unwrap();
+        let target = result.node_for(&key("target")).unwrap();
+        let mut drag_binding = SemanticMutationTransaction::new();
+        drag_binding.set_viewer_draggable(target, true);
+        scene.apply_semantic_transaction(drag_binding).unwrap();
+        let mut owner = scene.into_execution().unwrap();
+        let session = owner.session_mut();
+        session.set_translation_drag_targets([target]).unwrap();
+        session
+            .configure_native_pointer_input(
+                NativePointerId {
+                    source: 71,
+                    pointer: 2,
+                },
+                1,
+            )
+            .unwrap();
+        let token = session.native_pointer_input_token().unwrap();
+        let press = NativePointerInput::new(
+            1,
+            token.pointer(),
+            token.context(),
+            NativeInputModifiers::default(),
+            NativePointerInputKind::Press {
+                position: NativePointerPosition::new(Vec2::ZERO, Vec2::new(100.0, 100.0)).unwrap(),
+                button: 0,
+            },
+        );
+        owner.submit_translation_drag_input(&token, press).unwrap();
+        let publication = owner.session().publication_context();
+        let clear = candidate(owner.scene(), 2, [("target", 0.0)]);
+        assert!(matches!(
+            reconciler.reconcile(owner.scene_mut(), &clear),
+            Err(SourceReconciliationError::LivePublication(
+                ExecutionSessionPublicationError::TranslationDragActive
+            ))
+        ));
+        assert_eq!(owner.session().publication_context(), publication);
+        assert!(owner.session().translation_drag_active());
+        owner.session_mut().cancel_translation_drag().unwrap();
+        let result = reconciler.reconcile(owner.scene_mut(), &clear).unwrap();
+        assert_eq!(result.node_for(&key("target")), Some(target));
+        assert_eq!(result.mutation_impacts(), 1);
+        assert!(!owner
+            .scene()
+            .integration_store()
+            .borrow()
+            .semantic_object_state_checked(target)
+            .unwrap()
+            .viewer_draggable());
+    }
+
     #[test]
     fn keyed_reorder_preserves_semantic_identities() {
         let mut scene = Scene::new();
