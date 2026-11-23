@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use noon_core::{
-    Camera2DState, Color, NativePointerId, ObjectId, RateFunction, SemanticClickIndicate,
-    SemanticNodeId, SemanticVec3, Vec2,
+    Camera2DState, NativePointerId, ObjectId, RateFunction, SemanticClickIndicate, SemanticNodeId,
+    SemanticVec3, Vec2,
 };
 
 use super::{
@@ -40,15 +40,7 @@ struct InspectionReset {
     origin: Option<f64>,
 }
 
-/// One restoring viewer effect sampled independently of the authored timeline.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ViewerIndication {
-    pub object: ObjectId,
-    pub scale: f64,
-    pub color: Color,
-    pub strength: f32,
-    pub center: Option<SemanticVec3>,
-}
+pub use noon_runtime::ViewerIndication;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum ViewerIndicateTarget {
@@ -104,6 +96,7 @@ impl SessionInspectionView {
     pub(super) fn clear_indications(&mut self) {
         self.indications.clear();
         self.planar_press = None;
+        self.spatial_gestures = SpatialGestures::default();
     }
 }
 
@@ -221,21 +214,12 @@ impl ExecutionSession {
         displayed: Option<&SpatialPickFrame>,
         aspect: f64,
     ) -> Result<bool, InspectionNavigationError> {
-        match self.inspection.spatial_gestures.submit(input) {
+        match self.inspection.spatial_gestures.submit(input, || {
+            displayed.and_then(|frame| frame.pick_group(input.position, aspect))
+        }) {
             SpatialGesture::None => Ok(false),
             SpatialGesture::Motion(motion) => self.move_spatial_inspection(motion),
-            SpatialGesture::Click(position) => {
-                let Some(target) = displayed
-                    .and_then(|frame| frame.pick(position, aspect))
-                    .and_then(|object| self.interaction_semantic_object_id(object))
-                else {
-                    return Ok(false);
-                };
-                let Some((object, binding)) = self.prepare_viewer_indicate(target) else {
-                    return Ok(false);
-                };
-                Ok(self.start_viewer_indicate(object, binding))
-            }
+            SpatialGesture::Click(target) => Ok(self.indicate_displayed_target(target)),
             SpatialGesture::Reset => self.move_spatial_inspection(SpatialInspectionMotion {
                 reset: true,
                 ..SpatialInspectionMotion::default()
@@ -280,24 +264,30 @@ impl ExecutionSession {
                         press.pointer == pointer && within_click_slop(press.surface, surface)
                     })
                     .and_then(|press| press.target);
-                if let Some((object, binding)) = target
-                    .filter(|&(object, group)| self.runtime.viewer_group(object) == group)
-                    .map(|(object, _)| object)
-                    .filter(|&object| {
-                        self.runtime
-                            .frame_index_for_object(object)
-                            .is_some_and(|index| {
-                                super::picking::viewer_row_visible(self.frame(), index)
-                            })
-                    })
-                    .and_then(|object| self.interaction_semantic_object_id(object))
-                    .and_then(|node| self.prepare_viewer_indicate(node))
-                {
-                    self.start_viewer_indicate(object, binding);
-                }
+                self.indicate_displayed_target(target);
             }
             Press { .. } | Move(_) | Cancel => *pending = None,
         }
+    }
+
+    fn indicate_displayed_target(
+        &mut self,
+        target: Option<(ObjectId, Option<SemanticNodeId>)>,
+    ) -> bool {
+        let Some((object, binding)) = target
+            .filter(|&(object, group)| self.runtime.viewer_group(object) == group)
+            .map(|(object, _)| object)
+            .filter(|&object| {
+                self.runtime
+                    .frame_index_for_object(object)
+                    .is_some_and(|index| super::picking::viewer_row_visible(self.frame(), index))
+            })
+            .and_then(|object| self.interaction_semantic_object_id(object))
+            .and_then(|node| self.prepare_viewer_indicate(node))
+        else {
+            return false;
+        };
+        self.start_viewer_indicate(object, binding)
     }
 
     pub fn cancel_planar_viewer_pointer(&mut self) {

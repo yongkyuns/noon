@@ -85,8 +85,7 @@ impl BackdropInputs {
             .is_some_and(|owners| !owners.is_empty())
     }
     fn raw_bounds(publication: &RendererPublication<'_>, index: usize) -> Option<Rect> {
-        let row = publication.frame().objects.get(index)?;
-        publication.spatial_index()?.bounds_for_object(row.id)
+        publication.indexed_object_bounds(index)
     }
     fn footprint(
         &self,
