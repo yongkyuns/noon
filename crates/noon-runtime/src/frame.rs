@@ -143,7 +143,7 @@ mod spatial_render_routing_tests {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrameState {
     pub time: f64,
     pub objects: Vec<FrameObjectState>,
