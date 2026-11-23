@@ -464,6 +464,11 @@ def tokens(value):
                 candidate = source.replace("callout = VGroup().set_points", receiver)
                 self.assertFalse(source_execution_proof(candidate)["admitted"])
 
+    def test_compact_fourier_audio_fixture_is_admitted_for_prepared_playback(self):
+        fixture = Path(__file__).parents[2] / "scripts/fixtures/noon_fourier_epicycles_compact.py"
+        self.assertEqual(source_execution_proof(fixture.read_text()),
+                         {"admitted": True, "reason": None})
+
     def test_full_fourier_source_proves_closed_numpy_dataflow_without_claiming_runtime_replay(self):
         source = Path(__file__).parents[2].joinpath(
             "scripts", "fixtures", "noon_fourier_epicycles.py"

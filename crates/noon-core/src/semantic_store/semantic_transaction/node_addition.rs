@@ -76,7 +76,9 @@ impl SemanticPendingPathObject {
             SemanticObjectProperty::StrokeWidth => self.style.stroke_width.into(),
             SemanticObjectProperty::Emission => self.style.emission.strength().into(),
             SemanticObjectProperty::ObjectOpacity => self.style.object_opacity.into(),
-            SemanticObjectProperty::Presence => unreachable!("presence is not an object value"),
+            SemanticObjectProperty::Presence | SemanticObjectProperty::Reveal => {
+                unreachable!("binding-only properties have no authored value")
+            }
         }
     }
 

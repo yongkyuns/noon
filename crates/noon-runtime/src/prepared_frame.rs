@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use noon_compile::{CompilePatchError, CompiledChannelKey, ExecutionMutationTransaction};
 use noon_core::PublicationContext;
-use noon_core::{ReactiveValue, SignalId};
+use noon_core::{Property, ReactiveValue, SignalId};
 
 use crate::numeric_text::PreparedNumericTextUpdate;
 use crate::{
@@ -417,18 +417,23 @@ impl SceneInstance {
             stats.groups_evaluated += 1;
         }
 
+        // Reveal is a renderer channel without a host callback write. Stage it
+        // with the frame so an unrelated callback cannot discard the update.
+        let should_defer = |property| defer_reactive_bindings && property != Property::Reveal;
         let mut deferred = HashSet::new();
         for (&object_index, row) in &mut rows {
-            if defer_reactive_bindings {
-                for property in self.reactive_properties_for_object(object_index) {
-                    deferred.insert((object_index, property));
-                }
-            } else {
-                self.reapply_reactive_to_row(
-                    object_index,
-                    row.as_mut(&self.frame.objects[object_index].content),
-                );
-            }
+            self.reapply_reactive_to_row(
+                object_index,
+                row.as_mut(&self.frame.objects[object_index].content),
+                |property| {
+                    if should_defer(property) {
+                        deferred.insert((object_index, property));
+                        false
+                    } else {
+                        true
+                    }
+                },
+            );
         }
 
         let reactive = if reactive_inputs.is_empty() {
@@ -451,7 +456,7 @@ impl SceneInstance {
                 if !self.object_slot_is_live(*object_index) {
                     continue;
                 }
-                if defer_reactive_bindings {
+                if should_defer(*property) {
                     deferred.insert((*object_index, *property));
                     continue;
                 }
