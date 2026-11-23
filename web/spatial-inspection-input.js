@@ -36,10 +36,9 @@ export function attachSpatialInspectionInput(canvas, { signal, enabled, spatial 
     const tail = queue.at(-1);
     if (packet.samples?.every(sample => sample.phase === "move") &&
         tail?.view_revision === packet.view_revision &&
-        tail.samples?.every(sample => sample.phase === "move")) {
-      const capacity = MAX_BROWSER_POINTER_SAMPLES - tail.samples.length;
-      tail.samples.push(...packet.samples.slice(0, capacity));
-      if (capacity < packet.samples.length) tail.samples[tail.samples.length - 1] = packet.samples.at(-1);
+        tail.samples?.every(sample => sample.phase === "move") &&
+        tail.samples.length + packet.samples.length <= MAX_BROWSER_POINTER_SAMPLES) {
+      tail.samples.push(...packet.samples);
     } else if (queue.length < MAX_PENDING_PACKETS) {
       queue.push(packet);
     } else {
@@ -107,10 +106,14 @@ export function attachSpatialInspectionInput(canvas, { signal, enabled, spatial 
       timestamp_ms: value.timeStamp,
     });
     const coalesced = phase === "move" ? event.getCoalescedEvents?.() : null;
-    const samples = coalesced?.length
-      ? coalesced.slice(-MAX_BROWSER_POINTER_SAMPLES).map(sample)
-      : [sample(event)];
-    enqueue({ view_revision: revision, samples, ...(phase === "release" ? { presentation: presentation() } : {}) });
+    const history = coalesced?.length ? coalesced : [event];
+    const attachment = phase === "press" ? { presentation: presentation() } : {};
+    // Keep intermediate motion so Rust can distinguish a drag that returns to
+    // its origin from a click. An overflow clears capture and the Rust contact.
+    for (let start = 0; start < history.length && contacts.has(id); start += MAX_BROWSER_POINTER_SAMPLES) {
+      const samples = history.slice(start, start + MAX_BROWSER_POINTER_SAMPLES).map(sample);
+      enqueue({ view_revision: revision, samples, ...attachment });
+    }
     if (phase === "release") retire(id);
   };
   const capturePointer = event => {

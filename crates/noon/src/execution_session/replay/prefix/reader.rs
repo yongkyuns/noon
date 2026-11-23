@@ -271,11 +271,12 @@ impl PrefixReader {
     pub(crate) fn with_viewer_renderer_publication<T>(
         &mut self,
         samples: &[crate::ViewerIndication],
+        spatial_camera: Option<(usize, noon_core::SemanticCamera3D)>,
         previous: &noon_runtime::ViewerPresentation,
         draw: impl FnOnce(RendererPublication<'_>) -> T,
     ) -> T {
         self.session
-            .with_viewer_renderer_publication(samples, previous, draw)
+            .with_viewer_renderer_publication(samples, spatial_camera, previous, draw)
     }
 
     pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {

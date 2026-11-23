@@ -940,7 +940,12 @@ impl NativeApp {
                 .execution
                 .pending_endpoint()
                 .filter(|_| pass < MAX_RETAINED_ENDPOINTS);
-            let planar_view = self.capture_viewer_pick_frame(&pointer_frame, force_full_redraw);
+            let spatial_camera = self.execution.session().inspection_spatial_camera()?;
+            let pick_view = self.capture_viewer_pick_frame(
+                &pointer_frame,
+                spatial_camera.map(|(_, camera)| camera),
+                force_full_redraw,
+            );
             let samples = self.execution.session().viewer_indications();
             let gpu = self
                 .gpu
@@ -951,6 +956,7 @@ impl NativeApp {
             let mut presented_submission = None;
             let presented = self.execution.with_viewer_renderer_publication(
                 &samples,
+                spatial_camera,
                 &self.viewer_presentation,
                 &mut |mut publication| {
                     if force_full_redraw {
@@ -1141,7 +1147,7 @@ impl NativeApp {
                     Ok(retained)
                 },
             )?;
-            self.viewer_presentation.presented(&samples);
+            self.viewer_presentation.presented(&samples, spatial_camera);
             if endpoint.is_some() {
                 // Retain the endpoint in the same renderer before releasing the
                 // source. No picture or pointer receipt was displayed for it.
@@ -1171,7 +1177,7 @@ impl NativeApp {
                 }
             }
 
-            self.pointer.presented_viewer = planar_view;
+            self.pointer.presented_viewer = pick_view;
             self.pointer.presented = Some(pointer_frame);
             self.pointer.refresh_pending = false;
             self.last_selection_presentation = highlight;

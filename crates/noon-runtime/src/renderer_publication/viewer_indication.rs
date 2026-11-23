@@ -1,5 +1,5 @@
 //! Presentation-only Indicate samples borrowed by the typed renderer.
-use noon_core::{Color, ObjectId, SemanticVec3, Style, Transform2D, Vec2};
+use noon_core::{Color, ObjectId, SemanticCamera3D, SemanticVec3, Style, Transform2D, Vec2};
 
 use crate::{FrameChanges, FrameState, RendererPublication, SceneInstance};
 
@@ -93,29 +93,47 @@ impl ViewerIndication {
 #[derive(Clone, Debug, Default)]
 pub struct ViewerPresentation {
     previous: Vec<ViewerIndication>,
+    camera: Option<(usize, SemanticCamera3D)>,
 }
 
 impl ViewerPresentation {
     pub fn row_changes(
         &self,
         current: &[ViewerIndication],
+        camera: Option<(usize, SemanticCamera3D)>,
         mut object_index: impl FnMut(ObjectId) -> Option<usize>,
+        frame: &FrameState,
     ) -> FrameChanges {
-        if self.previous == current {
-            return FrameChanges::default();
+        let mut indices = Vec::new();
+        if self.previous != current {
+            indices.extend(
+                self.previous
+                    .iter()
+                    .chain(current)
+                    .filter_map(|sample| object_index(sample.object)),
+            );
         }
-        FrameChanges::objects(
-            self.previous
-                .iter()
-                .chain(current)
-                .filter_map(|sample| object_index(sample.object))
-                .collect(),
-        )
+        if self.camera != camera {
+            indices.extend(
+                self.camera
+                    .into_iter()
+                    .chain(camera)
+                    .filter_map(|(index, _)| {
+                        frame.objects.get(index)?.camera_projection().map(|_| index)
+                    }),
+            );
+        }
+        FrameChanges::objects(indices)
     }
 
-    pub fn presented(&mut self, current: &[ViewerIndication]) {
+    pub fn presented(
+        &mut self,
+        current: &[ViewerIndication],
+        camera: Option<(usize, SemanticCamera3D)>,
+    ) {
         self.previous.clear();
         self.previous.extend_from_slice(current);
+        self.camera = camera;
     }
 }
 
@@ -142,17 +160,21 @@ impl SceneInstance {
     fn show_viewer_samples<T>(
         &mut self,
         samples: &[ViewerIndication],
+        camera: Option<(usize, SemanticCamera3D)>,
         changes: FrameChanges,
+        viewer_rows_changed: bool,
         draw: impl FnOnce(RendererPublication<'_>) -> T,
     ) -> T {
-        if samples.is_empty() {
-            return draw(self.publication_with_changes(changes));
+        if samples.is_empty() && camera.is_none() {
+            let mut publication = self.publication_with_changes(changes);
+            publication.viewer_rows_changed = viewer_rows_changed;
+            return draw(publication);
         }
         let frame = std::mem::take(&mut self.frame);
         let mut view = ViewerFrame {
             runtime: self,
             frame,
-            canonical: Vec::with_capacity(samples.len()),
+            canonical: Vec::with_capacity(samples.len() + usize::from(camera.is_some())),
         };
         for &sample in samples {
             let Some(index) = view.runtime.frame_index_for_object(sample.object) else {
@@ -184,8 +206,27 @@ impl SceneInstance {
                 object.content.image().is_some(),
             );
         }
+        if let Some((index, camera)) = camera {
+            if let Some(row) = view
+                .frame
+                .objects
+                .get_mut(index)
+                .filter(|row| row.camera_projection().is_some())
+            {
+                view.canonical
+                    .push((index, row.clone(), view.frame.render_transforms[index]));
+                let spatial = row
+                    .spatial
+                    .as_mut()
+                    .expect("camera projection has a spatial row");
+                spatial.world.translation = camera.position;
+                spatial.world.rotation = camera.orientation;
+                spatial.camera_projection = Some(camera.projection);
+            }
+        }
         let mut publication = view.runtime.publication_for_frame(&view.frame, changes);
         publication.viewer_indications = samples;
+        publication.viewer_rows_changed = viewer_rows_changed;
         draw(publication)
     }
 
@@ -194,15 +235,23 @@ impl SceneInstance {
     pub fn with_viewer_renderer_publication<T>(
         &mut self,
         samples: &[ViewerIndication],
+        camera: Option<(usize, SemanticCamera3D)>,
         previous: &ViewerPresentation,
         followup_redraw: bool,
         draw: impl FnOnce(RendererPublication<'_>) -> T,
     ) -> T {
         let mut changes = self.take_frame_changes();
-        changes.accumulate(previous.row_changes(samples, |id| self.frame_index_for_object(id)));
+        let viewer_changes = previous.row_changes(
+            samples,
+            camera,
+            |id| self.frame_index_for_object(id),
+            &self.frame,
+        );
+        let viewer_rows_changed = !viewer_changes.is_empty();
+        changes.accumulate(viewer_changes);
         if followup_redraw {
             self.changes = FrameChanges::presentation_redraw();
         }
-        self.show_viewer_samples(samples, changes, draw)
+        self.show_viewer_samples(samples, camera, changes, viewer_rows_changed, draw)
     }
 }

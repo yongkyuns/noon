@@ -24,25 +24,12 @@ impl RetainedFamilyExecutionDeltaEncoder {
     ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
         let mut changes = publication.changes().clone();
         let frame = publication.frame();
-        if spatial_inspection != self.spatial_inspection {
-            // Switching inspection off must republish the authored pose. A
-            // removed or recycled non-camera slot is already handled by runtime changes.
-            let index = spatial_inspection
-                .or(self.spatial_inspection)
-                .map(|(index, _)| index);
-            if let Some(index) = index.filter(|&index| {
-                frame
-                    .objects
-                    .get(index)
-                    .is_some_and(|row| row.camera_projection().is_some())
-            }) {
-                changes.accumulate(noon_runtime::FrameChanges::objects(vec![index]));
-            }
-        }
-        changes.accumulate(
-            self.viewer_indications
-                .row_changes(viewer_indications, |id| publication.object_index(id)),
-        );
+        changes.accumulate(self.viewer_indications.row_changes(
+            viewer_indications,
+            spatial_inspection,
+            |id| publication.object_index(id),
+            frame,
+        ));
         if changes.is_empty() && (presentation_changed || self.planar_camera != Some(camera)) {
             changes = noon_runtime::FrameChanges::presentation_redraw();
         }
@@ -178,8 +165,8 @@ impl RetainedFamilyExecutionDeltaEncoder {
             .replace_transient_presentations(frame, publication.transient_presentations())
             .map_err(|error| error.to_string())?;
         self.planar_camera = Some(camera);
-        self.spatial_inspection = spatial_inspection;
-        self.viewer_indications.presented(viewer_indications);
+        self.viewer_indications
+            .presented(viewer_indications, spatial_inspection);
         Ok(Some(delta))
     }
 }

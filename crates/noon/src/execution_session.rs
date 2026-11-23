@@ -1728,6 +1728,7 @@ impl ExecutionSession {
     pub fn with_viewer_renderer_publication<T>(
         &mut self,
         samples: &[crate::ViewerIndication],
+        spatial_camera: Option<(usize, noon_core::SemanticCamera3D)>,
         previous: &noon_runtime::ViewerPresentation,
         draw: impl FnOnce(RendererPublication<'_>) -> T,
     ) -> T {
@@ -1735,8 +1736,12 @@ impl ExecutionSession {
         let camera = self.camera_object;
         let spatial_index = prefix_queries.then_some(&self.spatial_index);
         let occurrences = &self.derived_display_objects;
-        self.runtime
-            .with_viewer_renderer_publication(samples, previous, expiring, |publication| {
+        self.runtime.with_viewer_renderer_publication(
+            samples,
+            spatial_camera,
+            previous,
+            expiring,
+            |publication| {
                 let publication = publication.with_primary_view(camera);
                 let publication = match spatial_index {
                     Some(index) => publication.with_spatial_index(index),
@@ -1749,7 +1754,8 @@ impl ExecutionSession {
                             "compiler-owned family Transform rows retain valid painter anchors",
                         ),
                 )
-            })
+            },
+        )
     }
 
     /// Evaluate deterministically at an absolute time.

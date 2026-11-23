@@ -51,7 +51,6 @@ pub struct RetainedFamilyExecutionDeltaEncoder {
     free_render_geometry_resources: Vec<u32>,
     next_render_geometry_resource: u32,
     planar_camera: Option<Camera2DState>,
-    spatial_inspection: Option<(usize, noon_core::SemanticCamera3D)>,
     viewer_indications: noon_runtime::ViewerPresentation,
     published_rows: HashMap<crate::TransportSlotId, crate::RetainedTransportObjectState>,
 }
@@ -326,7 +325,6 @@ impl RetainedFamilyExecutionDeltaEncoder {
             free_render_geometry_resources: Vec::new(),
             next_render_geometry_resource: 0,
             planar_camera: None,
-            spatial_inspection: None,
             viewer_indications: noon_runtime::ViewerPresentation::default(),
             published_rows: HashMap::new(),
         }
