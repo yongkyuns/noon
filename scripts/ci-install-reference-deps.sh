@@ -51,8 +51,8 @@ if [[ -n "$playwright_browser" ]]; then
     --playwright-config "$source_dir/ubuntu.sources" > "$source_dir/apt.conf"
   chmod 600 "$source_dir/apt.conf"
   # Pass APT_CONFIG after sudo: Playwright's own sudo boundary would drop it.
-  # Its update and install share the existing 180s + 600s setup budget. A system
-  # PATH ensures its apt-get calls do not enter runner-image retry wrappers.
+  # Keep the combined dependency setup bounded so the workflow still has time
+  # to download the browser. Use system apt instead of runner retry wrappers.
   sudo -n /usr/bin/timeout --signal=TERM --kill-after=15s 780s \
     env DEBIAN_FRONTEND=noninteractive APT_CONFIG="$source_dir/apt.conf" \
     PATH=/usr/sbin:/usr/bin:/sbin:/bin \
@@ -63,6 +63,7 @@ fi
 apt_options=(
   -o "Dir::Etc::sourcelist=$source_dir/ubuntu.sources"
   -o Dir::Etc::sourceparts=-
+  -o Acquire::IndexTargets::deb::Translations::DefaultEnabled=false
   -o Acquire::Retries=2
   -o Acquire::http::Timeout=20
   -o Acquire::https::Timeout=20
@@ -71,7 +72,8 @@ apt_options=(
 
 # Use the system binary: runner-image apt wrappers may retry or mask failures.
 # Run timeout with sudo too, so it can signal apt and its privileged children.
-sudo -n /usr/bin/timeout --signal=TERM --kill-after=15s 180s \
+# A cold index download can take several minutes on a slow hosted runner.
+sudo -n /usr/bin/timeout --signal=TERM --kill-after=15s 240s \
   env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get \
   "${apt_options[@]}" --error-on=any update
 sudo -n /usr/bin/timeout --signal=TERM --kill-after=15s 600s \

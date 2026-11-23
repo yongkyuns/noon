@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { attachSpatialInspectionInput } from "./spatial-inspection-input.js";
+import { MAX_BROWSER_POINTER_SAMPLES } from "./browser-pointer-input.js";
 
 function fixture(t, options) {
   const previousWindow = globalThis.window;
@@ -27,7 +28,7 @@ function fixture(t, options) {
   return { canvas, captured, pointer };
 }
 
-test("the collector preserves ordered gesture edges and captures the release receipt immediately", async t => {
+test("the collector preserves ordered gesture edges and captures the pressed picture immediately", async t => {
   let enabled = false;
   let spatial = false;
   let finishPress;
@@ -55,6 +56,7 @@ test("the collector preserves ordered gesture edges and captures the release rec
   assert.equal(pointer("pointerdown", 20), false);
   assert.equal(ordinaryPresses, 2);
   assert.ok(captured.has(1));
+  receipt = { sequence: 8 };
   pointer("pointermove", 25);
   pointer("pointermove", 35);
   pointer("pointerup", 45);
@@ -65,7 +67,34 @@ test("the collector preserves ordered gesture edges and captures the release rec
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(sent.map(packet => packet.samples.map(sample => [sample.phase, sample.x])),
     [[["press", 0.2]], [["move", 0.25], ["move", 0.35]], [["release", 0.45]]]);
-  assert.deepEqual(sent.at(-1).presentation, { sequence: 3 });
+  assert.deepEqual(sent[0].presentation, { sequence: 3 });
+  assert.equal(sent.at(-1).presentation, undefined);
+});
+
+test("coalescing retains excursions when a pointer returns to its press position", async t => {
+  let finishPress;
+  const firstDelivery = new Promise(resolve => { finishPress = resolve; });
+  const sent = [];
+  const { pointer } = fixture(t, {
+    async send(packet) {
+      sent.push(packet);
+      if (sent.length === 1) await firstDelivery;
+    },
+  });
+  pointer("pointerdown", 20);
+  pointer("pointermove", 20, {
+    getCoalescedEvents: () => Array.from({ length: MAX_BROWSER_POINTER_SAMPLES + 1 }, (_, i) => ({
+      clientX: i === MAX_BROWSER_POINTER_SAMPLES - 1 ? 80 : 20,
+      clientY: 25, timeStamp: i + 1,
+    })),
+  });
+  pointer("pointermove", 20);
+  pointer("pointerup", 20);
+  finishPress();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(sent.map(packet => packet.samples.length), [1, MAX_BROWSER_POINTER_SAMPLES, 2, 1]);
+  assert.equal(sent[1].samples.at(-1).x, 0.8);
+  assert.equal(sent[2].samples.at(-1).x, 0.2);
 });
 
 test("overflow cancels an admitted press whose release was already queued", async t => {

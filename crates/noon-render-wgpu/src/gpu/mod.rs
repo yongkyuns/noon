@@ -1032,6 +1032,7 @@ impl GpuRenderer {
             context,
             frame,
             changes,
+            false,
             geometry_resources,
             text_resources,
             font_resources,
