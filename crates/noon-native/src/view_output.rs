@@ -11,6 +11,7 @@ use noon_render_wgpu::{
 #[cfg(feature = "wgsl-effects")]
 mod native_hdr_corpus;
 mod playback;
+mod viewer_indicate;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 fn scene() -> (Scene, noon::Mobject, noon::Mobject) {
     let mut scene = Scene::new();

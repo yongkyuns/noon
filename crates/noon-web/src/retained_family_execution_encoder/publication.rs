@@ -39,16 +39,10 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 changes.accumulate(noon_runtime::FrameChanges::objects(vec![index]));
             }
         }
-        let indication_changed = self.viewer_indications != viewer_indications;
-        if indication_changed {
-            let indices = self
-                .viewer_indications
-                .iter()
-                .chain(viewer_indications)
-                .filter_map(|effect| publication.object_index(effect.object))
-                .collect();
-            changes.accumulate(noon_runtime::FrameChanges::objects(indices));
-        }
+        changes.accumulate(
+            self.viewer_indications
+                .row_changes(viewer_indications, |id| publication.object_index(id)),
+        );
         if changes.is_empty() && (presentation_changed || self.planar_camera != Some(camera)) {
             changes = noon_runtime::FrameChanges::presentation_redraw();
         }
@@ -185,9 +179,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             .map_err(|error| error.to_string())?;
         self.planar_camera = Some(camera);
         self.spatial_inspection = spatial_inspection;
-        if indication_changed {
-            self.viewer_indications = viewer_indications.to_vec();
-        }
+        self.viewer_indications.presented(viewer_indications);
         Ok(Some(delta))
     }
 }
@@ -196,75 +188,23 @@ fn compose_viewer_indicate(
     row: &mut crate::RetainedTransportObjectState,
     effect: noon::ViewerIndication,
 ) {
-    let scale_about = |value: f64, center: f64| center + (value - center) * effect.scale;
-    let scale_planar = |pose: &mut noon_core::Transform2D| {
-        let scaled = pose.scale * effect.scale as f32;
-        let translation = effect.center.map_or(pose.translation, |center| {
-            noon_core::Vec2::new(
-                scale_about(f64::from(pose.translation.x), center.x) as f32,
-                scale_about(f64::from(pose.translation.y), center.y) as f32,
-            )
-        });
-        if scaled.x.is_finite()
-            && scaled.y.is_finite()
-            && translation.x.is_finite()
-            && translation.y.is_finite()
-        {
-            pose.scale = scaled;
-            pose.translation = translation;
-        }
-    };
     if let Some(spatial) = row.spatial.as_mut().filter(|spatial| {
         spatial.composition_domain != noon_core::SemanticSpatialCompositionDomain::FixedFrame
     }) {
-        let scaled = spatial.scale.map(|value| value * effect.scale);
-        let translate = |point| {
-            effect.center.map_or(point, |center| {
-                let [x, y, z] = point;
-                [
-                    scale_about(x, center.x),
-                    scale_about(y, center.y),
-                    scale_about(z, center.z),
-                ]
-            })
-        };
-        let translation = translate(spatial.translation);
-        let anchor = spatial.fixed_orientation_center.map(translate);
-        if scaled
-            .iter()
-            .chain(&translation)
-            .chain(anchor.iter().flatten())
-            .all(|value| value.is_finite())
-        {
-            spatial.scale = scaled;
-            spatial.translation = translation;
-            spatial.fixed_orientation_center = anchor;
-        }
+        effect.scale_spatial_pose(
+            &mut spatial.translation,
+            &mut spatial.scale,
+            &mut spatial.fixed_orientation_center,
+        );
     } else {
-        scale_planar(&mut row.transform);
-        if let Some(pose) = &mut row.render_transform {
-            scale_planar(pose);
-        }
+        row.transform = effect.planar_pose(row.transform);
+        row.render_transform = row.render_transform.map(|pose| effect.planar_pose(pose));
     }
-
-    // Raster content supports alpha through its fill style. Keep the image's
-    // authored colors and use the geometric part of Indicate for feedback.
-    if matches!(row.content, crate::TransportObjectContent::Image { .. }) {
-        return;
-    }
-    let mix = |from, to| from * (1.0 - effect.strength) + to * effect.strength;
-    let recolor = |color: noon_core::Color| {
-        noon_core::Color::rgba(
-            mix(color.red, effect.color.red),
-            mix(color.green, effect.color.green),
-            mix(color.blue, effect.color.blue),
-            color.alpha,
-        )
-    };
-    if row.fill_paint.is_none() {
-        row.style.fill = row.style.fill.map(recolor);
-    }
-    row.style.stroke = row.style.stroke.map(recolor);
+    effect.tint(
+        &mut row.style,
+        row.fill_paint.is_some(),
+        matches!(row.content, crate::TransportObjectContent::Image { .. }),
+    );
 }
 
 impl RetainedFamilyExecutionDeltaEnvelope {
