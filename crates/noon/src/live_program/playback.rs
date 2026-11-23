@@ -447,6 +447,98 @@ impl<C: LiveContinuation> PlaybackProgram<C> {
             _ => None,
         }
     }
+    /// Visit the selected source's renderer publication with viewer-only effects.
+    pub fn with_viewer_renderer_publication<T>(
+        &mut self,
+        samples: &[crate::ViewerIndication],
+        spatial_camera: Option<(usize, noon_core::SemanticCamera3D)>,
+        previous: &noon_runtime::ViewerPresentation,
+        draw: impl FnOnce(RendererPublication<'_>) -> T,
+    ) -> Option<T> {
+        if let Some(reader) = &mut self.reader {
+            return Some(reader.with_viewer_renderer_publication(
+                samples,
+                spatial_camera,
+                previous,
+                draw,
+            ));
+        }
+        self.with_observed_program(|program| {
+            program
+                .scene
+                .owned_execution_mut()
+                .with_viewer_renderer_publication(samples, spatial_camera, previous, draw)
+        })
+    }
+
+    pub fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        input: crate::PlanarViewerPointer,
+        displayed: Option<&crate::PlanarPickFrame>,
+    ) {
+        if let Some(reader) = &mut self.reader {
+            reader.submit_planar_viewer_pointer(pointer, input, displayed);
+        } else {
+            self.with_observed_program(|program| {
+                program
+                    .scene
+                    .owned_execution_mut()
+                    .submit_planar_viewer_pointer(pointer, input, displayed);
+            });
+        }
+    }
+
+    pub fn submit_spatial_pointer(
+        &mut self,
+        input: crate::SpatialPointerInput,
+        displayed: Option<&crate::SpatialPickFrame>,
+        aspect: f64,
+    ) -> Result<bool, crate::InspectionNavigationError> {
+        if let Some(reader) = &mut self.reader {
+            return reader.submit_spatial_pointer(input, displayed, aspect);
+        }
+        self.with_observed_program(|program| {
+            program
+                .scene
+                .owned_execution_mut()
+                .submit_spatial_pointer(input, displayed, aspect)
+        })
+        .unwrap_or(Ok(false))
+    }
+
+    pub fn move_spatial_inspection(
+        &mut self,
+        motion: crate::SpatialInspectionMotion,
+    ) -> Result<bool, crate::InspectionNavigationError> {
+        if let Some(reader) = &mut self.reader {
+            return reader.move_spatial_inspection(motion);
+        }
+        self.with_observed_program(|program| {
+            program
+                .scene
+                .owned_execution_mut()
+                .move_spatial_inspection(motion)
+        })
+        .unwrap_or(Ok(false))
+    }
+
+    pub fn advance_viewer_inspection(
+        &mut self,
+        wall_time: f64,
+    ) -> Result<(), crate::InspectionNavigationError> {
+        if let Some(reader) = &mut self.reader {
+            return reader.advance_viewer_inspection(wall_time);
+        }
+        self.with_observed_program(|program| {
+            program
+                .scene
+                .owned_execution_mut()
+                .advance_viewer_inspection(wall_time)
+        })
+        .unwrap_or(Ok(()))
+    }
+
     pub fn query_viewports(&mut self, bounds: &[Rect]) -> Option<ExecutionViewportQuery> {
         if let Some(reader) = &mut self.reader {
             return Some(reader.query_renderer_viewports(bounds));

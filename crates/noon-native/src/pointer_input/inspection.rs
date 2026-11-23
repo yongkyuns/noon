@@ -34,7 +34,8 @@ impl NativeApp {
         size: PhysicalSize<u32>,
         scale: f64,
     ) -> Result<PointerDispatch, NativeHostError> {
-        if !self.config.inspection_zoom {
+        let spatial = self.uses_spatial_viewer_pointer();
+        if !spatial && !self.config.inspection_zoom {
             return Ok(PointerDispatch::Unsubscribed);
         }
         let pixels = vertical_pixels(delta, scale)?;
@@ -45,6 +46,15 @@ impl NativeApp {
         if size.width == 0 || size.height == 0 {
             self.pointer_left()?;
             return Ok(PointerDispatch::Cancelled);
+        }
+        if spatial {
+            self.pointer.refresh_pending |=
+                self.execution
+                    .move_spatial_inspection(noon::SpatialInspectionMotion {
+                        zoom: pixels / 500.0,
+                        ..noon::SpatialInspectionMotion::default()
+                    })?;
+            return Ok(PointerDispatch::Admitted);
         }
         // Wheel occurrences carry no cursor location in winit. A valid OS sample
         // is required; focus/leave/resize/stale-contact cancellation clears it.
@@ -67,8 +77,10 @@ impl NativeApp {
         {
             // Shared navigation has atomically cancelled the gesture and retired
             // its binding. Everything below is infallible platform bookkeeping.
+            self.cancel_viewer_pointer()?;
             self.pointer.configured = false;
             self.pointer.presented = None;
+            self.pointer.presented_viewer = None;
             self.pointer.refresh_pending = true;
         }
         Ok(PointerDispatch::Admitted)

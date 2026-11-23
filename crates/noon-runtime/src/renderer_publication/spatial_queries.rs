@@ -66,7 +66,20 @@ impl RendererPublication<'_> {
                 objects.push((rank, object));
             }
         }
+        // The borrowed index describes the canonical view. An indication can
+        // move one of its affected rows into the requested painter prefix.
+        objects.extend(self.viewer_indications.iter().filter_map(|sample| {
+            let row = self.object_index(sample.object)?;
+            let rank = self.painter_rank(row).filter(|&rank| rank < anchor_rank)?;
+            let drawn = self.object_bounds(row)?;
+            (bounds.min.x <= drawn.max.x
+                && drawn.min.x <= bounds.max.x
+                && bounds.min.y <= drawn.max.y
+                && drawn.min.y <= bounds.max.y)
+                .then_some((rank, sample.object))
+        }));
         objects.sort_unstable_by_key(|&(rank, _)| rank);
+        objects.dedup();
         let objects = objects
             .into_iter()
             .map(|(_, object)| object)
