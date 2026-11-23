@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use noon_core::{
-    Camera2DState, Color, NativePointerId, ObjectId, RateFunction, SemanticClickIndicate,
-    SemanticNodeId, SemanticVec3, Vec2,
+    Camera2DState, NativePointerId, ObjectId, RateFunction, SemanticClickIndicate, SemanticNodeId,
+    SemanticVec3, Vec2,
 };
 
 use super::{
@@ -40,15 +40,7 @@ struct InspectionReset {
     origin: Option<f64>,
 }
 
-/// One restoring viewer effect sampled independently of the authored timeline.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ViewerIndication {
-    pub object: ObjectId,
-    pub scale: f64,
-    pub color: Color,
-    pub strength: f32,
-    pub center: Option<SemanticVec3>,
-}
+pub use noon_runtime::ViewerIndication;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum ViewerIndicateTarget {
