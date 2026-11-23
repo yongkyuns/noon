@@ -97,6 +97,7 @@ function changedPixels(bytes, backgroundBytes) {
 }
 
 let browser = null;
+let activeContext = null;
 let activePage = null;
 let activeErrors = [];
 let releasePendingStartup = null;
@@ -109,6 +110,7 @@ try {
     { name: "automatic-no-jspi", host: null, disableJspi: true },
   ]) {
     const context = await browser.newContext({ ...devices["iPhone 13"] });
+    activeContext = context;
     // Hold authoring startup while recording the empty canvas. Normal variants
     // delay the production worker response directly. The no-JSPI variant delays
     // a test-only bootstrap module, which disables JSPI before dynamically
@@ -358,7 +360,10 @@ try {
     console.log(
       `✓ mobile WebKit ${variant.name}: ${diagnostics.rendererBackend}, ${diagnostics.presentedFrames} frames`,
     );
+    // Worker requests can still be in flight after the last scene is ready.
+    await context.unrouteAll({ behavior: "wait" });
     await context.close();
+    activeContext = null;
   }
 } catch (error) {
   const state = await activePage?.evaluate(() => ({
@@ -372,6 +377,13 @@ try {
   throw error;
 } finally {
   releasePendingStartup?.();
-  await browser?.close();
-  server.kill("SIGTERM");
+  try {
+    await activeContext?.unrouteAll({ behavior: "wait" });
+  } finally {
+    try {
+      await browser?.close();
+    } finally {
+      server.kill("SIGTERM");
+    }
+  }
 }

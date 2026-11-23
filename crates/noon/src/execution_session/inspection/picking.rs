@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use noon_core::{
     GeometryRef, GeometryResource, MeshBounds3D, MeshResource, ObjectId, SemanticCamera3D,
-    SemanticProjection3D, SemanticVec3 as Vec3, SemanticWorldTransform3D, Vec2,
+    SemanticNodeId, SemanticProjection3D, SemanticVec3 as Vec3, SemanticWorldTransform3D, Vec2,
 };
 use noon_runtime::RendererPublication;
 
@@ -14,6 +14,7 @@ pub use planar::{PlanarPickCache, PlanarPickFrame};
 
 struct PickMesh {
     id: ObjectId,
+    group: Option<SemanticNodeId>,
     world: SemanticWorldTransform3D,
     mesh: Arc<MeshResource>,
 }
@@ -103,7 +104,10 @@ impl<Row: PickRow> PickNode<Row> {
 
 impl PartialEq for PickMesh {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.world == other.world && Arc::ptr_eq(&self.mesh, &other.mesh)
+        self.id == other.id
+            && self.group == other.group
+            && self.world == other.world
+            && Arc::ptr_eq(&self.mesh, &other.mesh)
     }
 }
 
@@ -152,7 +156,13 @@ pub(super) fn mesh_world_bounds(
 }
 
 impl PickNode<PickMesh> {
-    fn pick(&self, ray: &Ray, near: f64, best: &mut f64, target: &mut Option<ObjectId>) {
+    fn pick(
+        &self,
+        ray: &Ray,
+        near: f64,
+        best: &mut f64,
+        target: &mut Option<(ObjectId, Option<SemanticNodeId>)>,
+    ) {
         if !ray.intersects_bounds(self.bounds.min, self.bounds.max, near, *best) {
             return;
         }
@@ -180,7 +190,7 @@ impl PickNode<PickMesh> {
                 .filter(|depth| *depth >= near && *depth <= *best)
             {
                 *best = depth;
-                *target = Some(row.id);
+                *target = Some((row.id, row.group));
             }
         }
     }
@@ -226,6 +236,7 @@ impl SpatialPickCache {
             };
             Some(PickMesh {
                 id: row.id,
+                group: publication.viewer_group(row.id),
                 world: spatial.world,
                 mesh: Arc::clone(mesh),
             })
@@ -267,6 +278,14 @@ impl SpatialPickFrame {
     /// Pick the closest filled triangle at a viewport position, inside the
     /// camera clip range. Position uses viewport-height units from the upper left.
     pub fn pick(&self, position: Vec2, aspect: f64) -> Option<ObjectId> {
+        self.pick_group(position, aspect).map(|(id, _)| id)
+    }
+
+    pub(super) fn pick_group(
+        &self,
+        position: Vec2,
+        aspect: f64,
+    ) -> Option<(ObjectId, Option<SemanticNodeId>)> {
         let x = 2.0 * f64::from(position.x) - aspect;
         let y = 1.0 - 2.0 * f64::from(position.y);
         if !aspect.is_finite()
@@ -404,6 +423,7 @@ mod tests {
         );
         let row = |id, x| PickMesh {
             id: ObjectId::new(id),
+            group: None,
             world: SemanticWorldTransform3D {
                 translation: Vec3::new(x, 0.0, 0.0),
                 ..SemanticWorldTransform3D::IDENTITY
