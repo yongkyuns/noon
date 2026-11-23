@@ -447,6 +447,58 @@ impl<C: LiveContinuation> PlaybackProgram<C> {
             _ => None,
         }
     }
+    /// Visit the selected source's renderer publication with viewer-only effects.
+    pub fn with_viewer_renderer_publication<T>(
+        &mut self,
+        samples: &[crate::ViewerIndication],
+        previous: &noon_runtime::ViewerPresentation,
+        draw: impl FnOnce(RendererPublication<'_>) -> T,
+    ) -> Option<T> {
+        if let Some(reader) = &mut self.reader {
+            return Some(reader.with_viewer_renderer_publication(samples, previous, draw));
+        }
+        self.with_observed_program(|program| {
+            program
+                .scene
+                .owned_execution_mut()
+                .with_viewer_renderer_publication(samples, previous, draw)
+        })
+    }
+
+    pub fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        input: crate::PlanarViewerPointer,
+        displayed: Option<&crate::PlanarPickFrame>,
+    ) {
+        if let Some(reader) = &mut self.reader {
+            reader.submit_planar_viewer_pointer(pointer, input, displayed);
+        } else {
+            self.with_observed_program(|program| {
+                program
+                    .scene
+                    .owned_execution_mut()
+                    .submit_planar_viewer_pointer(pointer, input, displayed);
+            });
+        }
+    }
+
+    pub fn advance_viewer_inspection(
+        &mut self,
+        wall_time: f64,
+    ) -> Result<(), crate::InspectionNavigationError> {
+        if let Some(reader) = &mut self.reader {
+            return reader.advance_viewer_inspection(wall_time);
+        }
+        self.with_observed_program(|program| {
+            program
+                .scene
+                .owned_execution_mut()
+                .advance_viewer_inspection(wall_time)
+        })
+        .unwrap_or(Ok(()))
+    }
+
     pub fn query_viewports(&mut self, bounds: &[Rect]) -> Option<ExecutionViewportQuery> {
         if let Some(reader) = &mut self.reader {
             return Some(reader.query_renderer_viewports(bounds));

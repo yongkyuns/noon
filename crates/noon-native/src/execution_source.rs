@@ -5,8 +5,8 @@ use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameSnapshot, PointerFrameView,
 };
 use noon::{
-    LiveContinuation, LiveProgram, PlaybackProgram, RustHostCallbackTable, SceneExecution,
-    ScriptError, TranslationDragError,
+    LiveContinuation, LiveProgram, PlanarPickFrame, PlanarViewerPointer, PlaybackProgram,
+    RustHostCallbackTable, SceneExecution, ScriptError, TranslationDragError, ViewerIndication,
 };
 use noon_core::{
     Camera2DState, Inset2DViewState, NativeEventOccurrence, NativeInputValue, NativePointerId,
@@ -149,6 +149,22 @@ pub(crate) trait NativeExecutionSource {
         value: NativeInputValue,
     ) -> Result<(), NativeHostError>;
     fn emit_native_event(&mut self, event: NativeEventOccurrence) -> Result<(), NativeHostError>;
+    fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        input: PlanarViewerPointer,
+        displayed: Option<&PlanarPickFrame>,
+    );
+
+    fn with_viewer_renderer_publication(
+        &mut self,
+        samples: &[ViewerIndication],
+        previous: &noon::integration::ViewerPresentation,
+        draw: &mut dyn FnMut(
+            RendererPublication<'_>,
+        ) -> Result<PublicationContext, NativeHostError>,
+    ) -> Result<PublicationContext, NativeHostError>;
+    #[cfg(test)]
     fn take_renderer_publication(&mut self) -> RendererPublication<'_>;
     fn admit_retained_publication(
         &mut self,
@@ -204,6 +220,9 @@ impl NativeExecutionSource for StaticExecutionSource {
     }
 
     fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError> {
+        self.session
+            .session_mut()
+            .advance_viewer_inspection(wall_time_seconds)?;
         self.session
             .advance_interactions(wall_time_seconds)
             .map(|_| ())
@@ -336,6 +355,31 @@ impl NativeExecutionSource for StaticExecutionSource {
             .map_err(Into::into)
     }
 
+    fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        input: PlanarViewerPointer,
+        displayed: Option<&PlanarPickFrame>,
+    ) {
+        self.session
+            .session_mut()
+            .submit_planar_viewer_pointer(pointer, input, displayed);
+    }
+
+    fn with_viewer_renderer_publication(
+        &mut self,
+        samples: &[ViewerIndication],
+        previous: &noon::integration::ViewerPresentation,
+        draw: &mut dyn FnMut(
+            RendererPublication<'_>,
+        ) -> Result<PublicationContext, NativeHostError>,
+    ) -> Result<PublicationContext, NativeHostError> {
+        self.session
+            .session_mut()
+            .with_viewer_renderer_publication(samples, previous, draw)
+    }
+
+    #[cfg(test)]
     fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
         self.session.session_mut().take_renderer_publication()
     }
@@ -455,6 +499,7 @@ where
     }
 
     fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError> {
+        self.program.advance_viewer_inspection(wall_time_seconds)?;
         self.program
             .advance_interactions(wall_time_seconds)
             .map(|_| ())
@@ -601,6 +646,30 @@ where
             .map_err(|error| NativeHostError::Program(error.to_string()))
     }
 
+    fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        input: PlanarViewerPointer,
+        displayed: Option<&PlanarPickFrame>,
+    ) {
+        self.program
+            .submit_planar_viewer_pointer(pointer, input, displayed);
+    }
+
+    fn with_viewer_renderer_publication(
+        &mut self,
+        samples: &[ViewerIndication],
+        previous: &noon::integration::ViewerPresentation,
+        draw: &mut dyn FnMut(
+            RendererPublication<'_>,
+        ) -> Result<PublicationContext, NativeHostError>,
+    ) -> Result<PublicationContext, NativeHostError> {
+        self.program
+            .with_viewer_renderer_publication(samples, previous, draw)
+            .expect("native rendering requires a ready presentation")
+    }
+
+    #[cfg(test)]
     fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
         self.program
             .take_renderer_publication()
