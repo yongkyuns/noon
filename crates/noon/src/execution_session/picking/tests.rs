@@ -497,11 +497,13 @@ fn overlapping_animated_target_is_precisely_repicked_at_each_effective_position(
 
     session.advance_to(3.5).unwrap();
     assert_eq!(
-        query(&mut session, Vec2::ZERO).outcome(),
+        session.pick_effective_fill(Vec2::ZERO, |_| true).0,
         PointerFillOutcome::Hit(bottom)
     );
     assert_eq!(
-        query(&mut session, Vec2::new(-2.0, 0.0)).outcome(),
+        session
+            .pick_effective_fill(Vec2::new(-2.0, 0.0), |_| true)
+            .0,
         PointerFillOutcome::Hit(top)
     );
 }
