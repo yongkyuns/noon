@@ -60,11 +60,12 @@ class ReferenceDependencyInstallTests(unittest.TestCase):
         self.assertFalse(Path(source_options[0].split("=", 1)[1]).exists())
         for call in calls:
             self.assertIn("Dir::Etc::sourceparts=-", call)
-        for call, deadline in zip(calls, ["180s", "600s"]):
+        for call, deadline in zip(calls, ["240s", "600s"]):
             self.assertEqual(call[:8], ["-n", "/usr/bin/timeout", "--signal=TERM",
                              "--kill-after=15s", deadline, "env",
                              "DEBIAN_FRONTEND=noninteractive", "/usr/bin/apt-get"])
-            for option in ["Acquire::Retries=2", "Acquire::http::Timeout=20",
+            for option in ["Acquire::IndexTargets::deb::Translations::DefaultEnabled=false",
+                           "Acquire::Retries=2", "Acquire::http::Timeout=20",
                            "Acquire::https::Timeout=20", "DPkg::Lock::Timeout=60"]:
                 self.assertIn(option, call)
 
@@ -196,6 +197,7 @@ class PlaywrightDependencyInstallTests(unittest.TestCase):
                     'const query = cp.execFileSync(' + json.dumps(str(apt_get_config)) + ', ["shell",\n'
                     '"source", "Dir::Etc::sourcelist", "root", "Dir", "etc", "Dir::Etc",\n'
                     '"lists", "Dir::State::lists/d", "retries", "Acquire::Retries", "parts", "Dir::Etc::parts",\n'
+                    '"translations", "Acquire::IndexTargets::deb::Translations::DefaultEnabled",\n'
                     '"main", "Dir::Etc::main", "fragment", "NoonFixture::Fragment",\n'
                     '"hostMain", "NoonFixture::Main", "bootstrap", "NoonFixture::Bootstrap"], {encoding:"utf8"});\n'
                     'const source = query.match(/^source=\x27(.*)\x27$/m)[1];\n'
@@ -242,6 +244,7 @@ class PlaywrightDependencyInstallTests(unittest.TestCase):
         self.assertEqual(settings["etc"], "etc/apt")
         self.assertEqual(settings["lists"], "/var/lib/apt/lists/")
         self.assertEqual(settings["retries"], "2")
+        self.assertEqual(settings["translations"], "false")
         for key in ["fragment", "hostMain", "bootstrap"]:
             self.assertEqual(settings[key], "preserved")
         self.assertFalse(settings.get("parts"))
