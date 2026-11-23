@@ -411,6 +411,7 @@ struct NativeApp {
     interaction_wall_origin: Instant,
     next_input_sequence: u64,
     pointer: pointer_input::PointerCollector,
+    viewer_presentation: noon::integration::ViewerPresentation,
     force_full_redraw: bool,
     last_selection_presentation: Option<noon::integration::PointerSelectionPresentation>,
     error: Option<NativeHostError>,
@@ -506,6 +507,7 @@ impl NativeApp {
             interaction_wall_origin: Instant::now(),
             next_input_sequence: 0,
             pointer: pointer_input::PointerCollector::default(),
+            viewer_presentation: noon::integration::ViewerPresentation::default(),
             force_full_redraw: false,
             last_selection_presentation: None,
             error: None,
@@ -861,6 +863,7 @@ impl NativeApp {
                 || self.execution.buffering()
                 || matches!(self.execution.timeline(), TimelineWakeState::Quiescent))
             && !self.execution.session().interactions_active()
+            && !self.execution.session().viewer_inspection_active()
         {
             return Ok(());
         }
@@ -933,174 +936,231 @@ impl NativeApp {
             let highlight = self.execution.session().pointer_selection_presentation();
             let overlay = selection_overlay::prepare_highlight(highlight.as_ref())?;
             let force_full_redraw = self.force_full_redraw && pass == 0;
-            let endpoint = self.execution.pending_endpoint();
-            let Some(((surface_texture, reconfigure_after_present), publication)) =
-                Self::take_renderer_publication_after_acquire(
-                    self.execution.as_mut(),
-                    force_full_redraw,
-                    acquired.take(),
-                )
-            else {
-                return Ok(());
-            };
-
+            let endpoint = self
+                .execution
+                .pending_endpoint()
+                .filter(|_| pass < MAX_RETAINED_ENDPOINTS);
+            let planar_view = self.capture_viewer_pick_frame(&pointer_frame, force_full_redraw);
+            let samples = self.execution.session().viewer_indications();
             let gpu = self
                 .gpu
                 .as_mut()
                 .expect("drawable native host must own GPU state");
-            gpu.prepare_working_profile(&publication, !inset_views.is_empty(), camera)?;
-            pollster::block_on(
-                gpu.renderer
-                    .prepare_effect_programs(&gpu.device, &publication),
-            )
-            .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            gpu.prepared_effect_modules = None;
-            gpu.overlay.update(&gpu.device, &gpu.queue, overlay);
-            gpu.renderer
-                .prepare_spatial(&gpu.device, &gpu.queue, &publication)
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            let metrics = gpu.text_metrics(camera)?;
-            gpu.preparer.set_inset_views_active(!inset_views.is_empty());
-            gpu.renderer
-                .set_inset_2d_views(&gpu.device, &gpu.queue, &mut gpu.text_state, &inset_views)
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            let derived = gpu
-                .preparer
-                .prepare_transient_presentations_visible(&publication, visibility.object_indices())
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            // Glow can contribute outside the semantic object's hit bounds.
-            // Query the existing renderer-derived source set, then keep its
-            // ordinary painter slot in the retained GPU preparation.
-            let glow_visible = gpu
-                .renderer
-                .effect_source_visibility(&publication, visibility.object_indices())
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            let prepared = gpu
-                .preparer
-                .prepare_planned_publication_visible(
-                    &gpu.device,
-                    &publication,
-                    glow_visible,
-                    metrics,
-                )
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            gpu.renderer
-                .upload_retained(&gpu.device, &gpu.queue, &prepared, &mut gpu.text_state);
-            if let Some(video) = self.video.as_ref() {
-                video
-                    .upload(&mut gpu.renderer, &gpu.queue)
+            let mut rebind_after_present = false;
+            #[cfg(feature = "audio")]
+            let mut presented_submission = None;
+            let presented = self.execution.with_viewer_renderer_publication(
+                &samples,
+                &self.viewer_presentation,
+                &mut |mut publication| {
+                    if force_full_redraw {
+                        publication.invalidate_all();
+                    }
+                    gpu.prepare_working_profile(&publication, !inset_views.is_empty(), camera)?;
+                    pollster::block_on(
+                        gpu.renderer
+                            .prepare_effect_programs(&gpu.device, &publication),
+                    )
                     .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            }
-            if !derived.slots.is_empty() {
-                gpu.renderer
-                    .upload_derived(&gpu.device, &gpu.queue, &derived);
-            }
-            if let Some(expected) = endpoint.filter(|_| pass < MAX_RETAINED_ENDPOINTS) {
-                let retained = publication.context();
-                if retained != expected {
-                    return Err(NativeHostError::Program(
-                        "retained endpoint changed during native frame preparation".to_owned(),
-                    ));
-                }
-                // Retain all resource/dirty changes in the SAME production renderer
-                // before admitting the endpoint. Do not display an obsolete endpoint
-                // or install a pointer receipt for an image that was never shown.
-                self.execution.admit_retained_publication(retained)?;
+                    gpu.prepared_effect_modules = None;
+                    gpu.overlay.update(&gpu.device, &gpu.queue, overlay);
+                    gpu.renderer
+                        .prepare_spatial(&gpu.device, &gpu.queue, &publication)
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    let metrics = gpu.text_metrics(camera)?;
+                    gpu.preparer.set_inset_views_active(!inset_views.is_empty());
+                    gpu.renderer
+                        .set_inset_2d_views(
+                            &gpu.device,
+                            &gpu.queue,
+                            &mut gpu.text_state,
+                            &inset_views,
+                        )
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    let derived = gpu
+                        .preparer
+                        .prepare_transient_presentations_visible(
+                            &publication,
+                            visibility.object_indices(),
+                        )
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    // Glow can contribute outside the semantic object's hit bounds.
+                    // Query the existing renderer-derived source set, then keep its
+                    // ordinary painter slot in the retained GPU preparation.
+                    let mut viewer_visible = Vec::new();
+                    let visible = if samples.is_empty() {
+                        visibility.object_indices()
+                    } else {
+                        // A group pulse may move a member into the viewport. Include
+                        // those affected rows without refitting the authored index.
+                        viewer_visible.extend_from_slice(visibility.object_indices());
+                        viewer_visible.extend(samples.iter().filter_map(|sample| {
+                            let index = publication.object_index(sample.object)?;
+                            let bounds = publication.object_bounds(index)?;
+                            view_bounds
+                                .iter()
+                                .any(|view| {
+                                    view.min.x <= bounds.max.x
+                                        && bounds.min.x <= view.max.x
+                                        && view.min.y <= bounds.max.y
+                                        && bounds.min.y <= view.max.y
+                                })
+                                .then_some(index)
+                        }));
+                        viewer_visible
+                            .sort_unstable_by_key(|&index| publication.painter_rank(index));
+                        viewer_visible.dedup();
+                        &viewer_visible
+                    };
+                    let glow_visible = gpu
+                        .renderer
+                        .effect_source_visibility(&publication, visible)
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    let prepared = gpu
+                        .preparer
+                        .prepare_planned_publication_visible(
+                            &gpu.device,
+                            &publication,
+                            glow_visible,
+                            metrics,
+                        )
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    gpu.renderer.upload_retained(
+                        &gpu.device,
+                        &gpu.queue,
+                        &prepared,
+                        &mut gpu.text_state,
+                    );
+                    if let Some(video) = self.video.as_ref() {
+                        video
+                            .upload(&mut gpu.renderer, &gpu.queue)
+                            .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    }
+                    if !derived.slots.is_empty() {
+                        gpu.renderer
+                            .upload_derived(&gpu.device, &gpu.queue, &derived);
+                    }
+                    let retained = publication.context();
+                    if let Some(expected) = endpoint {
+                        if retained != expected {
+                            return Err(NativeHostError::Program(
+                                "retained endpoint changed during native frame preparation"
+                                    .to_owned(),
+                            ));
+                        }
+                        return Ok(retained);
+                    }
+                    let (surface_texture, reconfigure_after_present) = acquired
+                        .take()
+                        .expect("final pass owns the acquired native surface");
+                    let view = surface_texture
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+                    let mut encoder =
+                        gpu.device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("Noon native frame"),
+                            });
+                    let clear = noon_render_wgpu::authored_clear_color(
+                        CLEAR_COLOR,
+                        publication.color_profile(),
+                    );
+                    let no_overlay = OverlayGpuState::default();
+                    // Endpoint drains above retain the same surface and renderer; only
+                    // the final bounded pass may create a glow capture/blur workload.
+                    gpu.renderer
+                        .prepare_retained_effects(
+                            &gpu.device,
+                            &gpu.queue,
+                            &mut encoder,
+                            &prepared,
+                            &gpu.text_state,
+                            &publication,
+                            clear,
+                            noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
+                        )
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    let _draw = gpu
+                        .renderer
+                        .encode_retained_with_transient_presentations_and_overlay(
+                            &mut encoder,
+                            gpu.view_output.scene_view(&view),
+                            InteractiveRetainedFrame {
+                                prepared: &prepared,
+                                text: &gpu.text_state,
+                                transient: Some(&derived),
+                                overlay: if gpu.view_output.is_hdr() {
+                                    &no_overlay
+                                } else {
+                                    &gpu.overlay
+                                },
+                            },
+                            clear,
+                            None,
+                        )
+                        .map_err(|error| {
+                            gpu.renderer.invalidate_effect_captures();
+                            gpu.view_output.invalidate();
+                            NativeHostError::Gpu(error.to_string())
+                        })?;
+                    #[cfg(test)]
+                    {
+                        self.last_geometry_draw_calls = _draw.geometry.draw_calls;
+                        self.last_text_draw_calls = _draw.text.draw_calls;
+                    }
+                    let _view_work = gpu
+                        .view_output
+                        .resolve(
+                            &gpu.device,
+                            &gpu.queue,
+                            &mut encoder,
+                            &mut gpu.renderer,
+                            &publication,
+                            f64::from(camera.height),
+                            &gpu.overlay,
+                            &surface_texture.texture,
+                        )
+                        .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+                    #[cfg(test)]
+                    {
+                        self.last_bloom_passes = _view_work.passes;
+                    }
+                    window.pre_present_notify();
+                    let _submission = gpu.queue.submit(Some(encoder.finish()));
+                    gpu.queue.present(surface_texture);
+                    if reconfigure_after_present {
+                        gpu.surface.configure(&gpu.device, &gpu.config);
+                    }
+                    #[cfg(feature = "audio")]
+                    {
+                        presented_submission = Some(_submission);
+                    }
+                    if reconfigure_after_present {
+                        rebind_after_present = true;
+                    }
+                    Ok(retained)
+                },
+            )?;
+            self.viewer_presentation.presented(&samples);
+            if endpoint.is_some() {
+                // Retain the endpoint in the same renderer before releasing the
+                // source. No picture or pointer receipt was displayed for it.
+                self.execution.admit_retained_publication(presented)?;
                 self.advance_realtime_timeline(now)?;
                 if self.video_waiting {
                     return Ok(());
                 }
-                acquired = Some((surface_texture, reconfigure_after_present));
                 continue;
             }
-            let view = surface_texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            let mut encoder = gpu
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Noon native frame"),
-                });
-            let clear =
-                noon_render_wgpu::authored_clear_color(CLEAR_COLOR, publication.color_profile());
-            let no_overlay = OverlayGpuState::default();
-            // Endpoint drains above retain the same surface and renderer; only
-            // the final bounded pass may create a glow capture/blur workload.
-            gpu.renderer
-                .prepare_retained_effects(
-                    &gpu.device,
-                    &gpu.queue,
-                    &mut encoder,
-                    &prepared,
-                    &gpu.text_state,
-                    &publication,
-                    clear,
-                    noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
-                )
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            let _draw = gpu
-                .renderer
-                .encode_retained_with_transient_presentations_and_overlay(
-                    &mut encoder,
-                    gpu.view_output.scene_view(&view),
-                    InteractiveRetainedFrame {
-                        prepared: &prepared,
-                        text: &gpu.text_state,
-                        transient: Some(&derived),
-                        overlay: if gpu.view_output.is_hdr() {
-                            &no_overlay
-                        } else {
-                            &gpu.overlay
-                        },
-                    },
-                    clear,
-                    None,
-                )
-                .map_err(|error| {
-                    gpu.renderer.invalidate_effect_captures();
-                    gpu.view_output.invalidate();
-                    NativeHostError::Gpu(error.to_string())
-                })?;
-            #[cfg(test)]
-            {
-                self.last_geometry_draw_calls = _draw.geometry.draw_calls;
-                self.last_text_draw_calls = _draw.text.draw_calls;
-            }
-            let _view_work = gpu
-                .view_output
-                .resolve(
-                    &gpu.device,
-                    &gpu.queue,
-                    &mut encoder,
-                    &mut gpu.renderer,
-                    &publication,
-                    f64::from(camera.height),
-                    &gpu.overlay,
-                    &surface_texture.texture,
-                )
-                .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
-            #[cfg(test)]
-            {
-                self.last_bloom_passes = _view_work.passes;
-            }
-            window.pre_present_notify();
-            let _submission = gpu.queue.submit(Some(encoder.finish()));
-            gpu.queue.present(surface_texture);
-            if reconfigure_after_present {
-                gpu.surface.configure(&gpu.device, &gpu.config);
-            }
-            let presented = publication.context();
             debug_assert_eq!(pointer_frame.publication(), presented);
             self.execution.admit_presented_frame(&pointer_frame)?;
             #[cfg(feature = "audio")]
             if !self.audio_picture_ready {
                 if let Some(output) = self.audio_output.as_ref() {
                     // One cold/resume barrier, never a per-frame GPU fence.
-                    // Queue submission alone does not mean the first picture
-                    // has finished its shader/resource preparation.
                     gpu.device
                         .poll(wgpu::PollType::Wait {
-                            submission_index: Some(_submission),
+                            submission_index: presented_submission,
                             timeout: Some(Duration::from_secs(10)),
                         })
                         .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
@@ -1110,6 +1170,8 @@ impl NativeApp {
                     }
                 }
             }
+
+            self.pointer.presented_viewer = planar_view;
             self.pointer.presented = Some(pointer_frame);
             self.pointer.refresh_pending = false;
             self.last_selection_presentation = highlight;
@@ -1119,7 +1181,7 @@ impl NativeApp {
             }
             self.force_full_redraw = false;
             self.playback_picture_pending = false;
-            if reconfigure_after_present {
+            if rebind_after_present {
                 // The submitted image belongs to the old surface configuration.
                 self.rebind_pointer_view()?;
             }
@@ -1145,6 +1207,7 @@ impl NativeApp {
     ///
     /// A timeout, occlusion, or surface recovery leaves the session's pending
     /// publication intact so the next acquired surface receives the same changes.
+    #[cfg(test)]
     fn take_renderer_publication_after_acquire<T>(
         execution: &mut dyn NativeExecutionSource,
         force_full_redraw: bool,
@@ -1417,7 +1480,9 @@ impl ApplicationHandler for NativeApp {
             return;
         }
 
-        if self.execution.session().interactions_active() {
+        if self.execution.session().interactions_active()
+            || self.execution.session().viewer_inspection_active()
+        {
             window.request_redraw();
             self.set_wait_mode(event_loop, ControlFlow::Poll);
             return;

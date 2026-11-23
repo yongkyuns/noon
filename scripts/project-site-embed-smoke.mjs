@@ -20,6 +20,7 @@ const selection = JSON.parse(await readFile(path.join(root,'web/site/examples.js
 const report = [];
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const frameCaptureTimeout = 10_000;
+const coldAutoplayTimeout = 180_000;
 const editSource = color => `from noon import *
 class EmbedEdit(Scene):
     def construct(self):
@@ -289,12 +290,14 @@ try {
             // active playback and both actual frame/time counters advancing.
             // Observe before waiting for the completed source: an observed
             // first pass can finish and pause before a prepared scene is ready.
+            // A cold software renderer can still be compiling after the
+            // normal interaction deadline with every embed starting at once.
             await frame.waitForFunction(() => {
               const status = document.querySelector('#status');
               const frames = Number(status?.dataset.presentedFrames);
               const time = Number.parseFloat(document.querySelector('#metric-time')?.value);
               return status?.dataset.playbackPlaying === 'true' && frames > 0 && Number.isFinite(time);
-            });
+            }, null, {timeout:coldAutoplayTimeout});
             const autoplayBefore = await frame.evaluate(() => ({
               generation: window.__noonExampleGallery.generationDiagnostics.runGeneration,
               frames: Number(document.querySelector('#status').dataset.presentedFrames),

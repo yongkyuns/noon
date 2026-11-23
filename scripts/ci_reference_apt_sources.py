@@ -70,6 +70,7 @@ def playwright_apt_config(source):
         "Dir::Etc::parts": "", "Dir::Etc::main": "",
         "Dir::Etc::sourcelist": str(source.resolve()),
         "Dir::Etc::sourceparts": "-", "Acquire::Retries": "2",
+        "Acquire::IndexTargets::deb::Translations::DefaultEnabled": "false",
         "Acquire::http::Timeout": "20", "Acquire::https::Timeout": "20",
         "DPkg::Lock::Timeout": "60", "APT::Update::Error-Mode": "any",
     }
