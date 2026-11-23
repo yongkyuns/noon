@@ -63,7 +63,7 @@ fi
 apt_options=(
   -o "Dir::Etc::sourcelist=$source_dir/ubuntu.sources"
   -o Dir::Etc::sourceparts=-
-  -o Acquire::Languages=none
+  -o Acquire::IndexTargets::deb::Translations::DefaultEnabled=false
   -o Acquire::Retries=2
   -o Acquire::http::Timeout=20
   -o Acquire::https::Timeout=20
