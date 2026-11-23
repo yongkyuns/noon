@@ -1,29 +1,40 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { capturePausedFeedback, createLiveFeedbackExport } from "../../../web/playground-feedback-capture.js";
 import { runFeedbackCli } from "../src/feedback-cli.mjs";
 
-// Synthetic PNG and endpoint; this test does not execute Noon or prove playback.
-const PNG = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=", "base64"));
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=", "base64");
 const SOURCE = "from noon import *\n# Original source — not a later draft\n";
+const digest = value => createHash("sha256").update(value).digest("hex");
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), "noon-live-feedback-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const state = { preparedPlayback: true, playing: false, time: 1.2345678901234567,
-    presentationReceipt: { session: 7, sequence: 11, time: 1.2345678901234567 } };
-  const capture = await capturePausedFeedback({ source: SOURCE, runGeneration: 2, isCurrent: () => true,
-    canvas: {}, buildIdentity: async () => null,
-    player: { rendererBackend: "fixture", pause: async () => state, seek: async () => state, state: async () => state },
-  }, { afterPaint: async () => {}, copyImage: () => ({ width: 1, height: 1, png: PNG }) });
-  const exported = createLiveFeedbackExport(capture, {
-    region: { x: 0.25, y: 0.5, width: 0.5, height: 0.5 },
-  }, "Keep this input visible.");
+  const time = 1.2345678901234567;
+  const exported = {
+    kind: "noon-live-feedback-export", schemaVersion: 1,
+    source: SOURCE, pngBase64: PNG.toString("base64"),
+    presentationReceipt: { session: 7, sequence: 11, time },
+    feedback: {
+      kind: "noon-frame-feedback", schemaVersion: 1, status: "pending_review",
+      feedback: {
+        interval: { start: time, end: time }, region: { x: 0.25, y: 0.5, width: 0.5, height: 0.5 },
+        observation: "Keep this input visible.", desiredChange: "Clarify the input.", preserve: null,
+      },
+      frame: {
+        id: "fixture", mimeType: "image/png", width: 1, height: 1, byteLength: PNG.length, sha256: digest(PNG),
+        provenance: {
+          sessionId: "playground:2:7", sourceSha256: digest(SOURCE),
+          build: { engineRevision: null, wasmSha256: null, workerSha256: null, buildId: null },
+          requestedTime: time, publishedTime: time, backend: "fixture", sceneRevision: null, frameRevision: null,
+        },
+      },
+    },
+  };
   await writeFile(path.join(root, "note.json"), JSON.stringify(exported));
-  // Imported JSON is mutable external input, not the frozen in-process capture.
-  return { root, exported: JSON.parse(JSON.stringify(exported)) };
+  return { root, exported };
 }
 function importNote(root, output = "review") {
   return runFeedbackCli({ cwd: root, argv: ["import-live", "--input", "note.json", "--output", output] });
