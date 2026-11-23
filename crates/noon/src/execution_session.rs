@@ -1682,8 +1682,7 @@ impl ExecutionSession {
             .with_primary_view(self.camera_object)
     }
 
-    /// Consume one coherent renderer publication from this typed session.
-    pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+    fn prepare_renderer_publication(&mut self) -> (bool, bool) {
         let prefix_queries = self.runtime.has_painter_prefix_sources();
         if prefix_queries {
             self.sync_spatial_index();
@@ -1701,6 +1700,12 @@ impl ExecutionSession {
             self.derived_display_plan = None;
             self.derived_display_expire_after_publication = false;
         }
+        (prefix_queries, expiring)
+    }
+
+    /// Consume one coherent renderer publication from this typed session.
+    pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+        let (prefix_queries, expiring) = self.prepare_renderer_publication();
         let publication = if expiring {
             self.runtime
                 .take_renderer_publication_with_followup_presentation_redraw()
@@ -1716,6 +1721,41 @@ impl ExecutionSession {
         publication
             .with_transient_presentations(&self.derived_display_objects)
             .expect("compiler-owned family Transform rows retain valid painter anchors")
+    }
+
+    /// Publish the ordinary retained rows with scoped viewer presentation values.
+    /// Export and analysis keep using the canonical publication.
+    pub fn with_viewer_renderer_publication<T>(
+        &mut self,
+        samples: &[crate::ViewerIndication],
+        spatial_camera: Option<(usize, noon_core::SemanticCamera3D)>,
+        previous: &noon_runtime::ViewerPresentation,
+        draw: impl FnOnce(RendererPublication<'_>) -> T,
+    ) -> T {
+        let (prefix_queries, expiring) = self.prepare_renderer_publication();
+        let camera = self.camera_object;
+        let spatial_index = prefix_queries.then_some(&self.spatial_index);
+        let occurrences = &self.derived_display_objects;
+        self.runtime.with_viewer_renderer_publication(
+            samples,
+            spatial_camera,
+            previous,
+            expiring,
+            |publication| {
+                let publication = publication.with_primary_view(camera);
+                let publication = match spatial_index {
+                    Some(index) => publication.with_spatial_index(index),
+                    None => publication,
+                };
+                draw(
+                    publication
+                        .with_transient_presentations(occurrences)
+                        .expect(
+                            "compiler-owned family Transform rows retain valid painter anchors",
+                        ),
+                )
+            },
+        )
     }
 
     /// Evaluate deterministically at an absolute time.
