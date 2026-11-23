@@ -203,6 +203,15 @@ impl ExecutionSession {
         }
     }
 
+    /// A changed source publishes a new declaration set. Retain surviving
+    /// presentation identities and the physical button ledger, but discard
+    /// click candidates collected before this successful publication.
+    pub(crate) fn retire_source_click_candidates(&mut self) {
+        self.pointer_selection.pending = None;
+        self.cancel_planar_viewer_pointer();
+        self.cancel_spatial_pointer_gestures();
+    }
+
     /// Project only the selected row, without querying the spatial index,
     /// consuming renderer dirtiness or modifying authored/runtime geometry.
     /// Invisible or no-longer-supported effective geometry has no highlight.
