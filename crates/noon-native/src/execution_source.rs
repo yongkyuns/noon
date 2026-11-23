@@ -156,9 +156,21 @@ pub(crate) trait NativeExecutionSource {
         displayed: Option<&PlanarPickFrame>,
     );
 
+    fn submit_spatial_pointer(
+        &mut self,
+        input: noon::SpatialPointerInput,
+        displayed: Option<&noon::SpatialPickFrame>,
+        aspect: f64,
+    ) -> Result<bool, NativeHostError>;
+    fn move_spatial_inspection(
+        &mut self,
+        motion: noon::SpatialInspectionMotion,
+    ) -> Result<bool, NativeHostError>;
+
     fn with_viewer_renderer_publication(
         &mut self,
         samples: &[ViewerIndication],
+        spatial_camera: Option<(usize, noon_core::SemanticCamera3D)>,
         previous: &noon::integration::ViewerPresentation,
         draw: &mut dyn FnMut(
             RendererPublication<'_>,
@@ -366,17 +378,43 @@ impl NativeExecutionSource for StaticExecutionSource {
             .submit_planar_viewer_pointer(pointer, input, displayed);
     }
 
+    fn submit_spatial_pointer(
+        &mut self,
+        input: noon::SpatialPointerInput,
+        displayed: Option<&noon::SpatialPickFrame>,
+        aspect: f64,
+    ) -> Result<bool, NativeHostError> {
+        self.session
+            .session_mut()
+            .submit_spatial_pointer(input, displayed, aspect)
+            .map_err(Into::into)
+    }
+
+    fn move_spatial_inspection(
+        &mut self,
+        motion: noon::SpatialInspectionMotion,
+    ) -> Result<bool, NativeHostError> {
+        self.session
+            .session_mut()
+            .move_spatial_inspection(motion)
+            .map_err(Into::into)
+    }
+
     fn with_viewer_renderer_publication(
         &mut self,
         samples: &[ViewerIndication],
+        spatial_camera: Option<(usize, noon_core::SemanticCamera3D)>,
         previous: &noon::integration::ViewerPresentation,
         draw: &mut dyn FnMut(
             RendererPublication<'_>,
         ) -> Result<PublicationContext, NativeHostError>,
     ) -> Result<PublicationContext, NativeHostError> {
-        self.session
-            .session_mut()
-            .with_viewer_renderer_publication(samples, previous, draw)
+        self.session.session_mut().with_viewer_renderer_publication(
+            samples,
+            spatial_camera,
+            previous,
+            draw,
+        )
     }
 
     #[cfg(test)]
@@ -656,16 +694,37 @@ where
             .submit_planar_viewer_pointer(pointer, input, displayed);
     }
 
+    fn submit_spatial_pointer(
+        &mut self,
+        input: noon::SpatialPointerInput,
+        displayed: Option<&noon::SpatialPickFrame>,
+        aspect: f64,
+    ) -> Result<bool, NativeHostError> {
+        self.program
+            .submit_spatial_pointer(input, displayed, aspect)
+            .map_err(Into::into)
+    }
+
+    fn move_spatial_inspection(
+        &mut self,
+        motion: noon::SpatialInspectionMotion,
+    ) -> Result<bool, NativeHostError> {
+        self.program
+            .move_spatial_inspection(motion)
+            .map_err(Into::into)
+    }
+
     fn with_viewer_renderer_publication(
         &mut self,
         samples: &[ViewerIndication],
+        spatial_camera: Option<(usize, noon_core::SemanticCamera3D)>,
         previous: &noon::integration::ViewerPresentation,
         draw: &mut dyn FnMut(
             RendererPublication<'_>,
         ) -> Result<PublicationContext, NativeHostError>,
     ) -> Result<PublicationContext, NativeHostError> {
         self.program
-            .with_viewer_renderer_publication(samples, previous, draw)
+            .with_viewer_renderer_publication(samples, spatial_camera, previous, draw)
             .expect("native rendering requires a ready presentation")
     }
 

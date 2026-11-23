@@ -43,15 +43,21 @@ fn present(app: &mut NativeApp, wall_time: f64, mut draw: impl FnMut(&RendererPu
     let frame = app
         .capture_pointer_presentation(PhysicalSize::from(SIZE), 1.0)
         .unwrap();
-    let pick = app.capture_viewer_pick_frame(&frame, false);
+    let camera = app.session().inspection_spatial_camera().unwrap();
+    let pick = app.capture_viewer_pick_frame(&frame, camera.map(|(_, camera)| camera), false);
     let samples = app.session().viewer_indications();
     app.execution
-        .with_viewer_renderer_publication(&samples, &app.viewer_presentation, &mut |publication| {
-            draw(&publication);
-            Ok(publication.context())
-        })
+        .with_viewer_renderer_publication(
+            &samples,
+            camera,
+            &app.viewer_presentation,
+            &mut |publication| {
+                draw(&publication);
+                Ok(publication.context())
+            },
+        )
         .unwrap();
-    app.viewer_presentation.presented(&samples);
+    app.viewer_presentation.presented(&samples, camera);
     app.execution.admit_presented_frame(&frame).unwrap();
     app.pointer.presented = Some(frame);
     app.pointer.presented_viewer = pick;
@@ -203,4 +209,218 @@ fn native_graph_tick_pulses_both_axes_during_playback_and_pause() {
             adapter.get_info().backend,
         );
     }
+}
+
+fn spatial_app() -> (NativeApp, noon_core::ObjectId) {
+    let execution = noon::example_scenes::spatial_mesh::session().unwrap();
+    let app = NativeApp::new(
+        execution,
+        NativeViewportConfig {
+            playback_controls: true,
+            ..Default::default()
+        },
+    );
+    let id = app
+        .session()
+        .frame()
+        .objects
+        .iter()
+        .find(|row| row.style.fill == Some(Color::RED))
+        .unwrap()
+        .id;
+    (app, id)
+}
+
+fn mouse(app: &mut NativeApp, x: f64, y: f64, edge: Option<(MouseButton, ElementState)>) {
+    let size = PhysicalSize::from(SIZE);
+    app.dispatch_pointer_position(PhysicalPosition::new(x, y), size, 1.0)
+        .unwrap();
+    if let Some((button, state)) = edge {
+        assert_eq!(
+            app.dispatch_pointer_button(button, state, size, 1.0)
+                .unwrap(),
+            crate::pointer_input::PointerDispatch::Admitted
+        );
+    }
+}
+
+#[test]
+fn native_spatial_controls_follow_scripted_camera_and_pick_the_pressed_mesh() {
+    use ElementState::{Pressed, Released};
+    use MouseButton::{Left, Right};
+
+    let (mut app, front) = spatial_app();
+    app.execution.advance_to(0.10).unwrap();
+    present(&mut app, 0.0, |_| {});
+    mouse(&mut app, 256.0, 144.0, Some((Left, Pressed)));
+    // Red crosses behind the blue triangle before release. The displayed
+    // frame at press, not the new frontmost triangle, owns the click.
+    app.execution.advance_to(1.8).unwrap();
+    present(&mut app, 0.0, |_| {});
+    mouse(&mut app, 256.0, 144.0, Some((Left, Released)));
+    present(&mut app, 0.0, |_| {});
+    present(&mut app, 0.5, |publication| {
+        let front = publication.object_index(front).unwrap();
+        assert!(
+            publication.frame().objects[front]
+                .world_transform()
+                .unwrap()
+                .scale
+                .x
+                > 1.0
+        );
+        assert_eq!(publication.changes().object_indices(), &[front]);
+    });
+
+    let before = app.session().camera_3d().unwrap().unwrap();
+    mouse(&mut app, 256.0, 144.0, Some((Left, Pressed)));
+    mouse(&mut app, 288.0, 153.0, Some((Left, Released)));
+    let orbit = app
+        .session()
+        .inspection_spatial_camera()
+        .unwrap()
+        .unwrap()
+        .1;
+    assert_ne!(orbit.orientation, before.orientation);
+    app.execution.advance_to(1.9).unwrap();
+    let scripted = app.session().camera_3d().unwrap().unwrap();
+    assert_ne!(scripted, before);
+    let composed = app
+        .session()
+        .inspection_spatial_camera()
+        .unwrap()
+        .unwrap()
+        .1;
+    assert_ne!(composed, orbit);
+    assert_ne!(composed, scripted);
+
+    app.playback_paused = true;
+    present(&mut app, 0.55, |_| {});
+    mouse(&mut app, 256.0, 144.0, Some((Right, Pressed)));
+    mouse(&mut app, 274.0, 159.0, Some((Right, Released)));
+    let pan = app
+        .session()
+        .inspection_spatial_camera()
+        .unwrap()
+        .unwrap()
+        .1;
+    assert_ne!(pan.position, composed.position);
+    app.dispatch_inspection_scroll(
+        winit::event::MouseScrollDelta::LineDelta(0.0, 3.0),
+        PhysicalSize::from(SIZE),
+        1.0,
+    )
+    .unwrap();
+    let (index, adjusted) = app.session().inspection_spatial_camera().unwrap().unwrap();
+    assert_ne!(adjusted, pan);
+    present(&mut app, 0.6, |publication| {
+        let row = &publication.frame().objects[index];
+        assert_eq!(row.camera_projection(), Some(adjusted.projection));
+        assert_eq!(
+            row.world_transform().unwrap().translation,
+            adjusted.position
+        );
+    });
+    assert_eq!(app.session().camera_3d().unwrap().unwrap(), scripted);
+    for state in [Pressed, Released, Pressed, Released] {
+        mouse(&mut app, 256.0, 144.0, Some((Left, state)));
+    }
+    present(&mut app, 0.6, |_| {});
+    present(&mut app, 0.77, |_| {});
+    let intermediate = app
+        .session()
+        .inspection_spatial_camera()
+        .unwrap()
+        .unwrap()
+        .1;
+    assert_ne!(intermediate, adjusted);
+    assert_ne!(intermediate, scripted);
+    present(&mut app, 1.0, |publication| {
+        assert_eq!(
+            publication.frame().objects[index].camera_projection(),
+            Some(scripted.projection)
+        );
+        assert!(publication.changes().object_indices().contains(&index));
+    });
+    assert_eq!(app.session().inspection_spatial_camera().unwrap(), None);
+    assert_eq!(app.session().frame().time, 1.9);
+}
+
+#[test]
+#[ignore = "requires a real native raster adapter; run explicitly for pixel qualification"]
+fn native_spatial_viewer_draws_indicate_and_restores_the_camera() {
+    use ElementState::{Pressed, Released};
+    use MouseButton::Left;
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+    assert_ne!(adapter.get_info().backend, wgpu::Backend::Noop);
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let (mut app, _) = spatial_app();
+    app.execution.advance_to(0.1).unwrap();
+    app.playback_paused = true;
+    let mut draw = Draw::new(&device, &queue);
+    let mut output = AuthoredViewOutput::new(
+        &adapter,
+        &device,
+        FORMAT,
+        noon_render_wgpu::OutputTransfer::Direct,
+    );
+    let mut render = |app: &mut NativeApp, time| {
+        let mut pixels = Vec::new();
+        present(app, time, |publication| {
+            draw.renderer
+                .set_viewport(&device, &queue, SIZE[0], SIZE[1]);
+            draw.renderer
+                .prepare_spatial(&device, &queue, publication)
+                .unwrap();
+            pixels = draw
+                .frame(
+                    &device,
+                    &queue,
+                    &mut output,
+                    publication,
+                    SIZE,
+                    &OverlayGpuState::default(),
+                    false,
+                )
+                .0;
+        });
+        pixels
+    };
+    let baseline = render(&mut app, 0.0);
+    assert!(baseline
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|pixel| i32::from(pixel[0]) - i32::from(pixel[1]) > 50));
+    mouse(&mut app, 256.0, 144.0, Some((Left, Pressed)));
+    mouse(&mut app, 256.0, 144.0, Some((Left, Released)));
+    render(&mut app, 0.0);
+    let peak = render(&mut app, 0.5);
+    let yellow = peak
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[0] > 150 && pixel[1] > 160 && pixel[2] < 150)
+        .count();
+    assert!(yellow > 100, "the selected solid mesh visibly pulses");
+    assert!(render(&mut app, 1.1) == baseline);
+
+    mouse(&mut app, 256.0, 144.0, Some((Left, Pressed)));
+    mouse(&mut app, 342.0, 170.0, Some((Left, Released)));
+    let orbited = render(&mut app, 1.2);
+    assert!(orbited != baseline);
+    for state in [Pressed, Released, Pressed, Released] {
+        mouse(&mut app, 256.0, 144.0, Some((Left, state)));
+    }
+    render(&mut app, 1.3);
+    let returning = render(&mut app, 1.47);
+    assert!(returning != orbited && returning != baseline);
+    assert!(render(&mut app, 2.5) == baseline);
+    assert_eq!(app.session().frame().time, 0.1);
+    eprintln!(
+        "{:?}, yellow mesh pixels={yellow}, exact camera restoration",
+        adapter.get_info().backend
+    );
 }

@@ -397,6 +397,16 @@ fn overlapping_animated_target_is_precisely_repicked_at_each_effective_position(
     let mut top_state = circle();
     top_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
     let top = attach(&mut store, top_state);
+    let mut binding = SemanticMutationTransaction::new();
+    binding.set_click_indicate(
+        top,
+        Some(noon_core::SemanticClickIndicate::new(
+            1.2,
+            Color::YELLOW,
+            0.4,
+        )),
+    );
+    binding.apply(&mut store).unwrap();
 
     let mut bottom_endpoint_state = circle();
     bottom_endpoint_state.transform.translation = SemanticVec3::ZERO;
@@ -451,6 +461,39 @@ fn overlapping_animated_target_is_precisely_repicked_at_each_effective_position(
     assert_eq!(midpoint.outcome(), PointerFillOutcome::Hit(top));
     assert_eq!(midpoint.spatial_stats().results, 2);
     assert_eq!(midpoint.precise_tests(), 1);
+
+    session.enable_pointer_fill_selection(4.0).unwrap();
+    let (token, press) = record(&session, Vec2::ZERO);
+    session
+        .submit_native_pointer_input(&mut store, &token, press)
+        .unwrap();
+    let token = session.native_pointer_input_token().unwrap();
+    let release = NativePointerInput::new(
+        1,
+        POINTER,
+        token.context(),
+        NativeInputModifiers::default(),
+        NativePointerInputKind::Release {
+            position: press.position().unwrap(),
+            button: 0,
+        },
+    );
+    let click = session
+        .submit_native_pointer_input(&mut store, &token, release)
+        .unwrap();
+    assert_eq!(click.selection_click().unwrap().target(), Some(top));
+    session.advance_interactions(&mut store, 0.0).unwrap();
+    session.take_frame_changes();
+    session.advance_interactions(&mut store, 0.2).unwrap();
+    let top_object = session.execution_object_id(top).unwrap();
+    let top_row = session.runtime.frame_index_for_object(top_object).unwrap();
+    assert_eq!(
+        session.frame().objects[top_row].style.fill,
+        Some(Color::YELLOW)
+    );
+    assert_eq!(session.take_frame_changes().object_indices(), &[top_row]);
+    assert_eq!(session.frame().time, 3.0);
+    session.advance_interactions(&mut store, 0.5).unwrap();
 
     session.advance_to(3.5).unwrap();
     assert_eq!(

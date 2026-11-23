@@ -284,6 +284,7 @@ pub struct RendererPublication<'a> {
     view_color_profiles: Option<&'a dyn ViewColorProfileLookup>,
     spatial_index: Option<&'a crate::ExecutionSpatialIndex>,
     viewer_indications: &'a [ViewerIndication],
+    viewer_rows_changed: bool,
 }
 
 impl<'a> RendererPublication<'a> {
@@ -332,6 +333,11 @@ impl<'a> RendererPublication<'a> {
 
     pub const fn context(&self) -> PublicationContext {
         self.context
+    }
+
+    /// This typed publication updates viewer rows at the same authored epoch.
+    pub const fn viewer_rows_changed(&self) -> bool {
+        self.viewer_rows_changed
     }
 
     pub const fn frame(&self) -> &FrameState {
@@ -553,6 +559,7 @@ impl<'a> RendererPublication<'a> {
             view_color_profiles: None,
             spatial_index: None,
             viewer_indications: &[],
+            viewer_rows_changed: false,
         }
     }
 }

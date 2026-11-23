@@ -266,14 +266,15 @@ values are restored when that visit ends, and the last submitted rows are
 invalidated when the pulse retires. Export and input queries use the canonical
 publication.
 
-3D browser inspection composes relative orbit, pan and zoom with the effective
+3D native and browser inspection composes relative orbit, pan and zoom with the effective
 spatial camera. The adjusted pose and projection use the existing retained
 camera row, so world rendering and fixed-orientation objects use the same view.
 The planar HUD uses its own camera. The host collects ordered pointer input.
 Shared Rust distinguishes click, drag and double-click. Camera return uses
 monotonic interaction time and follows the authored camera at each sample,
-including while playback is paused. A click ray uses the camera and immutable
-mesh bounds from its displayed-frame receipt. Sparse mesh changes update only
+including while playback is paused. The press ray uses the camera and immutable
+mesh bounds from its displayed-frame receipt. Release validates the retained
+semantic target and group. Sparse mesh changes update only
 affected bounds paths. The frontmost mesh uses the same restoring Indicate
 by composing scale and tint with its current world pose and material.
 
