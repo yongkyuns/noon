@@ -1,5 +1,5 @@
 //! Gesture interpretation shared by hosts. Coordinates use viewport-height units.
-use noon_core::Vec2;
+use noon_core::{ObjectId, SemanticNodeId, Vec2};
 
 use crate::SpatialInspectionMotion;
 
@@ -27,7 +27,7 @@ pub struct SpatialPointerInput {
 pub enum SpatialGesture {
     None,
     Motion(SpatialInspectionMotion),
-    Click(Vec2),
+    Click(Option<(ObjectId, Option<SemanticNodeId>)>),
     Reset,
 }
 
@@ -39,6 +39,7 @@ struct Contact {
     pan: bool,
     touch: bool,
     dragged: bool,
+    target: Option<(ObjectId, Option<SemanticNodeId>)>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -49,7 +50,11 @@ pub(super) struct SpatialGestures {
 }
 
 impl SpatialGestures {
-    pub(super) fn submit(&mut self, input: SpatialPointerInput) -> SpatialGesture {
+    pub(super) fn submit(
+        &mut self,
+        input: SpatialPointerInput,
+        pick: impl FnOnce() -> Option<(ObjectId, Option<SemanticNodeId>)>,
+    ) -> SpatialGesture {
         use SpatialGesture::{Click, Motion, None as NoGesture, Reset};
         if self.view != input.view_revision {
             *self = Self {
@@ -104,6 +109,11 @@ impl SpatialGestures {
                 pan: input.pan,
                 touch: input.touch,
                 dragged: two_finger,
+                target: if input.pan || two_finger {
+                    None
+                } else {
+                    pick()
+                },
             });
             return NoGesture;
         }
@@ -153,7 +163,7 @@ impl SpatialGestures {
             Reset
         } else {
             self.last_click = Some((position, input.timestamp_ms));
-            Click(position)
+            Click(contact.target)
         }
     }
 }
