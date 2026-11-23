@@ -125,7 +125,7 @@ pub use noon_core::{
 pub use noon_runtime::{
     AudioMixError, AudioMixFormat, EffectiveObjectProperties, FrameChanges, FrameObjectState,
     FrameState, PreparedAudioMix, RendererPublication, ReplayError, ReplayLimits, RuntimeIdentity,
-    RuntimeWakeState, TimelineWakeState, MAX_AUDIO_MIX_BLOCK_FRAMES,
+    RuntimeWakeState, TimelineWakeState, ViewerPresentation, MAX_AUDIO_MIX_BLOCK_FRAMES,
 };
 
 pub mod graph;
