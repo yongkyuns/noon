@@ -1,5 +1,7 @@
 mod spatial_queries;
+mod viewer_indication;
 pub use spatial_queries::{PainterPrefixGeometryQuery, PainterPrefixGeometryQueryError};
+pub use viewer_indication::{ViewerIndication, ViewerPresentation};
 
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -281,6 +283,8 @@ pub struct RendererPublication<'a> {
     primary_view: Option<noon_core::ObjectId>,
     view_color_profiles: Option<&'a dyn ViewColorProfileLookup>,
     spatial_index: Option<&'a crate::ExecutionSpatialIndex>,
+    viewer_indications: &'a [ViewerIndication],
+    viewer_rows_changed: bool,
 }
 
 impl<'a> RendererPublication<'a> {
@@ -331,6 +335,11 @@ impl<'a> RendererPublication<'a> {
         self.context
     }
 
+    /// This typed publication updates viewer rows at the same authored epoch.
+    pub const fn viewer_rows_changed(&self) -> bool {
+        self.viewer_rows_changed
+    }
+
     pub const fn frame(&self) -> &FrameState {
         self.frame
     }
@@ -342,6 +351,28 @@ impl<'a> RendererPublication<'a> {
                 .get(index)
                 .is_some_and(|row| row.id == object)
         })
+    }
+
+    pub fn object_bounds(&self, index: usize) -> Option<Rect> {
+        crate::frame_object_conservative_bounds_with_resources(
+            self.frame,
+            index,
+            self.geometry_resources,
+        )
+    }
+
+    /// Preserve indexed bounds for stable rows and use the drawn bounds of
+    /// sparse viewer overrides for effect footprints.
+    pub fn indexed_object_bounds(&self, index: usize) -> Option<Rect> {
+        let row = self.frame.objects.get(index)?;
+        if self
+            .viewer_indications
+            .binary_search_by_key(&row.id, |sample| sample.object)
+            .is_ok()
+        {
+            return self.object_bounds(index);
+        }
+        self.spatial_index?.bounds_for_object(row.id)
     }
 
     pub fn viewer_group(&self, object: noon_core::ObjectId) -> Option<noon_core::SemanticNodeId> {
@@ -527,6 +558,8 @@ impl<'a> RendererPublication<'a> {
             primary_view: None,
             view_color_profiles: None,
             spatial_index: None,
+            viewer_indications: &[],
+            viewer_rows_changed: false,
         }
     }
 }
