@@ -206,6 +206,7 @@ impl SpatialGpuState {
             publication.context(),
             publication.frame(),
             publication.changes(),
+            publication.viewer_rows_changed(),
             publication.geometry_resources(),
             publication.text_resources(),
             publication.font_resources(),
@@ -224,6 +225,7 @@ impl SpatialGpuState {
         context: noon_core::PublicationContext,
         frame: &FrameState,
         changes: &FrameChanges,
+        viewer_rows_changed: bool,
         geometry_resources: &dyn GeometryResourceLookup,
         text_resources: &dyn noon_core::TextResourceLookup,
         font_resources: &dyn noon_core::FontResourceLookup,
@@ -236,7 +238,9 @@ impl SpatialGpuState {
         {
             return Err(SpatialPrepareError::StalePublication);
         }
-        let retry = self.last_publication == Some(context);
+        // Native viewer samples can change with authored playback paused.
+        // Transport retries continue to ignore already consumed row changes.
+        let retry = self.last_publication == Some(context) && !viewer_rows_changed;
         if retry && self.viewport == viewport && self.planar_camera == Some(camera) {
             return Ok(SpatialUploadStats {
                 resident_meshes: self.meshes.len(),
