@@ -257,6 +257,15 @@ Finite Python file export borrows that same paused immutable worker session. Sha
 
 Inspection navigation is a constant-size session adjustment composed with the current effective camera in shared Rust. Rendering, visibility and picking consume that same composed view, qualified by a monotonic inspection revision and the existing displayed-frame receipt. A wheel action changes neither the authored camera nor authored time; it can coexist with an independent object animation. Platform hosts normalize wheel units. The browser gallery enables inspection for every scene. Authored pointer subscriptions govern idle motion delivery and retain current-frame admission. For a scene with only default viewer input, planar picking uses the receipt captured at press and a release within the existing motion tolerance. The worker retains a bounded window of presented pick roots. Unchanged bounds branches and immutable geometry are shared across frames, while sparse changes replace only affected paths. Open paths test their revealed stroke so a plotted curve’s empty bounds leave axis ticks clickable. The selected object can move during the click. A default click runs a restoring Indicate on the existing viewer clock, including while paused. The compiler retains each drawable’s unambiguous outer mounted family in the same reversible row metadata as its bindings. A family uses one pulse and a shared pivot from the current drawn bounds, so authored motion and family animation can continue during the pulse. An individually mounted object or a member shared by multiple mounted families pulses on its own. Explicit click actions retain their own runtime admission rules. Stale receipts and excess outstanding input are rejected explicitly. New sessions reset inspection; same-session seeks preserve it. This viewer adjustment is excluded from ordinary authored export and replay.
 
+Native planar viewports use the same default click, mounted-family lookup and
+independent pulse clock. The native host pairs one shared pick snapshot with
+the last successfully presented picture. Scenes with explicit pointer
+subscriptions still use the authored input lane. In the typed renderer visit,
+only the indicated rows receive the shared pose and tint. Their canonical
+values are restored when that visit ends, and the last submitted rows are
+invalidated when the pulse retires. Export and input queries use the canonical
+publication.
+
 3D browser inspection composes relative orbit, pan and zoom with the effective
 spatial camera. The adjusted pose and projection use the existing retained
 camera row, so world rendering and fixed-orientation objects use the same view.

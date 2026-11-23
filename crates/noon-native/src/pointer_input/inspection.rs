@@ -67,8 +67,10 @@ impl NativeApp {
         {
             // Shared navigation has atomically cancelled the gesture and retired
             // its binding. Everything below is infallible platform bookkeeping.
+            self.cancel_viewer_pointer();
             self.pointer.configured = false;
             self.pointer.presented = None;
+            self.pointer.presented_viewer = None;
             self.pointer.refresh_pending = true;
         }
         Ok(PointerDispatch::Admitted)
