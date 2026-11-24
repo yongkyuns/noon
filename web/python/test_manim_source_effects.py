@@ -10,8 +10,10 @@ from _manim_source_execution import source_execution_proof, source_is_scene_only
 
 class SourceEffectsTests(unittest.TestCase):
     def test_hand_drawn_demo_uses_prepared_playback(self):
-        source = Path(__file__).with_name("examples").joinpath("hand_drawn.py").read_text()
-        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        for name in ("hand_drawn.py", "hand_drawn_paths.py"):
+            with self.subTest(demo=name):
+                source = Path(__file__).with_name("examples").joinpath(name).read_text()
+                self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
 
     def test_helper_proof_work_scales_with_call_sites(self):
         def visits(count):
