@@ -1134,6 +1134,28 @@
       ],
       "still_intervals": [[0, 0.75], [2.25, 2.5], [3.25, 4], [6.25, 6.75]],
       "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-retarget-blink",
+      "title": "One blink, two faces",
+      "lesson": "Two characters share one blink cue sequence. Each eyelid has its own outline and follows a different anchor as the head tilts.",
+      "primary_feature": "retargeted-eyelid-blink",
+      "category": "Motion",
+      "path": "python/examples/showcase_retarget_blink.py",
+      "features": ["joint retargeting", "named artwork cues"],
+      "duration": 5.25,
+      "thumbnail_time": 3.25,
+      "thumbnail": "thumbnails/showcase/showcase-retarget-blink.png",
+      "thumbnail_alt": "A round teal robot and a square copper robot tilt in opposite directions with their eyelids half open.",
+      "beats": [
+        { "time": 0.3, "label": "Compare the two eye shapes and their positions" },
+        { "time": 1.25, "label": "Both eyes reach the half-open cue as the heads tilt" },
+        { "time": 2.25, "label": "Both eyelids close while staying on their visors" },
+        { "time": 3.25, "label": "Both eyes reopen through the same half-open cue" },
+        { "time": 4.95, "label": "The eyes open and the heads return to their first pose" }
+      ],
+      "still_intervals": [[0, 0.5], [2, 2.5], [4.75, 5.25]],
+      "playback_capability": "deterministic-retained-replay"
     }
   ]
 }
