@@ -51,6 +51,7 @@ pub mod graph_queries;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod group_animation;
 pub mod hand_drawn;
+pub mod hand_drawn_paths;
 pub mod hatch_paint;
 pub mod image_fill;
 pub mod image_glow;

@@ -39,7 +39,7 @@ _COOPERATIVE_YIELD_QUANTUM_SECONDS = 0.001
 # deliberately a positive capability list, not a blacklist of known I/O calls.
 # Unknown dispatch, descriptors and source hooks keep observed execution.
 _SOURCE_CONSTRUCTORS = frozenset("""
-Scene Circle Ellipse Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
+Scene Circle Ellipse Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon Path
 Dot Line Arrow DoubleArrow DashedLine Underline VMobject VGroup Group Text MarkupText Code MathTypst FunctionGraph
 Intersection Union Exclusion Difference
 Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform AudioSource VideoSource
@@ -82,6 +82,7 @@ add_effect remove_effect get_center get_x get_y get_width get_height get_value g
 set_fill_image_mapping set_value increment_value copy become add_updater remove_updater clear_updaters
 plot plot_samples
 start_new_path add_line_to add_cubic_bezier_curve_to close_path set_points_as_corners
+line_to quadratic_to cubic_to close
 set_points set_object_opacity family_members_with_points get_subpaths get_arc_length
 point_from_proportion from_string save_state set_color_by_tex tex_string c2p get_area
 animate id width height radius red green blue append extend insert pop count index get keys values tracker value
@@ -3023,8 +3024,9 @@ class _SceneOnlySource(ast.NodeVisitor):
             if name in {"int", "float", "complex", "abs", "round", "min", "max", "len", "range", "enumerate"} and (
                     name in self.module_bindings or any(name in scope for scope in self.scopes[1:])):
                 raise _OpaqueSource(node.func, "unproven_shadowed_numeric_builtin")
-            if name in {"VMobject", "SVGMobject"} and (
-                    name in self.module_bindings or any(name in scope for scope in self.scopes[1:])):
+            if (name in {"VMobject", "SVGMobject"}
+                    and (name in self.module_bindings or any(name in scope for scope in self.scopes[1:]))
+                    and not self._trusted_noon_binding(name)):
                 raise _OpaqueSource(node.func, "unproven_shadowed_svg_constructor")
             safe_direct = (name in (_SOURCE_BUILTINS | _SOURCE_CONSTRUCTORS | _SOURCE_FUNCTIONS
                                    | _SOURCE_SHADER_CONSTRUCTORS | _SOURCE_TYPED_PAINT_CONSTRUCTORS

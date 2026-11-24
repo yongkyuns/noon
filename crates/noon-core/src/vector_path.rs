@@ -355,7 +355,24 @@ impl VectorPath {
         self.transformed_conservative_bounds(Transform2D::IDENTITY)
     }
 
+    /// Control bounds of a command slice, without raw points outside the drawable commands.
+    pub fn conservative_command_bounds(commands: &[PathCommand]) -> Option<Rect> {
+        Self::transformed_control_bounds(commands, &[], Transform2D::IDENTITY)
+    }
+
     pub(crate) fn transformed_conservative_bounds(&self, transform: Transform2D) -> Option<Rect> {
+        Self::transformed_control_bounds(
+            self.commands(),
+            self.manim_points().unwrap_or_default(),
+            transform,
+        )
+    }
+
+    fn transformed_control_bounds(
+        commands: &[PathCommand],
+        points: &[SemanticVec3],
+        transform: Transform2D,
+    ) -> Option<Rect> {
         let mut bounds: Option<Rect> = None;
         let mut include = |point: Vec2| {
             let point = transform.transform_point(point);
@@ -365,7 +382,7 @@ impl VectorPath {
             }
         };
 
-        for command in &self.commands {
+        for command in commands {
             match *command {
                 PathCommand::MoveTo { to } | PathCommand::LineTo { to } => include(to),
                 PathCommand::QuadraticTo { control, to } => {
@@ -384,10 +401,8 @@ impl VectorPath {
                 PathCommand::Close => {}
             }
         }
-        if let Some(points) = self.manim_points() {
-            for point in points.iter().copied() {
-                include(Vec2::new(point.x as f32, point.y as f32));
-            }
+        for point in points {
+            include(Vec2::new(point.x as f32, point.y as f32));
         }
         bounds
     }

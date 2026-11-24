@@ -409,10 +409,13 @@ impl ManimGeometryOptions {
     ) -> Result<(), AuthoringError> {
         if !matches!(
             self.geometry,
-            GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. } | GeometryRef::Line { .. }
+            GeometryRef::Circle { .. }
+                | GeometryRef::Rectangle { .. }
+                | GeometryRef::Line { .. }
+                | GeometryRef::VectorPath(_)
         ) {
             return Err(AuthoringError::InvalidSketchStroke(
-                "a sketch stroke requires a circle, rectangle, line, or arrow",
+                "a sketch stroke requires 2D vector geometry",
             ));
         }
         let stroke = noon_core::SketchStroke::new(roughness, seed).ok_or(
