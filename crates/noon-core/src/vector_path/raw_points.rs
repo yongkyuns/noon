@@ -111,6 +111,7 @@ impl VectorPath {
     pub(super) fn from_transformed_manim_points(
         points: Vec<SemanticVec3>,
         recipe: &[PathCommand],
+        promote_lines: bool,
     ) -> Self {
         let lower = |point: SemanticVec3| Vec2::new(point.x as f32, point.y as f32);
         let mut path = Self::new();
@@ -128,7 +129,7 @@ impl VectorPath {
                         continue;
                     };
                     curve += 1;
-                    if matches!(command, PathCommand::LineTo { .. }) {
+                    if !promote_lines && matches!(command, PathCommand::LineTo { .. }) {
                         path.line_to(lower(points[3]))
                     } else {
                         path.cubic_to(lower(points[1]), lower(points[2]), lower(points[3]))

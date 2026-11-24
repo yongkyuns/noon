@@ -556,6 +556,19 @@ value: MissingName = 2
         self.assertEqual(original.co_qualname, "RasterImage.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
+    def test_retargeting_showcases_use_portable_continuations(self):
+        examples = Path(__file__).with_name("examples")
+        for filename, scene_name, helper in (
+            ("showcase_character_rigs.py", "CharacterRigs", "_add_bird"),
+            ("showcase_shape_characters.py", "ShapeCharacters", "_bind_outline"),
+            ("showcase_retarget_hand.py", "RetargetHand", "_arm_rig"),
+        ):
+            with self.subTest(filename=filename):
+                _, pairs = compile_authoring_source((examples / filename).read_text(), filename=filename)
+                self.assertCountEqual([code.co_qualname for code in pairs],
+                                      [f"{scene_name}.construct", f"{scene_name}.{helper}"])
+                self.assertTrue(all(code.co_flags & inspect.CO_COROUTINE for code in pairs.values()))
+
     def test_initial_audio_declaration_keeps_the_ordinary_scene_portable(self):
         source = textwrap.dedent('''
             from noon import *

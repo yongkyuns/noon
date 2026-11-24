@@ -180,6 +180,8 @@ pub enum AuthoringError {
     InvalidCameraMotionInput(&'static str),
     /// A declaration's endpoint or options violate its animation profile.
     InvalidAnimationDeclaration(&'static str),
+    /// A planar skeleton, clip mapping, or deformation chain is invalid.
+    InvalidRig2d(String),
     /// A second camera-motion interval cannot begin while the camera has an open owner.
     CameraMotionAlreadyActive,
     /// A committed creation did not resolve its prepared local token.
@@ -424,6 +426,7 @@ impl std::fmt::Display for AuthoringError {
             }
             Self::InvalidCameraMotionInput(message) => f.write_str(message),
             Self::InvalidAnimationDeclaration(message) => f.write_str(message),
+            Self::InvalidRig2d(message) => f.write_str(message),
             Self::CameraMotionAlreadyActive => {
                 f.write_str("camera already has an open rotation; stop it before beginning another")
             }

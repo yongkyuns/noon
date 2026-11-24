@@ -281,6 +281,9 @@ impl From<AuthoringError> for AuthoringFailure {
             AuthoringError::AudioResource(_) => {
                 Self::new("invalid_input", "authoring.audio_resource", message)
             }
+            AuthoringError::InvalidRig2d(_) => {
+                Self::new("invalid_input", "rig_2d.invalid_input", message)
+            }
             AuthoringError::AudioClip(_) => {
                 Self::new("invalid_input", "authoring.audio_clip", message)
             }
