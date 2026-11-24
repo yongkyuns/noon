@@ -131,6 +131,7 @@ impl Scene {
                 if let Some(&index) = indices.get(&object.node_id()) {
                     positions[index].2 = state.transform.translation;
                 }
+                Ok(())
             },
         )?;
         stage_cyclic_positions(&mut transaction, &pending, &positions);

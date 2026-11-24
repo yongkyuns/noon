@@ -65,29 +65,65 @@ impl VectorPath {
         if self.manim_points().is_some() {
             return self.transformed_semantic(semantic_transform(transform));
         }
+        let mut result = self.map_commands(|point| transform.transform_point(point));
+        if let Some(target) = self.morph_target() {
+            result = result.with_morph_target(target.transformed(transform));
+        }
+        result
+    }
+
+    /// Map planar anchors and controls in place of their original coordinates.
+    /// Keep contour boundaries, closure, raw XYZ tails, and any morph target.
+    pub fn map_xy(&self, mut map: impl FnMut(f64, f64) -> (f64, f64)) -> Self {
+        self.map_xy_with(&mut map)
+    }
+
+    fn map_xy_with(&self, map: &mut impl FnMut(f64, f64) -> (f64, f64)) -> Self {
+        let mut result = if self.empty_point_array_shape.is_some() {
+            self.clone()
+        } else if let Some(points) = self.manim_points() {
+            let mapped: Vec<_> = points
+                .iter()
+                .map(|point| {
+                    let (x, y) = map(point.x, point.y);
+                    SemanticVec3::new(x, y, point.z)
+                })
+                .collect();
+            // After a nonlinear map the handles of a retained line can bend.
+            // Preserve the new curve in the drawable recipe as well as the raw array.
+            if mapped == points {
+                self.clone()
+            } else {
+                Self::from_transformed_manim_points(mapped, self.commands(), true)
+            }
+        } else {
+            self.map_commands(|point| {
+                let (x, y) = map(point.x.into(), point.y.into());
+                Vec2::new(x as f32, y as f32)
+            })
+        };
+        if let Some(target) = self.morph_target() {
+            result = result.with_morph_target(target.map_xy_with(map));
+        }
+        result
+    }
+
+    fn map_commands(&self, mut map: impl FnMut(Vec2) -> Vec2) -> Self {
         let mut result = Self::new();
         for command in self.commands() {
             result = match *command {
-                PathCommand::MoveTo { to } => result.move_to(transform.transform_point(to)),
-                PathCommand::LineTo { to } => result.line_to(transform.transform_point(to)),
-                PathCommand::QuadraticTo { control, to } => result.quadratic_to(
-                    transform.transform_point(control),
-                    transform.transform_point(to),
-                ),
+                PathCommand::MoveTo { to } => result.move_to(map(to)),
+                PathCommand::LineTo { to } => result.line_to(map(to)),
+                PathCommand::QuadraticTo { control, to } => {
+                    result.quadratic_to(map(control), map(to))
+                }
                 PathCommand::CubicTo {
                     control1,
                     control2,
                     to,
-                } => result.cubic_to(
-                    transform.transform_point(control1),
-                    transform.transform_point(control2),
-                    transform.transform_point(to),
-                ),
+                } => result.cubic_to(map(control1), map(control2), map(to)),
                 PathCommand::Close => result.close(),
             };
-        }
-        if let Some(target) = self.morph_target() {
-            result = result.with_morph_target(target.transformed(transform));
         }
         result
     }
@@ -102,7 +138,7 @@ impl VectorPath {
                 .iter()
                 .map(|&point| transform.transform_xyz(point))
                 .collect();
-            Self::from_transformed_manim_points(points, self.commands())
+            Self::from_transformed_manim_points(points, self.commands(), false)
         } else {
             self.transformed(Transform2D {
                 translation: Vec2::new(

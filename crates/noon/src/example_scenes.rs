@@ -16,6 +16,7 @@ pub mod blur;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod brace_text;
 pub mod camera_bloom;
+pub mod character_rigs;
 pub mod circle_surround;
 pub mod click_glow_pulse;
 #[cfg(all(feature = "code", feature = "bundled-fonts"))]
@@ -87,6 +88,8 @@ pub mod raster_image;
 pub mod renderer_fixtures;
 pub mod renderer_recovery;
 pub mod retained_locality;
+pub mod retarget_hand;
+pub mod retarget_outlines;
 pub mod sample_space;
 pub mod scope_opacity;
 #[cfg(feature = "wgsl-effects")]

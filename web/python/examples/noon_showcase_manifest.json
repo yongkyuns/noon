@@ -1066,6 +1066,74 @@
       ],
       "still_intervals": [],
       "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-character-rigs",
+      "title": "Same move, different reach",
+      "lesson": "Watch a heron and sparrow use the same reaching gesture. Their wing lengths change where it lands.",
+      "primary_feature": "planar-rig-retargeting",
+      "category": "Motion",
+      "path": "python/examples/showcase_character_rigs.py",
+      "features": ["layered vector artwork", "retargeted wing motion", "animated gaze and blink"],
+      "duration": 7.2,
+      "thumbnail_time": 2.7,
+      "thumbnail": "thumbnails/showcase/showcase-character-rigs.png",
+      "thumbnail_alt": "A slate-blue paper heron touches a gold dot while a rust-colored sparrow stretches toward it.",
+      "beats": [
+        { "time": 0.81, "label": "Catch the heron’s first blink" },
+        { "time": 1.75, "label": "Watch the folded wings open" },
+        { "time": 2.7, "label": "Compare how far each wing reaches" },
+        { "time": 3.54, "label": "See the feathers overlap as both wings bend" },
+        { "time": 6.4, "label": "See both birds return to rest" }
+      ],
+      "still_intervals": [[6.2, 7.2]],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-shape-characters",
+      "title": "One bend, three outlines",
+      "lesson": "See the paper birds’ joint motion bend the vector outlines of a square, circle, and star.",
+      "primary_feature": "retargeted-contour-deformation",
+      "category": "Motion",
+      "path": "python/examples/showcase_shape_characters.py",
+      "features": ["Transform", "retargeted joint clip", "continuous outline deformation"],
+      "duration": 7.2,
+      "thumbnail_time": 2.85,
+      "thumbnail": "thumbnails/showcase/showcase-shape-characters.png",
+      "thumbnail_alt": "A coral square, green circle, and golden star bend to the right with their bottoms planted.",
+      "beats": [
+        { "time": 0.5, "label": "Compare the original outlines" },
+        { "time": 1.91, "label": "Watch the upper portions start to bend" },
+        { "time": 2.85, "label": "Compare the curves at full bend" },
+        { "time": 3.54, "label": "The same motion eases back on each character" },
+        { "time": 4.18, "label": "Follow the second bend" },
+        { "time": 6.5, "label": "See all three return to rest" }
+      ],
+      "still_intervals": [[0, 0.96], [2.7, 3.15], [3.96, 4.32], [5.65, 7.2]],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-retarget-hand",
+      "title": "One fold, two reaches",
+      "lesson": "Two characters reuse an inward arm fold. The glove turns edge-on and passes in front of one torso and behind the other.",
+      "primary_feature": "retargeted-hand-turn",
+      "category": "Motion",
+      "path": "python/examples/showcase_retarget_hand.py",
+      "features": ["joint retargeting", "authored hand views", "painter order"],
+      "duration": 6.75,
+      "thumbnail_time": 3.45,
+      "thumbnail": "thumbnails/showcase/showcase-retarget-hand.png",
+      "thumbnail_alt": "A teal robot holds a gold glove in front of its coat while a coral robot's glove passes behind its coat.",
+      "beats": [
+        { "time": 0.5, "label": "Compare the two arm lengths" },
+        { "time": 1.5, "label": "Follow the palms as the elbows fold" },
+        { "time": 2.25, "label": "See both gloves edge-on" },
+        { "time": 3.5, "label": "See the back of one glove while the other passes behind its coat" },
+        { "time": 5.1, "label": "Watch the palms come back into view" },
+        { "time": 6.5, "label": "Both arms return to rest" }
+      ],
+      "still_intervals": [[0, 0.75], [2.25, 2.5], [3.25, 4], [6.25, 6.75]],
+      "playback_capability": "deterministic-retained-replay"
     }
   ]
 }
