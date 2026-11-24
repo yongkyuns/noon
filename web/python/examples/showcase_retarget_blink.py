@@ -24,6 +24,18 @@ def eye_points(spacing, width, height, opening):
     ) for point in contour]
 
 
+def closed_eye_points(spacing, width):
+    points = []
+    for x in (-spacing, spacing):
+        left, right = x - 0.84 * width, x + 0.84 * width
+        lid = [(left, 0), (left, -0.10), (right, -0.10), (right, 0),
+               (right, -0.16), (left, -0.16), (left, 0)]
+        points.extend(oval_points(x, -0.09, 0.014, 0.005))
+        points.extend(lid)
+        points.extend(oval_points(x, -0.09, 0.005, 0.002))
+    return points
+
+
 def eye_path(points, color):
     start, a, b, end, c, d, close = [(x, y, 0) for x, y in points]
     return (VMobject(fill_color=color, fill_opacity=1, stroke_width=0)
@@ -68,7 +80,8 @@ class RetargetBlink(Scene):
                 mapping={"head": ("head", tilt_gain)},
             )
             poses = {name: eye_points(spacing, width, height, opening)
-                     for name, opening in (("open", 1), ("half", 0.53), ("closed", 0.065))}
+                     for name, opening in (("open", 1), ("half", 0.53))}
+            poses["closed"] = closed_eye_points(spacing, width)
             eye = rig.artwork_track("eye", poses=poses, cues=BLINK)
             appearance = (shell, cheek_color, rig, eye)
             face = head_pose(*appearance, 0)
