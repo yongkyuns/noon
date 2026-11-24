@@ -188,6 +188,7 @@ struct PreparedTextObjectState {
     transform: Transform2D,
     reveal: f32,
     morph: f32,
+    sketched: bool,
     /// Stable arena ownership for this object's atlas-backed instances.  The
     /// ranges may contain spare capacity; only `GlyphBatch` ranges are drawn.
     mask_range: Range<u32>,
@@ -514,6 +515,7 @@ impl RetainedTextQuadPreparer {
                         || object.transform.rotation != state.transform.rotation
                         || frame.reveal(index) != state.reveal
                         || frame.morph(index) != state.morph
+                        || object.style.sketch_stroke.is_some() != state.sketched
                     {
                         return Ok(false);
                     }
@@ -559,6 +561,9 @@ impl RetainedTextQuadPreparer {
                 continue;
             };
             let object = &frame.objects[index];
+            if state.sketched {
+                continue;
+            }
             let resource = texts
                 .get(state.text)
                 .expect("validated text resource must remain present during object-local update");
@@ -824,6 +829,7 @@ impl RetainedTextQuadPreparer {
             self.stats.text_objects += 1;
             let reveal = frame.reveal(object_slot);
             let morph = frame.morph(object_slot);
+            let sketched = object.style.sketch_stroke.is_some();
             let item_start = self.items.len();
             let empty_start = self.stats.empty_glyphs;
 
@@ -832,7 +838,7 @@ impl RetainedTextQuadPreparer {
                     TextRenderItem::GlyphRun(run_index) => {
                         let run = &resource.runs[run_index as usize];
                         self.stats.glyph_runs += 1;
-                        if run.stroke.is_some() || reveal < 1.0 || morph != 0.0 {
+                        if sketched || run.stroke.is_some() || reveal < 1.0 || morph != 0.0 {
                             self.items.push(PreparedTextItem::OutlineRun {
                                 object_index,
                                 text: text_handle,
@@ -879,15 +885,20 @@ impl RetainedTextQuadPreparer {
                 transform: object.transform,
                 reveal,
                 morph,
+                sketched,
                 mask_range,
                 color_range,
                 empty_glyphs: self.stats.empty_glyphs - empty_start,
-                phase_fingerprint: object_phase_fingerprint(
-                    resource,
-                    object.transform,
-                    metrics,
-                    self.raster_size_limit,
-                )?,
+                phase_fingerprint: if sketched {
+                    0
+                } else {
+                    object_phase_fingerprint(
+                        resource,
+                        object.transform,
+                        metrics,
+                        self.raster_size_limit,
+                    )?
+                },
             });
             self.object_glyph_slots[object_slot] = glyph_item_slots;
         }

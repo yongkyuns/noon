@@ -3229,8 +3229,22 @@ class _SceneOnlySource(ast.NodeVisitor):
                     raise _OpaqueSource(node, "unproven_text_compiler")
             elif (not node.args or sum(self._controlled_tex_length(arg) for arg in node.args)
                     + len(node.args) - 1 > 1024 * 1024
-                    or not set(keywords) <= {"font_size", "color", "opacity"}):
+                    or not set(keywords) <= {"font_size", "color", "opacity", "stroke", "stroke_width"}):
                 raise _OpaqueSource(node, "unproven_text_compiler")
+            stroke = keywords.get("stroke")
+            if stroke is not None and (
+                not isinstance(stroke, ast.Call)
+                or not isinstance(stroke.func, ast.Name)
+                or stroke.func.id != "SketchStroke"
+                or not self._trusted_noon_binding("SketchStroke")
+            ):
+                raise _OpaqueSource(stroke, "unproven_text_compiler_option")
+            stroke_width = keywords.get("stroke_width")
+            if stroke_width is not None and (
+                stroke is None or not isinstance(stroke_width, ast.Constant)
+                or not self._finite_number(stroke_width) or stroke_width.value < 0
+            ):
+                raise _OpaqueSource(stroke_width, "unproven_text_compiler_option")
             font_size = keywords.get("font_size")
             if font_size is not None and (
                 not isinstance(font_size, ast.Constant)

@@ -507,7 +507,16 @@ fn effective_object_conservative_bounds_with_external(
             .sketch_stroke
             .filter(|_| foreground > 0.0)
             .map_or(0.0, |stroke| {
-                noon_geometry::sketch_outset(stroke) * max_scale
+                let local = if let Some(bounds) = text_bounds {
+                    // Glyph outlines are sketched in em units and mapped back
+                    // to the retained text frame. Closed glyph contours fit
+                    // inside the authored text bounds.
+                    let extent = bounds.max - bounds.min;
+                    noon_geometry::sketch_outset_for_extent(stroke, extent.x.min(extent.y))
+                } else {
+                    noon_geometry::sketch_outset(stroke)
+                };
+                local * max_scale
             });
         let expansion = width * scale * 0.5 * join.max(cap) + sketch;
         world.min.x -= expansion;

@@ -3575,5 +3575,7 @@ pub mod pointer_selection;
 
 #[cfg(feature = "latex")]
 pub mod latex_text;
+#[cfg(all(feature = "latex", feature = "native-text", feature = "bundled-fonts"))]
+pub mod sketch_text;
 
 pub mod polynomial_rates;

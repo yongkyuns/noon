@@ -131,13 +131,7 @@ impl RetainedFramePreparer {
         let images =
             self.stage_image_publication(device, frame.retained, changes, None, geometries)?;
         self.prepare_canonical_mixed_baseline(
-            device,
-            frame.retained,
-            changes,
-            texts,
-            fonts,
-            geometries,
-            metrics,
+            device, frame, changes, texts, fonts, geometries, metrics,
         )?;
 
         // The canonical generation is no longer reusable once operation-local scratch
@@ -419,6 +413,10 @@ impl RetainedFramePreparer {
         else {
             return Ok(false);
         };
+        let sketched = frame.retained.objects[object_index]
+            .style
+            .sketch_stroke
+            .is_some();
         for member in members {
             let member = member?;
             let TextAnimationMemberKind::Glyph(glyph) = member.member else {
@@ -427,6 +425,7 @@ impl RetainedFramePreparer {
             let glyph = glyph.glyph;
             if glyph.run_index == run_index
                 && (stable_rows
+                    || sketched
                     || !matches!(member.phase, RetainedDrawBorderThenFillPhase::Fill { progress } if progress >= 1.0))
             {
                 return Ok(true);
@@ -496,26 +495,10 @@ impl RetainedFramePreparer {
                     glyph,
                 },
             )?;
-            let (_, outline) = self.outlines.outline(fonts, run, positioned.glyph_id)?;
-            let path = append_transformed_path(
-                VectorPath::new(),
-                outline.as_ref(),
-                run.transform,
-                positioned.origin,
-            );
-            if path.is_empty() {
-                continue;
-            }
-            let scratch_slot = self.push_geometry(
-                object_id,
-                GeometryRef::path(path),
-                object.transform,
-                draw_border_glyph_style(run, object.style, member.phase),
-                object.appearance,
-                reveal,
-                0.0,
-            );
-            if stable_rows {
+            let style = draw_border_glyph_style(run, object.style, member.phase);
+            let scratch_slot =
+                self.push_glyph_outline(object, run, positioned, style, reveal, 0.0, fonts)?;
+            if let Some(scratch_slot) = scratch_slot.filter(|_| stable_rows) {
                 self.family_plan_scratch_slots
                     .entry(object_index)
                     .or_default()
@@ -557,8 +540,11 @@ pub(super) fn draw_border_style(
     // width, scaling mode, caps and joins while revealing it, then introduce the
     // fill. Interpolating its width with a screen-space border mixes units and
     // cannot preserve nonuniform transforms. Unstroked glyphs and screen-space
-    // strokes retain the ordinary Manim border transition below.
-    if final_stroke.is_some() && object_style.stroke_width_mode == StrokeWidthMode::ScaleWithObject
+    // strokes retain the ordinary Manim border transition below. A sketch
+    // already has its pen settings, so keep its stroke mesh across both phases.
+    if final_stroke.is_some()
+        && (object_style.stroke_width_mode == StrokeWidthMode::ScaleWithObject
+            || object_style.sketch_stroke.is_some())
     {
         return Style {
             fill: match phase {
@@ -796,6 +782,7 @@ mod draw_border_tests {
         preparer
             .build_scratch_frame(
                 &retained,
+                &[],
                 &texts,
                 &FontResourceArena::new(),
                 &GeometryResourceArena::new(),
@@ -829,6 +816,7 @@ mod draw_border_tests {
         preparer
             .build_scratch_frame(
                 &retained,
+                &[],
                 &texts,
                 &FontResourceArena::new(),
                 &GeometryResourceArena::new(),
