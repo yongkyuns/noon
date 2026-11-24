@@ -65,27 +65,34 @@ def head(x, coat, shade):
                   ink_line((x-0.04, 1.37), (x+0.09, 1.37), shade, 1.35))
 
 
-def hand_points(view, place):
+def hand_outline(top, bottom):
     # Equal cubic topology for all three drawings. The lip at the thumb side
     # flattens at the edge view, then reappears on the opposite side.
-    top, bottom = {"palm": (0.15, -0.26), "edge": (0.055, -0.055), "back": (0.26, -0.15)}[view]
-    return [place(x, y) for x, y in [
+    return [
         (-0.05, 0), (-0.05, 0.83*top), (0.08, top), (0.15, top),
         (0.19, top), (0.25, top*0.63), (0.31, top*0.71),
         (0.50, top*0.85), (0.59, top*0.52), (0.59, 0),
         (0.59, bottom*0.52), (0.50, bottom*0.85), (0.31, bottom*0.71),
         (0.25, bottom*0.63), (0.19, bottom), (0.15, bottom),
         (0.08, bottom), (-0.05, 0.83*bottom), (-0.05, 0),
-    ]]
+    ]
 
 
-def placement(joint):
+HAND_POSES = {
+    "palm": hand_outline(0.15, -0.26),
+    "edge": hand_outline(0.055, -0.055),
+    "back": hand_outline(0.26, -0.15),
+}
+HAND_CUES = [(phase, view) for phase, _, _, view in GESTURE]
+
+
+def placement(joint, width):
     x, y, heading = joint
     c, s = cos(heading), sin(heading)
-    return lambda a, b: (x + c*a - s*b, y + s*a + c*b)
+    return lambda a, b: (x + c*width*a - s*b, y + s*width*a + c*b)
 
 
-def arm_drawing(rig, key, sleeve_color):
+def arm_drawing(rig, hand, key, sleeve_color, hand_width):
     phase, _, _, view = GESTURE[key]
     pose = rig.pose(phase)
     # Rebuild one sleeve through the actual joints. The two rounded
@@ -95,8 +102,8 @@ def arm_drawing(rig, key, sleeve_color):
         return VMobject(fill_opacity=0, stroke_color=color, stroke_width=width,
                         stroke_join="round", stroke_cap="round").set_points_as_corners(joints)
 
-    place = placement(pose.joint("wrist"))
-    glove = path(hand_points(view, place), HAND, width=1.8)
+    place = placement(pose.joint("wrist"), hand_width)
+    glove = path(hand.points_at(phase), HAND, width=1.8)
     # The interior marks tell palm from knuckles. Their opacity collapses
     # through the thin edge view while the same glove outline keeps moving.
     crease = path([place(0.16, -0.13), place(0.20, -0.06),
@@ -130,28 +137,30 @@ class RetargetHand(Scene):
         actors = []
         for x, upper, forearm, coat, seam, sleeve, front in [
             (-3.76, 0.76, 1.27, "#4B8279", "#2B585D", "#78AA93", True),
-            (2.20, 0.57, 1.13, "#B95F56", "#873F47", "#DB8875", False),
+            (2.20, 0.57, 0.99, "#B95F56", "#873F47", "#DB8875", False),
         ]:
             rig = self._arm_rig(x, upper, forearm)
-            arm = arm_drawing(rig, 0, sleeve)
+            # The second actor has a shorter local drawing and a shorter forearm.
+            hand_width = 1.0 if front else 0.84
+            poses = {name: [(hand_width * a, b) for a, b in points]
+                     for name, points in HAND_POSES.items()}
+            hand = rig.artwork_track("wrist", poses=poses, cues=HAND_CUES)
+            arm = arm_drawing(rig, hand, 0, sleeve, hand_width)
             body = torso(x, coat, seam)
             self.add(*((body, arm) if front else (arm, body)))
             self.add(head(x, coat, sleeve))
             self.add(Text("Hand in front" if front else "Hand behind", font_size=27,
                           color=color_from_hex(INK)).move_to((x + 0.48, -1.59, 0)))
-            actors.append((rig, arm, sleeve))
+            actors.append((rig, hand, arm, sleeve, hand_width))
 
         def turn_to(key):
-            return [Transform(arm, arm_drawing(rig, key, color), run_time=0.75, rate_func=smooth)
-                    for rig, arm, color in actors]
+            return [Transform(arm, arm_drawing(rig, hand, key, color, width), run_time=0.75, rate_func=smooth)
+                    for rig, hand, arm, color, width in actors]
 
         self.wait(0.75)
-        self.play(*turn_to(1))
-        self.play(*turn_to(2))
-        self.wait(0.25)
-        self.play(*turn_to(3))
-        self.wait(0.75)
-        self.play(*turn_to(2))
-        self.play(*turn_to(1))
+        for key, hold in ((1, 0), (2, 0.25), (3, 0.75), (2, 0), (1, 0)):
+            self.play(*turn_to(key))
+            if hold:
+                self.wait(hold)
         self.play(*turn_to(4))
         self.wait(0.5)
