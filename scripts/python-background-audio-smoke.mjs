@@ -363,11 +363,19 @@ function assertEnvelope(snapshot, start, expected) {
   }
 }
 
+function projectedAudioTime(anchor, receivedEpochMs = anchor.receivedEpochMs) {
+  const deliveryMs = receivedEpochMs - anchor.sampledEpochMs;
+  assert.ok(Number.isFinite(deliveryMs), "worker and Window audio timestamps must be finite");
+  // The two realms can round a receipt below the worker sample. Rust keeps
+  // the authored anchor at that sample and adds only nonnegative delivery time.
+  return anchor.time + Math.max(0, deliveryMs) / 1000;
+}
+
 function correctedPhase(snapshot, start, requested) {
   const anchor = snapshot.anchors.find(anchor => anchor.sources.includes(start.node));
   assert.ok(anchor, "actual device start must be associated with an accepted worker anchor");
   assert.ok(anchor.time >= requested, "worker anchor must not precede the requested authored time");
-  const phase = anchor.time + (anchor.receivedEpochMs - anchor.sampledEpochMs) / 1000;
+  const phase = projectedAudioTime(anchor);
   near(start.args[1], phase, "shared clip phase includes exact transport age");
   near(start.args[2], 30 - phase, "finite source ends at the shared endpoint");
   return phase;
@@ -1132,7 +1140,7 @@ assert (second.start_time, second.end_time, second.duration) == (1, 30, 29)
     const anchor = running.anchors.find(anchor => anchor.sources.includes(sources[0].node));
     assert.ok(anchor, "overlapping sources must share an accepted worker clock sample");
     assert.deepEqual(anchor.sources, sources.map(source => source.node));
-    const phase = anchor.time + (anchor.receivedEpochMs - anchor.sampledEpochMs) / 1000;
+    const phase = projectedAudioTime(anchor);
     assert.ok(phase >= 2.1 && phase < 29.75);
     for (const [index, source] of sources.entries()) {
       assert.equal(source.loop, true);
@@ -1463,7 +1471,7 @@ for name in ["First", "Second", "Third"]:
     const voice = firstPass.starts[startsBeforePlay];
     const anchor = firstPass.anchors.find(item => item.sources.includes(voice.node));
     assert.ok(anchor, "the audio voice uses the accepted shared Rust time anchor");
-    const phase = anchor.time + (anchor.receivedEpochMs - anchor.sampledEpochMs) / 1000;
+    const phase = projectedAudioTime(anchor);
     near(voice.args[1], phase, "initial prepared soundtrack sample offset", 0.02);
     assert.equal(voice.args.length, 2, "the open prefix schedules a stoppable voice without a premature duration");
     const initialStop = firstPass.stops.find(stop => stop.node === voice.node && stop.args.length > 0);
@@ -1491,8 +1499,7 @@ for name in ["First", "Second", "Third"]:
     assert.ok(bufferResumeAnchor, "new Rust history resumes the held audio device");
     assert.ok(bufferResumeAnchor.anchor.sampledEpochMs > heldAnchor.anchor.sampledEpochMs);
     assert.ok(bufferResumeAnchor.starts.length > 0, "buffer recovery starts from the newly admitted Rust anchor");
-    const bufferResumeAnchorPhase = bufferResumeAnchor.anchor.time +
-      (bufferResumeAnchor.receivedEpochMs - bufferResumeAnchor.anchor.sampledEpochMs) / 1000;
+    const bufferResumeAnchorPhase = projectedAudioTime(bufferResumeAnchor.anchor, bufferResumeAnchor.receivedEpochMs);
     near(bufferResumeAnchor.starts[0].args[1], bufferResumeAnchorPhase,
       "audio buffer recovery uses the refreshed Rust sample offset", 0.02);
     assert.ok(finalState.ended.some(item => item.node === voice.node),
@@ -1513,8 +1520,7 @@ for name in ["First", "Second", "Third"]:
     const terminalStop = terminalStops[0];
     const terminalVoice = finalState.starts.find(start => start.node === terminalStop.node);
     assert.ok(terminalVoice, "the terminal stop belongs to a real started device voice");
-    const terminalPhase = terminalAnchor.time +
-      (terminalAnchor.receivedEpochMs - terminalAnchor.sampledEpochMs) / 1000;
+    const terminalPhase = projectedAudioTime(terminalAnchor);
     near(terminalStop.args[0] - terminalStop.observedAt, 34.65 - terminalPhase,
       "terminal soundtrack remaining duration", 0.02);
     assert.equal(finalState.starts.filter(start => start.node === terminalVoice.node).length, 1,
@@ -1585,7 +1591,7 @@ for name in ["First", "Second", "Third"]:
     const resumedVoice = resumed.starts.at(-1);
     const resumedAnchor = resumed.anchors.find(item => item.sources.includes(resumedVoice.node));
     assert.ok(resumedAnchor);
-    const resumedPhase = resumedAnchor.time + (resumedAnchor.receivedEpochMs - resumedAnchor.sampledEpochMs) / 1000;
+    const resumedPhase = projectedAudioTime(resumedAnchor);
     near(resumedVoice.args[1], resumedPhase, "seeked soundtrack sample offset", 0.02);
     assert.equal(resumedVoice.args.length, 2, "prepared seek uses the bounded source stop path");
     const resumedStop = resumed.stops.filter(stop => stop.node === resumedVoice.node && stop.args.length > 0).at(-1);
@@ -1622,7 +1628,7 @@ for name in ["First", "Second", "Third"]:
     const fadeVoice = fadePlay.starts.at(-1);
     const fadeAnchor = fadePlay.anchors.find(item => item.sources.includes(fadeVoice.node));
     assert.ok(fadeAnchor, "the fade-out voice also uses a Rust transport anchor");
-    const fadePhase = fadeAnchor.time + (fadeAnchor.receivedEpochMs - fadeAnchor.sampledEpochMs) / 1000;
+    const fadePhase = projectedAudioTime(fadeAnchor);
     assert.ok(fadePhase >= 33 && fadePhase < 34.65);
     const fadeGain = 0.5 * Math.max(0, Math.min(1, (34.65 - fadePhase) / 2.5));
     assertEnvelope(fadePlay, fadeVoice, [[0, fadeGain], [34.65 - fadePhase, 0]]);

@@ -696,6 +696,21 @@ mod wasm {
                 DirectSourceAuthority::Prepared(playback) => playback.reader.publication_context(),
             }
         }
+        #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
+        fn inspection_view_revision(&self) -> u64 {
+            match &self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    session.session().inspection_view_revision()
+                }
+                DirectSourceAuthority::Program(program) => {
+                    program.session().inspection_view_revision()
+                }
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    playback.reader.inspection_view_revision()
+                }
+            }
+        }
         fn interactions_active(&self) -> bool {
             match &self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
