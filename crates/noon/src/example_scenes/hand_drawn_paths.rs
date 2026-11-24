@@ -17,7 +17,7 @@ impl LiveContinuation for HandDrawnPaths {
     fn resume(&mut self, scene: &mut ContinuationScene) -> Result<ContinuationStep, ScriptError> {
         let segment = match self.step {
             0 => {
-                let options = AnimationOptions::new();
+                let options = AnimationOptions::new().rate_func(RateFunction::Linear);
                 scene.live().declare_and_activate_composition(
                     &Animation::Composition {
                         kind: crate::SemanticAnimationCompositionKind::Parallel,
@@ -28,7 +28,7 @@ impl LiveContinuation for HandDrawnPaths {
                             .collect(),
                         options,
                     },
-                    options.run_time(2.4).rate_func(RateFunction::Linear),
+                    options.run_time(2.4),
                 )?
             }
             1 => scene.live().wait_segment(0.6)?,
