@@ -12,7 +12,7 @@ import math
 import operator
 import sys
 from functools import partialmethod
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Self
+from typing import TYPE_CHECKING, Any, Callable, Iterable, NamedTuple, Self
 from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
 
@@ -1480,6 +1480,22 @@ def _membership_result(pending, result):
     return result
 
 
+class Joint2D(NamedTuple):
+    """A planar joint with a parent-local offset and a rest angle in radians.
+
+    A root joint has no parent and its offset is in scene coordinates.
+    The rest angle defaults to zero.
+    """
+
+    name: str
+    parent: str | None = None
+    offset: tuple[float, float] = (0.0, 0.0)
+    rest_angle: float = 0.0
+
+
+_Joint2DDeclaration = Joint2D | tuple[str, str | None, tuple[float, float], float]
+
+
 class Scene:
     """Python authoring facade; semantic operations require the shared Rust host."""
 
@@ -1656,6 +1672,37 @@ class Scene:
         return _scene_operations()._canonical_bind_sampled(
             self, mobject, tracker, channel, samples, linear,
         )
+
+    def bind_rig_2d(
+        self, tracker: object, *, joints: Iterable[_Joint2DDeclaration],
+        tracks: dict, attachments: Iterable,
+    ) -> Scene:
+        """Attach planar drawings to named joints before playing the scene.
+
+        Pass Joint2D declarations in parent-first order. Track keys are
+        (tracker value, radians from rest), keyed by joint name.
+        Reuse the tracks with different joint offsets and rest angles to
+        retarget the gesture. Untracked joints keep their local rest angle.
+        Joint tuples use (name, parent, offset, rest_angle).
+        Attachment rows are (joint name, added Mobject, joint-local (x, y)).
+        The joint drives the object's position and rotation, with local +X forward.
+        """
+        return _scene_operations()._canonical_bind_rig_2d(
+            self, tracker, joints, tracks, attachments,
+        )
+
+    def retarget_rig_2d(
+        self, *, joints: Iterable[_Joint2DDeclaration], tracks: dict,
+        mapping: dict | None = None,
+    ):
+        """Prepare a reusable rotation clip against a target skeleton.
+
+        Joint2D declarations and track keys use the same format as bind_rig_2d.
+        Track names match by default. Mapping entries are source: target or source:
+        (target, angle_gain). Use rig.pose(phase) to get joint placements
+        or pose.target_for(mobject) to prepare a vector drawing for Transform.
+        """
+        return _scene_operations()._canonical_retarget_rig_2d(self, joints, tracks, mapping)
 
     def on_click(self, target: Mobject, animation: object) -> Scene:
         """Bind Indicate(target), GlowPulse(target), or None to a primary click.
@@ -2219,6 +2266,7 @@ __all__ = [
     "RED_E",
     "RIGHT",
     "Scene",
+    "Joint2D",
     "TAU",
     "TEAL",
     "TEAL_A",

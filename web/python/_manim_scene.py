@@ -28,7 +28,7 @@ import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
 import _manim_semantic_handles as _semantic_handles
 from _manim_source_execution import (
-    PORTABLE_REACTIVE_METHODS,
+    PORTABLE_SCENE_METHODS,
     PORTABLE_SPATIAL_METHODS,
     PORTABLE_VECTOR_METHODS,
     cooperative_source_yield_active,
@@ -954,7 +954,7 @@ def _portable_scene_methods(scene: _base.Scene, used_names=()) -> dict[str, obje
         "set_viewer_draggable": _base.Scene.set_viewer_draggable,
         "next_section": _base.Scene.next_section,
     }
-    for name in PORTABLE_REACTIVE_METHODS.intersection(used_names):
+    for name in PORTABLE_SCENE_METHODS.intersection(used_names):
         methods[name] = getattr(_base.Scene, name)
     spatial_names = PORTABLE_SPATIAL_METHODS.intersection(used_names)
     if spatial_names:
@@ -3581,6 +3581,115 @@ def _canonical_bind_sampled(self, mobject, tracker, channel, samples, linear):
         packed.extend(row)
     engine_call(context.bindSampled, handle, tracker_handle, channel, bool(linear),
                 array_value(memoryview(packed)), operation="Scene.bind_sampled")
+    return self
+
+
+def _rig_2d_batch(context, joints, tracks, operation):
+    from array import array
+    from _noon_host import array_value
+
+    batch = engine_call(context.beginRig2d, operation=operation)
+    for name, parent, (x, y), rest_angle in joints:
+        engine_call(batch.joint, name, float(x), float(y), float(rest_angle), parent,
+                    operation=operation)
+    for name, keys in tracks.items():
+        packed = array("f")
+        for phase, angle in keys:
+            packed.extend((phase, angle))
+        engine_call(batch.track, name, array_value(memoryview(packed)), operation=operation)
+    return batch
+
+
+class _RetargetedRig2d:
+    def __init__(self, handle, scene):
+        self._handle = handle
+        self._scene = scene
+
+    def pose(self, phase):
+        """Sample a pose at a clip phase. Values outside each track clamp."""
+        handle = engine_call(self._handle.pose, float(phase), operation="RetargetedRig2d.pose")
+        return _RigPose2d(handle, self._scene)
+
+
+class _RigPose2d:
+    def __init__(self, handle, scene):
+        self._handle = handle
+        self._scene = scene
+
+    def target_for(self, mobject, *, chain=None):
+        """Return a detached Transform target from resting vector artwork.
+
+        A vector object or VGroup can share one chain. The copy preserves
+        contours, styles, and ordered membership. Landmarks are in scene space.
+        An unbranched rig uses its full chain by default. For a branched rig,
+        pass a parent-to-child sequence of joint names.
+        """
+        from _noon_host import array_value
+
+        context = _context(self._scene)
+        names = None if chain is None else array_value(list(chain))
+        operation = "RigPose2d.target_for"
+        if _semantic_handles._is_shared_family(mobject):
+            def prepare_family(controller, source, references):
+                return engine_call(controller.rigPoseFamilyTarget, self._handle,
+                                   source._semantic_family_handle, references, names,
+                                   operation=operation)
+
+            return _semantic_handles._group_copy_operation(
+                mobject, cyclic_replace=False, context_override=context, prepare_copy=prepare_family,
+            )
+
+        _scene_object_handle(self._scene, mobject)
+
+        def prepare_copy(controller, source):
+            return engine_call(controller.rigPoseTarget, self._handle, source, names,
+                               operation=operation)
+
+        return _semantic_handles._clone_mobject(
+            mobject, context_override=context, prepare_copy=prepare_copy,
+        )
+
+    def joint(self, name):
+        """Return the joint's scene-space (x, y, heading in radians)."""
+        return tuple(engine_call(self._handle.joint, name, operation="RigPose2d.joint"))
+
+    def deform_points(self, chain, points):
+        """Warp (x, y) Bézier points along a parent-to-child chain, in scene space."""
+        from array import array
+        from _noon_host import array_value
+
+        packed = array("d")
+        for x, y in points:
+            packed.extend((x, y))
+        result = engine_call(self._handle.deformPoints, array_value(list(chain)),
+                             array_value(memoryview(packed)), operation="RigPose2d.deform_points")
+        result = iter(result)
+        return list(zip(result, result))
+
+
+def _canonical_retarget_rig_2d(scene, joints, tracks, mapping):
+    operation = "Scene.retarget_rig_2d"
+    batch = _rig_2d_batch(_context(scene), joints, tracks, operation)
+    for source, destination in (mapping or {}).items():
+        target, gain = (destination, 1.0) if isinstance(destination, str) else destination
+        engine_call(batch.mapTrack, source, target, float(gain), operation=operation)
+    return _RetargetedRig2d(engine_call(batch.prepare, operation=operation), scene)
+
+
+def _canonical_bind_rig_2d(self, tracker, joints, tracks, attachments):
+    if not isinstance(tracker, _reactive.ValueTracker):
+        raise TypeError("bind_rig_2d requires a ValueTracker")
+    context = _context(self)
+    operation = "Scene.bind_rig_2d"
+    batch = _rig_2d_batch(context, joints, tracks, operation)
+    for name, target, (x, y) in attachments:
+        handle = _scene_object_handle(self, target, allow_detached=False)
+        engine_call(batch.attach, name, handle, float(x), float(y), operation=operation)
+    _associate_tracker(self, tracker)
+    tracker_context, tracker_handle = tracker._canonical_context_handle()
+    if tracker_context is not context:
+        raise ValueError("ValueTracker belongs to another Scene")
+    engine_call(context.bindRig2d, tracker_handle, batch, operation=operation)
     return self
 
 
