@@ -72,6 +72,8 @@ pub(crate) fn manim_color_from_effective(style: &Style) -> Color {
 
 pub(crate) trait PaintStyleEdit {
     fn set_emission(&mut self, emission: noon_core::Emission);
+    fn set_stroke_width_mode(&mut self, mode: noon_core::StrokeWidthMode);
+    fn set_sketch_stroke(&mut self, sketch: noon_core::SketchStroke);
     fn has_fill(&self) -> bool;
     fn has_stroke(&self) -> bool;
     fn has_background_stroke(&self) -> bool;
@@ -124,6 +126,14 @@ fn set_paint_opacity(paint: &mut Option<SemanticPaint>, multiplier: &mut f64, op
 impl PaintStyleEdit for SemanticStyle {
     fn set_emission(&mut self, emission: noon_core::Emission) {
         self.emission = emission;
+    }
+
+    fn set_stroke_width_mode(&mut self, mode: noon_core::StrokeWidthMode) {
+        self.stroke_width_mode = mode;
+    }
+
+    fn set_sketch_stroke(&mut self, sketch: noon_core::SketchStroke) {
+        self.sketch_stroke = Some(sketch);
     }
 
     fn has_fill(&self) -> bool {
@@ -210,6 +220,14 @@ impl PaintStyleEdit for SemanticStyle {
 impl PaintStyleEdit for Style {
     fn set_emission(&mut self, emission: noon_core::Emission) {
         self.emission = emission;
+    }
+
+    fn set_stroke_width_mode(&mut self, mode: noon_core::StrokeWidthMode) {
+        self.stroke_width_mode = mode;
+    }
+
+    fn set_sketch_stroke(&mut self, sketch: noon_core::SketchStroke) {
+        self.sketch_stroke = Some(sketch);
     }
 
     fn has_fill(&self) -> bool {

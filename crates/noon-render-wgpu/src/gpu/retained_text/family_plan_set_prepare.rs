@@ -310,7 +310,7 @@ impl RetainedFramePreparer {
         }
         self.prepare_canonical_mixed_baseline(
             device,
-            frame.retained,
+            &frame.as_family_frame(),
             changes,
             texts,
             fonts,
@@ -803,26 +803,11 @@ impl RetainedFramePreparer {
                                     },
                                 )?;
                                 let scratch = &mut self.scratch.objects[scratch_slot];
-                                scratch.transform = object.transform;
-                                scratch.style = Style {
-                                    fill: Some(
-                                        crate::text::resolve_text_paint(
-                                            run.fill,
-                                            object.style.fill,
-                                        )
-                                        .unwrap_or(Color::WHITE),
-                                    ),
-                                    stroke: None,
-                                    stroke_width: 0.0,
-                                    background_stroke: object.style.background_stroke,
-                                    background_stroke_width: object.style.background_stroke_width,
-                                    stroke_width_mode: StrokeWidthMode::ScaleWithObject,
-                                    stroke_join: StrokeJoin::Round,
-                                    stroke_cap: StrokeCap::Round,
-                                    sketch_stroke: None,
-                                    opacity: object.style.opacity,
-                                    emission: object.style.emission,
-                                };
+                                scratch.transform = glyph_outline_placement(
+                                    object.transform,
+                                    glyph_outline_em(run, object.style),
+                                );
+                                scratch.style = glyph_outline_style(run, object.style);
                                 scratch.appearance = object.appearance;
                                 self.scratch.presences[scratch_slot] = true;
                                 self.scratch.reveals[scratch_slot] = reveal;
@@ -894,7 +879,10 @@ impl RetainedFramePreparer {
                             RetainedDrawBorderThenFillPhase::Fill { .. } => 1.0,
                         };
                         let scratch = &mut self.scratch.objects[scratch_slot];
-                        scratch.transform = object.transform;
+                        scratch.transform = glyph_outline_placement(
+                            object.transform,
+                            glyph_outline_em(run, object.style),
+                        );
                         scratch.style = draw_border_glyph_style(run, object.style, member.phase);
                         scratch.appearance = object.appearance;
                         self.scratch.presences[scratch_slot] = true;
@@ -1114,6 +1102,87 @@ mod tests {
             "A #rect(width: 18pt, height: 12pt, fill: blue, stroke: 0.6pt)",
             TypstMode::Markup,
         );
+    }
+
+    #[test]
+    fn sketched_glyph_write_keeps_the_same_outline_after_completion_and_seek() {
+        let artifact = compile_typst_resource("a", TypstMode::Math).unwrap();
+        let mut texts = TextResourceArena::new();
+        let text = texts.insert(artifact.resource).unwrap();
+        let mut object = semantic_object(10, ObjectContentRef::Text(text));
+        object.transform.scale = Vec2::new(1.0 / 72.0, 1.0 / 72.0);
+        object.style.stroke = Some(Color::WHITE);
+        object.style.stroke_width = 0.035;
+        object.style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
+        object.style.sketch_stroke = noon_core::SketchStroke::new(1.1, 7);
+        let mut semantics = SemanticStore::new();
+        let leaf = semantics.insert_authoring_object();
+        let mut builder = RetainedFamilyAnimationPlanBuilder::begin(&semantics, leaf).unwrap();
+        builder
+            .accept_leaf(leaf, object.id, &object.content, &texts)
+            .unwrap();
+        let plan = builder.finish().unwrap();
+        let retained = FrameState {
+            objects: vec![object],
+            presences: vec![true],
+            reveals: vec![1.0],
+            morphs: vec![0.0],
+            render_geometries: vec![None],
+            render_transforms: vec![None],
+            family_animations: vec![None],
+            family_animation_plan_indices: vec![None],
+            time: 0.0,
+        };
+        let (device, _) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let metrics = TextDeviceMetrics::uniform(100.0).unwrap();
+        let mut preparer = RetainedFramePreparer::new();
+        let mut animated = |progress| {
+            let animations = [Some(FamilyAnimationState {
+                mode: FamilyAnimationMode::DrawBorderThenFill,
+                ..family_state(progress)
+            })];
+            let prepared = preparer
+                .prepare_family_draw_border_then_fill(
+                    &device,
+                    &RetainedFamilyFrame {
+                        retained: &retained,
+                        family_animations: &animations,
+                    },
+                    &plan,
+                    &texts,
+                    &artifact.fonts,
+                    &artifact.geometry,
+                    metrics,
+                )
+                .unwrap();
+            assert!(prepared
+                .render_items
+                .iter()
+                .all(|item| !matches!(item, RetainedRenderItem::Glyph { .. })));
+            (
+                prepared.geometry.paths.to_vec(),
+                prepared.geometry.path_vertices.to_vec(),
+            )
+        };
+        let drawing = animated(0.25);
+        let finished = animated(1.0);
+        assert_ne!(drawing.0, finished.0);
+        assert_eq!(animated(0.25), drawing);
+
+        let resting = preparer
+            .prepare_with_changes(
+                &device,
+                &retained,
+                &FrameChanges::all(),
+                &texts,
+                &artifact.fonts,
+                &artifact.geometry,
+                metrics,
+            )
+            .unwrap();
+        assert!(!finished.1.is_empty());
+        assert_eq!(resting.geometry.paths, finished.0);
+        assert_eq!(resting.geometry.path_vertices, finished.1);
     }
 
     fn assert_compiled_write_vector_style_and_cached_rows(source: &str, mode: TypstMode) {

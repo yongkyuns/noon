@@ -1806,6 +1806,28 @@ mod wasm {
             self.semantic_family()?.set_style(update).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setTextSketchStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_text_sketch_stroke(
+            &mut self,
+            roughness: f64,
+            seed: u32,
+            width: f64,
+            red: f32,
+            green: f32,
+            blue: f32,
+            alpha: f32,
+        ) -> Result<(), JsValue> {
+            let update = noon::StyleUpdate::text_sketch_stroke(
+                noon_core::Color::rgba(red, green, blue, alpha),
+                width,
+                roughness,
+                seed,
+            )
+            .map_err(js_error)?;
+            self.semantic_family()?.set_style(update).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setOwnStyle)]
         #[allow(clippy::too_many_arguments)]
         pub fn set_own_style(
@@ -4144,6 +4166,28 @@ mod wasm {
             self.handle
                 .set_stroke_color(red, green, blue, alpha)
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setTextSketchStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_text_sketch_stroke(
+            &mut self,
+            roughness: f64,
+            seed: u32,
+            width: f64,
+            red: f32,
+            green: f32,
+            blue: f32,
+            alpha: f32,
+        ) -> Result<(), JsValue> {
+            let update = noon::StyleUpdate::text_sketch_stroke(
+                noon_core::Color::rgba(red, green, blue, alpha),
+                width,
+                roughness,
+                seed,
+            )
+            .map_err(js_error)?;
+            self.handle.set_style(update).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setStrokeWidth)]

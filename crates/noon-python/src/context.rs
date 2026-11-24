@@ -2532,6 +2532,56 @@ impl Context {
         self.edit_scene(|scene| scene.set_family_own_stroke_cap(&source.family, cap))
     }
 
+    #[pyo3(name = "setTextSketchStroke")]
+    #[allow(clippy::too_many_arguments)]
+    fn set_text_sketch_stroke(
+        &mut self,
+        target: &MobjectHandle,
+        roughness: f64,
+        seed: u32,
+        width: f64,
+        red: f32,
+        green: f32,
+        blue: f32,
+        alpha: f32,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_store(target)?;
+        let update = noon::StyleUpdate::text_sketch_stroke(
+            noon_core::Color::rgba(red, green, blue, alpha),
+            width,
+            roughness,
+            seed,
+        )
+        .map_err(engine_error)?;
+        self.edit_scene(|scene| scene.set_style(&target.handle, update))
+    }
+
+    #[pyo3(name = "setFamilyTextSketchStroke")]
+    #[allow(clippy::too_many_arguments)]
+    fn set_family_text_sketch_stroke(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        roughness: f64,
+        seed: u32,
+        width: f64,
+        red: f32,
+        green: f32,
+        blue: f32,
+        alpha: f32,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.same_family_store(target)?;
+        let update = noon::StyleUpdate::text_sketch_stroke(
+            noon_core::Color::rgba(red, green, blue, alpha),
+            width,
+            roughness,
+            seed,
+        )
+        .map_err(engine_error)?;
+        self.edit_scene(|scene| scene.set_family_style(&target.family, update).map(|_| ()))
+    }
+
     #[pyo3(name = "setStrokeCap")]
     fn set_stroke_cap(&mut self, handle: &MobjectHandle, cap: &str) -> PyResult<()> {
         self.available()?;

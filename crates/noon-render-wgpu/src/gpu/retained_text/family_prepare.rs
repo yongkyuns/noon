@@ -137,13 +137,7 @@ impl RetainedFramePreparer {
         let images =
             self.stage_image_publication(device, frame.retained, changes, None, geometries)?;
         self.prepare_canonical_mixed_baseline(
-            device,
-            frame.retained,
-            changes,
-            texts,
-            fonts,
-            geometries,
-            metrics,
+            device, frame, changes, texts, fonts, geometries, metrics,
         )?;
 
         // The canonical generation is no longer reusable once family-local scratch
@@ -422,10 +416,15 @@ impl RetainedFramePreparer {
         else {
             return Ok(false);
         };
+        let sketched = frame.retained.objects[object_index]
+            .style
+            .sketch_stroke
+            .is_some();
         for member in members {
             match member? {
                 RetainedFamilyRevealMember::TextGlyph { glyph, reveal, .. }
-                    if glyph.run_index == run_index && (stable_rows || reveal < 1.0) =>
+                    if glyph.run_index == run_index
+                        && (stable_rows || sketched || reveal < 1.0) =>
                 {
                     return Ok(true);
                 }
@@ -487,40 +486,10 @@ impl RetainedFramePreparer {
                             glyph,
                         },
                     )?;
-                    let (_, outline) = self.outlines.outline(fonts, run, positioned.glyph_id)?;
-                    let path = append_transformed_path(
-                        VectorPath::new(),
-                        outline.as_ref(),
-                        run.transform,
-                        positioned.origin,
-                    );
-                    if path.is_empty() {
-                        continue;
-                    }
-                    let fill = crate::text::resolve_text_paint(run.fill, object.style.fill)
-                        .unwrap_or(Color::WHITE);
-                    let scratch_slot = self.push_geometry(
-                        object_id,
-                        GeometryRef::path(path),
-                        object.transform,
-                        Style {
-                            fill: Some(fill),
-                            stroke: None,
-                            stroke_width: 0.0,
-                            background_stroke: object.style.background_stroke,
-                            background_stroke_width: object.style.background_stroke_width,
-                            stroke_width_mode: StrokeWidthMode::ScaleWithObject,
-                            stroke_join: StrokeJoin::Round,
-                            stroke_cap: StrokeCap::Round,
-                            sketch_stroke: None,
-                            opacity: object.style.opacity,
-                            emission: object.style.emission,
-                        },
-                        object.appearance,
-                        reveal,
-                        0.0,
-                    );
-                    if stable_rows {
+                    let style = glyph_outline_style(run, object.style);
+                    let scratch_slot = self
+                        .push_glyph_outline(object, run, positioned, style, reveal, 0.0, fonts)?;
+                    if let Some(scratch_slot) = scratch_slot.filter(|_| stable_rows) {
                         self.family_plan_scratch_slots
                             .entry(object_index)
                             .or_default()
@@ -762,6 +731,7 @@ mod tests {
         preparer
             .build_scratch_frame(
                 &retained,
+                &[],
                 &TextResourceArena::new(),
                 &FontResourceArena::new(),
                 &GeometryResourceArena::new(),
@@ -790,6 +760,7 @@ mod tests {
         preparer
             .build_scratch_frame(
                 &retained,
+                &[],
                 &texts,
                 &FontResourceArena::new(),
                 &GeometryResourceArena::new(),
@@ -817,6 +788,7 @@ mod tests {
         preparer
             .build_scratch_frame(
                 &retained,
+                &[],
                 &texts,
                 &FontResourceArena::new(),
                 &GeometryResourceArena::new(),

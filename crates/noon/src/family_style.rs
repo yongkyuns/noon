@@ -26,15 +26,47 @@ pub struct StyleUpdate {
     pub stroke_color: Option<Color>,
     pub stroke_width: Option<f64>,
     pub stroke_opacity: Option<f64>,
+    pub stroke_width_mode: Option<noon_core::StrokeWidthMode>,
+    pub sketch_stroke: Option<noon_core::SketchStroke>,
     pub background_stroke_color: Option<Color>,
     pub background_stroke_width: Option<f64>,
     pub background_stroke_opacity: Option<f64>,
 }
 
 impl StyleUpdate {
+    /// Style retained glyph outlines with a pen width in scene units.
+    pub fn text_sketch_stroke(
+        color: Color,
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<Self, AuthoringError> {
+        let sketch = noon_core::SketchStroke::new(roughness, seed).ok_or(
+            AuthoringError::InvalidSketchStroke("sketch roughness must be between 0 and 2"),
+        )?;
+        Ok(Self {
+            stroke_color: Some(color),
+            stroke_width: Some(width),
+            stroke_width_mode: Some(noon_core::StrokeWidthMode::ScreenSpace),
+            sketch_stroke: Some(sketch),
+            ..Self::default()
+        })
+    }
+
     pub(crate) fn apply<S: PaintStyleEdit>(&self, style: &mut S) -> Result<(), AuthoringError> {
         if let Some(emission) = self.emission {
             style.set_emission(emission);
+        }
+        if let Some(mode) = self.stroke_width_mode {
+            style.set_stroke_width_mode(mode);
+        }
+        if let Some(sketch) = self.sketch_stroke {
+            if !sketch.is_valid() {
+                return Err(AuthoringError::InvalidSketchStroke(
+                    "sketch roughness must be between 0 and 2",
+                ));
+            }
+            style.set_sketch_stroke(sketch);
         }
         fill(style, self.fill_color, self.fill_opacity)?;
         stroke(

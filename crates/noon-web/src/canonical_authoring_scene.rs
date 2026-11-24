@@ -10410,6 +10410,58 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
+        #[wasm_bindgen(js_name = setTextSketchStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_text_sketch_stroke(
+            &mut self,
+            target: &crate::WasmAuthoringMobjectHandle,
+            roughness: f64,
+            seed: u32,
+            width: f64,
+            red: f32,
+            green: f32,
+            blue: f32,
+            alpha: f32,
+        ) -> Result<(), JsValue> {
+            let update = noon::StyleUpdate::text_sketch_stroke(
+                noon_core::Color::rgba(red, green, blue, alpha),
+                width,
+                roughness,
+                seed,
+            )
+            .map_err(typed_js_error)?;
+            self.inner
+                .edit_scene(|scene| scene.set_style(&target.semantic_mobject(), update))
+                .map_err(typed_js_error)
+        }
+
+        #[wasm_bindgen(js_name = setFamilyTextSketchStroke)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_family_text_sketch_stroke(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            roughness: f64,
+            seed: u32,
+            width: f64,
+            red: f32,
+            green: f32,
+            blue: f32,
+            alpha: f32,
+        ) -> Result<(), JsValue> {
+            let family = target.semantic_family()?;
+            let update = noon::StyleUpdate::text_sketch_stroke(
+                noon_core::Color::rgba(red, green, blue, alpha),
+                width,
+                roughness,
+                seed,
+            )
+            .map_err(typed_js_error)?;
+            self.inner
+                .edit_scene(|scene| scene.set_family_style(&family, update))
+                .map(|_| ())
+                .map_err(typed_js_error)
+        }
+
         #[wasm_bindgen(js_name = setStrokeColor)]
         pub fn set_stroke_color(
             &mut self,

@@ -6,8 +6,12 @@ const DISPLACEMENT: f32 = 0.085;
 
 /// A conservative local-space radial bound on the perturbation of each control point.
 pub fn sketch_outset(stroke: SketchStroke) -> f32 {
+    sketch_outset_for_extent(stroke, MAX_ROUGHNESS_SCALE)
+}
+
+pub fn sketch_outset_for_extent(stroke: SketchStroke, extent: f32) -> f32 {
     // Allow for both the displaced anchor and asymmetric bow controls.
-    stroke.roughness() * MAX_ROUGHNESS_SCALE * DISPLACEMENT * 3.0
+    stroke.roughness() * extent * DISPLACEMENT * 3.0
 }
 
 pub fn sketch_outline(path: &VectorPath, stroke: SketchStroke) -> VectorPath {

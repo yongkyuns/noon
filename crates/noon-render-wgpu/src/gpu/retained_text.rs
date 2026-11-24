@@ -15,10 +15,10 @@ use crate::text::{
 };
 use noon_core::{
     Color, FontResourceHandle, FontResourceLookup, GeometryRef, GeometryResource,
-    GeometryResourceLookup, GlyphRun, ObjectContentRef, ObjectId, PathCommand, PublicationContext,
-    RasterImageResourceLookup, StrokeCap, StrokeJoin, StrokeWidthMode, Style, TextAffineTransform,
-    TextGlyphStroke, TextRenderItem, TextResourceLookup, TextVectorItem, Transform2D, Vec2,
-    VectorPath,
+    GeometryResourceLookup, GlyphRun, ObjectContentRef, ObjectId, PathCommand, PositionedGlyph,
+    PublicationContext, RasterImageResourceLookup, StrokeCap, StrokeJoin, StrokeWidthMode, Style,
+    TextAffineTransform, TextGlyphStroke, TextRenderItem, TextResourceLookup, TextVectorItem,
+    Transform2D, Vec2, VectorPath,
 };
 #[cfg(test)]
 use noon_core::{FontResourceArena, GeometryResourceArena, TextResourceArena, TextVectorStyle};
@@ -1888,7 +1888,7 @@ impl RetainedFramePreparer {
         }
 
         let scratch_reused =
-            self.prepare_scratch_with_changes(frame, changes, texts, fonts, geometries)?;
+            self.prepare_scratch_with_changes(frame, &[], changes, texts, fonts, geometries)?;
 
         if scratch_reused
             && changes.is_empty()
@@ -2073,7 +2073,7 @@ impl RetainedFramePreparer {
     pub(super) fn prepare_canonical_mixed_baseline(
         &mut self,
         device: &wgpu::Device,
-        frame: &FrameState,
+        frame: &noon_runtime::RetainedFamilyFrame<'_>,
         changes: &FrameChanges,
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
@@ -2092,9 +2092,16 @@ impl RetainedFramePreparer {
             self.geometry.clear_painter_order();
             self.geometry_uses_source_indices = false;
         }
-        self.prepare_scratch_with_changes(frame, changes, texts, fonts, geometries)?;
+        self.prepare_scratch_with_changes(
+            frame.retained,
+            frame.family_animations,
+            changes,
+            texts,
+            fonts,
+            geometries,
+        )?;
         self.geometry_only_classification = None;
-        self.prepare_text_snapshot(device, frame, changes, texts, fonts, metrics)
+        self.prepare_text_snapshot(device, frame.retained, changes, texts, fonts, metrics)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2142,6 +2149,7 @@ impl RetainedFramePreparer {
     fn prepare_scratch_with_changes(
         &mut self,
         frame: &FrameState,
+        family_animations: &[Option<noon_core::FamilyAnimationState>],
         changes: &FrameChanges,
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
@@ -2161,7 +2169,7 @@ impl RetainedFramePreparer {
         // Mark the current generation invalid first so a later empty change set can
         // never reuse a partially rebuilt scratch scene.
         self.scratch_ready = false;
-        self.build_scratch_frame(frame, texts, fonts, geometries)?;
+        self.build_scratch_frame(frame, family_animations, texts, fonts, geometries)?;
         self.scratch_object_count = frame.objects.len();
         self.scratch_ready = true;
         self.incremental_stats.scratch_rebuilds =
@@ -2763,6 +2771,7 @@ impl RetainedFramePreparer {
     fn build_scratch_frame(
         &mut self,
         frame: &FrameState,
+        family_animations: &[Option<noon_core::FamilyAnimationState>],
         texts: &(impl TextResourceLookup + ?Sized),
         fonts: &(impl FontResourceLookup + ?Sized),
         geometries: &(impl GeometryResourceLookup + ?Sized),
@@ -2855,7 +2864,27 @@ impl RetainedFramePreparer {
                         match item {
                             TextRenderItem::GlyphRun(run_index) => {
                                 let run = &resource.runs[run_index as usize];
-                                if run.stroke.is_some() || reveal < 1.0 || morph != 0.0 {
+                                if object.style.sketch_stroke.is_some() {
+                                    fast_text_only = false;
+                                    if family_animations
+                                        .get(object_index)
+                                        .is_some_and(Option::is_some)
+                                    {
+                                        // The family plan supplies each glyph's reveal or fill phase.
+                                        self.sources.push(SourceItem::FastGlyphRun {
+                                            object_id: object.id,
+                                            object_index: object_index_u32,
+                                            run_index,
+                                        });
+                                    } else {
+                                        let style = glyph_outline_style(run, object.style);
+                                        for glyph in run.glyphs.iter() {
+                                            self.push_glyph_outline(
+                                                object, run, glyph, style, reveal, morph, fonts,
+                                            )?;
+                                        }
+                                    }
+                                } else if run.stroke.is_some() || reveal < 1.0 || morph != 0.0 {
                                     fast_text_only = false;
                                     self.push_outline_run(
                                         object.id,
@@ -2985,6 +3014,42 @@ impl RetainedFramePreparer {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn push_glyph_outline(
+        &mut self,
+        object: &FrameObjectState,
+        run: &GlyphRun,
+        glyph: &PositionedGlyph,
+        style: Style,
+        reveal: f32,
+        morph: f32,
+        fonts: &(impl FontResourceLookup + ?Sized),
+    ) -> Result<Option<usize>, RetainedPrepareError> {
+        let (_, outline) = self.outlines.outline(fonts, run, glyph.glyph_id)?;
+        if outline.is_empty() {
+            return Ok(None);
+        }
+        // Work in em units so the pen perturbation follows the glyph's size,
+        // including math scripts. Keep the original placement in the transform.
+        let em = glyph_outline_em(run, style);
+        let units = 1.0 / f64::from(em);
+        let layout = run.transform.then(TextAffineTransform {
+            xx: units,
+            yy: units,
+            ..TextAffineTransform::IDENTITY
+        });
+        let path = transform_path(&outline, layout, glyph.origin);
+        Ok(Some(self.push_geometry(
+            object.id,
+            GeometryRef::path(path),
+            glyph_outline_placement(object.transform, em),
+            style,
+            object.appearance,
+            reveal,
+            morph,
+        )))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn push_outline_run(
         &mut self,
         object_id: ObjectId,
@@ -3067,6 +3132,39 @@ impl RetainedFramePreparer {
             }
         }
         Ok(())
+    }
+}
+
+fn glyph_outline_em(run: &GlyphRun, style: Style) -> f32 {
+    if style.sketch_stroke.is_some() {
+        (run.font_size as f32).max(1.0)
+    } else {
+        1.0
+    }
+}
+
+fn glyph_outline_placement(mut transform: Transform2D, em: f32) -> Transform2D {
+    transform.scale = transform.scale * em;
+    transform
+}
+
+fn glyph_outline_style(run: &GlyphRun, object_style: Style) -> Style {
+    let fill =
+        Some(crate::text::resolve_text_paint(run.fill, object_style.fill).unwrap_or(Color::WHITE));
+    if object_style.sketch_stroke.is_some() {
+        return Style {
+            fill,
+            ..object_style
+        };
+    }
+    Style {
+        fill,
+        stroke: None,
+        stroke_width: 0.0,
+        stroke_width_mode: StrokeWidthMode::ScaleWithObject,
+        stroke_join: StrokeJoin::Round,
+        stroke_cap: StrokeCap::Round,
+        ..object_style
     }
 }
 

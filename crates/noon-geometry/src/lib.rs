@@ -15,7 +15,9 @@ mod isoline;
 mod morph;
 mod outline;
 mod sketch_stroke;
-pub use sketch_stroke::{sketch_arrow_tip, sketch_outline, sketch_outset};
+pub use sketch_stroke::{
+    sketch_arrow_tip, sketch_outline, sketch_outset, sketch_outset_for_extent,
+};
 mod partial;
 mod polygon_fill;
 pub use polygon_fill::polygon_fill_contains;
