@@ -3,7 +3,17 @@ import path from "node:path";
 
 // Hold automatic startup at the real module boundary while a smoke check
 // observes the cold page. Releasing it preserves the normal post-paint Run.
-export async function holdPlaygroundPreload(page) {
+export async function holdPlaygroundPreload(page, {
+  renderHost = process.env.NOON_PLAYGROUND_RENDER_HOST ?? "auto",
+} = {}) {
+  if (!["auto", "worker", "main-thread"].includes(renderHost)) {
+    throw new Error(`unsupported Noon render host ${renderHost}`);
+  }
+  if (renderHost !== "auto") {
+    await page.addInitScript((host) => {
+      globalThis.__NOON_RENDER_HOST__ = host;
+    }, renderHost);
+  }
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   await page.route("**/live-authoring-bootstrap.js", async (route) => {

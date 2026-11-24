@@ -1,12 +1,12 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "ce4afba45c249d3b60d1b41e7f3b1929099f737a",
-  "checkoutRevision": "ce4afba45c249d3b60d1b41e7f3b1929099f737a",
+  "captureRevision": "5dc25c0b5ca311a14a1334cba4237fe509c4011a",
+  "checkoutRevision": "5dc25c0b5ca311a14a1334cba4237fe509c4011a",
   "backend": "webgl",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "ce4afba45c249d3b60d1b41e7f3b1929099f737a",
+    "sourceRevision": "5dc25c0b5ca311a14a1334cba4237fe509c4011a",
     "files": {
       "worker": {
         "path": "./python-worker.js",
@@ -14,18 +14,18 @@
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "2c2e3dda0fa73b0c8a80e97e6b45c880bd7ab20ad56c82f789a43888166bb591"
+        "sha256": "09789d339f542f325b05175c127a668a31ddd0788db1d5c537877308ae1de861"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "d18c6227e4628be8c64b77124418b034c454001a2d6cc4801da69b6419f74280"
+        "sha256": "f892479ab1c8b4cd42c346a06b205f6e6ff3f4a96d6f241c30f955ec8772f3bf"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
         "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
       }
     },
-    "buildId": "a3a28a1752e5915adc669fe357b866829285e152b75adcb33266f26737493d75"
+    "buildId": "aa95ee16ffe965f4ecf4be7231f08ba6271359e823e329debec8f36088da7bf0"
   },
   "qualification": {
     "script": "scripts/python-background-audio-smoke.mjs",
@@ -37,14 +37,14 @@
   "posters": [
     {
       "id": "showcase-background-music",
-      "captureBuildId": "a3a28a1752e5915adc669fe357b866829285e152b75adcb33266f26737493d75",
-      "sourceSha256": "b5bcced4ffb30c44b4bf476e16ae1416a6fad072d2f0df88edd98346a4711a40",
+      "captureBuildId": "aa95ee16ffe965f4ecf4be7231f08ba6271359e823e329debec8f36088da7bf0",
+      "sourceSha256": "5ff28d11f7789cf79123d8af307fa48b1dd677ff484bbcbd02f991aa0c8e842e",
       "thumbnailTime": 8,
       "image": {
         "width": 960,
         "height": 540,
-        "pngSha256": "53dd8a235009fa37b9a62db3ea04094e1f43ad4f66754a68df044cee683899dd",
-        "pixelSha256": "448370c47b1fdbd3981a2793d2709d26311825a2a69d76363b999a6800acf0e7"
+        "pngSha256": "500a823ca7b94660881995b31f732fb85df7249dbfc43fa57d0498d24fd0d4d0",
+        "pixelSha256": "211988036084ae36863782357da642f8688f86a34fc9dbc479eb56b5a1c93a07"
       },
       "sample": {
         "requestedTime": 8,

@@ -268,6 +268,7 @@ fn worker_scroll_does_not_bypass_a_pending_callback_and_retries_after_completion
     let mut target = PlayerPointerTarget {
         source: &mut p.source,
         translation_drag_undo: &mut p.translation_drag_undo,
+        control_publication: None,
     };
     p.worker_pointer_presentation
         .set_view(

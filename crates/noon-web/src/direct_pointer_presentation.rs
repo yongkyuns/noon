@@ -100,13 +100,14 @@ impl DirectPointerPresentation {
         self.refresh_pending
             || (target.has_native_pointer_subscribers()
                 && self.presented.as_ref().is_some_and(|frame| {
-                    target
-                        .validate_pointer_frame(
-                            frame,
-                            frame.view(),
-                            crate::browser_pointer_input::PointerFrameValidation::Input,
-                        )
-                        .is_err_and(|error| recoverable_frame_error(&error))
+                    target.pointer_frame_needs_refresh(frame)
+                        || target
+                            .validate_pointer_frame(
+                                frame,
+                                frame.view(),
+                                crate::browser_pointer_input::PointerFrameValidation::Input,
+                            )
+                            .is_err_and(|error| recoverable_frame_error(&error))
                 }))
     }
 
@@ -117,7 +118,7 @@ impl DirectPointerPresentation {
 
     pub(crate) fn capture(
         &self,
-        target: &(impl BrowserPointerTarget + ?Sized),
+        target: &mut (impl BrowserPointerTarget + ?Sized),
         camera: Camera2DState,
     ) -> Result<Option<PointerFrameSnapshot>, PointerFrameError> {
         let Some(viewport) = self.view else {

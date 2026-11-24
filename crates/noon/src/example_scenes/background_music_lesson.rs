@@ -3,11 +3,12 @@
 //! One scalar timeline drives both points through native position bindings. The
 //! original score is prepared once and attached to the same Scene. There are no
 //! callbacks or source continuations; native export and browser playback lower
-//! this ordinary Scene directly.
+//! this ordinary Scene directly. Five authored buttons use the shared playback
+//! commands without changing the lesson's timeline or soundtrack.
 
 use crate::{
-    AudioClipOptions, AudioResource, Color, Mobject, RateFunction, Scene, SectionType,
-    SemanticVec3, Text, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
+    AudioClipOptions, AudioResource, Color, Mobject, PlaybackControl, RateFunction, Scene,
+    SectionType, SemanticVec3, Text, DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
 };
 
 use super::background_audio::{music, SAMPLE_RATE};
@@ -118,8 +119,82 @@ pub fn illustration(scene: &mut Scene) -> BuildResult<[Mobject; 2]> {
         (0.0, "02  NEGATIVE", "-2 becomes -4"),
         (4.3, "03  ZERO", "0 stays 0"),
     ] {
-        label(scene, heading, 18.0, x, -2.95, BLUE)?;
-        label(scene, explanation, 18.0, x, -3.35, MUTED)?;
+        label(scene, heading, 16.0, x, -2.70, BLUE)?;
+        label(scene, explanation, 16.0, x, -2.98, MUTED)?;
+    }
+    // Stroke-only icons leave the filled button as the shared picker's target.
+    // Text labels stay outside the fill; no frontend hit-test map is needed.
+    type StrokeSegment = ((f64, f64), (f64, f64));
+    for (x, caption, action) in [
+        (-3.6, "PREVIOUS", PlaybackControl::PreviousSection),
+        (-1.8, "PLAY / PAUSE", PlaybackControl::TogglePlayback),
+        (0.0, "NEXT", PlaybackControl::NextSection),
+        (1.8, "RESTART", PlaybackControl::Restart),
+        (3.6, "SOUND ON / OFF", PlaybackControl::ToggleAudioMuted),
+    ] {
+        let y = -3.45;
+        let mut button = scene.rectangle(1.55, 0.48)?;
+        button.set_translation(x, y)?;
+        button.set_color(GUIDE.red.into(), GUIDE.green.into(), GUIDE.blue.into(), 1.0)?;
+        button.set_fill(PANEL.red.into(), PANEL.green.into(), PANEL.blue.into(), 1.0)?;
+        button.set_stroke_width(0.018)?;
+        scene.add(&button)?;
+        scene.on_click_playback(&button, action)?;
+
+        let segments: &[StrokeSegment] = match action {
+            PlaybackControl::PreviousSection => &[
+                ((-0.24, 0.0), (0.14, 0.0)),
+                ((-0.24, 0.0), (-0.02, 0.17)),
+                ((-0.24, 0.0), (-0.02, -0.17)),
+                ((-0.35, -0.17), (-0.35, 0.17)),
+            ],
+            PlaybackControl::TogglePlayback => &[
+                ((-0.30, -0.17), (-0.30, 0.17)),
+                ((-0.30, 0.17), (-0.03, 0.0)),
+                ((-0.03, 0.0), (-0.30, -0.17)),
+                ((0.14, -0.17), (0.14, 0.17)),
+                ((0.30, -0.17), (0.30, 0.17)),
+            ],
+            PlaybackControl::NextSection => &[
+                ((0.24, 0.0), (-0.14, 0.0)),
+                ((0.24, 0.0), (0.02, 0.17)),
+                ((0.24, 0.0), (0.02, -0.17)),
+                ((0.35, -0.17), (0.35, 0.17)),
+            ],
+            PlaybackControl::Restart => &[
+                ((-0.18, 0.20), (-0.18, -0.02)),
+                ((-0.18, -0.02), (0.04, -0.02)),
+            ],
+            PlaybackControl::ToggleAudioMuted => &[
+                ((-0.30, -0.08), (-0.30, 0.08)),
+                ((-0.30, 0.08), (-0.18, 0.08)),
+                ((-0.18, 0.08), (-0.02, 0.20)),
+                ((-0.02, 0.20), (-0.02, -0.20)),
+                ((-0.02, -0.20), (-0.18, -0.08)),
+                ((-0.18, -0.08), (-0.30, -0.08)),
+                ((0.13, 0.14), (0.23, 0.0)),
+                ((0.23, 0.0), (0.13, -0.14)),
+            ],
+        };
+        for &(start, end) in segments {
+            let mut icon = scene.line(
+                (x + 0.65 * start.0, y + 0.65 * start.1),
+                (x + 0.65 * end.0, y + 0.65 * end.1),
+            )?;
+            icon.set_color(INK.red.into(), INK.green.into(), INK.blue.into(), 1.0)?;
+            icon.set_stroke_width(0.02)?;
+            icon.set_fill(0.0, 0.0, 0.0, 0.0)?;
+            scene.add(&icon)?;
+        }
+        if action == PlaybackControl::Restart {
+            let mut ring = scene.circle(0.125)?;
+            ring.set_translation(x, y)?;
+            ring.set_color(INK.red.into(), INK.green.into(), INK.blue.into(), 1.0)?;
+            ring.set_stroke_width(0.02)?;
+            ring.set_fill(0.0, 0.0, 0.0, 0.0)?;
+            scene.add(&ring)?;
+        }
+        label(scene, caption, 12.0, x, -3.84, MUTED)?;
     }
     let mut points = Vec::with_capacity(2);
     for (y, tint) in [(INPUT_Y, BLUE), (OUTPUT_Y, GOLD)] {

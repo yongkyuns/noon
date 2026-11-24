@@ -126,7 +126,7 @@ impl PrefixReader {
         displayed.validate_presentation(&self.session, view)
     }
     pub fn capture_pointer_frame(
-        &self,
+        &mut self,
         view: PointerFrameView,
     ) -> Result<PointerFrameSnapshot, PointerFrameError> {
         self.session.capture_pointer_frame(view)

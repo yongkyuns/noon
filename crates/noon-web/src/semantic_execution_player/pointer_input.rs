@@ -1,9 +1,10 @@
 //! Genuine worker input envelope; the collection receipt is never refreshed here.
 #[cfg(test)]
 use crate::browser_pointer_input::BrowserPointerInput;
-use crate::browser_pointer_input::BrowserPointerTarget;
+use crate::browser_pointer_input::{BrowserPointerAdmissionError, BrowserPointerTarget};
 use noon::integration::{
-    NativePointerInputPublication, NativePointerInputToken, PointerFrameSnapshot, PointerFrameView,
+    NativePointerInputPublication, NativePointerInputToken, PointerFrameError,
+    PointerFrameSnapshot, PointerFrameView,
 };
 use noon::SceneExecution;
 use noon_core::{NativePointerId, NativePointerInput, Vec2};
@@ -15,6 +16,9 @@ use noon_core::{NativePointerId, NativePointerInput, Vec2};
 pub(super) struct PlayerPointerTarget<'a> {
     pub(super) source: &'a mut SceneExecution,
     pub(super) translation_drag_undo: &'a mut Option<noon::TranslationDragUndo>,
+    /// The same committed input receipt, observed only after the shared
+    /// transaction returns. No target or click is inferred by this adapter.
+    pub(super) control_publication: Option<NativePointerInputPublication>,
 }
 
 impl BrowserPointerTarget for PlayerPointerTarget<'_> {
@@ -61,12 +65,6 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
     ) -> Result<noon_core::Camera2DState, noon::integration::PointerFrameError> {
         self.source.session().inspection_camera()
     }
-    fn capture_pointer_frame(
-        &self,
-        view: noon::integration::PointerFrameView,
-    ) -> Result<noon::integration::PointerFrameSnapshot, noon::integration::PointerFrameError> {
-        self.source.session().capture_pointer_frame(view)
-    }
     fn validate_pointer_frame(
         &self,
         frame: &noon::integration::PointerFrameSnapshot,
@@ -91,6 +89,43 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         view: noon::integration::PointerFrameView,
     ) -> Result<NativePointerInputToken, noon::integration::PointerFrameError> {
         frame.input_token(self.source.session(), view)
+    }
+
+    fn capture_pointer_frame(
+        &mut self,
+        view: PointerFrameView,
+    ) -> Result<PointerFrameSnapshot, PointerFrameError> {
+        self.source.session_mut().capture_pointer_frame(view)
+    }
+
+    fn supports_compatible_pointer_receipts(&self) -> bool {
+        true
+    }
+
+    fn pointer_frame_needs_refresh(&self, frame: &PointerFrameSnapshot) -> bool {
+        frame.needs_input_refresh(self.source.session())
+    }
+
+    fn validate_pointer_position(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<(), BrowserPointerAdmissionError> {
+        frame
+            .validate_position(self.source.session_mut(), view, surface)
+            .map_err(Into::into)
+    }
+
+    fn pointer_frame_token(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<NativePointerInputToken, BrowserPointerAdmissionError> {
+        frame
+            .input_token_at(self.source.session_mut(), view, surface)
+            .map_err(Into::into)
     }
 
     fn configure_pointer(
@@ -129,15 +164,18 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         token: &NativePointerInputToken,
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, String> {
-        self.source
+        let receipt = self
+            .source
             .submit_translation_drag_input(token, input)
-            .map(|receipt| {
-                if let Some(undo) = receipt.undo {
-                    *self.translation_drag_undo = Some(undo);
-                }
-                receipt.input
-            })
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        if let Some(undo) = receipt.undo {
+            *self.translation_drag_undo = Some(undo);
+        }
+        let publication = receipt.input;
+        if publication.playback_control().is_some() {
+            self.control_publication = Some(publication);
+        }
+        Ok(publication)
     }
 }
 
@@ -187,6 +225,7 @@ impl SemanticExecutionPlayer {
         let mut target = PlayerPointerTarget {
             source: &mut self.source,
             translation_drag_undo: &mut self.translation_drag_undo,
+            control_publication: None,
         };
         submit_test_frame(
             &mut target,

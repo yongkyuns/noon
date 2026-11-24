@@ -105,7 +105,7 @@ impl SceneInstance {
         self.refresh_time_effect_row(index);
         // Halo coverage is renderer-derived. Semantic geometry, spatial queries,
         // object motion, painter order and all unrelated rows stay untouched.
-        self.changes.insert(index);
+        self.mark_nonspatial_changed(index);
         self.last_stats = EvaluationStats::default();
         self.last_patch_stats = stats;
         Ok(())
@@ -210,6 +210,7 @@ mod tests {
         assert_eq!(runtime.frame().objects[0], expected);
         runtime.take_frame_changes();
         runtime.take_spatial_changes();
+        runtime.take_nonspatial_changes();
         let survivor_address =
             runtime.compiled.track(TrackId::new(2)).unwrap() as *const _ as usize;
         runtime
@@ -234,6 +235,11 @@ mod tests {
         assert_eq!(
             runtime.take_frame_changes(),
             crate::FrameChanges::objects(vec![0])
+        );
+        assert_eq!(
+            runtime.take_nonspatial_changes(),
+            crate::FrameChanges::objects(vec![0]),
+            "consuming renderer dirtiness must preserve pointer damage"
         );
         assert!(runtime.take_spatial_changes().is_empty());
         runtime.seek(1.5).unwrap();
@@ -393,6 +399,9 @@ mod tests {
             edit(a.clone(), b.clone(), 3.0, 4.0),
             final_patch,
         ]);
+        runtime.take_frame_changes();
+        runtime.take_spatial_changes();
+        runtime.take_nonspatial_changes();
         let before = runtime.publication_context();
         let prepared = runtime
             .prepare_authored_value_publication(
@@ -430,6 +439,16 @@ mod tests {
             radius(&runtime, b.attachment),
             noon_core::EffectRadius::Scene(4.0)
         );
+        assert_eq!(
+            runtime.take_frame_changes(),
+            crate::FrameChanges::objects(vec![0])
+        );
+        assert_eq!(
+            runtime.take_nonspatial_changes(),
+            crate::FrameChanges::objects(vec![0]),
+            "prepared ordered values must retain damage after renderer consumption"
+        );
+        assert!(runtime.take_spatial_changes().is_empty());
         let context = runtime.publication_context();
         let frame = runtime.frame().clone();
         let stale = CompiledEffect {
@@ -449,6 +468,53 @@ mod tests {
             .is_err());
         assert_eq!(runtime.frame(), &frame);
         assert_eq!(runtime.publication_context(), context);
+    }
+
+    #[test]
+    fn prepared_effect_values_equal_to_presented_frame_adopt_submitted_column_without_damage() {
+        let a = blur(10, 1.0);
+        let b = blur(11, 2.0);
+        let mut runtime = runtime(
+            stack([a.clone(), b.clone()]),
+            &[radius_track(1, a, 5.0), radius_track(2, b, 10.0)],
+        );
+        runtime.seek(1.0).unwrap();
+        let submitted = stack([blur(10, 3.0), blur(11, 6.0)]);
+        let presented = Arc::clone(runtime.frame().objects[0].effects.as_ref().unwrap());
+        assert_eq!(presented, submitted);
+        assert!(!Arc::ptr_eq(&presented, &submitted));
+        runtime.take_frame_changes();
+        runtime.take_spatial_changes();
+        runtime.take_nonspatial_changes();
+
+        // The authored radii change, but their active tracks already present the
+        // new values. Publish the submitted column without dirtying that picture.
+        let before = runtime.publication_context();
+        let prepared = runtime
+            .prepare_authored_value_publication(
+                &ExecutionMutationTransaction::from_mutations([ExecutionPatch::SetEffects {
+                    object: ObjectId::new(0),
+                    effects: Arc::clone(&submitted),
+                }]),
+                Default::default(),
+                before,
+                before.scene_revision().checked_next().unwrap(),
+            )
+            .unwrap()
+            .unwrap();
+        runtime.commit_prepared_authored_value_publication(prepared);
+
+        assert!(Arc::ptr_eq(
+            runtime.compiled.objects()[0].effects.as_ref().unwrap(),
+            &submitted
+        ));
+        assert!(Arc::ptr_eq(
+            runtime.frame().objects[0].effects.as_ref().unwrap(),
+            &submitted
+        ));
+        assert!(runtime.take_frame_changes().is_empty());
+        assert!(runtime.take_nonspatial_changes().is_empty());
+        assert!(runtime.take_spatial_changes().is_empty());
     }
 
     #[test]

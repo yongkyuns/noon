@@ -395,7 +395,7 @@ mod wasm {
     impl PreparedExecutionPlayer {
         #[wasm_bindgen(js_name = feedbackTargetsJson)]
         pub fn feedback_targets_json(
-            &self,
+            &mut self,
             context: &CanonicalAuthoringSceneContext,
             query: &str,
         ) -> Result<String, JsValue> {
@@ -422,7 +422,7 @@ mod wasm {
             {
                 return Ok("null".into());
             }
-            let reader = &self.playback.reader;
+            let reader = &mut self.playback.reader;
             let source = context.inner.feedback_source();
             let Some(result) = self
                 .pointer

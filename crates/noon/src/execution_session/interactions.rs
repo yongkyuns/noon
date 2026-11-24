@@ -17,6 +17,13 @@ impl InteractionBindings {
         self.bindings.is_empty()
     }
 
+    pub(super) fn is_playback_control(&self, node: SemanticNodeId) -> bool {
+        matches!(
+            self.bindings.get(&node),
+            Some(SemanticClickAction::Playback(_))
+        )
+    }
+
     fn insert(&mut self, node: SemanticNodeId, binding: SemanticClickAction) {
         let previous = self.bindings.insert(node, binding);
         self.playback_count -=

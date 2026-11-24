@@ -605,6 +605,59 @@ impl<C: LiveContinuation> PlaybackProgram<C> {
             _ => Err(PlaybackProgramError::Unavailable),
         }
     }
+    pub fn capture_pointer_frame(
+        &mut self,
+        view: PointerFrameView,
+    ) -> Result<PointerFrameSnapshot, PlaybackProgramError<C::Error>> {
+        let captured = match (&mut self.reader, &mut self.source) {
+            (Some(reader), _) => reader.capture_pointer_frame(view),
+            (None, Source::Observed(program)) => program.capture_pointer_frame(view),
+            _ => return Err(PlaybackProgramError::Unavailable),
+        };
+        captured
+            .map_err(|error| PlaybackProgramError::Program(LiveProgramError::PointerFrame(error)))
+    }
+
+    pub fn validate_pointer_frame_position(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<(), PlaybackProgramError<C::Error>> {
+        if let Some(reader) = &self.reader {
+            return reader.validate_pointer_frame(frame, view).map_err(|error| {
+                PlaybackProgramError::Program(LiveProgramError::PointerFrame(error))
+            });
+        }
+        match &mut self.source {
+            Source::Observed(program) => program
+                .validate_pointer_frame_position(frame, view, surface)
+                .map_err(PlaybackProgramError::Program),
+            _ => Err(PlaybackProgramError::Unavailable),
+        }
+    }
+
+    pub fn pointer_frame_input_token(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<NativePointerInputToken, PlaybackProgramError<C::Error>> {
+        if let Some(reader) = &self.reader {
+            return reader
+                .pointer_input_token_for_frame(frame, view)
+                .map_err(|error| {
+                    PlaybackProgramError::Program(LiveProgramError::PointerFrame(error))
+                });
+        }
+        match &mut self.source {
+            Source::Observed(program) => program
+                .pointer_frame_input_token(frame, view, surface)
+                .map_err(PlaybackProgramError::Program),
+            _ => Err(PlaybackProgramError::Unavailable),
+        }
+    }
+
     pub fn refresh_pointer_hover(
         &mut self,
         frame: &PointerFrameSnapshot,

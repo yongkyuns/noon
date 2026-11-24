@@ -273,11 +273,7 @@ fn frontier_handoff_keeps_observed_callback_times_inspection_and_foreign_receipt
         .unwrap()
         .inspection_pointer_view(1, Vec2::new(800.0, 400.0))
         .unwrap();
-    let frame = player
-        .session()
-        .unwrap()
-        .capture_pointer_frame(view)
-        .unwrap();
+    let frame = player.capture_pointer_frame(view).unwrap();
     assert!(player
         .scroll_inspection_view(&frame, view, Vec2::new(400.0, 200.0), 100.0)
         .unwrap());
@@ -287,11 +283,7 @@ fn frontier_handoff_keeps_observed_callback_times_inspection_and_foreign_receipt
         .unwrap()
         .inspection_pointer_view(1, Vec2::new(800.0, 400.0))
         .unwrap();
-    let frame = player
-        .session()
-        .unwrap()
-        .capture_pointer_frame(view)
-        .unwrap();
+    let frame = player.capture_pointer_frame(view).unwrap();
     for target in [f64::NAN, f64::INFINITY, -1.0, 0.25] {
         assert!(player.advance_to(&mut callbacks, target).is_err());
         assert_eq!(player.session().unwrap().runtime_identity(), identity);

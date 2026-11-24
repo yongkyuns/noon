@@ -725,7 +725,7 @@ mod tests {
             owner.session().inspection_camera().unwrap(),
         )
         .unwrap();
-        let displayed = owner.session().capture_pointer_frame(view).unwrap();
+        let displayed = owner.session_mut().capture_pointer_frame(view).unwrap();
         owner
             .session_mut()
             .refresh_pointer_hover(&displayed, view)
