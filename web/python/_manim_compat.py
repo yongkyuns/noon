@@ -978,6 +978,34 @@ class Path(VMobject):
         _path_init(self, path, color=color, **kwargs)
 
 
+class HandDrawn(VMobject):
+    """Opt-in sketch paths from `line`, `arrow`, `rectangle` or `circle`.
+
+    Roughness ranges from 0 (a clean outline) to 2. The seed fixes the pen
+    marks for the life of the path. Use HatchPaint as an ordinary fill.
+    """
+
+    def __init__(self, shape, dimensions, *, roughness=1, seed=0, color=None, **kwargs):
+        from _manim_semantic_handles import _hand_drawn_init
+        _hand_drawn_init(self, shape, dimensions, roughness, seed, color, kwargs)
+
+    @classmethod
+    def line(cls, start, end, **kwargs):
+        return cls("line", (*_base._as_vec2(start), *_base._as_vec2(end)), **kwargs)
+
+    @classmethod
+    def arrow(cls, start, end, **kwargs):
+        return cls("arrow", (*_base._as_vec2(start), *_base._as_vec2(end)), **kwargs)
+
+    @classmethod
+    def rectangle(cls, width=4, height=2, **kwargs):
+        return cls("rectangle", (width, height), **kwargs)
+
+    @classmethod
+    def circle(cls, radius=1, **kwargs):
+        return cls("circle", (radius,), **kwargs)
+
+
 def _leaf_mobjects(value: object) -> list[Mobject]:
     if _is_shared_family(value):
         leaves: list[Mobject] = []

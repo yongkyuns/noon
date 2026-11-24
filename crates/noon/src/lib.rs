@@ -483,6 +483,8 @@ pub use scene::{
     SectionType,
 };
 pub use scene_membership::SceneMembershipRequest;
+mod hand_drawn;
+pub use hand_drawn::HandDrawnShape;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
 pub use source_reconciliation::{
     SourceCandidate, SourceCandidateError, SourceGeneration, SourceObjectDeclaration,

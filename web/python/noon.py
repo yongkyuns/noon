@@ -2047,6 +2047,7 @@ _PUBLIC_EXPORTS = {
     "Square": "_manim_compat",
     "Line": "_manim_compat",
     "Path": "_manim_compat",
+    "HandDrawn": "_manim_compat",
     "Group": "_manim_compat",
     "VGroup": "_manim_compat",
     "VDict": "_manim_compat",

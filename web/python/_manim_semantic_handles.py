@@ -516,6 +516,24 @@ def _path_init(
     self.path = path
 
 
+def _hand_drawn_init(self, shape, dimensions, roughness, seed, color, kwargs):
+    from _noon_host import array_value
+
+    if _geometry_options is None:
+        raise RuntimeError("HandDrawn construction requires the shared Rust authoring host")
+    seed = operator.index(seed)
+    if not 0 <= seed <= 0xFFFFFFFF:
+        raise ValueError("hand-drawn seed must be an unsigned 32-bit integer")
+    dimensions = [_ir._finite_number("hand-drawn dimension", v) for v in dimensions]
+    roughness = _ir._finite_number("hand-drawn roughness", roughness)
+    options = engine_call(
+        _geometry_options.handDrawn, shape, array_value(dimensions), roughness, seed
+    )
+    _apply_shared_constructor_options(options, kwargs)
+    _apply_constructor_color(options, color)
+    _attach_geometry_options(self, options)
+
+
 def _line_init(
     self: _compat.Line,
     start: object = None,

@@ -225,6 +225,8 @@ pub enum AuthoringError {
     PointArrayCapacityExceeded(usize),
     /// A polygon or star constructor has invalid topology options.
     InvalidPolygonOptions(&'static str),
+    /// Invalid shape arguments or roughness for a hand-drawn outline.
+    InvalidHandDrawnOptions(&'static str),
     /// An Angle constructor has invalid line or geometry options.
     InvalidAngleOptions(&'static str),
     /// An elbow or non-Angle object has no nominal arc value.
@@ -416,7 +418,9 @@ impl std::fmt::Display for AuthoringError {
                 write!(f, "repeated path point array exceeds capacity ({count} points)")
             }
             Self::NonFiniteGeometry => f.write_str("geometry must be finite"),
-            Self::InvalidPolygonOptions(reason) => f.write_str(reason),
+            Self::InvalidPolygonOptions(reason) | Self::InvalidHandDrawnOptions(reason) => {
+                f.write_str(reason)
+            }
             Self::InvalidAngleOptions(reason) => f.write_str(reason),
             Self::MissingAngleValue => f.write_str("object has no nominal Angle arc value"),
             Self::NonFiniteObjectState => {

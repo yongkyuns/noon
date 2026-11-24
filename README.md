@@ -109,6 +109,11 @@ from the native runner.
 
 For a local browser build, follow the [web guide](web/README.md).
 
+The [hand-drawn diagram](web/python/examples/hand_drawn.py) uses
+`HandDrawn.rectangle(2.6, 1.6, roughness=1.25, seed=8)` with `Create` and
+`HatchPaint`. The same constructor supports lines, open-tip arrows, and circles.
+Run the paired Rust demo with `cargo run -p noon-native --example hand_drawn`.
+
 ## Release candidates
 
 Registry names are not yet finalized, and the existing `noon` entries on

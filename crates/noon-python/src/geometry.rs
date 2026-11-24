@@ -54,6 +54,14 @@ pub(crate) fn bounds_coordinates(bounds: noon_core::Bounds2D64) -> [f64; 4] {
 #[pymethods]
 impl GeometryOptions {
     #[staticmethod]
+    #[pyo3(name = "handDrawn")]
+    fn hand_drawn(shape: &str, dimensions: Vec<f64>, roughness: f64, seed: u32) -> PyResult<Self> {
+        noon::integration::hand_drawn_geometry(shape, &dimensions, roughness, seed)
+            .map(Self::from_options)
+            .map_err(engine_error)
+    }
+
+    #[staticmethod]
     #[pyo3(name = "booleanOperands")]
     fn boolean_operands() -> BooleanOperands {
         BooleanOperands(Vec::new())

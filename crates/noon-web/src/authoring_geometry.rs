@@ -206,6 +206,18 @@ impl WasmManimGeometryOptions {
 
 #[wasm_bindgen]
 impl WasmManimGeometryOptions {
+    #[wasm_bindgen(js_name = handDrawn)]
+    pub fn hand_drawn(
+        shape: &str,
+        dimensions: &[f64],
+        roughness: f64,
+        seed: u32,
+    ) -> Result<Self, JsValue> {
+        noon::integration::hand_drawn_geometry(shape, dimensions, roughness, seed)
+            .map(Self::from_options)
+            .map_err(js_error)
+    }
+
     pub fn circle(radius: f64) -> Result<Self, JsValue> {
         noon::ManimGeometryOptions::circle(radius)
             .map(Self::from_options)

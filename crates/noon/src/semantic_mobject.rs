@@ -135,6 +135,10 @@ impl ManimGeometryOptions {
         ))
     }
 
+    pub(crate) fn hand_drawn_outline(&self) -> VectorPath {
+        noon_geometry::canonical_outline_path(&self.geometry).expect("inline primitive")
+    }
+
     pub fn path(path: VectorPath) -> Result<Self, AuthoringError> {
         if !path.is_finite() {
             return Err(AuthoringError::NonFiniteGeometry);
