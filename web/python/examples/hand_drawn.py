@@ -11,6 +11,8 @@ class HandDrawnDiagram(Scene):
         )
         arrow = Arrow((-1, 0), (1.25, 0), buff=0, stroke_width=5.5, tip_length=0.29,
                       stroke=SketchStroke(YELLOW, roughness=1.4, seed=23920))
+        _, tip = arrow
+        tip.set_fill(opacity=0).set_stroke(width=3.5)
         circle = Circle(0.82, stroke=SketchStroke(BLUE, roughness=1.15, seed=20))
         circle.shift((2.25, 0, 0))
         underline = Line((-3.55, -1.12), (-1.45, -1.12), stroke=SketchStroke(TEAL, seed=25))

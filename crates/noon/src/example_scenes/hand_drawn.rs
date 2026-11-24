@@ -87,6 +87,8 @@ pub fn program() -> Result<LiveProgram<HandDrawnDiagram>, ScriptError> {
     arrow.set_tip_length(0.29)?;
     arrow.set_sketch_stroke(YELLOW, 1.4, 23920)?;
     let arrow = scene.manim_arrow(arrow)?;
+    scene.set_fill_opacity(arrow.end_tip(), 0.0)?;
+    scene.set_stroke_width(arrow.end_tip(), 0.035)?;
     let mut frame = scene.rectangle(8.8, 3.7)?;
     frame.set_stroke_opacity(0.25)?;
     scene.add(&frame)?;
