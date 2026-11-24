@@ -162,9 +162,18 @@ pub struct JointMapping2d {
 }
 
 /// A rotation clip prepared against the target's own bind skeleton.
+#[derive(Clone)]
 pub struct RetargetedRig2d {
     skeleton: Arc<RigSkeleton>,
     samples: Vec<Option<SignalSamples>>,
+}
+
+/// Named drawings with matching point correspondence, attached to one target joint.
+pub struct RigArtwork2d {
+    rig: RetargetedRig2d,
+    joint: usize,
+    poses: Vec<Vec<[f64; 2]>>,
+    cues: Vec<(f32, usize)>,
 }
 
 struct RigSkeleton {
@@ -236,6 +245,90 @@ impl RetargetedRig2d {
             skeleton: Arc::clone(&self.skeleton),
             posed,
         })
+    }
+
+    /// Prepare a sequence of named drawings in joint-local coordinates. Each
+    /// drawing supplies the same ordered set of anchors and control points.
+    /// The cue phases use the same units as the joint tracks.
+    pub fn artwork_track(
+        &self,
+        joint: &str,
+        poses: Vec<(String, Vec<[f64; 2]>)>,
+        cues: &[(f32, String)],
+    ) -> Result<RigArtwork2d, AuthoringError> {
+        let joint = *self
+            .skeleton
+            .names
+            .get(joint)
+            .ok_or_else(|| invalid(format!("unknown artwork joint `{joint}`")))?;
+        let point_count = poses.first().map_or(0, |(_, points)| points.len());
+        let mut names = HashMap::new();
+        for (index, (name, points)) in poses.iter().enumerate() {
+            if name.is_empty() || names.insert(name.as_str(), index).is_some() {
+                return Err(invalid("2D artwork pose names must be nonempty and unique"));
+            }
+            if point_count == 0 || points.len() != point_count {
+                return Err(invalid(
+                    "2D artwork poses require matching nonempty point arrays",
+                ));
+            }
+            if !points
+                .iter()
+                .flatten()
+                .all(|&value| (value as f32).is_finite())
+            {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+        }
+        if cues.is_empty()
+            || cues.iter().any(|(phase, _)| !phase.is_finite())
+            || cues.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+        {
+            return Err(invalid(
+                "2D artwork cues require finite, strictly increasing phases",
+            ));
+        }
+        let cues = cues
+            .iter()
+            .map(|(phase, name)| {
+                let index = names
+                    .get(name.as_str())
+                    .ok_or_else(|| invalid(format!("unknown artwork pose `{name}`")))?;
+                Ok((*phase, *index))
+            })
+            .collect::<Result<_, AuthoringError>>()?;
+        Ok(RigArtwork2d {
+            rig: self.clone(),
+            joint,
+            cues,
+            poses: poses.into_iter().map(|(_, points)| points).collect(),
+        })
+    }
+}
+
+impl RigArtwork2d {
+    /// Interpolate the named drawings locally, then place the points in scene
+    /// space using the exact sampled joint pose. Cue endpoints clamp.
+    pub fn points_at(&self, phase: f32) -> Result<Vec<[f64; 2]>, AuthoringError> {
+        let joint = self.rig.pose(phase)?.posed[self.joint];
+        let upper = self.cues.partition_point(|(key, _)| *key <= phase);
+        let (start, from) = self.cues[upper.saturating_sub(1)];
+        let (end, to) = self.cues[upper.min(self.cues.len() - 1)];
+        let progress = if from == to {
+            0.0
+        } else {
+            (f64::from(phase) - f64::from(start)) / (f64::from(end) - f64::from(start))
+        };
+        let points = self.poses[from].iter().zip(&self.poses[to]).map(|(a, b)| {
+            let local = std::array::from_fn(|axis| a[axis] + (b[axis] - a[axis]) * progress);
+            let [x, y] = rotate(local, joint.heading);
+            let point = [joint.position[0] + x, joint.position[1] + y];
+            if !point.iter().all(|&value| (value as f32).is_finite()) {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+            Ok(point)
+        });
+        points.collect()
     }
 }
 
@@ -665,6 +758,52 @@ mod tests {
             joint: joint.into(),
             object: object.clone(),
             offset: [0.0, 0.0],
+        }
+    }
+
+    #[test]
+    fn artwork_cues_blink_on_a_turning_head_with_different_eye_offsets() {
+        let cues = [
+            (0.0, "open".into()),
+            (1.0, "shut".into()),
+            (2.0, "open".into()),
+        ];
+        let poses = || {
+            vec![
+                ("open".into(), vec![[0.0, 0.0], [0.0, 0.4], [0.5, 0.0]]),
+                ("shut".into(), vec![[0.0, 0.0], [0.0, 0.0], [0.5, 0.0]]),
+            ]
+        };
+        for eye_offset in [0.7, 1.2] {
+            let rig = RetargetedRig2d::new(
+                vec![
+                    joint("head", None, [0.4, -0.3], 0.0),
+                    joint("eye", Some("head"), [eye_offset, 0.0], 0.0),
+                ],
+                &[JointTrack2d {
+                    joint: "head".into(),
+                    keys: vec![[0.0, 0.0], [1.0, FRAC_PI_2]],
+                }],
+                &[],
+            )
+            .unwrap();
+            let blink = rig.artwork_track("eye", poses(), &cues).unwrap();
+            for (phase, opening) in [(0.5, 0.2), (1.0, 0.0), (1.5, 0.2), (0.5, 0.2)] {
+                let [x, y, heading] = rig.pose(phase).unwrap().joint("eye").unwrap();
+                let points = blink.points_at(phase).unwrap();
+                assert_eq!(points[0], [x, y]);
+                assert!((points[1][0] - (x - opening * heading.sin())).abs() < 1e-10);
+                assert!((points[1][1] - (y + opening * heading.cos())).abs() < 1e-10);
+            }
+            assert_eq!(blink.points_at(2.0).unwrap(), blink.points_at(3.0).unwrap());
+            let error = rig
+                .artwork_track("eye", poses(), &[(0.0, "missing".into())])
+                .err()
+                .unwrap();
+            assert!(error.to_string().contains("missing"));
+            let mut mismatched = poses();
+            mismatched[1].1.pop();
+            assert!(rig.artwork_track("eye", mismatched, &cues).is_err());
         }
     }
 

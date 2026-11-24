@@ -102,8 +102,8 @@ jobs:
     name: Actual showcase frames (${{ matrix.backend }})
     needs: build
     runs-on: ubuntu-latest
-    # The full catalog can take longer to capture and replay on hosted WebGPU.
-    timeout-minutes: ${{ matrix.backend == 'webgpu' && 85 || 65 }}
+    # Full-catalog capture and replay can exceed 65 minutes on hosted WebGL.
+    timeout-minutes: ${{ matrix.backend == 'webgpu' && 85 || 75 }}
     strategy:
       fail-fast: false
       matrix:
