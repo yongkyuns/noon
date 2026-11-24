@@ -222,6 +222,33 @@ impl NativeRetargetedRig2d {
             .map(NativeRigPose2d)
             .map_err(engine_error)
     }
+
+    #[pyo3(name = "artworkTrack")]
+    fn artwork_track(
+        &self,
+        joint: &str,
+        poses: Vec<(String, Vec<[f64; 2]>)>,
+        cues: Vec<(f32, String)>,
+    ) -> PyResult<NativeRigArtwork2d> {
+        self.0
+            .artwork_track(joint, poses, &cues)
+            .map(NativeRigArtwork2d)
+            .map_err(engine_error)
+    }
+}
+
+#[pyclass(skip_from_py_object, module = "_noon_native")]
+pub struct NativeRigArtwork2d(noon::RigArtwork2d);
+
+#[pymethods]
+impl NativeRigArtwork2d {
+    #[pyo3(name = "pointsAt")]
+    fn points_at(&self, phase: f32) -> PyResult<Vec<f64>> {
+        self.0
+            .points_at(phase)
+            .map(|points| points.into_flattened())
+            .map_err(engine_error)
+    }
 }
 
 #[pyclass(skip_from_py_object, module = "_noon_native")]

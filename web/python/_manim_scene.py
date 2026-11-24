@@ -3610,6 +3610,30 @@ class _RetargetedRig2d:
         handle = engine_call(self._handle.pose, float(phase), operation="RetargetedRig2d.pose")
         return _RigPose2d(handle, self._scene)
 
+    def artwork_track(self, joint, *, poses, cues):
+        """Prepare named joint-local drawings with matching ordered (x, y) points.
+
+        Cues are (phase, pose name) in increasing order. A drawing can recur.
+        Points interpolate between cues in the same phase units as the rig.
+        """
+        from _noon_host import array_value
+
+        draws = [(name, [tuple(map(float, xy)) for xy in points]) for name, points in poses.items()]
+        keys = [(float(phase), name) for phase, name in cues]
+        handle = engine_call(self._handle.artworkTrack, joint, array_value(draws), array_value(keys),
+                             operation="RetargetedRig2d.artwork_track")
+        return _RigArtwork2d(handle)
+
+
+class _RigArtwork2d:
+    def __init__(self, handle):
+        self._handle = handle
+
+    def points_at(self, phase):
+        """Sample the drawing in scene coordinates at an arbitrary clip phase."""
+        points = iter(engine_call(self._handle.pointsAt, float(phase), operation="RigArtwork2d.points_at"))
+        return list(zip(points, points))
+
 
 class _RigPose2d:
     def __init__(self, handle, scene):
