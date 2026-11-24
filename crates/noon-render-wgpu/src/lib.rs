@@ -2852,7 +2852,8 @@ fn pack_line(object: &FrameObjectState, reveal: f32) -> LineInstance {
 }
 
 fn should_create_path_reveal_head(object: &FrameObjectState, reveal: f32) -> bool {
-    reveal < 1.0
+    // Sketch meshes play either direction without reallocating the rounded pen head.
+    (reveal < 1.0 || object.style.sketch_stroke.is_some())
         && object.style.stroke_cap == StrokeCap::Round
         && object.style.stroke_width > 0.0
         && (object.style.stroke.is_some() || object.style.fill.is_some())
@@ -2881,7 +2882,7 @@ fn pack_path_reveal_head(
         style.stroke = [0.0; 4];
         style.stroke_enabled = 0;
     }
-    let active = reveal > 0.0 && should_create_path_reveal_head(object, reveal);
+    let active = reveal > 0.0 && reveal < 1.0 && should_create_path_reveal_head(object, reveal);
     style.opacity *= f32::from(active);
     if object.style.stroke.is_none() {
         style.opacity *= 1.0 - smoothstep(0.75, 1.0, reveal);
