@@ -83,7 +83,7 @@ pub fn program() -> Result<LiveProgram<HandDrawnDiagram>, ScriptError> {
     )?;
     let mut arrow = ManimArrowOptions::arrow(-0.9, 0.0, 1.15, 0.0)?;
     arrow.set_buff(0.0)?;
-    arrow.set_sketch_stroke(YELLOW, 1.1, 12)?;
+    arrow.set_sketch_stroke(YELLOW, 1.8, 3987)?;
     let arrow = scene.manim_arrow(arrow)?;
     let mut frame = scene.rectangle(8.8, 3.7)?;
     frame.set_stroke_opacity(0.25)?;
