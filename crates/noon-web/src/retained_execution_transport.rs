@@ -2382,7 +2382,7 @@ fn validate_object_fields(
     {
         let invalid = || RetainedExecutionTransportError::InvalidObjectPatch(object.slot);
         if object.spatial.is_some()
-            || object.reveal != 1.0
+            || !(0.0..=1.0).contains(&object.reveal)
             || object.morph != 0.0
             || object.render_geometry.is_some()
             || object.render_geometry_resource.is_some()
@@ -2618,7 +2618,7 @@ fn frame_object(
 
 #[cfg(test)]
 mod tests {
-    use noon_core::{Color, TextResourceId, Vec2};
+    use noon_core::{Color, TextResourceId, Vec2, VectorPath};
 
     use super::*;
 
@@ -3333,6 +3333,14 @@ mod tests {
         )));
         let mut frame = mixed_frame();
         frame.objects[0].fill_paint = Some(paint.clone());
+        frame.objects[0].content = ObjectContentRef::Geometry(GeometryRef::path(
+            VectorPath::new()
+                .move_to(Vec2::new(-1.0, -1.0))
+                .line_to(Vec2::new(1.0, -1.0))
+                .line_to(Vec2::new(0.0, 1.0))
+                .close(),
+        ));
+        frame.reveals[0] = 0.5;
         let mut encoder = RetainedExecutionDeltaEncoder::new(4);
         let snapshot = encoder
             .encode_snapshot_with_context(
@@ -3368,6 +3376,8 @@ mod tests {
             mirror.frame().unwrap().objects[0].fill_paint.as_ref(),
             Some(&paint)
         );
+        assert_eq!(mirror.frame().unwrap().reveal(0), 0.5);
+        frame.reveals[0] = 1.0;
         frame.objects[0].fill_paint = None;
         let delta = encoder
             .encode_incremental_with_context(
@@ -3397,6 +3407,7 @@ mod tests {
         assert_eq!(mirror.applied_sequence(), Some(0));
         mirror.apply(delta).unwrap();
         assert!(mirror.frame().unwrap().objects[0].fill_paint.is_none());
+        assert_eq!(mirror.frame().unwrap().reveal(0), 1.0);
         assert_eq!(mirror.applied_sequence(), Some(1));
     }
 

@@ -552,6 +552,25 @@ impl GeometryOptions {
         self.options.set_stroke_join(join).map_err(engine_error)
     }
 
+    #[pyo3(name = "setSketchStroke")]
+    pub fn set_sketch_stroke(
+        &mut self,
+        roughness: f64,
+        seed: u32,
+        red: f32,
+        green: f32,
+        blue: f32,
+        alpha: f32,
+    ) -> PyResult<()> {
+        self.options
+            .set_sketch_stroke(
+                noon_core::Color::rgba(red, green, blue, alpha),
+                roughness,
+                seed,
+            )
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "setStrokeCap")]
     pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), PyErr> {
         self.options.set_stroke_cap(cap).map_err(engine_error)

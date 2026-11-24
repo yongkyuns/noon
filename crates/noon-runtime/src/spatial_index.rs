@@ -480,12 +480,13 @@ fn effective_object_conservative_bounds_with_external(
         .map_or(0.0, |_| style.background_stroke_width.abs());
     let width = foreground.max(background);
     if width > 0.0 {
+        let max_scale = render_transform
+            .scale
+            .x
+            .abs()
+            .max(render_transform.scale.y.abs());
         let scale = match style.stroke_width_mode {
-            noon_core::StrokeWidthMode::ScaleWithObject => render_transform
-                .scale
-                .x
-                .abs()
-                .max(render_transform.scale.y.abs()),
+            noon_core::StrokeWidthMode::ScaleWithObject => max_scale,
             // ScreenSpace keeps a scene-space width invariant under object
             // transforms. Camera projection is applied later, like geometry.
             noon_core::StrokeWidthMode::ScreenSpace => 1.0,
@@ -502,7 +503,13 @@ fn effective_object_conservative_bounds_with_external(
         } else {
             1.0
         };
-        let expansion = width * scale * 0.5 * join.max(cap);
+        let sketch = style
+            .sketch_stroke
+            .filter(|_| foreground > 0.0)
+            .map_or(0.0, |stroke| {
+                noon_geometry::sketch_outset(stroke) * max_scale
+            });
+        let expansion = width * scale * 0.5 * join.max(cap) + sketch;
         world.min.x -= expansion;
         world.min.y -= expansion;
         world.max.x += expansion;

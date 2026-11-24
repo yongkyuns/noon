@@ -50,6 +50,7 @@ pub mod glow_pulse;
 pub mod graph_queries;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod group_animation;
+pub mod hand_drawn;
 pub mod hatch_paint;
 pub mod image_fill;
 pub mod image_glow;
@@ -2431,6 +2432,7 @@ pub fn ordinary_moving_camera_center_program(
         stroke_width_mode: StrokeWidthMode::ScreenSpace,
         stroke_join: StrokeJoin::Miter,
         stroke_cap: StrokeCap::Butt,
+        sketch_stroke: None,
         object_opacity: 1.0,
         emission: noon_core::Emission::NONE,
     };

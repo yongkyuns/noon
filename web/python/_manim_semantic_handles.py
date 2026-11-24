@@ -320,6 +320,13 @@ def _apply_shared_constructor_options(
 
     stroke = options.get("stroke", _CONSTRUCTOR_MISSING)
     stroke_color = options.get("stroke_color", _CONSTRUCTOR_MISSING)
+    from _noon_paints import SketchStroke
+    if isinstance(stroke, SketchStroke):
+        parsed = stroke._color if stroke_color in (_CONSTRUCTOR_MISSING, None) else _compat._as_color("stroke_color", stroke_color)
+        engine_call(handle.setSketchStroke, stroke._roughness, stroke._seed,
+                    parsed.red, parsed.green, parsed.blue, parsed.alpha)
+        stroke = _CONSTRUCTOR_MISSING
+        stroke_color = _CONSTRUCTOR_MISSING
     if stroke_color is not _CONSTRUCTOR_MISSING and stroke_color is not None:
         stroke = _compat._as_color("stroke_color", stroke_color)
     if stroke is not _CONSTRUCTOR_MISSING:

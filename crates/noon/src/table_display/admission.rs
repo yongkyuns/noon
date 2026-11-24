@@ -195,6 +195,7 @@ fn line_style() -> SemanticStyle {
         stroke_width_mode: noon_core::StrokeWidthMode::ScreenSpace,
         stroke_join: noon_core::StrokeJoin::Miter,
         stroke_cap: noon_core::StrokeCap::Butt,
+        sketch_stroke: None,
         object_opacity: 1.0,
         emission: noon_core::Emission::NONE,
     }

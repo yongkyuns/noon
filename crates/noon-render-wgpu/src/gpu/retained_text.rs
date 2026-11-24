@@ -3029,6 +3029,7 @@ impl RetainedFramePreparer {
                     stroke_width_mode: StrokeWidthMode::ScaleWithObject,
                     stroke_join: StrokeJoin::Round,
                     stroke_cap: StrokeCap::Round,
+                    sketch_stroke: None,
                     opacity: object_style.opacity,
                     emission: object_style.emission,
                 },
@@ -3055,6 +3056,7 @@ impl RetainedFramePreparer {
                         stroke_width_mode: StrokeWidthMode::ScaleWithObject,
                         stroke_join: StrokeJoin::Round,
                         stroke_cap: StrokeCap::Round,
+                        sketch_stroke: None,
                         opacity: object_style.opacity,
                         emission: object_style.emission,
                     },
@@ -3085,6 +3087,7 @@ pub(super) fn resolved_text_vector_style(object_style: Style, vector: &TextVecto
         stroke_width_mode: StrokeWidthMode::ScaleWithObject,
         stroke_join: vector.style.stroke_join,
         stroke_cap: vector.style.stroke_cap,
+        sketch_stroke: None,
         opacity: object_style.opacity,
         emission: object_style.emission,
     }

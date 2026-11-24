@@ -3556,6 +3556,11 @@ fn interpolate_style(from: Style, to: Style, progress: f32) -> Style {
         } else {
             from.stroke_cap
         },
+        sketch_stroke: if progress >= 1.0 {
+            to.sketch_stroke
+        } else {
+            from.sketch_stroke
+        },
         opacity: lerp(from.opacity, to.opacity, progress),
         emission: from
             .emission

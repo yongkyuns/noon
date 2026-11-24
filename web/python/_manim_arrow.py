@@ -42,6 +42,7 @@ _ARROW_CONSTRUCTOR_OPTIONS = frozenset(
         "position",
         "rotation",
         "scale",
+        "stroke",
         "stroke_width",
         "stroke_width_mode",
         "stroke_join",
@@ -131,6 +132,10 @@ def _apply_constructor_options(options: object, kwargs: dict[str, Any]) -> None:
     unknown = sorted(set(values) - _ARROW_CONSTRUCTOR_OPTIONS)
     if unknown:
         raise TypeError(f"unsupported Arrow constructor option(s): {', '.join(unknown)}")
+    if "stroke" in values:
+        from _noon_paints import SketchStroke
+        if not isinstance(values["stroke"], SketchStroke):
+            raise TypeError("Arrow stroke expects a SketchStroke")
     _shared._apply_shared_constructor_options(options, values)
 
 
