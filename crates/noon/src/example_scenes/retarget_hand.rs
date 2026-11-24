@@ -1,9 +1,9 @@
 //! Direct Rust counterpart of the gallery's inward fold and hand turn.
 use crate::{
     AnimationOptions, AuthoringError, Color, ContinuationScene, ContinuationStep, Joint2d,
-    JointTrack2d, LiveContinuation, LiveProgram, Mobject, RateFunction, RetargetedRig2d, Scene,
-    SemanticAnimationCompositionKind, SemanticPaint, SemanticStyle, TransformToRequest, Vec2,
-    VectorPath,
+    JointTrack2d, LiveContinuation, LiveProgram, Mobject, RateFunction, RetargetedRig2d,
+    RigArtwork2d, Scene, SemanticAnimationCompositionKind, SemanticPaint, SemanticStyle,
+    TransformToRequest, Vec2, VectorPath,
 };
 
 const FOLD: [[f32; 3]; 5] = [
@@ -13,7 +13,7 @@ const FOLD: [[f32; 3]; 5] = [
     [0.80, 0.39, 2.90],
     [1.0, 0.0, 0.0],
 ];
-const VIEWS: [[f64; 2]; 4] = [[0.15, -0.26], [0.15, -0.26], [0.055, -0.055], [0.26, -0.15]];
+const VIEWS: [&str; 5] = ["palm", "palm", "edge", "back", "palm"];
 const INK: Color = Color::from_hex(0x303047);
 const GLOVE: Color = Color::from_hex(0xFFD075);
 const COATS: [Color; 2] = [Color::from_hex(0x4B8279), Color::from_hex(0xB95F56)];
@@ -43,11 +43,6 @@ fn rig(x: f64, upper: f64, forearm: f64) -> Result<RetargetedRig2d, AuthoringErr
     )
 }
 
-fn place([x, y, heading]: [f64; 3], [a, b]: [f64; 2]) -> [f64; 2] {
-    let (sin, cos) = heading.sin_cos();
-    [x + cos * a - sin * b, y + sin * a + cos * b]
-}
-
 fn filled(color: Color) -> SemanticStyle {
     SemanticStyle {
         fill: Some(SemanticPaint::Solid(color)),
@@ -61,7 +56,35 @@ fn vector([x, y]: [f64; 2]) -> Vec2 {
     Vec2::new(x as f32, y as f32)
 }
 
+fn hand_outline(top: f64, bottom: f64, width: f64) -> Vec<[f64; 2]> {
+    [
+        [-0.05, 0.0],
+        [-0.05, 0.83 * top],
+        [0.08, top],
+        [0.15, top],
+        [0.19, top],
+        [0.25, top * 0.63],
+        [0.31, top * 0.71],
+        [0.50, top * 0.85],
+        [0.59, top * 0.52],
+        [0.59, 0.0],
+        [0.59, bottom * 0.52],
+        [0.50, bottom * 0.85],
+        [0.31, bottom * 0.71],
+        [0.25, bottom * 0.63],
+        [0.19, bottom],
+        [0.15, bottom],
+        [0.08, bottom],
+        [-0.05, 0.83 * bottom],
+        [-0.05, 0.0],
+    ]
+    .into_iter()
+    .map(|[x, y]| [width * x, y])
+    .collect()
+}
+
 struct Arm {
+    hand: RigArtwork2d,
     rig: RetargetedRig2d,
     sleeve_color: Color,
     layer: f64,
@@ -72,11 +95,28 @@ impl Arm {
         x: f64,
         upper: f64,
         forearm: f64,
+        hand_width: f64,
         sleeve_color: Color,
         layer: f64,
     ) -> Result<Self, AuthoringError> {
+        let rig = rig(x, upper, forearm)?;
+        let cues = FOLD
+            .iter()
+            .zip(VIEWS)
+            .map(|(row, name)| (row[0], name.into()))
+            .collect::<Vec<_>>();
+        let hand = rig.artwork_track(
+            "wrist",
+            vec![
+                ("palm".into(), hand_outline(0.15, -0.26, hand_width)),
+                ("edge".into(), hand_outline(0.055, -0.055, hand_width)),
+                ("back".into(), hand_outline(0.26, -0.15, hand_width)),
+            ],
+            &cues,
+        )?;
         Ok(Self {
-            rig: rig(x, upper, forearm)?,
+            hand,
+            rig,
             sleeve_color,
             layer,
         })
@@ -91,29 +131,7 @@ impl Arm {
             .move_to(vector([sx, sy]))
             .line_to(vector([ex, ey]))
             .line_to(vector([wrist[0], wrist[1]]));
-        let [top, bottom] = VIEWS[key];
-        let glove = [
-            [-0.05, 0.0],
-            [-0.05, 0.83 * top],
-            [0.08, top],
-            [0.15, top],
-            [0.19, top],
-            [0.25, top * 0.63],
-            [0.31, top * 0.71],
-            [0.50, top * 0.85],
-            [0.59, top * 0.52],
-            [0.59, 0.0],
-            [0.59, bottom * 0.52],
-            [0.50, bottom * 0.85],
-            [0.31, bottom * 0.71],
-            [0.25, bottom * 0.63],
-            [0.19, bottom],
-            [0.15, bottom],
-            [0.08, bottom],
-            [-0.05, 0.83 * bottom],
-            [-0.05, 0.0],
-        ]
-        .map(|point| place(wrist, point));
+        let glove = self.hand.points_at(FOLD[key][0])?;
         let stroke = |color, width| SemanticStyle {
             fill: None,
             stroke: Some(SemanticPaint::Solid(color)),
@@ -190,8 +208,8 @@ impl LiveContinuation for RetargetedPoses {
 pub fn program() -> Result<LiveProgram<RetargetedPoses>, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
     let arms = [
-        Arm::new(-3.76, 0.76, 1.27, Color::from_hex(0x78AA93), 1.0)?,
-        Arm::new(2.20, 0.57, 1.13, Color::from_hex(0xDB8875), -1.0)?,
+        Arm::new(-3.76, 0.76, 1.27, 1.0, Color::from_hex(0x78AA93), 1.0)?,
+        Arm::new(2.20, 0.57, 0.99, 0.84, Color::from_hex(0xDB8875), -1.0)?,
     ];
     let mut paper = scene.rectangle(14.4, 8.3)?;
     let background = Color::from_hex(0xF7ECD7);
