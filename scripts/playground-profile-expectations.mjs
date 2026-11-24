@@ -59,9 +59,9 @@ const rows = [
   ['showcase-circle-area-signals','showcase_circle_area_signals.py','90a0780f39059407ae4d36b3c976e6ef995ae6697c2888c1618fe51fbad0c435','incremental','ordinary',[], 'finite-complete', true],
   ['showcase-brand-value-race','showcase_brand_value_race.py','da5efec1c0e9ed12dbc5919de7e35936c79f2a2cd27c512efbcc6f045967b30d','incremental','ordinary',[], 'finite-complete', true],
   ['showcase-drip-fill-gauge','showcase_drip_fill_gauge.py','6e1582c8432dc9fd88de0df2e54e4f1bf07131f20dae93def3393938abbb76e8','incremental','ordinary',[], 'finite-complete', true],
-  ['showcase-character-rigs','showcase_character_rigs.py','8f4450139597368def1bd3c17cc17cb8fee09d7ccfd3fcb641d85b2ce1146f8b','incremental','ordinary',[], 'looped'],
-  ['showcase-shape-characters','showcase_shape_characters.py','aff850534219adffeb89f6e3d5222931b75df8f16b7073ba4ae61159ad6b04df','incremental','ordinary',[], 'looped'],
-  ['showcase-retarget-hand','showcase_retarget_hand.py','8c90c2cd66ec12baef6753987177b852829125401b01a319e410adcc6fbf166e','incremental','ordinary',[], 'looped'],
+  ['showcase-character-rigs','showcase_character_rigs.py','8f4450139597368def1bd3c17cc17cb8fee09d7ccfd3fcb641d85b2ce1146f8b','observed','observed-replay',[], 'observed-complete'],
+  ['showcase-shape-characters','showcase_shape_characters.py','aff850534219adffeb89f6e3d5222931b75df8f16b7073ba4ae61159ad6b04df','observed','observed-replay',[], 'observed-complete'],
+  ['showcase-retarget-hand','showcase_retarget_hand.py','8c90c2cd66ec12baef6753987177b852829125401b01a319e410adcc6fbf166e','observed','observed-replay',[], 'observed-complete'],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
