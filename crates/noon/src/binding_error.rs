@@ -470,11 +470,9 @@ impl From<AuthoringError> for AuthoringFailure {
                 "authoring.invalid_polygon_options",
                 message,
             ),
-            AuthoringError::InvalidHandDrawnOptions(_) => Self::new(
-                "invalid_input",
-                "authoring.invalid_hand_drawn_options",
-                message,
-            ),
+            AuthoringError::InvalidSketchStroke(_) => {
+                Self::new("invalid_input", "authoring.invalid_sketch_stroke", message)
+            }
             AuthoringError::MissingAngleValue => {
                 Self::new("invalid_input", "angle.value_missing", message)
             }

@@ -14,6 +14,8 @@ mod geometry_proportion;
 mod isoline;
 mod morph;
 mod outline;
+mod sketch_stroke;
+pub use sketch_stroke::{sketch_outline, sketch_outset};
 mod partial;
 mod polygon_fill;
 pub use polygon_fill::polygon_fill_contains;

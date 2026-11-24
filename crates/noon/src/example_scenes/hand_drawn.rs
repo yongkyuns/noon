@@ -1,12 +1,14 @@
 //! Native Rust counterpart of the Python hand-drawn diagram.
 use crate::{
-    AnimationOptions, Color, ContinuationEffects, ContinuationScene, ContinuationStep,
-    HandDrawnShape as Shape, HatchPaint, HatchPaintOptions, LiveContinuation, LiveProgram,
-    ManimGeometryOptions, Mobject, RateFunction, Scene, ScriptError, BLUE, TEAL, YELLOW,
+    AnimationCompositionRequest as Animation, AnimationOptions, Color, ContinuationEffects,
+    ContinuationScene, ContinuationStep, HatchPaint, HatchPaintOptions, LiveContinuation,
+    LiveProgram, ManimArrow, ManimArrowOptions, ManimGeometryOptions, Mobject, RateFunction, Scene,
+    ScriptError, BLUE, TEAL, YELLOW,
 };
 
 pub struct HandDrawnDiagram {
-    pens: [Mobject; 4],
+    pens: [Mobject; 3],
+    arrow: ManimArrow,
     step: u8,
 }
 
@@ -16,15 +18,30 @@ impl LiveContinuation for HandDrawnDiagram {
 
     fn resume(&mut self, scene: &mut ContinuationScene) -> Result<ContinuationStep, ScriptError> {
         let segment = match self.step {
-            0 => scene.live().declare_and_activate_create_parallel(
-                &self
+            0 => {
+                let options = AnimationOptions::new();
+                let mut animations = self
                     .pens
-                    .each_ref()
-                    .map(|pen| (pen, AnimationOptions::new())),
-                AnimationOptions::new()
-                    .run_time(2.4)
-                    .rate_func(RateFunction::Linear),
-            )?,
+                    .iter()
+                    .map(|target| Animation::Create { target, options })
+                    .collect::<Vec<_>>();
+                animations.insert(
+                    1,
+                    Animation::FamilyReveal {
+                        target: self.arrow.family(),
+                        reverse: false,
+                        options,
+                    },
+                );
+                scene.live().declare_and_activate_composition(
+                    &Animation::Composition {
+                        kind: crate::SemanticAnimationCompositionKind::Parallel,
+                        children: animations,
+                        options,
+                    },
+                    options.run_time(2.4).rate_func(RateFunction::Linear),
+                )?
+            }
             1 => scene.live().wait_segment(0.6)?,
             _ => return Ok(ContinuationStep::Finished),
         };
@@ -35,20 +52,11 @@ impl LiveContinuation for HandDrawnDiagram {
 
 pub fn program() -> Result<LiveProgram<HandDrawnDiagram>, ScriptError> {
     let mut scene = Scene::new();
-    let mut pen = |shape, roughness, seed, color: Color| {
-        let mut options = ManimGeometryOptions::hand_drawn(shape, roughness, seed)?;
-        options.set_stroke_color(color.red.into(), color.green.into(), color.blue.into(), 1.0)?;
+    let mut pen = |mut options: ManimGeometryOptions, roughness, seed, color: Color| {
+        options.set_sketch_stroke(color, roughness, seed)?;
         scene.geometry(options)
     };
-    let mut panel = pen(
-        Shape::Rectangle {
-            width: 2.6,
-            height: 1.6,
-        },
-        1.25,
-        8,
-        TEAL,
-    )?;
+    let mut panel = pen(ManimGeometryOptions::rectangle(2.6, 1.6)?, 1.25, 8, TEAL)?;
     panel.set_translation(-2.5, 0.0)?;
     panel.set_fill_hatch(
         HatchPaint::new(
@@ -65,40 +73,32 @@ pub fn program() -> Result<LiveProgram<HandDrawnDiagram>, ScriptError> {
         .expect("valid demo fill"),
         Some(0.55),
     )?;
-    let arrow = pen(
-        Shape::Arrow {
-            start: (-0.9, 0.0),
-            end: (1.15, 0.0),
-        },
-        1.1,
-        12,
-        YELLOW,
-    )?;
-    let mut circle = pen(Shape::Circle { radius: 0.82 }, 1.45, 20, BLUE)?;
+    let mut circle = pen(ManimGeometryOptions::circle(0.82)?, 1.45, 20, BLUE)?;
     circle.set_translation(2.25, 0.0)?;
     let underline = pen(
-        Shape::Line {
-            start: (-3.55, -1.12),
-            end: (-1.45, -1.12),
-        },
+        ManimGeometryOptions::line(-3.55, -1.12, -1.45, -1.12)?,
         1.0,
         25,
         TEAL,
     )?;
+    let mut arrow = ManimArrowOptions::arrow(-0.9, 0.0, 1.15, 0.0)?;
+    arrow.set_buff(0.0)?;
+    arrow.set_sketch_stroke(YELLOW, 1.1, 12)?;
+    let arrow = scene.manim_arrow(arrow)?;
     let mut frame = scene.rectangle(8.8, 3.7)?;
     frame.set_stroke_opacity(0.25)?;
     scene.add(&frame)?;
     Ok(scene.into_live_program(HandDrawnDiagram {
-        pens: [panel, arrow, circle, underline],
+        pens: [panel, circle, underline],
+        arrow,
         step: 0,
     })?)
 }
 
 #[cfg(all(test, feature = "prepared-prefix"))]
 #[test]
-fn sketch_create_reuses_the_same_geometry_when_scrubbed() {
+fn sketch_create_retains_analytic_geometry_and_stroke_when_scrubbed() {
     use crate::{GeometryRef, PlaybackProgram, RustHostCallbackTable};
-    use std::sync::Arc;
 
     let mut player = program().unwrap().into_playback().unwrap();
     let mut callbacks = RustHostCallbackTable::new();
@@ -123,25 +123,26 @@ fn sketch_create_reuses_the_same_geometry_when_scrubbed() {
                     .is_some_and(|paint| paint.as_hatch().is_some())
             })
             .unwrap();
-        let Some(GeometryRef::VectorPath(path)) = object.geometry() else {
-            panic!("sketch must use an ordinary retained path");
-        };
-        (frame.reveal(index), path.clone())
+        assert!(matches!(
+            object.geometry(),
+            Some(GeometryRef::Rectangle { .. })
+        ));
+        (frame.reveal(index), object.style.sketch_stroke.unwrap())
     };
 
     player.advance_to(&mut callbacks, 1.2).unwrap();
-    let (mid, path) = sample(&player);
+    let (mid, stroke) = sample(&player);
     assert!((mid - 0.5).abs() < 1e-6);
     player.advance_to(&mut callbacks, 2.7).unwrap();
     assert_eq!(sample(&player).0, 1.0);
     player.seek(0.3).unwrap();
     assert!(sample(&player).0 < mid);
     player.seek(1.2).unwrap();
-    let (scrubbed, scrubbed_path) = sample(&player);
+    let (scrubbed, scrubbed_stroke) = sample(&player);
     assert_eq!(mid, scrubbed);
-    assert!(Arc::ptr_eq(&path, &scrubbed_path));
+    assert_eq!(stroke, scrubbed_stroke);
     player.advance_to(&mut callbacks, 2.7).unwrap();
-    let (resumed, resumed_path) = sample(&player);
+    let (resumed, resumed_stroke) = sample(&player);
     assert_eq!(resumed, 1.0);
-    assert!(Arc::ptr_eq(&path, &resumed_path));
+    assert_eq!(stroke, resumed_stroke);
 }

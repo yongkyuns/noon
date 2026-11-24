@@ -54,14 +54,6 @@ pub(crate) fn bounds_coordinates(bounds: noon_core::Bounds2D64) -> [f64; 4] {
 #[pymethods]
 impl GeometryOptions {
     #[staticmethod]
-    #[pyo3(name = "handDrawn")]
-    fn hand_drawn(shape: &str, dimensions: Vec<f64>, roughness: f64, seed: u32) -> PyResult<Self> {
-        noon::integration::hand_drawn_geometry(shape, &dimensions, roughness, seed)
-            .map(Self::from_options)
-            .map_err(engine_error)
-    }
-
-    #[staticmethod]
     #[pyo3(name = "booleanOperands")]
     fn boolean_operands() -> BooleanOperands {
         BooleanOperands(Vec::new())
@@ -558,6 +550,25 @@ impl GeometryOptions {
     #[pyo3(name = "setStrokeJoin")]
     pub fn set_stroke_join(&mut self, join: &str) -> Result<(), PyErr> {
         self.options.set_stroke_join(join).map_err(engine_error)
+    }
+
+    #[pyo3(name = "setSketchStroke")]
+    pub fn set_sketch_stroke(
+        &mut self,
+        roughness: f64,
+        seed: u32,
+        red: f32,
+        green: f32,
+        blue: f32,
+        alpha: f32,
+    ) -> PyResult<()> {
+        self.options
+            .set_sketch_stroke(
+                noon_core::Color::rgba(red, green, blue, alpha),
+                roughness,
+                seed,
+            )
+            .map_err(engine_error)
     }
 
     #[pyo3(name = "setStrokeCap")]

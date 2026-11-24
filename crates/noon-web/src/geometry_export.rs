@@ -61,6 +61,7 @@ pub(crate) fn mobject_fields(
         stroke_width_mode: state.style.stroke_width_mode,
         stroke_join: state.style.stroke_join,
         stroke_cap: state.style.stroke_cap,
+        sketch_stroke: None,
         opacity: object
             .wire_object_opacity()
             .map_err(|error| error.to_string())? as f32,

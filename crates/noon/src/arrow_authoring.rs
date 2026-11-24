@@ -141,6 +141,15 @@ impl ManimArrowOptions {
         self.prototype.set_stroke_join(join)
     }
 
+    pub fn set_sketch_stroke(
+        &mut self,
+        color: Color,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<(), AuthoringError> {
+        self.prototype.set_sketch_stroke(color, roughness, seed)
+    }
+
     pub fn set_stroke_cap(&mut self, cap: &str) -> Result<(), AuthoringError> {
         self.prototype.set_stroke_cap(cap)
     }
@@ -488,6 +497,7 @@ fn tip_state(
     let mut state = SemanticObjectState::new(StoredGeometry::Resource(handle));
     state.transform = prepared.shaft.transform;
     state.style = prepared.shaft.style.clone();
+    state.style.sketch_stroke = None;
     state.style.fill = Some(SemanticPaint::Solid(prepared.tip_color));
     state.style.fill_opacity = 1.0;
     state.style.stroke = Some(SemanticPaint::Solid(prepared.tip_color));

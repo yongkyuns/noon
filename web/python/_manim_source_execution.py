@@ -40,10 +40,10 @@ _COOPERATIVE_YIELD_QUANTUM_SECONDS = 0.001
 # Unknown dispatch, descriptors and source hooks keep observed execution.
 _SOURCE_CONSTRUCTORS = frozenset("""
 Scene Circle Ellipse Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon
-Dot Line Arrow DoubleArrow HandDrawn DashedLine Underline VMobject VGroup Group Text MarkupText Code MathTypst FunctionGraph
+Dot Line Arrow DoubleArrow DashedLine Underline VMobject VGroup Group Text MarkupText Code MathTypst FunctionGraph
 Intersection Union Exclusion Difference
 Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform AudioSource VideoSource
-ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes ThreeDScene MovingCameraScene LinearTransformationScene
+ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint SketchStroke Axes ThreeDScene MovingCameraScene LinearTransformationScene
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
 TransformMatchingShapes TransformMatchingTex Rotate MoveAlongPath Restore GrowArrow
@@ -1367,7 +1367,6 @@ class _SceneOnlySource(ast.NodeVisitor):
         self.admitted_scene_video_calls = set()
         self.admitted_audio_factory_attributes = set()
         self.admitted_svg_from_string_attributes = set()
-        self.admitted_hand_drawn_calls = set()
         self.admitted_numpy_attributes = set()
         self.admitted_numpy_generator_factories = set()
         self.admitted_numpy_function_loads = set()
@@ -2937,12 +2936,6 @@ class _SceneOnlySource(ast.NodeVisitor):
         return True
 
     def visit_Call(self, node):
-        if (isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name) and node.func.value.id == "HandDrawn"
-                and node.func.attr in {"line", "arrow", "rectangle", "circle"}):
-            if not self._trusted_noon_binding("HandDrawn"):
-                raise _OpaqueSource(node.func, "unproven_hand_drawn_factory")
-            self.admitted_hand_drawn_calls.add(id(node.func))
         if isinstance(node.func, ast.Name) and node.func.id == "FunctionGraph":
             function = node.args[0] if node.args else None
             if (not self._trusted_noon_binding("FunctionGraph") or not isinstance(function, ast.Name)
@@ -3634,9 +3627,6 @@ class _SceneOnlySource(ast.NodeVisitor):
             self.visit(node.value)
             return
         if id(node) in self.admitted_spatial_constructor_loads and node.attr == "polyhedron":
-            self.visit(node.value)
-            return
-        if id(node) in self.admitted_hand_drawn_calls:
             self.visit(node.value)
             return
         if id(node) in self.admitted_scene_helper_attributes:

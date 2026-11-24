@@ -1237,6 +1237,7 @@ fn collect_text_paths<'a>(
                     stroke_width_mode: StrokeWidthMode::ScaleWithObject,
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,
+                    sketch_stroke: None,
                     opacity: 1.0,
                     emission: object_style.emission,
                 };

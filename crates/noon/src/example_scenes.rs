@@ -2429,6 +2429,7 @@ pub fn ordinary_moving_camera_center_program(
         stroke_width_mode: StrokeWidthMode::ScreenSpace,
         stroke_join: StrokeJoin::Miter,
         stroke_cap: StrokeCap::Butt,
+        sketch_stroke: None,
         object_opacity: 1.0,
         emission: noon_core::Emission::NONE,
     };

@@ -449,6 +449,7 @@ mod image_paint_authoring_tests;
 mod noise_authoring_tests;
 #[cfg(test)]
 mod radial_authoring_tests;
+pub use noon_core::SketchStroke;
 pub use noon_geometry::manim_default_vector_field_ranges_2d;
 pub use noon_geometry::{
     cone_mesh, cube_mesh, cylinder_mesh, line_3d_mesh, prism_mesh, sphere_mesh, surface_mesh,
@@ -483,8 +484,6 @@ pub use scene::{
     SectionType,
 };
 pub use scene_membership::SceneMembershipRequest;
-mod hand_drawn;
-pub use hand_drawn::HandDrawnShape;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
 pub use source_reconciliation::{
     SourceCandidate, SourceCandidateError, SourceGeneration, SourceObjectDeclaration,

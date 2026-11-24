@@ -30,7 +30,7 @@ use noon_core::{
 };
 use noon_geometry::{PathSurface, TessellatedPath};
 use noon_runtime::{FrameChanges, FrameObjectState, FrameState};
-use reveal::{analytic_reveal_key, temporary_style_path, AnalyticRevealKey};
+use reveal::{analytic_outline_key, analytic_reveal_key, temporary_style_path, AnalyticRevealKey};
 use std::{
     collections::{hash_map::DefaultHasher, BTreeMap, HashMap},
     hash::{Hash, Hasher},
@@ -604,6 +604,7 @@ struct PathMeshKey {
     background_stroke_width_bits: u32,
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
+    sketch_stroke: Option<[u32; 2]>,
     fill_enabled: bool,
 }
 
@@ -615,6 +616,7 @@ struct CachedPathMesh {
     background_stroke_width_bits: u32,
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
+    sketch_stroke: Option<[u32; 2]>,
     fill_enabled: bool,
     mesh: TessellatedPath,
     bounds: Option<[noon_core::Rect; 2]>,
@@ -1277,7 +1279,9 @@ impl FramePreparer {
     ) -> StructuralAppendStats {
         let object = &frame.objects[object_index];
         let reveal = frame.reveal(object_index);
-        let partial_reveal_bits = analytic_reveal.map(|_| reveal.clamp(0.0, 1.0).to_bits());
+        let partial_reveal_bits = analytic_reveal
+            .filter(|_| object.style.sketch_stroke.is_none())
+            .map(|_| reveal.clamp(0.0, 1.0).to_bits());
         let (cache_index, cache_miss) = match self.cache_path_mesh_at_progress(
             path,
             object.style,
@@ -1630,7 +1634,9 @@ impl FramePreparer {
         // A full-to-partial reveal allocates it once; later invalid states
         // retain the slot but pack it with zero opacity before submission.
         let replacement_reveal_head = previous_reveal_head.or_else(|| {
-            if temporary_reveal.is_some() || !should_create_path_reveal_head(object, reveal) {
+            if (temporary_reveal.is_some() && object.style.sketch_stroke.is_none())
+                || !should_create_path_reveal_head(object, reveal)
+            {
                 return None;
             }
             let index = self.lines.len();
@@ -1658,6 +1664,7 @@ impl FramePreparer {
             *analytic_reveal = temporary_reveal.as_ref().map(|(key, _)| *key);
             *partial_reveal_bits = temporary_reveal
                 .as_ref()
+                .filter(|_| object.style.sketch_stroke.is_none())
                 .map(|_| reveal.clamp(0.0, 1.0).to_bits());
             *reveal_head = replacement_reveal_head;
         }
@@ -1768,6 +1775,7 @@ impl FramePreparer {
                 let index = path_groups[batch].instances.len();
                 let partial_reveal_bits = temporary_reveal
                     .as_ref()
+                    .filter(|_| object.style.sketch_stroke.is_none())
                     .map(|_| reveal.clamp(0.0, 1.0).to_bits());
                 path_groups[batch].ids.push(object.id);
                 path_groups[batch]
@@ -2158,17 +2166,20 @@ impl FramePreparer {
             PreparedSlot::Absent => false,
             PreparedSlot::Circle(index) => {
                 matches!(render_geometry, GeometryRef::Circle { .. })
+                    && object.style.sketch_stroke.is_none()
                     && effective_background_stroke_width(object.style) == 0.0
                     && self.circle_ids.get(*index) == Some(&object.id)
             }
             PreparedSlot::Rectangle(index) => {
                 matches!(render_geometry, GeometryRef::Rectangle { .. })
+                    && object.style.sketch_stroke.is_none()
                     && effective_background_stroke_width(object.style) == 0.0
                     && frame.reveal(object_index) >= 1.0
                     && self.rectangle_ids.get(*index) == Some(&object.id)
             }
             PreparedSlot::Line(index) => {
                 matches!(render_geometry, GeometryRef::Line { .. })
+                    && object.style.sketch_stroke.is_none()
                     && effective_background_stroke_width(object.style) == 0.0
                     && self.line_ids.get(*index) == Some(&object.id)
             }
@@ -2184,6 +2195,10 @@ impl FramePreparer {
                 };
                 let cache = &self.path_mesh_cache[*cache_index];
                 let geometry_matches = match analytic_reveal {
+                    Some(expected) if object.style.sketch_stroke.is_some() => {
+                        partial_reveal_bits.is_none()
+                            && analytic_outline_key(render_geometry) == Some(*expected)
+                    }
                     Some(expected) => {
                         let reveal = frame.reveal(object_index).clamp(0.0, 1.0);
                         *partial_reveal_bits == Some(reveal.to_bits())
@@ -2216,6 +2231,7 @@ impl FramePreparer {
                         == effective_background_stroke_width(object.style).to_bits()
                     && cache.stroke_join == object.style.stroke_join
                     && cache.stroke_cap == object.style.stroke_cap
+                    && cache.sketch_stroke == sketch_stroke_key(object.style)
                     && path_fill_cache_matches(cache.fill_enabled, &cache.path, object.style)
             }
             PreparedSlot::Unsupported(index) => {
@@ -2284,6 +2300,7 @@ impl FramePreparer {
                 background_stroke_width_bits,
                 style.stroke_join,
                 style.stroke_cap,
+                sketch_stroke_key(style),
                 fill_enabled,
             );
             if let Some(index) = self.find_cached_path_mesh_index(path, key) {
@@ -2309,6 +2326,7 @@ impl FramePreparer {
             background_stroke_width_bits,
             style.stroke_join,
             style.stroke_cap,
+            sketch_stroke_key(style),
             fill_enabled,
         );
         let index = self.path_mesh_cache.len();
@@ -2320,6 +2338,7 @@ impl FramePreparer {
             background_stroke_width_bits,
             stroke_join: style.stroke_join,
             stroke_cap: style.stroke_cap,
+            sketch_stroke: sketch_stroke_key(style),
             fill_enabled,
             bounds: tessellated_path_bounds(&mesh),
             mesh,
@@ -2341,6 +2360,7 @@ impl FramePreparer {
                     && entry.background_stroke_width_bits == key.background_stroke_width_bits
                     && entry.stroke_join == key.stroke_join
                     && entry.stroke_cap == key.stroke_cap
+                    && entry.sketch_stroke == key.sketch_stroke
                     && entry.fill_enabled == key.fill_enabled
             })
         })
@@ -2437,6 +2457,7 @@ impl FramePreparer {
                         background_stroke_width_bits,
                         object.style.stroke_join,
                         object.style.stroke_cap,
+                        sketch_stroke_key(object.style),
                         fill_enabled,
                     );
                     self.find_cached_path_mesh_index(path, key)
@@ -2483,6 +2504,7 @@ impl FramePreparer {
                 entry.background_stroke_width_bits,
                 entry.stroke_join,
                 entry.stroke_cap,
+                entry.sketch_stroke,
                 entry.fill_enabled,
             );
             let new_index = self.path_mesh_cache.len();
@@ -2617,8 +2639,20 @@ fn tessellate_path_mesh_with_fill(
     };
     // Correspondence is established by shared transform preparation. Stroke
     // scaling affects tessellation coordinates, never semantic point pairing.
-    noon_geometry::tessellate_styled_with_background_stroke(
+    let sketch = style
+        .sketch_stroke
+        .filter(|_| path.morph_target().is_none())
+        .map(|stroke| {
+            let outline = noon_geometry::sketch_outline(path, stroke);
+            if style.stroke_width_mode == StrokeWidthMode::ScreenSpace {
+                transform_path_without_translation(&outline, transform)
+            } else {
+                outline
+            }
+        });
+    noon_geometry::tessellate_with_stroke_outline(
         tessellation_path,
+        sketch.as_ref().unwrap_or(tessellation_path),
         style.stroke_width,
         background_stroke_width,
         style.stroke_join,
@@ -2689,6 +2723,13 @@ pub(crate) fn packed_path_transform(style: Style, transform: Transform2D) -> Pac
     }
 }
 
+fn sketch_stroke_key(style: Style) -> Option<[u32; 2]> {
+    style
+        .sketch_stroke
+        .map(|stroke| [stroke.roughness().to_bits(), stroke.seed()])
+}
+
+#[allow(clippy::too_many_arguments)]
 fn path_mesh_key(
     path: &VectorPath,
     stroke_transform: PathStrokeTransformKey,
@@ -2696,6 +2737,7 @@ fn path_mesh_key(
     background_stroke_width_bits: u32,
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
+    sketch_stroke: Option<[u32; 2]>,
     fill_enabled: bool,
 ) -> PathMeshKey {
     let mut hasher = DefaultHasher::new();
@@ -2707,6 +2749,7 @@ fn path_mesh_key(
         background_stroke_width_bits,
         stroke_join,
         stroke_cap,
+        sketch_stroke,
         fill_enabled,
     }
 }

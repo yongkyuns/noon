@@ -1359,6 +1359,7 @@ pub(crate) fn lower_semantic_style_value(
         stroke_width_mode: state.style.stroke_width_mode,
         stroke_join: state.style.stroke_join,
         stroke_cap: state.style.stroke_cap,
+        sketch_stroke: state.style.sketch_stroke,
         opacity,
         emission: state.style.emission,
     })

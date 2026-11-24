@@ -133,34 +133,6 @@ pub mod graph;
 mod vector_path;
 pub use crate::binding_error::AuthoringFailure;
 
-/// Decode an inert sketch constructor request from a language binding.
-pub fn hand_drawn_geometry(
-    shape: &str,
-    dimensions: &[f64],
-    roughness: f64,
-    seed: u32,
-) -> Result<crate::ManimGeometryOptions, crate::AuthoringError> {
-    use crate::{AuthoringError, HandDrawnShape::*, ManimGeometryOptions};
-    let shape = match (shape, dimensions) {
-        ("line", &[x1, y1, x2, y2]) => Line {
-            start: (x1, y1),
-            end: (x2, y2),
-        },
-        ("arrow", &[x1, y1, x2, y2]) => Arrow {
-            start: (x1, y1),
-            end: (x2, y2),
-        },
-        ("rectangle", &[width, height]) => Rectangle { width, height },
-        ("circle", &[radius]) => Circle { radius },
-        _ => {
-            return Err(AuthoringError::InvalidHandDrawnOptions(
-                "invalid hand-drawn shape or dimensions",
-            ))
-        }
-    };
-    ManimGeometryOptions::hand_drawn(shape, roughness, seed)
-}
-
 /// Preserve the language host's live Variable construction errors.
 #[cfg(feature = "latex")]
 pub fn live_variable_failure(error: crate::VariableAuthoringError) -> AuthoringFailure {

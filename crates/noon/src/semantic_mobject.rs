@@ -135,10 +135,6 @@ impl ManimGeometryOptions {
         ))
     }
 
-    pub(crate) fn hand_drawn_outline(&self) -> VectorPath {
-        noon_geometry::canonical_outline_path(&self.geometry).expect("inline primitive")
-    }
-
     pub fn path(path: VectorPath) -> Result<Self, AuthoringError> {
         if !path.is_finite() {
             return Err(AuthoringError::NonFiniteGeometry);
@@ -401,6 +397,34 @@ impl ManimGeometryOptions {
 
     pub fn set_stroke_join(&mut self, join: &str) -> Result<(), AuthoringError> {
         self.style.stroke_join = parse_stroke_join(join)?;
+        Ok(())
+    }
+
+    /// Configure the foreground stroke on this constructor without changing its shape.
+    pub fn set_sketch_stroke(
+        &mut self,
+        color: Color,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<(), AuthoringError> {
+        if !matches!(
+            self.geometry,
+            GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. } | GeometryRef::Line { .. }
+        ) {
+            return Err(AuthoringError::InvalidSketchStroke(
+                "a sketch stroke requires a circle, rectangle, line, or arrow",
+            ));
+        }
+        let stroke = noon_core::SketchStroke::new(roughness, seed).ok_or(
+            AuthoringError::InvalidSketchStroke("sketch roughness must be between 0 and 2"),
+        )?;
+        self.set_stroke_color(
+            color.red.into(),
+            color.green.into(),
+            color.blue.into(),
+            color.alpha.into(),
+        )?;
+        self.style.sketch_stroke = (stroke.roughness() > 0.0).then_some(stroke);
         Ok(())
     }
 
@@ -1527,6 +1551,7 @@ fn manim_style(color: Color) -> SemanticStyle {
         stroke_join: StrokeJoin::Miter,
         // Preserve Manim's public AUTO value; Cairo resolves its untouched default to butt.
         stroke_cap: StrokeCap::Auto,
+        sketch_stroke: None,
         object_opacity: 1.0,
         emission: noon_core::Emission::NONE,
     }
