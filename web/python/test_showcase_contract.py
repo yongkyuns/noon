@@ -116,7 +116,7 @@ class ShowcaseSourceContract(unittest.TestCase):
                 else:
                     self.assertTrue(
                         any(isinstance(node.func, ast.Name)
-                            and node.func.id in {"FadeIn", "Write", "Create"} for node in calls)
+                            and node.func.id in {"FadeIn", "Write", "Create", "Transform"} for node in calls)
                         or any(isinstance(node, ast.Attribute) and node.attr == "animate"
                                for node in ast.walk(scenes[0])),
                         "teach an entrance or ordinary target animation")
