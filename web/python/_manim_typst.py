@@ -362,26 +362,10 @@ def _in_canonical_callback_phase(mobject: _base.Mobject) -> bool:
 
 
 def _text_sketch_arguments(options):
-    from _noon_paints import SketchStroke
+    from _manim_semantic_handles import _as_sketch_stroke
 
-    stroke = options.pop("stroke", None)
-    if stroke is None:
-        return None
-    if not isinstance(stroke, SketchStroke):
-        raise TypeError("text stroke expects a SketchStroke")
-    width = _compat._manim_stroke_width(options.pop("stroke_width", 3.5))
-    color = stroke._color
-    return (stroke._roughness, stroke._seed, width, color.red, color.green, color.blue, color.alpha)
-
-
-def _apply_text_sketch(handle, context, arguments, *, family=False):
-    if arguments is None:
-        return
-    if context is None:
-        engine_call(handle.setTextSketchStroke, *arguments)
-    else:
-        setter = context.setFamilyTextSketchStroke if family else context.setTextSketchStroke
-        engine_call(setter, handle, *arguments)
+    stroke = _as_sketch_stroke(options.pop("stroke", None))
+    return None if stroke is None else (stroke, options.pop("stroke_width", 3.5))
 
 
 class _RetainedTextMobject(_base.Mobject):
@@ -534,6 +518,7 @@ class _RetainedTypstMobject(_RetainedTextMobject):
         **kwargs: Any,
     ) -> None:
         opacity = _validated_opacity(kwargs.pop("opacity", 1.0))
+        sketch = _text_sketch_arguments(kwargs)
         if kwargs:
             unsupported = ", ".join(sorted(kwargs))
             raise NotImplementedError(f"unsupported Typst option(s): {unsupported}")
@@ -565,6 +550,9 @@ class _RetainedTypstMobject(_RetainedTextMobject):
             opacity,
             presentation_applied=context is not None,
         )
+
+        if sketch is not None:
+            self.set_stroke(*sketch)
 
 
 class Typst(_RetainedTypstMobject):
@@ -653,7 +641,8 @@ class Text(_RetainedTextMobject):
             opacity,
             presentation_applied=context is not None,
         )
-        _apply_text_sketch(handle, context, sketch)
+        if sketch is not None:
+            self.set_stroke(*sketch)
         from _manim_semantic_handles import _record_python_source_site
         _record_python_source_site(handle)
 

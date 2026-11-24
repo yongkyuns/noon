@@ -255,6 +255,7 @@ def _apply_shared_constructor_options(
     kwargs: dict[str, Any],
     *,
     allow_sheen_direction: bool = False,
+    color: object = None,
 ) -> None:
     """Apply Python constructor coercions to one shared typed target.
 
@@ -283,6 +284,12 @@ def _apply_shared_constructor_options(
     ) != 0.0:
         raise NotImplementedError("2D sheen requires shared gradient paint")
 
+    from _noon_paints import SketchStroke
+
+    sketch = isinstance(options.get("stroke"), SketchStroke)
+    if sketch:
+        _apply_constructor_color(handle, color)
+
     if "z_index" in options:
         engine_call(handle.setZIndex, _ir._finite_number("z_index", options["z_index"]))
     if "sheen_direction" in options:
@@ -297,7 +304,10 @@ def _apply_shared_constructor_options(
         value = _ir._vec2("scale", options["scale"])
         engine_call(handle.setScale, value["x"], value["y"])
     if "stroke_width" in options:
-        engine_call(handle.setStrokeWidth, _compat._manim_stroke_width(options["stroke_width"]))
+        width = options["stroke_width"]
+        if width is None:
+            width = 3.5 if sketch else 0.0
+        engine_call(handle.setStrokeWidth, _compat._manim_stroke_width(width))
     if "stroke_width_mode" in options:
         engine_call(handle.setStrokeWidthMode, _ir._stroke_width_mode(options["stroke_width_mode"]))
     if "stroke_join" in options:
@@ -320,11 +330,11 @@ def _apply_shared_constructor_options(
 
     stroke = options.get("stroke", _CONSTRUCTOR_MISSING)
     stroke_color = options.get("stroke_color", _CONSTRUCTOR_MISSING)
-    from _noon_paints import SketchStroke
-    if isinstance(stroke, SketchStroke):
+    if sketch:
         parsed = stroke._color if stroke_color in (_CONSTRUCTOR_MISSING, None) else _compat._as_color("stroke_color", stroke_color)
         engine_call(handle.setSketchStroke, stroke._roughness, stroke._seed,
                     parsed.red, parsed.green, parsed.blue, parsed.alpha)
+        engine_call(handle.setStrokeOpacity, parsed.alpha)
         stroke = _CONSTRUCTOR_MISSING
         stroke_color = _CONSTRUCTOR_MISSING
     if stroke_color is not _CONSTRUCTOR_MISSING and stroke_color is not None:
@@ -341,9 +351,11 @@ def _apply_shared_constructor_options(
         engine_call(handle.setFillOpacity, _compat._opacity("fill_opacity", options["fill_opacity"]))
     if options.get("stroke_opacity") is not None:
         engine_call(handle.setStrokeOpacity, _compat._opacity("stroke_opacity", options["stroke_opacity"]))
+    if not sketch:
+        _apply_constructor_color(handle, color)
 
 
-def _apply_constructor_color(handle: object, color: _base.Color | None) -> None:
+def _apply_constructor_color(handle: object, color: object) -> None:
     if color is not None:
         parsed = _constructor_color("color", color)
         engine_call(handle.setColor, parsed.red, parsed.green, parsed.blue, parsed.alpha)
@@ -460,8 +472,7 @@ def _circle_init(
         raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     value = _ir._positive_number("radius", radius)
     options = engine_call(_geometry_options.circle, value)
-    _apply_shared_constructor_options(options, kwargs)
-    _apply_constructor_color(options, color)
+    _apply_shared_constructor_options(options, kwargs, color=color)
     _attach_geometry_options(self, options, "Circle")
     self.radius = value
 
@@ -479,8 +490,7 @@ def _rectangle_init(
     width_value = _ir._positive_number("width", width)
     height_value = _ir._positive_number("height", height)
     options = engine_call(_geometry_options.rectangle, width_value, height_value)
-    _apply_shared_constructor_options(options, kwargs)
-    _apply_constructor_color(options, color)
+    _apply_shared_constructor_options(options, kwargs, color=color)
     _attach_geometry_options(self, options, "Rectangle")
     self.width_value = width_value
     self.height_value = height_value
@@ -497,8 +507,7 @@ def _square_init(
         raise RuntimeError("Mobject construction requires the shared Rust authoring host")
     value = _ir._positive_number("side_length", side_length)
     options = engine_call(_geometry_options.square, value)
-    _apply_shared_constructor_options(options, kwargs)
-    _apply_constructor_color(options, color)
+    _apply_shared_constructor_options(options, kwargs, color=color)
     _attach_geometry_options(self, options, "Square")
     self.side_length = value
     self.width_value = value
@@ -517,8 +526,7 @@ def _path_init(
     if not isinstance(path, _base.VectorPath):
         raise TypeError("path must be a VectorPath")
     options = _vector_path_options(path.to_ir())
-    _apply_shared_constructor_options(options, kwargs)
-    _apply_constructor_color(options, color)
+    _apply_shared_constructor_options(options, kwargs, color=color)
     _attach_geometry_options(self, options, "Path")
     self.path = path
 
@@ -563,8 +571,7 @@ def _line_init(
     options = engine_call(_geometry_options.line,
         start_value.x, start_value.y, end_value.x, end_value.y
     )
-    _apply_shared_constructor_options(options, kwargs)
-    _apply_constructor_color(options, color)
+    _apply_shared_constructor_options(options, kwargs, color=color)
     _attach_geometry_options(self, options, "Line")
     self.start = start_value
     self.end = end_value
@@ -1628,6 +1635,38 @@ def _paint_authoring_target(value):
     return _handle_for(value), _path_authoring_context(value), ""
 
 
+def _as_sketch_stroke(stroke):
+    if stroke is None:
+        return None
+    from _noon_paints import SketchStroke
+
+    if not isinstance(stroke, SketchStroke):
+        raise TypeError("stroke expects a SketchStroke")
+    return stroke
+
+
+def _set_sketch_stroke(self, stroke, width=None, opacity=None, family=True):
+    from _manim_updaters import canonical_callback_phase_active
+
+    if canonical_callback_phase_active():
+        raise NotImplementedError("SketchStroke requires an ordinary scene style edit")
+    width = None if width is None else _compat._manim_stroke_width(width)
+    opacity = None if opacity is None else _compat._opacity("stroke opacity", opacity)
+    color = stroke._color
+    handle, context, suffix = _paint_authoring_target(self)
+    arguments = (stroke._roughness, stroke._seed, width, opacity,
+                 color.red, color.green, color.blue, color.alpha)
+    if suffix:
+        arguments = (*arguments, bool(family))
+    if handle is None:
+        raise RuntimeError("SketchStroke requires the shared Rust authoring host")
+    if context is None:
+        engine_call(handle.setSketchStroke, *arguments)
+    else:
+        engine_call(getattr(context, f"set{suffix}SketchStroke"), handle, *arguments)
+    return self
+
+
 def _style_value(value, name):
     if hasattr(value, "tolist"):
         value = value.tolist()
@@ -2165,6 +2204,10 @@ def _set_stroke(
     opacity: float | None = None,
     family: bool = True,
 ) -> _compat.VMobject:
+    from _noon_paints import SketchStroke
+
+    if isinstance(color, SketchStroke):
+        return _set_sketch_stroke(self, color, width, opacity, family)
     handle = _handle_for(self)
     if handle is None:
         raise RuntimeError("Mobject paint requires the shared Rust authoring host")
@@ -2333,6 +2376,10 @@ def _group_set_fill(self, color=None, opacity=None, family=True):
 
 
 def _group_set_stroke(self, color=None, width=None, opacity=None, family=True):
+    from _noon_paints import SketchStroke
+
+    if isinstance(color, SketchStroke):
+        return _set_sketch_stroke(self, color, width, opacity, family)
     stroke_width = None if width is None else _compat._manim_stroke_width(width)
     alpha = None if opacity is None else _compat._opacity("stroke opacity", opacity)
     arguments = (*_family_color_arguments(color), stroke_width, alpha)

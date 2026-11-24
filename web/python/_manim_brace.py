@@ -37,7 +37,7 @@ def _brace_target_handle(mobject: object):
 def _brace_constructor_options(
     options: dict[str, Any],
     *,
-    stroke_width: float,
+    stroke_width: float | None,
     fill_opacity: float,
     background_stroke_width: float,
 ) -> dict[str, Any]:
@@ -62,10 +62,7 @@ def _finish_candidate(
     options: dict[str, Any],
 ) -> None:
     color = options.pop("color", None)
-    _shared._apply_shared_constructor_options(candidate, options)
-    if color is not None:
-        parsed = _shared._compat._as_color("color", color)
-        _shared._apply_constructor_color(candidate, parsed)
+    _shared._apply_shared_constructor_options(candidate, options, color=color)
     _shared._attach_geometry_options(owner, candidate, name)
 
 
@@ -115,7 +112,7 @@ class Brace(_compat.VMobject):
         direction: object = _base.DOWN,
         buff: float = 0.2,
         sharpness: float = 2.0,
-        stroke_width: float = 0.0,
+        stroke_width: float | None = None,
         fill_opacity: float = 1.0,
         background_stroke_width: float = 0.0,
         background_stroke_color: object = _base.BLACK,
@@ -126,13 +123,12 @@ class Brace(_compat.VMobject):
         direction_value = _base._as_vec2(direction)
         buff_value = _shared._ir._finite_number("buff", buff)
         sharpness_value = _shared._ir._finite_number("sharpness", sharpness)
-        stroke_value = _shared._ir._finite_number("stroke_width", stroke_width)
         fill_value = _shared._compat._opacity("fill_opacity", fill_opacity)
         options = dict(kwargs)
         options["background_stroke_color"] = background_stroke_color
         options = _brace_constructor_options(
             options,
-            stroke_width=stroke_value,
+            stroke_width=stroke_width,
             fill_opacity=fill_value,
             background_stroke_width=background_stroke_width,
         )
@@ -226,16 +222,14 @@ class BraceBetweenPoints(Brace):
         sharpness_value = _shared._ir._finite_number(
             "sharpness", options.pop("sharpness", 2.0)
         )
-        stroke_value = _shared._ir._finite_number(
-            "stroke_width", options.pop("stroke_width", 0.0)
-        )
+        stroke_width = options.pop("stroke_width", None)
         fill_value = _shared._compat._opacity(
             "fill_opacity", options.pop("fill_opacity", 1.0)
         )
         background_width = options.pop("background_stroke_width", 0.0)
         options = _brace_constructor_options(
             options,
-            stroke_width=stroke_value,
+            stroke_width=stroke_width,
             fill_opacity=fill_value,
             background_stroke_width=background_width,
         )

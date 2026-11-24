@@ -41,10 +41,7 @@ class DashedLine(_compat.Line):
                 dash_length_value,
                 dashed_ratio_value,
         )
-        _shared._apply_shared_constructor_options(candidate, options)
-        if color is not None:
-            parsed = _shared._compat._as_color("color", color)
-            _shared._apply_constructor_color(candidate, parsed)
+        _shared._apply_shared_constructor_options(candidate, options, color=color)
         _shared._attach_geometry_options(self, candidate, "DashedLine")
         self.dash_length = dash_length_value
         self.dashed_ratio = dashed_ratio_value

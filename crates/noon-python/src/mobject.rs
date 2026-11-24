@@ -1515,21 +1515,23 @@ impl MobjectHandle {
             .set_stroke_color(red, green, blue, alpha)
             .map_err(engine_error)
     }
-    #[pyo3(name = "setTextSketchStroke")]
+    #[pyo3(name = "setSketchStroke", signature = (roughness, seed, width, opacity, red, green, blue, alpha))]
     #[allow(clippy::too_many_arguments)]
-    fn set_text_sketch_stroke(
+    fn set_sketch_stroke(
         &mut self,
         roughness: f64,
         seed: u32,
-        width: f64,
+        width: Option<f64>,
+        opacity: Option<f64>,
         red: f32,
         green: f32,
         blue: f32,
         alpha: f32,
     ) -> PyResult<()> {
-        let update = noon::StyleUpdate::text_sketch_stroke(
+        let update = noon::StyleUpdate::sketch_stroke(
             noon_core::Color::rgba(red, green, blue, alpha),
             width,
+            opacity,
             roughness,
             seed,
         )

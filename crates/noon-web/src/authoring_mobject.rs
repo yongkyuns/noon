@@ -1806,26 +1806,35 @@ mod wasm {
             self.semantic_family()?.set_style(update).map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = setTextSketchStroke)]
+        #[wasm_bindgen(js_name = setSketchStroke)]
         #[allow(clippy::too_many_arguments)]
-        pub fn set_text_sketch_stroke(
+        pub fn set_sketch_stroke(
             &mut self,
             roughness: f64,
             seed: u32,
-            width: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
             red: f32,
             green: f32,
             blue: f32,
             alpha: f32,
+            family: bool,
         ) -> Result<(), JsValue> {
-            let update = noon::StyleUpdate::text_sketch_stroke(
+            let update = noon::StyleUpdate::sketch_stroke(
                 noon_core::Color::rgba(red, green, blue, alpha),
                 width,
+                opacity,
                 roughness,
                 seed,
             )
             .map_err(js_error)?;
-            self.semantic_family()?.set_style(update).map_err(js_error)
+            let target = self.semantic_family()?;
+            if family {
+                target.set_style(update)
+            } else {
+                target.set_own_style(update)
+            }
+            .map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = setOwnStyle)]
@@ -4168,21 +4177,23 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = setTextSketchStroke)]
+        #[wasm_bindgen(js_name = setSketchStroke)]
         #[allow(clippy::too_many_arguments)]
-        pub fn set_text_sketch_stroke(
+        pub fn set_sketch_stroke(
             &mut self,
             roughness: f64,
             seed: u32,
-            width: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
             red: f32,
             green: f32,
             blue: f32,
             alpha: f32,
         ) -> Result<(), JsValue> {
-            let update = noon::StyleUpdate::text_sketch_stroke(
+            let update = noon::StyleUpdate::sketch_stroke(
                 noon_core::Color::rgba(red, green, blue, alpha),
                 width,
+                opacity,
                 roughness,
                 seed,
             )

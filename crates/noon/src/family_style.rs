@@ -11,8 +11,11 @@ use crate::{
     Color, Mobject, MobjectFamily, MobjectTarget, Scene,
 };
 use noon_core::{
-    SemanticMutationTransaction, SemanticMutationTransactionResult, SemanticSheenDirection,
-    SemanticStyle, SemanticVec3,
+    GeometryResource, GeometryResourceArena, SemanticMutationTransaction,
+    SemanticMutationTransactionResult, SemanticObjectContent, SemanticObjectRole,
+    SemanticObjectState, SemanticOrientation, SemanticSheenDirection,
+    SemanticSpatialCompositionDomain, SemanticSpatialMaterial, SemanticStyle, SemanticVec3,
+    StoredGeometry, StrokeWidthMode,
 };
 
 /// Optional common paint fields, applied together through one semantic mutation.
@@ -34,10 +37,13 @@ pub struct StyleUpdate {
 }
 
 impl StyleUpdate {
-    /// Style retained glyph outlines with a pen width in scene units.
-    pub fn text_sketch_stroke(
+    /// Apply a seeded foreground stroke to planar paths and retained text.
+    /// An explicit width is in scene units. Omission keeps the authored pen width
+    /// when it is nonzero.
+    pub fn sketch_stroke(
         color: Color,
-        width: f64,
+        width: Option<f64>,
+        opacity: Option<f64>,
         roughness: f64,
         seed: u32,
     ) -> Result<Self, AuthoringError> {
@@ -46,11 +52,30 @@ impl StyleUpdate {
         )?;
         Ok(Self {
             stroke_color: Some(color),
-            stroke_width: Some(width),
-            stroke_width_mode: Some(noon_core::StrokeWidthMode::ScreenSpace),
+            stroke_width: width,
+            stroke_opacity: Some(opacity.unwrap_or(f64::from(color.alpha))),
+            stroke_width_mode: width.map(|_| StrokeWidthMode::ScreenSpace),
             sketch_stroke: Some(sketch),
             ..Self::default()
         })
+    }
+
+    pub(crate) fn for_object(
+        mut self,
+        state: &SemanticObjectState,
+        geometry: &GeometryResourceArena,
+    ) -> Result<Self, AuthoringError> {
+        if self.sketch_stroke.is_some() {
+            if !supports_sketch_stroke(state, geometry) {
+                return Err(AuthoringError::InvalidSketchStroke(
+                    "a sketch stroke requires a planar path or retained text",
+                ));
+            }
+            if state.content.text().is_some() {
+                self.stroke_width_mode = Some(StrokeWidthMode::ScreenSpace);
+            }
+        }
+        Ok(self)
     }
 
     pub(crate) fn apply<S: PaintStyleEdit>(&self, style: &mut S) -> Result<(), AuthoringError> {
@@ -67,6 +92,10 @@ impl StyleUpdate {
                 ));
             }
             style.set_sketch_stroke(sketch);
+            if self.stroke_width.is_none() && !style.has_stroke_width() {
+                style.set_stroke_width_mode(StrokeWidthMode::ScreenSpace);
+                style.set_stroke_width(0.035);
+            }
         }
         fill(style, self.fill_color, self.fill_opacity)?;
         stroke(
@@ -81,6 +110,26 @@ impl StyleUpdate {
             self.background_stroke_width,
             self.background_stroke_opacity,
         )
+    }
+}
+
+fn supports_sketch_stroke(state: &SemanticObjectState, geometry: &GeometryResourceArena) -> bool {
+    if !matches!(state.transform.orientation, SemanticOrientation::Planar(_))
+        || state.spatial_composition_domain() != SemanticSpatialCompositionDomain::World
+        || state.spatial_material() == SemanticSpatialMaterial::CairoPath
+        || matches!(
+            state.role(),
+            SemanticObjectRole::Camera3D | SemanticObjectRole::PointLight3D
+        )
+    {
+        return false;
+    }
+    match state.content {
+        SemanticObjectContent::Image(_) => false,
+        SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) => {
+            matches!(geometry.get(handle), Some(GeometryResource::VectorPath(_)))
+        }
+        SemanticObjectContent::Geometry(_) | SemanticObjectContent::Text(_) => true,
     }
 }
 
@@ -100,7 +149,12 @@ impl Mobject {
     /// Atomically update supplied paint fields, preserving identity and content.
     pub fn set_style(&mut self, update: StyleUpdate) -> Result<(), AuthoringError> {
         let mut state = self.state()?;
-        update.apply(&mut state.style)?;
+        update
+            .for_object(
+                &state,
+                self.integration_store().borrow().geometry_resources(),
+            )?
+            .apply(&mut state.style)?;
         self.commit_state(state)
     }
 
@@ -587,13 +641,20 @@ impl MobjectFamily {
                     update.background_stroke_opacity,
                 );
             } else {
-                let previous = &store
+                let state = store
                     .semantic_object_state_checked(node)
-                    .map_err(AuthoringError::from)?
-                    .style;
+                    .map_err(AuthoringError::from)?;
+                let previous = &state.style;
                 let update = update_for(previous, false);
+                if update.sketch_stroke.is_some()
+                    && !supports_sketch_stroke(state, store.geometry_resources())
+                {
+                    continue;
+                }
                 let mut style = previous.clone();
-                update.apply(&mut style)?;
+                update
+                    .for_object(state, store.geometry_resources())?
+                    .apply(&mut style)?;
                 if style != *previous {
                     transaction.replace_style(node, style);
                 }
@@ -1404,6 +1465,39 @@ mod tests {
     use super::*;
     use crate::{ManimGeometryOptions, Scene};
     use noon_core::{SemanticPaint, Style, VectorPath};
+
+    #[test]
+    fn sketch_style_reuses_svg_paths_and_skips_raster_members() {
+        let mut scene = Scene::new();
+        let svg = scene
+            .svg_from_str(
+                r#"<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 L3 0 L1 2 Z"/></svg>"#,
+            )
+            .unwrap();
+        let Some(crate::CompositeEntryHandle::Mobject(path)) = svg.member_at(0).unwrap() else {
+            panic!("expected a retained SVG path");
+        };
+        let image = scene.image_rgba8(1, 1, vec![255; 4]).unwrap();
+        let family = scene
+            .family(&[(&svg).into(), (&path).into(), (&image).into()])
+            .unwrap();
+        let before = path.state().unwrap();
+        let image_before = image.state().unwrap();
+        let sketch = StyleUpdate::sketch_stroke(Color::BLUE, None, Some(0.6), 1.0, 9).unwrap();
+
+        scene.set_family_own_style(&family, sketch).unwrap();
+        assert_eq!(path.state().unwrap(), before);
+        scene.set_family_style(&family, sketch).unwrap();
+
+        let after = path.state().unwrap();
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.style.fill, before.style.fill);
+        assert!(after.style.stroke_width > 0.0);
+        assert_eq!(after.style.stroke_opacity, 0.6);
+        assert_eq!(after.style.sketch_stroke, sketch.sketch_stroke);
+        assert_eq!(image.state().unwrap(), image_before);
+        assert!(scene.set_style(&image, sketch).is_err());
+    }
 
     #[test]
     fn recursive_fade_counts_alias_paths_but_reads_and_publishes_unique_leaves() {

@@ -3170,7 +3170,7 @@ fn glyph_outline_style(run: &GlyphRun, object_style: Style) -> Style {
 
 pub(super) fn resolved_text_vector_style(object_style: Style, vector: &TextVectorItem) -> Style {
     let has_stroke = vector.style.stroke_width > 0.0;
-    Style {
+    let mut style = Style {
         fill: if vector.style.fill.is_some() || !has_stroke {
             crate::text::resolve_text_paint(vector.style.fill, object_style.fill)
         } else {
@@ -3188,7 +3188,16 @@ pub(super) fn resolved_text_vector_style(object_style: Style, vector: &TextVecto
         sketch_stroke: None,
         opacity: object_style.opacity,
         emission: object_style.emission,
+    };
+    if let Some(sketch) = object_style.sketch_stroke {
+        style.stroke = object_style.stroke;
+        style.stroke_width = object_style.stroke_width;
+        style.stroke_width_mode = object_style.stroke_width_mode;
+        style.stroke_cap = object_style.stroke_cap;
+        style.stroke_join = object_style.stroke_join;
+        style.sketch_stroke = Some(sketch);
     }
+    style
 }
 
 pub(super) fn publication_is_stale(

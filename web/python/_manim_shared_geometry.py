@@ -131,7 +131,7 @@ def _dot_init(
     self: _geometry.Dot,
     point: object = _base.ORIGIN,
     radius: float = _geometry.DEFAULT_DOT_RADIUS,
-    stroke_width: float = 0.0,
+    stroke_width: float | None = None,
     fill_opacity: float = 1.0,
     color: _base.Color = _base.WHITE,
     **kwargs: Any,
@@ -169,11 +169,10 @@ def _ellipse_init(
     color = options.pop("color", None)
     scale = options.pop("scale", None)
     candidate = engine_call(_shared._geometry_options.ellipse, width_value, height_value)
-    _shared._apply_shared_constructor_options(candidate, options)
+    _shared._apply_shared_constructor_options(candidate, options, color=color)
     if scale is not None:
         scale_value = _shared._ir._vec2("scale", scale)
         engine_call(candidate.scaleBy, scale_value["x"], scale_value["y"])
-    _apply_candidate_color(candidate, color)
     _shared._attach_geometry_options(self, candidate, "Ellipse")
 
 
@@ -189,8 +188,7 @@ class Elbow(_compat.VMobject):
         options = dict(kwargs)
         color = options.pop("color", None)
         candidate = engine_call(_shared._geometry_options.elbow, width_value, angle_value)
-        _shared._apply_shared_constructor_options(candidate, options)
-        _apply_candidate_color(candidate, color)
+        _shared._apply_shared_constructor_options(candidate, options, color=color)
         _shared._attach_geometry_options(self, candidate, "Elbow")
 
 
@@ -211,8 +209,7 @@ class RoundedRectangle(_compat.Rectangle):
         radius = _shared._ir._finite_number("corner_radius", corner_radius)
         color = options.pop("color", None)
         candidate = engine_call(_shared._geometry_options.roundedRectangle, width, height, radius)
-        _shared._apply_shared_constructor_options(candidate, options)
-        _apply_candidate_color(candidate, color)
+        _shared._apply_shared_constructor_options(candidate, options, color=color)
         _shared._attach_geometry_options(self, candidate, "RoundedRectangle")
         self.width_value = width
         self.height_value = height
@@ -265,8 +262,7 @@ class SurroundingRectangle(RoundedRectangle):
         bounds, context = _shape_matcher_bounds(mobject)
         candidate = engine_call(_shared._geometry_options.surroundingRectangle, bounds, buff_x, buff_y, radius)
         options = dict(kwargs)
-        _shared._apply_shared_constructor_options(candidate, options)
-        _apply_candidate_color(candidate, color)
+        _shared._apply_shared_constructor_options(candidate, options, color=color)
         _shared._attach_geometry_options(self, candidate, "SurroundingRectangle", context=context)
         self.buff = buff
         self.corner_radius = radius
@@ -298,8 +294,7 @@ class BackgroundRectangle(SurroundingRectangle):
         options["stroke_width"] = stroke_width
         options["stroke_opacity"] = stroke_opacity
         options["fill_opacity"] = fill_value
-        _shared._apply_shared_constructor_options(candidate, options)
-        _apply_candidate_color(candidate, color)
+        _shared._apply_shared_constructor_options(candidate, options, color=color)
         _shared._attach_geometry_options(self, candidate, "BackgroundRectangle", context=context)
         self.buff = buff
         self.corner_radius = corner_radius
@@ -328,8 +323,7 @@ class Cross(_compat.VGroup):
         for candidate in engine_call(_shared._geometry_options.crossLines, bounds, scale_value):
             options = dict(leaf_options)
             options["stroke_width"] = stroke_value
-            _shared._apply_shared_constructor_options(candidate, options)
-            _apply_candidate_color(candidate, stroke_color)
+            _shared._apply_shared_constructor_options(candidate, options, color=stroke_color)
             line = object.__new__(_compat.Line)
             _shared._attach_geometry_options(line, candidate, "Cross", context=context)
             members.append(line)
@@ -368,8 +362,7 @@ class Underline(_compat.Line):
             if context is None
             else engine_call(context.beginUnderline, target_handle, buff_value)
         )
-        _shared._apply_shared_constructor_options(candidate, options)
-        _apply_candidate_color(candidate, color)
+        _shared._apply_shared_constructor_options(candidate, options, color=color)
         _shared._attach_geometry_options(self, candidate, "Underline", context=context)
         self.buff = buff_value
 
@@ -402,14 +395,13 @@ def _apply_sector_style(
     kwargs: dict[str, Any],
     *,
     fill_opacity: float,
-    stroke_width: float,
+    stroke_width: float | None,
     color: object,
 ) -> None:
     options = dict(kwargs)
     options["fill_opacity"] = fill_opacity
     options["stroke_width"] = stroke_width
-    _shared._apply_shared_constructor_options(candidate, options)
-    _apply_candidate_color(candidate, color)
+    _shared._apply_shared_constructor_options(candidate, options, color=color)
 
 
 class AnnularSector(_compat.VMobject):
@@ -422,7 +414,7 @@ class AnnularSector(_compat.VMobject):
         angle: float = _base.TAU / 4.0,
         start_angle: float = 0.0,
         fill_opacity: float = 1.0,
-        stroke_width: float = 0.0,
+        stroke_width: float | None = None,
         color: _base.Color = _base.WHITE,
         **kwargs: Any,
     ) -> None:
@@ -468,7 +460,7 @@ class Sector(AnnularSector):
 
         options = dict(kwargs)
         fill_opacity = options.pop("fill_opacity", 1.0)
-        stroke_width = options.pop("stroke_width", 0.0)
+        stroke_width = options.pop("stroke_width", None)
         color = options.pop("color", _base.WHITE)
         start_angle = options.pop("start_angle", 0.0)
         angle = options.pop("angle", _base.TAU / 4.0)
@@ -508,7 +500,7 @@ class Annulus(_compat.VMobject):
         inner_radius: float = 1.0,
         outer_radius: float = 2.0,
         fill_opacity: float = 1.0,
-        stroke_width: float = 0.0,
+        stroke_width: float | None = None,
         color: _base.Color = _base.WHITE,
         mark_paths_closed: bool = False,
         **kwargs: Any,
@@ -566,8 +558,7 @@ def _boolean_init(self, operation: str, mobjects: tuple, options: dict) -> None:
         operands.free()
     color = options.pop("color", None)
     try:
-        _shared._apply_shared_constructor_options(candidate, options)
-        _apply_candidate_color(candidate, color)
+        _shared._apply_shared_constructor_options(candidate, options, color=color)
     except Exception:
         release = getattr(candidate, "free", None)
         if release is not None:

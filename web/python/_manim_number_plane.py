@@ -137,6 +137,8 @@ class NumberPlane(_plot.Axes):
                  background_line_style=None, faded_line_style=None,
                  faded_line_ratio=1, *, axis_config=None, x_axis_config=None,
                  y_axis_config=None, **kwargs):
+        stroke = _plot._shared._as_sketch_stroke(kwargs.pop("stroke", None))
+        stroke_width = None if stroke is None else kwargs.pop("stroke_width", None)
         if kwargs:
             raise TypeError("unsupported NumberPlane option(s): " + ", ".join(sorted(kwargs)))
         if isinstance(faded_line_ratio, bool):
@@ -218,6 +220,8 @@ class NumberPlane(_plot.Axes):
         x_axis.scaling = y_axis.scaling = _plot.LinearBase()
         members.extend((x_axis, y_axis))
         _plot._family(self, handle, members)
+        if stroke is not None:
+            self.set_stroke(stroke, stroke_width)
         self.axes = _plot._compat.VGroup(x_axis, y_axis)
         background = self.background_lines.submobjects
         for name, horizontal in (("x_lines", True), ("y_lines", False)):

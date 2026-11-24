@@ -507,16 +507,15 @@ fn effective_object_conservative_bounds_with_external(
             .sketch_stroke
             .filter(|_| foreground > 0.0)
             .map_or(0.0, |stroke| {
-                let local = if let Some(bounds) = text_bounds {
-                    // Glyph outlines are sketched in em units and mapped back
-                    // to the retained text frame. Closed glyph contours fit
-                    // inside the authored text bounds.
+                let path_outset = noon_geometry::sketch_outset(stroke);
+                let glyph_outset = text_bounds.map_or(0.0, |bounds| {
+                    // Closed glyph contours are sketched in em units and then
+                    // mapped back to the retained text frame.
                     let extent = bounds.max - bounds.min;
                     noon_geometry::sketch_outset_for_extent(stroke, extent.x.min(extent.y))
-                } else {
-                    noon_geometry::sketch_outset(stroke)
-                };
-                local * max_scale
+                });
+                // Compiled text can also contain open native-unit paths.
+                path_outset.max(glyph_outset) * max_scale
             });
         let expansion = width * scale * 0.5 * join.max(cap) + sketch;
         world.min.x -= expansion;
@@ -782,6 +781,41 @@ mod tests {
         // omit this visible background stroke from a backdrop prefix query.
         let old_radius = 0.1 + style.stroke_width * frame.objects[0].transform.scale.x * 0.5;
         assert!(old_radius < 0.4);
+    }
+
+    #[test]
+    fn text_bounds_contain_the_sketch_of_a_flat_vector_decoration() {
+        let path = noon_core::VectorPath::new()
+            .move_to(Vec2::new(-5.0, 0.0))
+            .line_to(Vec2::new(5.0, 0.0));
+        let raw = path.conservative_bounds().unwrap();
+        let sketch = noon_core::SketchStroke::new(2.0, 9).unwrap();
+        let style = Style {
+            stroke: Some(noon_core::Color::WHITE),
+            stroke_width: 0.02,
+            sketch_stroke: Some(sketch),
+            ..Style::default()
+        };
+        let bounds =
+            effective_object_conservative_bounds(None, Some(raw), Transform2D::IDENTITY, style)
+                .unwrap();
+        let mesh = noon_geometry::tessellate_with_stroke_outline(
+            &path,
+            &noon_geometry::sketch_outline(&path, sketch),
+            style.stroke_width,
+            0.0,
+            style.stroke_join,
+            style.stroke_cap,
+            false,
+        )
+        .unwrap();
+        assert!(mesh.vertices.iter().any(|v| v.position.y.abs() > 0.01));
+        assert!(mesh.vertices.iter().all(|v| {
+            v.position.x >= bounds.min.x
+                && v.position.x <= bounds.max.x
+                && v.position.y >= bounds.min.y
+                && v.position.y <= bounds.max.y
+        }));
     }
 
     #[test]

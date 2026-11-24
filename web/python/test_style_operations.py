@@ -27,7 +27,7 @@ class StyleOperationsTests(unittest.TestCase):
         )
         self.assertEqual(
             list(inspect.signature(compat.VGroup.__init__).parameters),
-            ["self", "mobjects", "z_index", "color", "shade_in_3d"],
+            ["self", "mobjects", "z_index", "color", "shade_in_3d", "stroke", "stroke_width"],
         )
         self.assertIs(compat.VGroup.shade_in_3d, compat.VMobject.shade_in_3d)
         self.assertIs(compat.VGroup.set_shade_in_3d, compat.VMobject.set_shade_in_3d)
