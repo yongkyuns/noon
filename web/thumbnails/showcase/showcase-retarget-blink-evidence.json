@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "23346a5a506978f30a7e823f9695ae14882d0929",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "23346a5a506978f30a7e823f9695ae14882d0929",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "39c33c1d3db7fcfbda5ed6c362ea80a6073762a2bab3fcfd140f8585416e5898"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "ccf6e337fbe7b3d4eae0120f7d7835c03c84ea8227ac4331b8b116b8c97f66fa"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "6717debae932f8ce493d865fc98c858daa1334255b573ef16621f70baadc2dcf"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
+      }
+    },
+    "buildId": "9892687a467e189f4e3720d522f48f82de501d13be72b9c8b158e4d77acd1ebd"
+  },
+  "posters": [
+    {
+      "id": "showcase-retarget-blink",
+      "captureBuildId": "9892687a467e189f4e3720d522f48f82de501d13be72b9c8b158e4d77acd1ebd",
+      "sourceSha256": "d29e8ed39d6e4ae3a15e7e54665305a7a35bc71399b0000083d409f296943aa8",
+      "thumbnailTime": 3.25,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 72160,
+        "pngSha256": "1f31d749b1b41991cac6041dd46531b00200943163148f5a8ded10fc7b9a6c0b",
+        "pixelSha256": "6f20cf46cc6c604bc67877fc8b71d26c249e854e21744f32646139d0990022c6"
+      },
+      "sample": {
+        "requestedTime": 3.25,
+        "publishedTime": 3.25,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}
