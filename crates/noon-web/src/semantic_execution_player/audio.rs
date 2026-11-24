@@ -35,12 +35,18 @@ impl SemanticExecutionPlayer {
 impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = hasAudio))]
     pub fn has_audio_wasm(&self) -> bool {
-        self.session.has_audio()
+        self.source.session().has_audio()
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = finitePlaybackDuration))]
     pub fn finite_playback_duration(&self) -> Option<f64> {
         self.finite_transport_end
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = finiteAudioDuration))]
+    pub fn finite_audio_duration(&self) -> Option<f64> {
+        self.finite_transport_end
+            .filter(|_| self.source.session().has_audio())
     }
 
     /// Platform completion metadata for one successfully committed click.
@@ -69,10 +75,10 @@ impl SemanticExecutionPlayer {
             return Ok(None);
         }
         self.pending_scene_control = None;
-        if request.publication != self.session.publication_context() {
+        if request.publication != self.source.session().publication_context() {
             return Ok(None);
         }
-        if !self.session.supports_immutable_playback() || self.finite_export.is_some() {
+        if !self.source.session().supports_immutable_playback() || self.finite_export.is_some() {
             return Err(
                 "scene playback controls require admitted finite immutable execution (#2263)"
                     .into(),
@@ -89,7 +95,7 @@ impl SemanticExecutionPlayer {
     #[cfg(any(target_arch = "wasm32", test))]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioResourceBundleBytes))]
     pub fn audio_resource_bundle_bytes(&self) -> Result<Vec<u8>, String> {
-        crate::worker_audio::encode(&self.session, self.encoder.session())
+        crate::worker_audio::encode(self.source.session(), self.encoder.session())
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioAnchorJson))]
@@ -97,11 +103,20 @@ impl SemanticExecutionPlayer {
         if !sampled_epoch_ms.is_finite() {
             return Err("audio anchor requires a finite host timestamp".into());
         }
-        Ok(serde_json::json!({
-            "session": self.encoder.session(), "time": self.session.frame().time,
-            "playing": self.clock.is_playing(), "sampledEpochMs": sampled_epoch_ms,
-        })
-        .to_string())
+        let time = self.time();
+        let mut anchor = serde_json::json!({
+            "session": self.encoder.session(), "time": time,
+            "playing": self.clock.is_playing(), "buffering": self.video.waiting(),
+            "sampledEpochMs": sampled_epoch_ms,
+        });
+        let media = self.source.session().video_rasters();
+        if let Some(end) = self.finite_transport_end.filter(|_| !media.is_empty()) {
+            anchor["authorizedUntil"] = serde_json::json!(self
+                .video
+                .boundary(media, time)
+                .map_or(end, |limit| end.min(limit)));
+        }
+        Ok(anchor.to_string())
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sectionsJson))]
@@ -111,8 +126,24 @@ impl SemanticExecutionPlayer {
         }).collect()).to_string()
     }
 
+    /// Read-only cue indices for the same Rust-authored time shown by the host.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sectionStateJson))]
+    pub fn section_state_json(&self, time: f64) -> Result<String, String> {
+        let index = |value: Option<(usize, &noon::SceneSection)>| value.map(|(index, _)| index);
+        Ok(serde_json::json!({
+            "current": index(self.section_navigation.current(time)?),
+            "previous": index(self.section_navigation.target(time, noon::SectionNavigation::Previous)?),
+            "next": index(self.section_navigation.target(time, noon::SectionNavigation::Next)?),
+        }).to_string())
+    }
+
+    /// Navigate from a Rust clock observation, which may lead the last static frame.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekSectionDeltaJson))]
-    pub fn seek_section_delta_json(&mut self, previous: bool) -> Result<Option<String>, String> {
+    pub fn seek_section_delta_json(
+        &mut self,
+        previous: bool,
+        observed_time: f64,
+    ) -> Result<Option<String>, String> {
         let direction = if previous {
             noon::SectionNavigation::Previous
         } else {
@@ -120,7 +151,7 @@ impl SemanticExecutionPlayer {
         };
         let time = self
             .section_navigation
-            .target(self.time(), direction)?
+            .target(observed_time, direction)?
             .map(|(_, section)| section.time);
         match time {
             Some(time) => self.seek_delta_json(time),

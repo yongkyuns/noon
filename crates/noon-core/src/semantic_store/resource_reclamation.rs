@@ -124,8 +124,23 @@ impl SemanticStore {
                 .clone()
         };
         let previous = style(self.node(object).expect("preflighted style owner"));
+        let previous_isolated = self.node(object).unwrap().has_partial_family_opacity();
+        let previous_target = self
+            .node(object)
+            .unwrap()
+            .has_explicit_family_opacity_target();
         edit(self.node_mut(object).expect("preflighted style owner"));
         let next = style(self.node(object).expect("preflighted style owner"));
+        let next_isolated = self.node(object).unwrap().has_partial_family_opacity();
+        let next_target = self
+            .node(object)
+            .unwrap()
+            .has_explicit_family_opacity_target();
+        self.partial_opacity_families = self.partial_opacity_families + usize::from(next_isolated)
+            - usize::from(previous_isolated);
+        self.explicit_family_opacity_targets = self.explicit_family_opacity_targets
+            + usize::from(next_target)
+            - usize::from(previous_target);
         self.retain_semantic_style_resources(&next);
         self.release_semantic_style_resources(&previous);
     }
@@ -143,6 +158,16 @@ impl SemanticStore {
             return;
         }
         self.retain_semantic_content_resources(content);
+        self.explicit_family_opacity_targets -= usize::from(
+            self.node(object)
+                .expect("preflighted content owner")
+                .has_explicit_family_opacity_target(),
+        );
+        self.partial_opacity_families -= usize::from(
+            self.node(object)
+                .expect("preflighted content owner")
+                .has_partial_family_opacity(),
+        );
         let node = self.node_mut(object).expect("preflighted content owner");
         if let Some(state) = node.semantic_object_state_mut() {
             state.content = content;

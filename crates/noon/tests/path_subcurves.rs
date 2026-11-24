@@ -11,25 +11,27 @@ fn subcurve_copies_preserve_style_source_and_coherent_live_state() {
         source.set_stroke_color(1., 0., 0., 0.5).unwrap();
         scene.add(&source).unwrap();
         let before = source.state().unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let selected = if live_mode {
-            let copy = scene
-                .live(&mut session)
-                .subcurve(&source, 0.25, 0.75)
-                .unwrap();
-            assert!(!scene.live(&mut session).contains(&copy).unwrap());
-            scene.live(&mut session).add(&copy).unwrap();
-            assert_eq!(
-                noon::integration::effective_path_query(scene.integration_store(), &session, &copy)
-                    .unwrap()
-                    .start()
-                    .unwrap(),
-                (4., 3.)
-            );
-            copy
+        let (mut running, selected, full) = if live_mode {
+            let mut running = scene.into_execution().unwrap();
+            let selected = running.scene_mut().subcurve(&source, 0.25, 0.75).unwrap();
+            let full = running.scene_mut().subcurve(&source, 0., 1.).unwrap();
+            (running, selected, full)
         } else {
-            source.subcurve(0.25, 0.75).unwrap()
+            let selected = scene.subcurve(&source, 0.25, 0.75).unwrap();
+            let full = scene.subcurve(&source, 0., 1.).unwrap();
+            (scene.into_execution().unwrap(), selected, full)
         };
+        assert!(!running.scene().contains_direct(&selected).unwrap());
+        running.scene_mut().add(&selected).unwrap();
+        assert_eq!(
+            running
+                .scene()
+                .effective_path_query(&selected)
+                .unwrap()
+                .start()
+                .unwrap(),
+            (4., 3.)
+        );
         assert_ne!(selected.node_id(), source.node_id());
         assert_eq!(selected.path_query().unwrap().end().unwrap(), (8., 3.));
         assert_eq!(selected.state().unwrap().style, before.style);
@@ -38,11 +40,6 @@ fn subcurve_copies_preserve_style_source_and_coherent_live_state() {
             before.presentation().z_index
         );
         assert_eq!(source.state().unwrap(), before);
-        let full = if live_mode {
-            scene.live(&mut session).subcurve(&source, 0., 1.).unwrap()
-        } else {
-            source.subcurve(0., 1.).unwrap()
-        };
         assert_eq!(full.state().unwrap().content, before.content);
     }
 }
@@ -170,44 +167,29 @@ fn live_subcurve_captures_effective_transform_and_rejects_reveal_override() {
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.)
-        .unwrap();
-    let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
-        .subcurve(&source, 0.25, 0.75)
-        .is_err());
-    assert_eq!(scene.revision(), revision);
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 2.)
-        .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    session.seek(1.).unwrap();
-    let selected = scene
-        .live(&mut session)
-        .subcurve(&source, 0.25, 0.75)
-        .unwrap();
+    let mut running = scene.into_execution().unwrap();
+    let segment = running.live().play_animation(&animation).unwrap();
+    running.live().advance_segment_to(segment, 1.).unwrap();
+    let revision = running.scene().revision();
+    assert!(running.scene_mut().subcurve(&source, 0.25, 0.75).is_err());
+    assert_eq!(running.scene().revision(), revision);
+    running.live().advance_segment_to(segment, 2.).unwrap();
+    running.live().complete_segment(segment).unwrap();
+    running.seek(1.).unwrap();
+    let selected = running.scene_mut().subcurve(&source, 0.25, 0.75).unwrap();
     assert_eq!(selected.path_query().unwrap().start().unwrap(), (1., 1.));
     assert_eq!(source.path_query().unwrap().start().unwrap(), (0., 2.));
-    session.seek(2.).unwrap();
+    running.seek(2.).unwrap();
     assert_eq!(selected.path_query().unwrap().start().unwrap(), (1., 1.));
 
     let mut scene = Scene::new();
     let source = scene.circle(1.).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    scene
-        .live(&mut session)
+    let mut running = scene.into_execution().unwrap();
+    running
+        .live()
         .declare_and_activate_create(&source, AnimationOptions::new())
         .unwrap();
-    let revision = scene.revision();
-    assert!(scene
-        .live(&mut session)
-        .subcurve(&source, 0.2, 0.8)
-        .is_err());
-    assert_eq!(scene.revision(), revision);
+    let revision = running.scene().revision();
+    assert!(running.scene_mut().subcurve(&source, 0.2, 0.8).is_err());
+    assert_eq!(running.scene().revision(), revision);
 }

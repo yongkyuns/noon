@@ -1,6 +1,7 @@
 use super::*;
 use noon_core::{Color, EffectUpdate, Pixels};
 
+#[cfg(all(feature = "native", not(target_arch = "wasm32")))]
 fn only_effect(stack: &noon_compile::CompiledEffectStack) -> noon_compile::CompiledEffect {
     assert_eq!(stack.len(), 1, "single-effect reference fixture");
     stack.iter().next().unwrap()
@@ -17,11 +18,75 @@ fn parameters(sigma: f64) -> GlowParameters {
 }
 
 #[test]
+fn ancestor_original_coverage_is_budgeted_without_an_authored_filter() {
+    let bounds = EffectPixelBounds {
+        min: [17.0, 25.0],
+        max: [25.0, 33.0],
+    };
+    let parameters = super::super::EffectStackParameters {
+        shader: None,
+        working_format: wgpu::TextureFormat::Rgba8Unorm,
+        output_height: 64,
+        world_view_height: 6.4,
+        scope_opacity: 1.0,
+        scratch_budget_bytes: 800,
+        source_bounds: None,
+    };
+    let prepare = |demand, budget| {
+        EffectCaptureTile::prepare_stack_input(
+            bounds,
+            [64; 2],
+            &[],
+            parameters,
+            1024,
+            budget,
+            demand,
+        )
+    };
+    assert_eq!(prepare(CaptureDemand::default(), 800), Ok(None));
+    let demand = CaptureDemand {
+        defer_glow_blur: false,
+        required_by_parent: true,
+        original_by_parent: true,
+        isolate: false,
+        padding_pixels: 0,
+    };
+    // Eight by eight pixels plus a one-pixel coverage fringe, with one painted
+    // and one original RGBA8 image. No filter scratch or invented attachment.
+    let tile = prepare(demand, 800).unwrap().unwrap();
+    assert_eq!(tile.size, [10; 2]);
+    assert_eq!(tile.capture_and_scratch_bytes, 800);
+    assert_eq!(
+        prepare(demand, 799),
+        Err(EffectPrepareError::ScratchBudgetExceeded)
+    );
+}
+
+#[test]
+fn zoomed_glow_capture_keeps_only_visible_pixels_and_full_kernel_padding() {
+    let bounds = EffectPixelBounds {
+        min: [-5000.0; 2],
+        max: [5000.0; 2],
+    };
+    let parameters = parameters(3.0);
+    let viewport = [200, 100];
+    let budget = 1_000_000;
+    let tile = EffectCaptureTile::prepare(bounds, viewport, parameters, 1024, budget)
+        .unwrap()
+        .unwrap();
+    assert_eq!(tile.visible_size, viewport);
+    assert_eq!(tile.support_radius, 9);
+    assert_eq!(tile.origin, [-12, -12]);
+    assert_eq!(tile.size, [223, 123]);
+}
+
+#[test]
 fn uniform_layout_and_complete_finite_kernel_are_normalized() {
-    assert_eq!(size_of::<GlowUniform>(), 1072);
+    assert_eq!(size_of::<GlowUniform>(), 1088);
     assert_eq!(std::mem::offset_of!(GlowUniform, tint), 16);
     assert_eq!(std::mem::offset_of!(GlowUniform, control), 32);
-    assert_eq!(std::mem::offset_of!(GlowUniform, weights), 48);
+    assert_eq!(std::mem::offset_of!(GlowUniform, source_bounds), 48);
+    assert_eq!(std::mem::offset_of!(GlowUniform, weights), 64);
     for sigma in [f64::MIN_POSITIVE, 0.01, 0.5, 1.0, 3.25, 12.0, 64.0] {
         let (_, uniform) = GlowUniform::prepare(parameters(sigma), [17, 13], None).unwrap();
         assert_eq!(uniform.radius, (3.0 * sigma).ceil() as u32);
@@ -359,10 +424,13 @@ fn ordered_capture_uses_cumulative_support_and_one_shared_source_budget() {
             .into(),
     ];
     let values = super::super::EffectStackParameters {
+        shader: None,
+        working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 100,
         world_view_height: 10.0,
         scope_opacity: 0.5,
         scratch_budget_bytes: 1_000_000,
+        source_bounds: None,
     };
     let bounds = EffectPixelBounds {
         min: [-16.0, 50.0],
@@ -399,7 +467,7 @@ fn ordered_capture_uses_cumulative_support_and_one_shared_source_budget() {
         Err(EffectPrepareError::ScratchBudgetExceeded)
     );
     let invalid_suffix = [
-        definitions[0],
+        definitions[0].clone(),
         noon_core::Blur::new(EffectUpdate::default().radius(Pixels(65.0)))
             .unwrap()
             .into(),
@@ -419,7 +487,9 @@ fn ordered_capture_uses_cumulative_support_and_one_shared_source_budget() {
         EffectCaptureTile::prepare_stack(
             bounds,
             [100, 100],
-            &[definitions[0]; noon_core::MAX_EFFECT_STACK_LEN + 1],
+            &std::array::from_fn::<_, { noon_core::MAX_EFFECT_STACK_LEN + 1 }, _>(|_| definitions
+                [0]
+            .clone()),
             values,
             4096,
             1_000_000
@@ -436,22 +506,31 @@ fn silhouette_suffix_expands_original_geometry_instead_of_the_painted_prefix() {
     let b = EffectUpdate::default()
         .radius(Pixels(1.0))
         .source(GlowSource::Silhouette)
-        .apply_to(a)
+        .apply_to(a.clone())
         .unwrap();
     let bounds = EffectPixelBounds {
         min: [20.0, 20.0],
         max: [24.0, 24.0],
     };
     let values = super::super::EffectStackParameters {
+        shader: None,
+        working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 100,
         world_view_height: 10.0,
         scope_opacity: 1.0,
         scratch_budget_bytes: 1_000_000,
+        source_bounds: None,
     };
-    let silhouette =
-        EffectCaptureTile::prepare_stack(bounds, [100, 100], &[a, b], values, 4096, 1_000_000)
-            .unwrap()
-            .unwrap();
+    let silhouette = EffectCaptureTile::prepare_stack(
+        bounds,
+        [100, 100],
+        &[a.clone(), b.clone()],
+        values,
+        4096,
+        1_000_000,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(silhouette.origin, [10, 10]);
     assert_eq!(silhouette.size, [24, 24]);
     assert_eq!(

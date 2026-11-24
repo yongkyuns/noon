@@ -3,13 +3,12 @@
 //! source is projected into the session's current unkeyed native pointer signals.
 //! This is not a picking/capture owner or a historical presented-frame cache.
 
+use noon::integration::scene_execution::ExecutionSession;
 use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameError,
     PointerFrameSnapshot, PointerFrameView,
 };
-use noon::{
-    ExecutionSession, ExecutionSessionInputError, LiveContinuation, LiveProgram, LiveProgramError,
-};
+use noon::{ExecutionSessionInputError, LiveContinuation, LiveProgram, LiveProgramError};
 
 pub(crate) fn recoverable_frame_error(error: &PointerFrameError) -> bool {
     matches!(
@@ -24,26 +23,83 @@ pub(crate) fn recoverable_frame_error(error: &PointerFrameError) -> bool {
     )
 }
 
-/// Only the operations needed by browser pointer normalization. A live program
-/// preserves its continuation barriers instead of exposing mutable session state.
+/// Distinguish ordinary input, observation, and already-captured gestures.
+/// Each execution owner retains its own admission rules for these operations.
+#[derive(Clone, Copy)]
+pub(crate) enum PointerFrameValidation {
+    Input,
+    Presentation,
+    CapturedGesture,
+}
+
+/// Read-only frame operations are capabilities, not an unrestricted session
+/// reference: a historical reader must retain its own readiness boundaries.
 pub(crate) trait BrowserPointerTarget {
-    fn session(&self) -> &ExecutionSession;
+    fn cancel_spatial_pointer_gestures(&mut self) {}
+    fn cancel_planar_viewer_pointer(&mut self) {}
+    fn submit_planar_viewer_pointer(
+        &mut self,
+        _pointer: NativePointerId,
+        _kind: noon::PlanarViewerPointer,
+        _displayed: Option<&noon::PlanarPickFrame>,
+    ) {
+    }
+    fn uses_planar_viewer_input(&self) -> bool {
+        self.default_viewer_selection() && !self.has_native_pointer_subscribers()
+    }
+    fn default_viewer_selection(&self) -> bool {
+        false
+    }
+    fn has_native_pointer_subscribers(&self) -> bool;
+    fn translation_drag_active(&self) -> bool;
+    fn inspection_camera(&self) -> Result<noon_core::Camera2DState, PointerFrameError>;
     fn capture_pointer_frame(
         &mut self,
         view: PointerFrameView,
     ) -> Result<PointerFrameSnapshot, PointerFrameError>;
+    fn validate_pointer_frame(
+        &self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        validation: PointerFrameValidation,
+    ) -> Result<(), PointerFrameError>;
+    fn pointer_input_token_for_frame(
+        &self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+    ) -> Result<NativePointerInputToken, PointerFrameError>;
+    fn inspection_pointer_view(
+        &self,
+        revision: u64,
+        viewport: Vec2,
+    ) -> Result<PointerFrameView, PointerFrameError> {
+        PointerFrameView::new(revision, viewport, self.inspection_camera()?)
+    }
+    /// Only targets that can prove point compatibility retain stale authored receipts.
+    fn supports_compatible_pointer_receipts(&self) -> bool {
+        false
+    }
+    fn pointer_frame_needs_refresh(&self, _frame: &PointerFrameSnapshot) -> bool {
+        false
+    }
     fn validate_pointer_position(
         &mut self,
         frame: &PointerFrameSnapshot,
         view: PointerFrameView,
-        surface: Vec2,
-    ) -> Result<(), BrowserPointerAdmissionError>;
+        _surface: Vec2,
+    ) -> Result<(), BrowserPointerAdmissionError> {
+        self.validate_pointer_frame(frame, view, PointerFrameValidation::Input)?;
+        Ok(())
+    }
     fn pointer_frame_token(
         &mut self,
         frame: &PointerFrameSnapshot,
         view: PointerFrameView,
-        surface: Vec2,
-    ) -> Result<NativePointerInputToken, BrowserPointerAdmissionError>;
+        _surface: Vec2,
+    ) -> Result<NativePointerInputToken, BrowserPointerAdmissionError> {
+        self.pointer_input_token_for_frame(frame, view)
+            .map_err(Into::into)
+    }
     fn observe_pointer_frame(
         &mut self,
         frame: &PointerFrameSnapshot,
@@ -199,14 +255,46 @@ pub(crate) fn cancel_browser_pointer_input(
 }
 
 impl BrowserPointerTarget for noon::SceneExecution {
-    fn session(&self) -> &ExecutionSession {
-        self.session()
+    fn has_native_pointer_subscribers(&self) -> bool {
+        ExecutionSession::has_native_pointer_subscribers(self.session())
+    }
+    fn translation_drag_active(&self) -> bool {
+        ExecutionSession::translation_drag_active(self.session())
+    }
+    fn inspection_camera(&self) -> Result<noon_core::Camera2DState, PointerFrameError> {
+        ExecutionSession::inspection_camera(self.session())
+    }
+    fn validate_pointer_frame(
+        &self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        validation: PointerFrameValidation,
+    ) -> Result<(), PointerFrameError> {
+        match validation {
+            PointerFrameValidation::Input => frame.validate_current(self.session(), view),
+            PointerFrameValidation::Presentation => {
+                frame.validate_presentation(self.session(), view)
+            }
+            PointerFrameValidation::CapturedGesture => {
+                frame.validate_captured_gesture(self.session(), view)
+            }
+        }
+    }
+    fn pointer_input_token_for_frame(
+        &self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+    ) -> Result<NativePointerInputToken, PointerFrameError> {
+        frame.input_token(self.session(), view)
     }
     fn capture_pointer_frame(
         &mut self,
         view: PointerFrameView,
     ) -> Result<PointerFrameSnapshot, PointerFrameError> {
         self.session_mut().capture_pointer_frame(view)
+    }
+    fn pointer_frame_needs_refresh(&self, frame: &PointerFrameSnapshot) -> bool {
+        frame.needs_input_refresh(self.session())
     }
     fn validate_pointer_position(
         &mut self,
@@ -275,14 +363,50 @@ impl<C: LiveContinuation> BrowserPointerTarget for LiveProgram<C>
 where
     C::Error: std::fmt::Display,
 {
-    fn session(&self) -> &ExecutionSession {
-        self.session()
+    fn has_native_pointer_subscribers(&self) -> bool {
+        (self.session()).has_native_pointer_subscribers()
+    }
+    fn translation_drag_active(&self) -> bool {
+        (self.session()).translation_drag_active()
+    }
+    fn inspection_camera(
+        &self,
+    ) -> Result<noon_core::Camera2DState, noon::integration::PointerFrameError> {
+        (self.session()).inspection_camera()
+    }
+    fn validate_pointer_frame(
+        &self,
+        frame: &noon::integration::PointerFrameSnapshot,
+        view: noon::integration::PointerFrameView,
+        validation: crate::browser_pointer_input::PointerFrameValidation,
+    ) -> Result<(), noon::integration::PointerFrameError> {
+        match validation {
+            crate::browser_pointer_input::PointerFrameValidation::Input => {
+                frame.validate_current(self.session(), view)
+            }
+            crate::browser_pointer_input::PointerFrameValidation::Presentation => {
+                frame.validate_presentation(self.session(), view)
+            }
+            crate::browser_pointer_input::PointerFrameValidation::CapturedGesture => {
+                frame.validate_captured_gesture(self.session(), view)
+            }
+        }
+    }
+    fn pointer_input_token_for_frame(
+        &self,
+        frame: &noon::integration::PointerFrameSnapshot,
+        view: noon::integration::PointerFrameView,
+    ) -> Result<NativePointerInputToken, noon::integration::PointerFrameError> {
+        frame.input_token(self.session(), view)
     }
     fn capture_pointer_frame(
         &mut self,
         view: PointerFrameView,
     ) -> Result<PointerFrameSnapshot, PointerFrameError> {
         self.capture_pointer_frame(view)
+    }
+    fn pointer_frame_needs_refresh(&self, frame: &PointerFrameSnapshot) -> bool {
+        frame.needs_input_refresh(self.session())
     }
     fn validate_pointer_position(
         &mut self,
@@ -340,7 +464,7 @@ where
 }
 use noon_core::{
     NativeInputModifiers, NativePointerCancellation, NativePointerId, NativePointerInput,
-    NativePointerInputKind, Vec2,
+    NativePointerInputKind, NativePointerPosition, Vec2,
 };
 use serde::Deserialize;
 
@@ -428,6 +552,21 @@ impl BrowserPointerInput {
             BrowserPointerKind::FocusLost => Some(NativePointerCancellation::FocusLost),
             BrowserPointerKind::CaptureLost => Some(NativePointerCancellation::CaptureLost),
             _ => None,
+        }
+    }
+
+    pub(crate) fn positioned_kind(self, position: NativePointerPosition) -> NativePointerInputKind {
+        match self.kind {
+            BrowserPointerKind::Move => NativePointerInputKind::Move(position),
+            BrowserPointerKind::Press => NativePointerInputKind::Press {
+                position,
+                button: self.button.expect("validated edge"),
+            },
+            BrowserPointerKind::Release => NativePointerInputKind::Release {
+                position,
+                button: self.button.expect("validated edge"),
+            },
+            _ => unreachable!("position-free cancellation handled separately"),
         }
     }
 
@@ -568,7 +707,6 @@ fn submit_pointer(
         // All hosts validate the displayed publication before configuration;
         // resetting held signals may itself change execution.
         let camera = target
-            .session()
             .inspection_camera()
             .map_err(BrowserPointerAdmissionError::Frame)?;
         if let Some((frame, admission)) = presented {
@@ -577,9 +715,11 @@ fn submit_pointer(
                 PositionalAdmission::Presented => {
                     target.validate_pointer_position(frame, view, surface)?;
                 }
-                PositionalAdmission::CapturedGesture => {
-                    frame.validate_captured_gesture(target.session(), view)?
-                }
+                PositionalAdmission::CapturedGesture => target.validate_pointer_frame(
+                    frame,
+                    view,
+                    PointerFrameValidation::CapturedGesture,
+                )?,
             }
             frame.position(surface)?;
         } else {
@@ -606,7 +746,6 @@ fn submit_pointer(
     } else {
         let (surface, viewport) = coordinates.expect("validated positional record");
         let camera = target
-            .session()
             .inspection_camera()
             .map_err(BrowserPointerAdmissionError::Frame)?;
         let position = if let Some((frame, admission)) = presented {
@@ -620,25 +759,18 @@ fn submit_pointer(
                     token = target.pointer_frame_token(frame, view, surface)?;
                 }
                 PositionalAdmission::CapturedGesture => {
-                    frame.validate_captured_gesture(target.session(), view)?;
+                    target.validate_pointer_frame(
+                        frame,
+                        view,
+                        PointerFrameValidation::CapturedGesture,
+                    )?;
                 }
             }
             frame.position(surface)?
         } else {
             return Err("positional browser input requires a presented frame".into());
         };
-        match wire.kind {
-            BrowserPointerKind::Move => NativePointerInputKind::Move(position),
-            BrowserPointerKind::Press => NativePointerInputKind::Press {
-                position,
-                button: wire.button.expect("validated edge"),
-            },
-            BrowserPointerKind::Release => NativePointerInputKind::Release {
-                position,
-                button: wire.button.expect("validated edge"),
-            },
-            _ => unreachable!("cancellation handled above"),
-        }
+        wire.positioned_kind(position)
     };
     let input = NativePointerInput::new(
         sequence,
@@ -660,8 +792,8 @@ fn submit_pointer(
     // displayed publication, update hover against that same visible frame.
     // Otherwise the next successful presentation observes the new geometry.
     if let Some((frame, _)) = presented {
-        if frame
-            .validate_presentation(target.session(), frame.view())
+        if target
+            .validate_pointer_frame(frame, frame.view(), PointerFrameValidation::Presentation)
             .is_ok()
         {
             target.observe_pointer_frame(frame)?;
@@ -697,3 +829,6 @@ impl BrowserPointerKind {
         }
     }
 }
+
+#[cfg(feature = "prepared-prefix")]
+mod prefix;

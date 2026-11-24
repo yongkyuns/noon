@@ -7,9 +7,11 @@ import {
   galleryCaseQueue,
   galleryEntriesFromManifests,
   galleryManifestPaths,
+  galleryPoolForProfileGate,
   galleryShardFromEnvironment,
   shardGalleryEntries,
 } from "./gallery-shards.mjs";
+import { SHOWCASE_PROFILE_EXPECTATIONS } from "./playground-profile-expectations.mjs";
 
 const manifests = await Promise.all(galleryManifestPaths.map(async path =>
   JSON.parse(await readFile(new URL("../web/" + path, import.meta.url), "utf8"))
@@ -33,6 +35,17 @@ const requiredPortableControls = [
 ];
 const caseKey = ({ entry, noJspi }) => entry.id + ":" + (noJspi ? "no-jspi" : "normal");
 
+test("cross-browser gallery qualifies optimized WASM without reducing portable or shader coverage", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/playground-cross-browser.yml", import.meta.url), "utf8");
+  assert.match(workflow, /NOON_WASM_PROFILE:\s*["']?release/);
+  assert.match(workflow, /NOON_WASM_SKIP_OPT:\s*["']?0/);
+  assert.match(workflow, /NOON_RENDERER_SMOKE:\s*["']?1/);
+  assert.match(workflow, /uses:\s*\.\/\.github\/actions\/install-wasm-opt/);
+  assert.match(workflow, /node scripts\/playground-gallery-runtime-smoke\.mjs/);
+  assert.match(workflow, /Qualify the full gallery shard, including portable no-JSPI controls/);
+  assert.match(workflow, /web\/pkg/);
+});
+
 test("every current gallery entry and no-JSPI control is covered exactly once per browser", () => {
   assert.deepEqual([...affected], requiredPortableControls, "portable coverage policy was changed");
   for (const browser of ["chromium", "firefox", "webkit"]) {
@@ -48,6 +61,26 @@ test("every current gallery entry and no-JSPI control is covered exactly once pe
         browser + ": portable control mismatch for " + id);
     }
   }
+});
+
+test("strict showcase coverage includes every catalog entry in the shard pool exactly once", () => {
+  const strictEntries = galleryPoolForProfileGate(entries, manifests[3].entries, "strict");
+  const showcaseIds = new Set(SHOWCASE_PROFILE_EXPECTATIONS.map(row => row.id));
+  for (const browser of ["chromium", "firefox", "webkit"]) {
+    const shards = Array.from({ length: shardCount }, (_, index) =>
+      shardGalleryEntries(strictEntries, index, shardCount));
+    const actual = shards.flatMap(shard => shard.filter(entry => showcaseIds.has(entry.id)))
+      .map(entry => entry.id).sort();
+    assert.deepEqual(actual, [...showcaseIds].sort(), browser + ": strict showcase coverage omitted or duplicated an entry");
+  }
+});
+
+test("profile-gate pool preserves disabled runs and allows an explicitly focused baseline", () => {
+  assert.deepEqual(galleryPoolForProfileGate(entries, manifests[3].entries, "disabled"), entries);
+  const focused = galleryPoolForProfileGate(entries, manifests[3].entries, "baseline", ["showcase-first-scene"]);
+  assert.deepEqual(focused.map(entry => entry.id), ["showcase-first-scene"]);
+  assert.throws(() => galleryPoolForProfileGate(entries, manifests[3].entries, "strict", ["showcase-first-scene"]),
+    /complete unfiltered/);
 });
 
 test("shard assignment is stable regardless of manifest order", () => {

@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use noon_core::{
     continuous_time_map_interval, resolve_track_timing, validate_style, validate_track_definition,
-    validate_transform, ObjectContentRef, ObjectId, Property, TrackDefinition, TrackId,
-    TrackValues,
+    validate_transform, ObjectContentRef, ObjectId, Property, SemanticClickIndicate,
+    TrackDefinition, TrackId, TrackValues,
 };
 
 use crate::{
@@ -92,6 +92,8 @@ fn effective_track_interval(
 enum ObjectOverlay {
     Present {
         effects: Option<std::sync::Arc<crate::CompiledEffectStack>>,
+        click_indicate: Option<SemanticClickIndicate>,
+        click_indicate_target: bool,
         index: u32,
         is_text: bool,
         continuous_fill: bool,
@@ -108,6 +110,7 @@ enum ObjectOverlay {
 struct PreflightOverlay {
     objects: BTreeMap<ObjectId, ObjectOverlay>,
     paint_definitions: BTreeMap<u32, bool>,
+    view_color_profiles: BTreeMap<u32, Option<noon_core::ViewColorProfile>>,
     tracks: BTreeMap<TrackId, Option<TrackShadow>>,
     channels: BTreeMap<CompiledChannelKey, BTreeSet<TrackId>>,
     seen_objects: BTreeSet<ObjectId>,
@@ -121,6 +124,7 @@ impl PreflightOverlay {
         Self {
             objects: BTreeMap::new(),
             paint_definitions: BTreeMap::new(),
+            view_color_profiles: BTreeMap::new(),
             tracks: BTreeMap::new(),
             channels: BTreeMap::new(),
             seen_objects: BTreeSet::new(),
@@ -191,6 +195,13 @@ impl PreflightOverlay {
                 id,
                 ObjectOverlay::Present {
                     effects,
+                    click_indicate: scene.objects[index as usize]
+                        .click_indicate
+                        .as_deref()
+                        .copied(),
+                    click_indicate_target: crate::is_click_indicate_target(
+                        &scene.objects[index as usize].content,
+                    ),
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
                     continuous_fill: crate::continuous_fill_content_supported(
@@ -237,6 +248,13 @@ impl PreflightOverlay {
                 id,
                 ObjectOverlay::Present {
                     effects: scene.objects[index as usize].effects.clone(),
+                    click_indicate: scene.objects[index as usize]
+                        .click_indicate
+                        .as_deref()
+                        .copied(),
+                    click_indicate_target: crate::is_click_indicate_target(
+                        &scene.objects[index as usize].content,
+                    ),
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
                     continuous_fill: crate::continuous_fill_content_supported(
@@ -257,6 +275,58 @@ impl PreflightOverlay {
                 self.seen_objects.insert(id);
                 Some(scene.objects[index as usize].text().is_some())
             }
+        }
+    }
+
+    fn click_indicate(
+        &mut self,
+        scene: &CompiledScene,
+        id: ObjectId,
+    ) -> Option<(bool, Option<SemanticClickIndicate>)> {
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present {
+                click_indicate,
+                click_indicate_target,
+                ..
+            }) => Some((*click_indicate_target, *click_indicate)),
+            Some(ObjectOverlay::Removed { .. }) => None,
+            None => {
+                let index = scene.object_indices.get(&id).copied()?;
+                self.seen_objects.insert(id);
+                let row = &scene.objects[index as usize];
+                Some((
+                    crate::is_click_indicate_target(&row.content),
+                    row.click_indicate.as_deref().copied(),
+                ))
+            }
+        }
+    }
+
+    fn set_click_indicate(
+        &mut self,
+        scene: &CompiledScene,
+        id: ObjectId,
+        binding: Option<SemanticClickIndicate>,
+    ) {
+        if let Some(ObjectOverlay::Present { click_indicate, .. }) = self.objects.get_mut(&id) {
+            *click_indicate = binding;
+            return;
+        }
+        if let Some(index) = scene.object_indices.get(&id).copied() {
+            self.seen_objects.insert(id);
+            let row = &scene.objects[index as usize];
+            self.objects.insert(
+                id,
+                ObjectOverlay::Present {
+                    effects: row.effects.clone(),
+                    continuous_fill: crate::continuous_fill_content_supported(&row.content),
+                    click_indicate: binding,
+                    click_indicate_target: crate::is_click_indicate_target(&row.content),
+                    index,
+                    is_text: row.text().is_some(),
+                    spatial: row.spatial.clone(),
+                },
+            );
         }
     }
 
@@ -439,10 +509,25 @@ pub(super) fn preflight_transaction_with_resources(
                 overlay
                     .paint_definitions
                     .insert(index, object.fill_paint.is_some());
+                // Ordinary creations need no view-metadata shadow allocation.
+                // An explicit None still masks a former camera at a reused slot.
+                if object.view_color_profile.is_some()
+                    || scene
+                        .objects
+                        .get(index as usize)
+                        .is_some_and(|row| row.view_color_profile.is_some())
+                    || overlay.view_color_profiles.contains_key(&index)
+                {
+                    overlay
+                        .view_color_profiles
+                        .insert(index, object.view_color_profile);
+                }
                 overlay.objects.insert(
                     object.id,
                     ObjectOverlay::Present {
                         effects: object.effects.clone(),
+                        click_indicate: object.click_indicate.as_deref().copied(),
+                        click_indicate_target: crate::is_click_indicate_target(&object.content),
                         index,
                         is_text: object.text().is_some(),
                         continuous_fill: crate::continuous_fill_content_supported(&object.content),
@@ -479,6 +564,14 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, *object)
                     .ok_or(CompilePatchError::UnknownObject(*object))?;
                 validate_execution_content(*object, content, *text_bounds)?;
+                let (_, click_indicate) = overlay
+                    .click_indicate(scene, *object)
+                    .expect("validated live object");
+                crate::validate_click_indicate_binding(
+                    *object,
+                    crate::is_click_indicate_target(content),
+                    click_indicate.as_ref(),
+                )?;
                 validate_execution_content_resource(
                     &scene.resources,
                     Some(additions),
@@ -510,6 +603,8 @@ pub(super) fn preflight_transaction_with_resources(
                     *object,
                     ObjectOverlay::Present {
                         effects,
+                        click_indicate,
+                        click_indicate_target: crate::is_click_indicate_target(content),
                         index,
                         is_text: matches!(content, ObjectContentRef::Text(_)),
                         continuous_fill: crate::continuous_fill_content_supported(content),
@@ -610,10 +705,19 @@ pub(super) fn preflight_transaction_with_resources(
                 }
                 overlay.set_spatial(scene, *object, spatial.clone());
             }
-            ExecutionPatch::SetDrawEnabled { object, .. } => {
+            ExecutionPatch::SetDrawEnabled { object, .. }
+            | ExecutionPatch::SetViewerGroup { object, .. }
+            | ExecutionPatch::SetViewerDraggable { object, .. } => {
                 if overlay.object_index(scene, *object).is_none() {
                     return Err(CompilePatchError::UnknownObject(*object));
                 }
+            }
+            ExecutionPatch::SetClickIndicate { object, binding } => {
+                let (analytic_target, _) = overlay
+                    .click_indicate(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                crate::validate_click_indicate_binding(*object, analytic_target, binding.as_ref())?;
+                overlay.set_click_indicate(scene, *object, *binding);
             }
             ExecutionPatch::SetZIndex { object, value } => {
                 if overlay.object_index(scene, *object).is_none() {
@@ -648,6 +752,19 @@ pub(super) fn preflight_transaction_with_resources(
                     expected,
                     effects.as_deref(),
                 )?;
+                for property in [Property::Transform, Property::Morph] {
+                    if let Err(error) =
+                        crate::validate_shader_source_track(property, effects.as_deref())
+                    {
+                        if overlay
+                            .channel(scene, CompiledChannelKey::new(index, property))
+                            .iter()
+                            .any(|track| !track.reconciled)
+                        {
+                            return Err(CompilePatchError::InvalidTrack(error));
+                        }
+                    }
+                }
                 // Respect staged adds/replacements as well as base tracks. A
                 // retired generation cannot retain drivers or block its successor.
                 for attachment in expected {
@@ -657,7 +774,11 @@ pub(super) fn preflight_transaction_with_resources(
                     {
                         continue;
                     }
-                    for property in crate::CompiledEffect::PARAMETER_PROPERTIES {
+                    let retired = previous
+                        .as_ref()
+                        .and_then(|stack| stack.get(*attachment))
+                        .expect("validated previous attachment");
+                    for property in retired.parameter_properties() {
                         for track in overlay.channel(
                             scene,
                             CompiledChannelKey::effect(index, property, *attachment),
@@ -667,6 +788,28 @@ pub(super) fn preflight_transaction_with_resources(
                     }
                 }
                 overlay.set_effects(scene, *object, effects.clone());
+            }
+            ExecutionPatch::SetViewColorProfile { object, profile } => {
+                let index = overlay
+                    .object_index(scene, *object)
+                    .ok_or(CompilePatchError::UnknownObject(*object))?;
+                let current = overlay
+                    .view_color_profiles
+                    .get(&index)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        scene
+                            .objects
+                            .get(index as usize)
+                            .and_then(|row| row.view_color_profile)
+                    });
+                if current.is_none() {
+                    return Err(CompilePatchError::InvalidObjectState {
+                        object: *object,
+                        field: noon_core::ObjectStateField::ViewColorProfile,
+                    });
+                }
+                overlay.view_color_profiles.insert(index, Some(*profile));
             }
             ExecutionPatch::SetStyle {
                 object,
@@ -762,6 +905,13 @@ pub(super) fn preflight_transaction_with_resources(
                     Some(additions),
                     &track.values,
                 )?;
+                if matches!(track.property, Property::Transform | Property::Morph) {
+                    crate::validate_shader_source_track(
+                        track.property,
+                        overlay.effects(scene, track.object).as_deref(),
+                    )
+                    .map_err(CompilePatchError::InvalidTrack)?;
+                }
                 if matches!(track.values, TrackValues::Effect { .. }) {
                     crate::validate_effect_track_attachment(
                         track,
@@ -812,6 +962,18 @@ pub(super) fn preflight_transaction_with_resources(
                     .object_index(scene, track.object)
                     .ok_or(CompilePatchError::UnknownObject(track.object))?;
                 validate_track(track)?;
+                crate::validate_execution_paint_track_resources(
+                    &scene.resources,
+                    Some(additions),
+                    &track.values,
+                )?;
+                if matches!(track.property, Property::Transform | Property::Morph) {
+                    crate::validate_shader_source_track(
+                        track.property,
+                        overlay.effects(scene, track.object).as_deref(),
+                    )
+                    .map_err(CompilePatchError::InvalidTrack)?;
+                }
                 if matches!(track.values, TrackValues::Effect { .. }) {
                     crate::validate_effect_track_attachment(
                         track,
@@ -884,6 +1046,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::Fill
                             | Property::Stroke
                             | Property::StrokeWidth
+                            | Property::Emission
                             | Property::Opacity
                             | Property::Appearance
                             | Property::Reveal
@@ -894,7 +1057,13 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::EffectColor
                             | Property::EffectRadius
                             | Property::EffectIntensity
+                            | Property::EffectThreshold
                             | Property::EffectOffset
+                            | Property::EffectProgress
+                            | Property::EffectSoftness
+                            | Property::EffectSize
+                            | Property::EffectShader(_)
+                            | Property::EffectSeed
                     )
                 {
                     return Err(CompilePatchError::UnsupportedTrackReconciliation(*track));
@@ -919,6 +1088,7 @@ pub(super) fn preflight_transaction_with_resources(
     }
 
     Ok(CompiledTransactionPreflightStats {
+        composed: scene.preflight_composed_mutations(transaction.mutations())?,
         objects_indexed: overlay.seen_objects.len(),
         tracks_indexed: overlay.seen_tracks.len(),
         track_metadata_visits: overlay.track_metadata_visits,

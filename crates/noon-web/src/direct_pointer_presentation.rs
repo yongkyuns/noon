@@ -8,7 +8,6 @@ use crate::browser_pointer_input::{
 use noon::integration::{
     NativePointerInputPublication, PointerFrameError, PointerFrameSnapshot, PointerFrameView,
 };
-use noon::ExecutionSession;
 use noon_core::{Camera2DState, Vec2};
 
 #[derive(Default)]
@@ -71,7 +70,7 @@ impl DirectPointerPresentation {
         // A registered DOM view alone is not input interest. The explicit Rust
         // input API retains its callback barrier; a dormant platform collector
         // simply retires its unbound source without creating publication work.
-        if binding.is_none() && !target.session().has_native_pointer_subscribers() {
+        if binding.is_none() && !target.has_native_pointer_subscribers() {
             return Ok(None);
         }
         if let Some(frame) = self.presented.as_ref() {
@@ -97,13 +96,17 @@ impl DirectPointerPresentation {
     /// normal host wake when pointer input is interested; a registered but
     /// dormant view does not need receipt-only redraws. Callback barriers are
     /// not display races.
-    pub(crate) fn needs_refresh(&self, session: &ExecutionSession) -> bool {
+    pub(crate) fn needs_refresh(&self, target: &(impl BrowserPointerTarget + ?Sized)) -> bool {
         self.refresh_pending
-            || (session.has_native_pointer_subscribers()
+            || (target.has_native_pointer_subscribers()
                 && self.presented.as_ref().is_some_and(|frame| {
-                    frame.needs_input_refresh(session)
-                        || frame
-                            .validate_current(session, frame.view())
+                    target.pointer_frame_needs_refresh(frame)
+                        || target
+                            .validate_pointer_frame(
+                                frame,
+                                frame.view(),
+                                crate::browser_pointer_input::PointerFrameValidation::Input,
+                            )
                             .is_err_and(|error| recoverable_frame_error(&error))
                 }))
     }

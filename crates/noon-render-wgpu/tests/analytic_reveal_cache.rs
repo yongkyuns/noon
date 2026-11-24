@@ -49,12 +49,12 @@ fn active_analytic_reveal_meshes_survive_cache_pressure_on_full_rebuild() {
     let mut preparer = FramePreparer::new();
     preparer.set_path_mesh_cache_limit(1);
 
-    let cold = preparer.prepare(&frame);
+    let cold = preparer.prepare(&frame).unwrap();
     assert_eq!(cold.stats.geometry_cache_misses, 3);
     assert_eq!(cold.paths.len(), 3);
     assert_eq!(preparer.cached_path_mesh_count(), 3);
 
-    let warm = preparer.prepare(&frame);
+    let warm = preparer.prepare(&frame).unwrap();
     assert_eq!(warm.paths.len(), 3);
     assert_eq!(warm.stats.geometry_cache_misses, 0);
     assert_eq!(preparer.cached_path_mesh_count(), 3);

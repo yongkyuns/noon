@@ -327,6 +327,46 @@ mod tests {
     }
 
     #[test]
+    fn native_latex_group_keeps_the_term_and_resource_after_entering() {
+        use noon::{LiveProgramStatus, RustHostCallbackTable, YELLOW};
+
+        let Some(mut backend) = system_backend_from_environment() else {
+            return;
+        };
+        let mut program = noon::example_scenes::latex_text::group_program(&mut backend).unwrap();
+        let mut callbacks = RustHostCallbackTable::new();
+        let mut admitted_term = None;
+        for end in [0.5, 1.25, 1.5, 2.0] {
+            assert!(matches!(
+                program.resume().unwrap(),
+                LiveProgramStatus::Awaiting(_)
+            ));
+            if let LiveProgramStatus::PublicationPending(expected) =
+                program.drive_to(&mut callbacks, end).unwrap()
+            {
+                let publication = program.take_renderer_publication().context();
+                assert_eq!(expected, publication);
+                program.admit_publication(publication).unwrap();
+            }
+            let objects = &program.session().frame().objects;
+            if end == 0.5 {
+                assert_eq!(objects.len(), 1);
+                continue;
+            }
+            assert_eq!(objects.len(), 7);
+            let term = &objects[2];
+            let identity = admitted_term.get_or_insert_with(|| (term.id, term.content.clone()));
+            assert_eq!(identity.0, term.id);
+            assert_eq!(identity.1, term.content);
+            assert!((term.transform.translation.y - 0.25).abs() < 1e-5);
+            if end == 2.0 {
+                assert_eq!(term.style.fill, Some(YELLOW));
+                assert_eq!(objects[3].style.fill, Some(noon::WHITE));
+            }
+        }
+    }
+
+    #[test]
     fn native_system_latex_compiles_and_normalizes_real_dvi_when_assets_are_supplied() {
         let Some(mut backend) = system_backend_from_environment() else {
             eprintln!(
@@ -369,10 +409,10 @@ mod tests {
         assert!((parts.current_font_size().unwrap() - 72.0).abs() < 1e-5);
 
         let scene = noon::Scene::new();
-        let mut execution = scene.execution_session().unwrap();
-        let mut live = scene.live(&mut execution);
-        let live_parts = live
-            .create_math_tex_parts(
+        let mut execution = scene.into_execution().unwrap();
+        let live_parts = execution
+            .scene_mut()
+            .math_tex_parts(
                 noon::MathTex::new(r"x^2+\frac{1}{2}")
                     .unwrap()
                     .with_isolated_substrings(["x", r"\frac{1}{2}"])
@@ -382,12 +422,30 @@ mod tests {
             )
             .unwrap();
         assert_eq!(live_parts.current_members().unwrap().len(), 3);
-        live.add_many(&[live_parts.family().into()]).unwrap();
-        assert!((live.latex_font_size(&live_parts).unwrap() - 36.0).abs() < 1e-6);
+        execution
+            .scene_mut()
+            .add_many(&[live_parts.family().into()])
+            .unwrap();
+        assert!(
+            (execution
+                .scene()
+                .effective_latex_font_size(&live_parts)
+                .unwrap()
+                - 36.0)
+                .abs()
+                < 1e-6
+        );
 
-        let target = live.copy_family(live_parts.family()).unwrap();
-        live.scale_family(target.root(), 2.0, 2.0).unwrap();
-        let segment = live
+        let target = execution
+            .scene_mut()
+            .copy_family(live_parts.family())
+            .unwrap();
+        execution
+            .scene_mut()
+            .scale_family(target.root(), 2.0, 2.0)
+            .unwrap();
+        let segment = execution
+            .live()
             .declare_and_activate_family_transform_to(
                 live_parts.family(),
                 target.root(),
@@ -396,31 +454,61 @@ mod tests {
                     .rate_func(noon::RateFunction::Linear),
             )
             .unwrap();
-        live.advance_segment_to(segment, segment.start_time() + 0.5)
+        execution
+            .live()
+            .advance_segment_to(segment, segment.start_time() + 0.5)
             .unwrap();
-        assert!((live.latex_font_size(&live_parts).unwrap() - 54.0).abs() < 1e-4);
-        live.advance_segment_to(segment, segment.end_time())
+        assert!(
+            (execution
+                .scene()
+                .effective_latex_font_size(&live_parts)
+                .unwrap()
+                - 54.0)
+                .abs()
+                < 1e-4
+        );
+        execution
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
+        execution.live().complete_segment(segment).unwrap();
 
-        let before_rotation = live.effective_family_layout(live_parts.family()).unwrap();
-        live.rotate_family(
-            live_parts.family(),
-            std::f64::consts::FRAC_PI_2,
-            noon::ManimRotationPivot::Center,
-        )
-        .unwrap();
-        let rotated_size = live.latex_font_size(&live_parts).unwrap();
+        let before_rotation = execution
+            .scene()
+            .effective_family_layout(live_parts.family())
+            .unwrap();
+        execution
+            .scene_mut()
+            .rotate_family(
+                live_parts.family(),
+                std::f64::consts::FRAC_PI_2,
+                noon::ManimRotationPivot::Center,
+            )
+            .unwrap();
+        let rotated_size = execution
+            .scene()
+            .effective_latex_font_size(&live_parts)
+            .unwrap();
         let expected = 72.0 * before_rotation.width / before_rotation.height;
         assert!((rotated_size - expected).abs() < 1e-4);
 
         let removed = live_parts.current_members().unwrap().remove(0);
-        live.remove_family_members(live_parts.family(), &[(&removed).into()])
+        execution
+            .scene_mut()
+            .remove_family_members(live_parts.family(), &[(&removed).into()])
             .unwrap();
-        assert!(live.latex_font_size(&live_parts).unwrap().is_finite());
+        assert!(execution
+            .scene()
+            .effective_latex_font_size(&live_parts)
+            .unwrap()
+            .is_finite());
 
         let rebound = live_parts.rebind_family(target.root().clone()).unwrap();
-        assert!(live.latex_font_size(&rebound).unwrap().is_finite());
+        assert!(execution
+            .scene()
+            .effective_latex_font_size(&rebound)
+            .unwrap()
+            .is_finite());
     }
 
     struct FailingLatexBackend;
@@ -454,28 +542,25 @@ mod tests {
         let mut scene = noon::Scene::new();
         let companion = scene.circle(1.0).unwrap();
         scene.add(&companion).unwrap();
-        let mut session = scene.execution_session().unwrap();
-
-        let number = {
-            let mut live = scene.live(&mut session);
-            let number = live
-                .create_decimal_number(&mut backend, 12.34, DecimalFormat::default(), 48.0)
-                .unwrap();
-            live.add(number.mobject()).unwrap();
-            number
-        };
+        let mut scene = scene.into_execution().unwrap();
+        let number = scene
+            .scene_mut()
+            .decimal_number(&mut backend, 12.34, DecimalFormat::default(), 48.0)
+            .unwrap();
+        scene.scene_mut().add(number.mobject()).unwrap();
+        let session = scene.session();
         let number_id = session
             .execution_object_id(number.mobject().node_id())
             .unwrap();
         let companion_id = session.execution_object_id(companion.node_id()).unwrap();
 
-        {
-            let mut live = scene.live(&mut session);
-            live.set_decimal_value(&number, &mut backend, 98.76)
-                .unwrap();
-        }
+        scene
+            .scene_mut()
+            .set_decimal_value(&number, &mut backend, 98.76)
+            .unwrap();
 
         assert_eq!(number.value().unwrap(), 98.76);
+        let session = scene.session();
         assert_eq!(
             session.execution_object_id(number.mobject().node_id()),
             Some(number_id)
@@ -497,36 +582,33 @@ mod tests {
         let mut scene = noon::Scene::new();
         let companion = scene.circle(1.0).unwrap();
         scene.add(&companion).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let number = {
-            let mut live = scene.live(&mut session);
-            let number = live
-                .create_decimal_number(&mut backend, 12.34, DecimalFormat::default(), 48.0)
-                .unwrap();
-            live.add(number.mobject()).unwrap();
-            number
-        };
+        let mut scene = scene.into_execution().unwrap();
+        let number = scene
+            .scene_mut()
+            .decimal_number(&mut backend, 12.34, DecimalFormat::default(), 48.0)
+            .unwrap();
+        scene.scene_mut().add(number.mobject()).unwrap();
         let before_value = number.value().unwrap();
         let before_state = number.mobject().state().unwrap();
         let before_source = before_state.content.text().unwrap();
         let (before_resource, before_resources) = {
-            let store = scene.integration_store().borrow();
+            let store = scene.scene().integration_store().borrow();
             (
                 store.text_resources().get(before_source).unwrap().clone(),
                 store.text_resources().stats(),
             )
         };
+        let session = scene.session();
         let number_id = session
             .execution_object_id(number.mobject().node_id())
             .unwrap();
         let companion_id = session.execution_object_id(companion.node_id()).unwrap();
 
         let mut failing_backend = FailingLatexBackend;
-        let error = {
-            let mut live = scene.live(&mut session);
-            live.set_decimal_value(&number, &mut failing_backend, 98.76)
-                .unwrap_err()
-        };
+        let error = scene
+            .scene_mut()
+            .set_decimal_value(&number, &mut failing_backend, 98.76)
+            .unwrap_err();
         assert!(error
             .to_string()
             .contains("intentional live DecimalNumber compiler failure"));
@@ -536,13 +618,14 @@ mod tests {
             number.mobject().state().unwrap().content,
             before_state.content
         );
-        let store = scene.integration_store().borrow();
+        let store = scene.scene().integration_store().borrow();
         assert_eq!(store.text_resources().stats(), before_resources);
         assert_eq!(
             store.text_resources().get(before_source),
             Some(&before_resource)
         );
         drop(store);
+        let session = scene.session();
         assert_eq!(
             session.execution_object_id(number.mobject().node_id()),
             Some(number_id)

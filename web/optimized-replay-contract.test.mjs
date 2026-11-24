@@ -47,11 +47,15 @@ test("optimized identity rejects debug, no-opt and unrelated feature overrides",
   assert.throws(() => validateBuildEnvironment({}, "replay"));
 });
 
-test("release fixture export is opt-in without enabling renderer diagnostics", async () => {
+test("production playback keeps replay fixtures and renderer diagnostics opt-in", async () => {
   const cargo = await source("crates/noon-web/Cargo.toml");
-  assert.match(cargo, /^default = \["renderer"\]$/m);
+  const defaults = cargo.match(/^default = \[(.*)\]$/m)?.[1];
+  assert.equal(typeof defaults, "string");
+  assert.match(defaults, /"renderer"/);
+  assert.match(defaults, /"prepared-prefix"/);
+  assert.doesNotMatch(defaults, /"(?:renderer-smoke|replay-smoke)"/);
   assert.match(cargo, /^replay-smoke = \[\]$/m);
-  assert.match(cargo, /^renderer-smoke = \["renderer"\]$/m);
+  assert.match(cargo, /^renderer-smoke = \[[^\n]*"renderer"[^\n]*\]$/m);
   const rust = await source("crates/noon-web/src/determinism.rs");
   assert.match(rust, /#\[cfg\(all\(\s*target_arch = "wasm32",\s*any\(debug_assertions, feature = "replay-smoke"\)\s*\)\)\]\s*mod wasm/);
 });
@@ -63,8 +67,14 @@ async function buildArguments(env) {
   try {
     await mkdir(path.join(temp, "scripts"));
     await mkdir(path.join(temp, "bin"));
+    const noticePath = "crates/noon/assets/arimo/OFL.txt";
+    const notice = await readFile(path.join(root, noticePath));
+    await mkdir(path.dirname(path.join(temp, noticePath)), { recursive: true });
+    await writeFile(path.join(temp, noticePath), notice);
+    await mkdir(path.join(temp, "web/pkg"), { recursive: true });
     await writeFile(path.join(temp, "scripts/build-web-demo.sh"), await source("scripts/build-web-demo.sh"));
     await writeFile(path.join(temp, "bin/node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await writeFile(path.join(temp, "bin/npm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     await writeFile(path.join(temp, "bin/cargo"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$NOON_TEST_CARGO_ARGS"\nexit "$NOON_TEST_CARGO_STATUS"\n', { mode: 0o755 });
     await writeFile(path.join(temp, "bin/wasm-pack"), '#!/bin/sh\nprintf "%s\\n" "$@" > "$NOON_TEST_ARGS"\n', { mode: 0o755 });
     const argsFile = path.join(temp, "args.txt");
@@ -83,6 +93,7 @@ async function buildArguments(env) {
         "a stale dependency lock must fail before wasm-pack can rewrite it");
       return null;
     }
+    assert.deepEqual(await readFile(path.join(temp, "web/pkg/arimo-OFL.txt")), notice);
     const args = (await readFile(argsFile, "utf8")).trim().split("\n");
     assert.equal(args.at(-1), "--locked");
     assert.ok(!args.includes("--"),
@@ -149,5 +160,12 @@ test("workflow retains production before replay and retries browsers without com
   assert.match(browser, /optimized-replay-artifact\.mjs verify replay \./);
   assert.match(browser, /node scripts\/deterministic-replay-smoke\.mjs/);
   assert.doesNotMatch(browser, /cargo |rustup |wasm-pack |build-web-demo\.sh/);
+  const release = workflow.split("\n  browser-release:\n")[1]?.split("\n  optimized-replay:\n")[0];
+  assert.ok(release, "the complete production release needs its own archive consumer");
+  assert.match(release, /needs: optimized-wasm/);
+  assert.match(release, /name: browser-release-candidate/);
+  assert.match(release, /check-browser-release\.mjs --archive/);
+  assert.match(release, /if: always\(\)/);
+  assert.doesNotMatch(release, /optimized-replay-pkg|optimized-web-pkg|cargo |rustup |wasm-pack |build-web-demo\.sh/);
   assert.doesNotMatch(workflow, /continue-on-error: true|CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS|NOON_WASM_PROFILE:.*dev|NOON_WASM_SKIP_OPT:.*1/);
 });

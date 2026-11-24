@@ -1,0 +1,269 @@
+//! Forward presentation-only input through the existing shared session policy.
+//! No frontend picking, gesture synthesis, frame retagging or causal mutation.
+use super::PrefixReader;
+use crate::execution_session::{
+    ExecutionSessionInputError, ExecutionViewportQuery, InspectionNavigationError,
+    NativePointerInputPublication, NativePointerInputToken, PointerFillQuery, PointerFrameError,
+    PointerFrameSnapshot, PointerFrameView, PointerHoverTransition, PointerSelectionHighlight,
+    PointerSelectionPresentation,
+};
+use noon_core::{Camera2DState, NativePointerId, NativePointerInput, Rect, SemanticNodeId, Vec2};
+use noon_runtime::SpatialIndexUpdateStats;
+
+impl PrefixReader {
+    pub fn has_native_pointer_subscribers(&self) -> bool {
+        self.session.runtime.has_viewer_drag_targets()
+            || self.session.has_native_pointer_subscribers()
+    }
+    pub fn enable_default_viewer_selection(&mut self) {
+        self.session.enable_default_viewer_selection()
+    }
+    pub fn default_viewer_selection(&self) -> bool {
+        self.session.default_viewer_selection()
+    }
+    pub fn enable_pointer_fill_selection(
+        &mut self,
+        max_movement: f32,
+    ) -> Result<(), ExecutionSessionInputError> {
+        self.session.enable_pointer_fill_selection(max_movement)
+    }
+    pub fn disable_pointer_fill_selection(&mut self) -> Result<(), ExecutionSessionInputError> {
+        self.session.disable_pointer_fill_selection()
+    }
+    pub fn configure_native_pointer_input(
+        &mut self,
+        pointer: NativePointerId,
+        view_revision: u64,
+    ) -> Result<NativePointerInputToken, ExecutionSessionInputError> {
+        self.session
+            .configure_native_pointer_input(pointer, view_revision)
+    }
+    pub fn native_pointer_input_token(
+        &self,
+    ) -> Result<NativePointerInputToken, ExecutionSessionInputError> {
+        self.session.native_pointer_input_token()
+    }
+    pub fn submit_native_pointer_input(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+    ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        self.session
+            .submit_prepared_pointer_presentation(token, input, self.viewer_drag_enabled)
+    }
+    pub fn set_viewer_drag_enabled(&mut self, enabled: bool) {
+        self.viewer_drag_enabled = enabled;
+    }
+    pub fn translation_drag_active(&self) -> bool {
+        self.session.translation_drag_active()
+    }
+    pub fn can_undo_translation_drag(&self) -> bool {
+        self.session.can_undo_viewer_drag()
+    }
+    pub fn undo_translation_drag(&mut self) -> Result<bool, ExecutionSessionInputError> {
+        self.session.undo_viewer_drag()
+    }
+    pub fn validate_captured_gesture(
+        &self,
+        displayed: &PointerFrameSnapshot,
+        view: PointerFrameView,
+    ) -> Result<(), PointerFrameError> {
+        if !self.translation_drag_active() {
+            return Err(PointerFrameError::Input(
+                ExecutionSessionInputError::Interaction(
+                    "prepared playback has no captured viewer drag".into(),
+                ),
+            ));
+        }
+        displayed.validate_captured_gesture(&self.session, view)
+    }
+    pub fn pick_native_pointer_fill(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+        eligible: impl FnMut(SemanticNodeId) -> bool,
+    ) -> Result<PointerFillQuery, ExecutionSessionInputError> {
+        self.session
+            .pick_native_pointer_fill(token, input, eligible)
+    }
+    pub fn selected_pointer_target(&self) -> Option<SemanticNodeId> {
+        self.session.selected_pointer_target()
+    }
+    pub fn pointer_gesture_active(&self) -> bool {
+        self.session.pointer_gesture_active()
+    }
+    pub fn pointer_selection_highlight(&self) -> Option<PointerSelectionHighlight> {
+        self.session.pointer_selection_highlight()
+    }
+    pub fn pointer_selection_presentation(&self) -> Option<PointerSelectionPresentation> {
+        self.session.pointer_selection_presentation()
+    }
+    pub fn hovered_pointer_target(&self) -> Option<SemanticNodeId> {
+        self.session.hovered_pointer_target()
+    }
+    pub fn refresh_pointer_hover(
+        &mut self,
+        displayed: &PointerFrameSnapshot,
+        view: PointerFrameView,
+    ) -> Result<Option<PointerHoverTransition>, PointerFrameError> {
+        self.session.refresh_pointer_hover(displayed, view)
+    }
+    /// Check the displayed frame before configuring a browser input source.
+    /// This does not require a binding, retag a stale receipt, or admit input.
+    pub fn validate_pointer_frame(
+        &self,
+        displayed: &PointerFrameSnapshot,
+        view: PointerFrameView,
+    ) -> Result<(), PointerFrameError> {
+        displayed.validate_current(&self.session, view)
+    }
+    /// Read-only presentation observation; input still uses its stricter gate.
+    pub fn validate_pointer_presentation(
+        &self,
+        displayed: &PointerFrameSnapshot,
+        view: PointerFrameView,
+    ) -> Result<(), PointerFrameError> {
+        displayed.validate_presentation(&self.session, view)
+    }
+    pub fn capture_pointer_frame(
+        &mut self,
+        view: PointerFrameView,
+    ) -> Result<PointerFrameSnapshot, PointerFrameError> {
+        self.session.capture_pointer_frame(view)
+    }
+    /// Validate the caller's actually presented snapshot, never replace it with
+    /// the producer frontier or a newer unpresented reader publication.
+    pub fn pointer_input_token_for_frame(
+        &self,
+        displayed: &PointerFrameSnapshot,
+        view: PointerFrameView,
+    ) -> Result<NativePointerInputToken, PointerFrameError> {
+        displayed.input_token(&self.session, view)
+    }
+    pub fn has_spatial_camera(&self) -> bool {
+        self.session
+            .camera_3d()
+            .is_ok_and(|camera| camera.is_some())
+    }
+
+    pub fn inspection_spatial_camera(
+        &self,
+    ) -> Result<Option<(usize, noon_core::SemanticCamera3D)>, InspectionNavigationError> {
+        self.session.inspection_spatial_camera()
+    }
+
+    pub fn move_spatial_inspection(
+        &mut self,
+        motion: crate::SpatialInspectionMotion,
+    ) -> Result<bool, InspectionNavigationError> {
+        self.session.move_spatial_inspection(motion)
+    }
+
+    pub fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        kind: crate::PlanarViewerPointer,
+        displayed: Option<&crate::PlanarPickFrame>,
+    ) {
+        self.session
+            .submit_planar_viewer_pointer(pointer, kind, displayed);
+    }
+
+    pub fn cancel_planar_viewer_pointer(&mut self) {
+        self.session.cancel_planar_viewer_pointer();
+    }
+
+    pub fn viewer_indications(&self) -> Vec<crate::ViewerIndication> {
+        self.session.viewer_indications()
+    }
+
+    pub fn viewer_inspection_active(&self) -> bool {
+        self.session.viewer_inspection_active()
+    }
+
+    pub fn advance_viewer_inspection(
+        &mut self,
+        wall_time: f64,
+    ) -> Result<(), InspectionNavigationError> {
+        self.session.advance_viewer_inspection(wall_time)
+    }
+
+    pub fn submit_spatial_pointer(
+        &mut self,
+        input: crate::SpatialPointerInput,
+        displayed: Option<&crate::SpatialPickFrame>,
+        aspect: f64,
+    ) -> Result<bool, InspectionNavigationError> {
+        self.session
+            .submit_spatial_pointer(input, displayed, aspect)
+    }
+
+    pub fn cancel_spatial_pointer_gestures(&mut self) {
+        self.session.cancel_spatial_pointer_gestures();
+    }
+
+    pub fn inspection_camera(&self) -> Result<Camera2DState, PointerFrameError> {
+        self.session.inspection_camera()
+    }
+    pub fn inspection_pointer_view(
+        &self,
+        revision: u64,
+        viewport: Vec2,
+    ) -> Result<PointerFrameView, PointerFrameError> {
+        self.session.inspection_pointer_view(revision, viewport)
+    }
+    pub fn inspection_view_revision(&self) -> u64 {
+        self.session.inspection_view_revision()
+    }
+    pub fn zoom_inspection_view(
+        &mut self,
+        displayed: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+        factor: f64,
+    ) -> Result<bool, InspectionNavigationError> {
+        if self.translation_drag_active() {
+            return Ok(false);
+        }
+        self.session
+            .zoom_inspection_view(displayed, view, surface, factor)
+    }
+    pub fn scroll_inspection_view(
+        &mut self,
+        displayed: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+        delta_pixels: f64,
+    ) -> Result<bool, InspectionNavigationError> {
+        if self.translation_drag_active() {
+            return Ok(false);
+        }
+        self.session
+            .scroll_inspection_view(displayed, view, surface, delta_pixels)
+    }
+    pub fn reset_inspection_view(&mut self) -> Result<bool, InspectionNavigationError> {
+        if self.translation_drag_active() {
+            return Ok(false);
+        }
+        self.session.reset_inspection_view()
+    }
+    pub fn query_viewport(&mut self, bounds: Rect) -> ExecutionViewportQuery {
+        self.session.query_viewport(bounds)
+    }
+
+    pub fn feedback_targets(
+        &self,
+        displayed: &PointerFrameSnapshot,
+        region: [f32; 4],
+        source: &noon_core::SemanticStore,
+    ) -> Option<crate::integration::FeedbackTargets> {
+        self.session.feedback_targets(displayed, region, source)
+    }
+    /// Candidate membership is qualified by both reader incarnation and frame.
+    pub fn viewport_query_is_current(&self, query: &ExecutionViewportQuery) -> bool {
+        query.is_current_for(&self.session)
+    }
+    pub fn last_spatial_update_stats(&self) -> SpatialIndexUpdateStats {
+        self.session.last_spatial_update_stats()
+    }
+}

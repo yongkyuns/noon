@@ -121,51 +121,33 @@ fn scalar_curve_appends_preserve_incomplete_raw_points_in_authored_and_live_path
                 expected.extend([control1, control2, anchor]);
 
                 if live {
-                    let mut session = scene.execution_session().unwrap();
-                    let operation = match edit {
-                        Edit::Line => noon::integration::BorrowedPathEdit::Line {
-                            object: &object,
-                            point: anchor,
-                        },
-                        Edit::Quadratic => noon::integration::BorrowedPathEdit::Quadratic {
-                            object: &object,
-                            control: Vec2::new(8., 2.),
+                    let mut running = scene.into_execution().unwrap();
+                    match edit {
+                        Edit::Line => running.scene_mut().add_line_to(&object, anchor),
+                        Edit::Quadratic => running.scene_mut().add_quadratic_bezier_curve_to(
+                            &object,
+                            Vec2::new(8., 2.),
                             anchor,
-                        },
-                        Edit::Cubic => noon::integration::BorrowedPathEdit::Cubic {
-                            object: &object,
-                            control1,
-                            control2,
+                        ),
+                        Edit::Cubic => running
+                            .scene_mut()
+                            .add_cubic_bezier_curve_to(&object, control1, control2, anchor),
+                        Edit::Smooth => running
+                            .scene_mut()
+                            .add_smooth_curve_to(&object, None, anchor),
+                        Edit::SmoothWithHandle => running.scene_mut().add_smooth_curve_to(
+                            &object,
+                            Some(Vec2::new(7., 2.)),
                             anchor,
-                        },
-                        Edit::Smooth => noon::integration::BorrowedPathEdit::SmoothCurve {
-                            object: &object,
-                            handle2: None,
-                            anchor,
-                        },
-                        Edit::SmoothWithHandle => {
-                            noon::integration::BorrowedPathEdit::SmoothCurve {
-                                object: &object,
-                                handle2: Some(Vec2::new(7., 2.)),
-                                anchor,
-                            }
-                        }
-                    };
-                    noon::integration::publish_borrowed_path_edit(
-                        scene.integration_store(),
-                        scene.root(),
-                        &mut session,
-                        operation,
-                    )
+                        ),
+                    }
                     .unwrap();
-                    let actual = noon::integration::effective_path_query(
-                        scene.integration_store(),
-                        &session,
-                        &object,
-                    )
-                    .unwrap()
-                    .points()
-                    .unwrap();
+                    let actual = running
+                        .scene()
+                        .effective_path_query(&object)
+                        .unwrap()
+                        .points()
+                        .unwrap();
                     assert_raw_points_match(&actual, &expected);
                 } else {
                     match edit {
@@ -264,60 +246,41 @@ fn scalar_curve_appends_classify_pending_anchors_using_mutable_stride() {
                 expected.extend([control1, control2, anchor]);
 
                 if live {
-                    let mut session = scene.execution_session().unwrap();
-                    let operation = match edit {
-                        Edit::Line => noon::integration::BorrowedPathEdit::LineWithStride {
-                            object: &object,
-                            point: anchor,
-                            stride,
-                        },
-                        Edit::Quadratic => {
-                            noon::integration::BorrowedPathEdit::QuadraticWithStride {
-                                object: &object,
-                                control: Vec2::new(8., 2.),
-                                anchor,
+                    let mut running = scene.into_execution().unwrap();
+                    match edit {
+                        Edit::Line => running
+                            .scene_mut()
+                            .add_line_to_with_stride(&object, anchor, stride),
+                        Edit::Quadratic => running
+                            .scene_mut()
+                            .add_quadratic_bezier_curve_to_f64_with_stride(
+                                &object,
+                                (8., 2.),
+                                (anchor.x.into(), anchor.y.into()),
                                 stride,
-                            }
-                        }
-                        Edit::Cubic => noon::integration::BorrowedPathEdit::CubicWithStride {
-                            object: &object,
-                            control1,
-                            control2,
-                            anchor,
-                            stride,
-                        },
-                        Edit::Smooth => {
-                            noon::integration::BorrowedPathEdit::SmoothCurveWithStride {
-                                object: &object,
-                                handle2: None,
-                                anchor,
-                                stride,
-                            }
-                        }
+                            ),
+                        Edit::Cubic => running.scene_mut().add_cubic_bezier_curve_to_with_stride(
+                            &object, control1, control2, anchor, stride,
+                        ),
+                        Edit::Smooth => running
+                            .scene_mut()
+                            .add_smooth_curve_to_with_stride(&object, None, anchor, stride),
                         Edit::SmoothWithHandle => {
-                            noon::integration::BorrowedPathEdit::SmoothCurveWithStride {
-                                object: &object,
-                                handle2: Some(Vec2::new(7., 2.)),
+                            running.scene_mut().add_smooth_curve_to_with_stride(
+                                &object,
+                                Some(Vec2::new(7., 2.)),
                                 anchor,
                                 stride,
-                            }
+                            )
                         }
-                    };
-                    noon::integration::publish_borrowed_path_edit(
-                        scene.integration_store(),
-                        scene.root(),
-                        &mut session,
-                        operation,
-                    )
+                    }
                     .unwrap();
-                    let actual = noon::integration::effective_path_query(
-                        scene.integration_store(),
-                        &session,
-                        &object,
-                    )
-                    .unwrap()
-                    .points()
-                    .unwrap();
+                    let actual = running
+                        .scene()
+                        .effective_path_query(&object)
+                        .unwrap()
+                        .points()
+                        .unwrap();
                     assert_raw_points_match(&actual, &expected);
                 } else {
                     match edit {
@@ -386,27 +349,17 @@ fn add_points_as_corners_preserves_mutable_stride_samples_in_authored_and_live_p
             object.set_points(&initial).unwrap();
             if live {
                 scene.add(&object).unwrap();
-                let mut session = scene.execution_session().unwrap();
-                noon::integration::publish_borrowed_path_edit(
-                    scene.integration_store(),
-                    scene.root(),
-                    &mut session,
-                    noon::integration::BorrowedPathEdit::AppendCornersWithStride {
-                        object: &object,
-                        points: &corners,
-                        stride,
-                        bezier_t_values: &samples,
-                    },
-                )
-                .unwrap();
-                let actual = noon::integration::effective_path_query(
-                    scene.integration_store(),
-                    &session,
-                    &object,
-                )
-                .unwrap()
-                .points()
-                .unwrap();
+                let mut running = scene.into_execution().unwrap();
+                running
+                    .scene_mut()
+                    .add_points_as_corners_with_stride(&object, &corners, stride, &samples)
+                    .unwrap();
+                let actual = running
+                    .scene()
+                    .effective_path_query(&object)
+                    .unwrap()
+                    .points()
+                    .unwrap();
                 assert_raw_points_match(&actual, &expected);
             } else {
                 object
@@ -436,50 +389,26 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
     object.shift(3., 1.).unwrap();
     scene.add(&object).unwrap();
     let before = object.path_query().unwrap();
-    let mut session = scene.execution_session().unwrap();
-    noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        noon::integration::BorrowedPathEdit::Line {
-            object: &object,
-            point: Vec2::new(4., 3.),
-        },
-    )
-    .unwrap();
-    noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        noon::integration::BorrowedPathEdit::Quadratic {
-            object: &object,
-            control: Vec2::new(5., 4.),
-            anchor: Vec2::new(6., 3.),
-        },
-    )
-    .unwrap();
-    noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        noon::integration::BorrowedPathEdit::Cubic {
-            object: &object,
-            control1: Vec2::new(7., 3.),
-            control2: Vec2::new(7., 1.),
-            anchor: Vec2::new(6., 1.),
-        },
-    )
-    .unwrap();
-    noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        noon::integration::BorrowedPathEdit::Close { object: &object },
-    )
-    .unwrap();
-    let query =
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-            .unwrap();
+    let mut running = scene.into_execution().unwrap();
+    running
+        .scene_mut()
+        .add_line_to(&object, Vec2::new(4., 3.))
+        .unwrap();
+    running
+        .scene_mut()
+        .add_quadratic_bezier_curve_to(&object, Vec2::new(5., 4.), Vec2::new(6., 3.))
+        .unwrap();
+    running
+        .scene_mut()
+        .add_cubic_bezier_curve_to(
+            &object,
+            Vec2::new(7., 3.),
+            Vec2::new(7., 1.),
+            Vec2::new(6., 1.),
+        )
+        .unwrap();
+    running.scene_mut().close_path(&object).unwrap();
+    let query = running.scene().effective_path_query(&object).unwrap();
     let start = before.start().unwrap();
     assert!((query.start().unwrap().0 - start.0).abs() < 1e-6);
     assert!((query.start().unwrap().1 - start.1).abs() < 1e-6);
@@ -490,16 +419,10 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
         .borrow()
         .geometry_resources()
         .stats();
-    assert!(noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        noon::integration::BorrowedPathEdit::Line {
-            object: &object,
-            point: Vec2::new(f32::INFINITY, 0.),
-        },
-    )
-    .is_err());
+    assert!(running
+        .scene_mut()
+        .add_line_to(&object, Vec2::new(f32::INFINITY, 0.))
+        .is_err());
     assert_eq!(object.state().unwrap(), before);
     assert_eq!(
         object
@@ -509,28 +432,18 @@ fn live_world_space_appends_preserve_transformed_geometry_and_use_one_publicatio
             .stats(),
         resources
     );
-    noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        noon::integration::BorrowedPathEdit::Start {
-            object: &object,
-            point: Vec2::new(-2., -1.),
-        },
-    )
-    .unwrap();
-    noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut session,
-        noon::integration::BorrowedPathEdit::Line {
-            object: &object,
-            point: Vec2::new(-1., 0.),
-        },
-    )
-    .unwrap();
+    running
+        .scene_mut()
+        .start_new_path(&object, Vec2::new(-2., -1.))
+        .unwrap();
+    running
+        .scene_mut()
+        .add_line_to(&object, Vec2::new(-1., 0.))
+        .unwrap();
     assert_eq!(
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+        running
+            .scene()
+            .effective_path_query(&object)
             .unwrap()
             .end()
             .unwrap(),

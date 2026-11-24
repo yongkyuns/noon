@@ -13,16 +13,34 @@ import {
   TransferableExecutionDeltaReceiver,
 } from "./execution-transport.js";
 
+import { VideoFrameHost } from "./video-frame-host.js";
+
 const RENDER_CHANNEL = "noon.render";
 const RENDER_PROTOCOL_VERSION = 1;
 const MODE_RETAINED = "retained";
 const BOOTSTRAP_QUEUE_LIMIT = 1;
 
+function receiveRuntimeModule(port) {
+  if (!(port instanceof MessagePort)) throw new Error("renderer runtime module delivery requires a MessagePort");
+  return new Promise((resolve, reject) => {
+    port.onmessage = ({ data }) => {
+      port.close();
+      if (data === null || data instanceof WebAssembly.Module) resolve(data ?? undefined);
+      else reject(new Error("renderer received an invalid WebAssembly module"));
+    };
+    port.onmessageerror = () => {
+      port.close();
+      resolve(undefined);
+    };
+  });
+}
+
 let wasmInitializationPromise = null;
 
-function initializeWasmModule() {
+function initializeWasmModule(wasmModule) {
   if (wasmInitializationPromise === null) {
-    const initialization = Promise.resolve().then(() => init());
+    const initialization = Promise.resolve().then(() =>
+      wasmModule === undefined ? init() : init({ module_or_path: wasmModule }));
     const sharedInitialization = initialization.catch((error) => {
       if (wasmInitializationPromise === sharedInitialization) {
         wasmInitializationPromise = null;
@@ -43,11 +61,15 @@ export function createAuthoringRenderController(host) {
   }
 
   let renderPort = null;
+  let video = null;
+  let exportReadback = null;
   let transportMode = null;
   let mode = null;
   let sharedReader = null;
   let transferableReceiver = null;
   let renderer = null;
+  // Opaque owned GPU leases only; semantic publication stays in the author worker.
+  let effectPreparation = null;
   let resourceBytes = null;
   let reconnectResourceBundlePending = false;
   let canvas = null;
@@ -67,6 +89,7 @@ export function createAuthoringRenderController(host) {
   // present exposes. It is an acknowledgement only, never scene or time state.
   let pendingPresentationPublication = null;
   let lastPresentedPublication = null;
+  let latestPresentationSample = null;
   let lastPointerReceipt = null;
   let pendingRendererObservationRequest = null;
   let pendingRendererObservationPublication = null;
@@ -90,6 +113,17 @@ export function createAuthoringRenderController(host) {
   const presentationIntervals = new SampleWindow(120);
   let lastContinuousPresentationAtMs = null;
   let continuousPresentation = false;
+  // Optional W8 capture of the same gaps already measured above. The rolling
+  // UI summary keeps its existing reset/retention behavior; this separate ring
+  // survives cadence resets so polling cannot erase unobserved intervals.
+  const rawPresentationIntervalCapacity = 120;
+  const rawPresentationIntervalSamples = [];
+  let rawPresentationIntervalNext = 0;
+  let rawPresentationIntervalOrdinal = 0;
+  let rawPresentationIntervalOrdinalOverflow = false;
+  let rawPresentationIntervalGeneration = 0;
+  let rawPresentationIntervalGenerationStartedAtMs = performance.now();
+  let rawPresentationIntervalCaptureEnabled = false;
   let rendererReadyAtMs = null;
   let modeSwitches = 0;
   let rendererRebuilds = 0;
@@ -144,9 +178,31 @@ export function createAuthoringRenderController(host) {
         case "resize":
           resize(message);
           return;
+        case "capture_export_frame": {
+          if (renderer === null || needsPresent ||
+              !samePublication(lastPresentedPublication, message.publication ?? null)) {
+            throw new Error("export capture requires the displayed renderer publication");
+          }
+          exportReadback ??= new OffscreenCanvas(width, height).getContext("2d", { willReadFrequently: true, alpha: false });
+          if (exportReadback === null) throw new Error("RGBA readback canvas is unavailable");
+          if (exportReadback.canvas.width !== width || exportReadback.canvas.height !== height) {
+            exportReadback.canvas.width = width;
+            exportReadback.canvas.height = height;
+          }
+          // Repaint and take ownership of that buffer in the same task. The
+          // DOM placeholder can lag and its swapchain can discard old buffers.
+          if (!renderer.renderExportFrame()) throw new Error("export capture could not repaint the displayed publication");
+          const snapshot = canvas.transferToImageBitmap();
+          try { exportReadback.drawImage(snapshot, 0, 0); }
+          finally { snapshot.close(); }
+          const pixels = exportReadback.getImageData(0, 0, width, height).data;
+          respond(message.requestId, { type: "capture_export_frame", pixels }, [pixels.buffer]);
+          return;
+        }
         case "metrics":
           if (!drainGpuDiagnostics()) return;
           if (message.profilePublicationStages === true) publicationStageProfiling = true;
+          if (message.includePresentationIntervals === true) rawPresentationIntervalCaptureEnabled = true;
           if (message.profileRenderSubstages === true) {
             renderSubstageProfiling = true;
             renderer?.setRenderSubstageProfiling(true);
@@ -209,7 +265,9 @@ export function createAuthoringRenderController(host) {
     width = normalizedDimension(message.width ?? canvas.width);
     height = normalizedDimension(message.height ?? canvas.height);
     transportMode = message.transportMode;
-    await initializeWasmModule();
+    const wasmModule = message.wasmModulePort === undefined
+      ? message.wasmModule : await receiveRuntimeModule(message.wasmModulePort);
+    await initializeWasmModule(wasmModule);
     if (stopped) return false;
     canvas.addEventListener("webglcontextrestored", wakeAfterWebGlContextRestored);
     canvas.addEventListener("webglcontextlost", suspendForWebGlContextLoss);
@@ -225,6 +283,7 @@ export function createAuthoringRenderController(host) {
     event.preventDefault();
     webglContextLost = true;
     resetPresentationIntervals();
+    invalidateRawPresentationIntervalHistory();
     invalidatePointerReceipt();
     cancelScheduledFrame();
   }
@@ -421,13 +480,18 @@ export function createAuthoringRenderController(host) {
     if (transportMode === EXECUTION_TRANSPORT_TRANSFERABLE) {
       transferableReceiver = new TransferableExecutionDeltaReceiver(
         port,
-        (json, metadata) => (renderPort === port ? consumeDelta(json, metadata) : true),
+        (json, metadata, packet) => (renderPort === port ? consumeDelta(packet, metadata) : true),
       );
     }
     port.start();
   }
 
   function detachRenderPort() {
+    video?.close();
+    video = null;
+    exportReadback = null;
+    effectPreparation?.prepared?.free?.();
+    effectPreparation = null;
     cancelScheduledFrame();
     engineWake = null;
     continuousPresentation = false;
@@ -437,6 +501,7 @@ export function createAuthoringRenderController(host) {
   }
 
   function resetTransportState() {
+    sharedReader?.close();
     sharedReader = null;
     transferableReceiver = null;
     bootstrapQueue = [];
@@ -444,6 +509,7 @@ export function createAuthoringRenderController(host) {
     pendingPresentationPublication = null;
     pendingPublicationStageSample = null;
     lastPresentedPublication = null;
+    latestPresentationSample = null;
     lastPointerReceipt = null;
     pendingRendererObservationRequest = null;
     pendingRendererObservationPublication = null;
@@ -451,6 +517,24 @@ export function createAuthoringRenderController(host) {
 
   function handleEngineMessage(message) {
     if (!message || typeof message !== "object") {
+      return;
+    }
+    if (message.type === "video_assets" || message.type === "video_demands") {
+      try {
+        if (message.type === "video_assets") {
+          const port = renderPort;
+          video ??= new VideoFrameHost(
+            () => scheduleFrame(),
+            update => port.postMessage(update),
+            error => fail(error, null),
+          );
+          video.register(message.assets);
+          renderer?.setVideoFrameProvider((...args) => video.request(...args));
+        } else {
+          if (video === null) throw new Error("video demands require installed media");
+          for (const demand of message.demands) video.prepare(demand);
+        }
+      } catch (error) { fail(error, null); }
       return;
     }
     if (message.type === "execution_wake") {
@@ -473,6 +557,17 @@ export function createAuthoringRenderController(host) {
         scheduleFrame();
       } catch (error) {
         fail(error, null);
+      }
+      return;
+    }
+    if (message.type === "prepare_effect_programs") {
+      void prepareEffectPrograms(message);
+      return;
+    }
+    if (message.type === "release_effect_programs") {
+      if (effectPreparation?.session === message.session && effectPreparation.requestId === message.requestId) {
+        effectPreparation.prepared?.free?.();
+        effectPreparation = null;
       }
       return;
     }
@@ -511,6 +606,40 @@ export function createAuthoringRenderController(host) {
       } catch (error) {
         fail(error, null);
       }
+    }
+  }
+
+  async function prepareEffectPrograms(message) {
+    const port = renderPort;
+    const entry = { session: message.session, requestId: message.requestId, prepared: null };
+    try {
+      if (!Number.isSafeInteger(message.requestId) || message.requestId <= 0 ||
+          !Number.isInteger(message.session) || message.session < 0 || message.session > 0xffffffff ||
+          !(message.bytes instanceof Uint8Array) || effectPreparation !== null) {
+        throw new Error("invalid effect preparation request");
+      }
+      effectPreparation = entry;
+      // Prepared source may reach a later attachment while the initial retained
+      // snapshot is still creating its GPU owner. Reuse that bootstrap barrier.
+      if (bootstrapPromise !== null) await bootstrapPromise;
+      if (stopped || renderPort !== port || effectPreparation !== entry) return;
+      requireBootstrappedRenderer("prepare effect programs");
+      const owner = renderer;
+      const prepared = await owner.prepareEffectPrograms(message.bytes);
+      if (renderPort !== port || renderer !== owner || effectPreparation !== entry) {
+        prepared.free();
+        return;
+      }
+      entry.prepared = prepared;
+      // This checks the current device/cache authority after the external await.
+      owner.cacheEffectPrograms(prepared);
+      port.postMessage({ type: "effect_programs_prepared", session: message.session, requestId: message.requestId });
+    } catch (error) {
+      if (effectPreparation === entry) effectPreparation = null;
+      if (error instanceof WebAssembly.RuntimeError) { fail(error, null); return; }
+      entry.prepared?.free?.();
+      if (renderPort === port) port?.postMessage({ type: "effect_programs_prepared",
+        session: message.session, requestId: message.requestId, error: String(error?.message ?? error) });
     }
   }
 
@@ -553,7 +682,7 @@ export function createAuthoringRenderController(host) {
   function drainTransport() {
     try {
       if (sharedReader !== null) {
-        const drained = sharedReader.drain((json, metadata) => consumeDelta(json, metadata));
+        const drained = sharedReader.drain((json, metadata, packet) => consumeDelta(packet, metadata));
         if (drained > 0) {
           renderPort?.postMessage({ type: "transport_writable" });
         }
@@ -624,38 +753,55 @@ export function createAuthoringRenderController(host) {
     transitionResourceBytes = null;
     transitionFrameLoopWasRunning = false;
 
-    // The replacement engine has already queued a complete bootstrap payload.
-    // Retire the currently presenting renderer only once that payload reaches
-    // this host; renderer/device construction is the only remaining blank-window seam.
-    disposeRenderer();
+    // Replacing a source requires new retained resources, not a new GPU device.
+    // Reclaiming an OffscreenCanvas WebGL2 context while other embeds present
+    // can stall adapter/device creation for more than the hot-edit timeout.
+    const reuseRenderer = renderer !== null && nextMode === mode &&
+      typeof renderer.replaceResourceBundle === "function" &&
+      !webglContextLost && webglRecoveryPromise === null;
+    if (!reuseRenderer) disposeRenderer();
     resourceBytes = nextResourceBytes;
     reconnectResourceBundlePending = false;
     needsPresent = false;
     pendingPresentationPublication = null;
     pendingPublicationStageSample = null;
     lastPresentedPublication = null;
+    latestPresentationSample = null;
     lastPointerReceipt = null;
     pendingRendererObservationPublication = null;
     mode = nextMode;
-    bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication);
+    bootstrapPromise = bootstrapRenderer(initial, resumeFrameLoop, publication, reuseRenderer);
     return true;
   }
 
-  async function bootstrapRenderer(initial, resumeFrameLoop = true, publication = null) {
+  async function bootstrapRenderer(initial, resumeFrameLoop = true, publication = null,
+    reuseRenderer = false) {
     const bootstrapGeneration = frameLoopGeneration;
     rendererStartupPending = true;
     surfaceCreationError = null;
     try {
-      const createdRenderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
+      // The reused WebGL renderer can finish bootstrap synchronously. Defer its
+      // body once so the caller owns bootstrapPromise before finally clears it;
+      // otherwise a resolved Promise remains installed and rejects later edits.
+      await Promise.resolve();
+      let createdRenderer;
+      if (reuseRenderer) {
+        // Validate and replace only scene-owned retained caches on the same
+        // surface/device. The first new snapshot still must actually present.
+        renderer.replaceResourceBundle(resourceBytes);
+        createdRenderer = renderer;
+      } else {
+        createdRenderer = await RetainedExecutionCanvasRenderer.create(canvas, resourceBytes);
+      }
       if (renderSubstageProfiling) createdRenderer.setRenderSubstageProfiling(true);
       if (gpuCompletionProfiling) createdRenderer.setGpuCompletionProfiling(true);
-      // create() resolves after GPU setup; keep this separate from first render.
       rendererReadyAtMs ??= performance.now();
       if (stopped) {
-        createdRenderer.free?.();
+        if (!reuseRenderer) createdRenderer.free?.();
         return;
       }
       renderer = createdRenderer;
+      if (video !== null) renderer.setVideoFrameProvider((...args) => video.request(...args));
       lastDeltaApplyMs = null;
       lastRendererCallMs = null;
       resourceBytes = null;
@@ -669,7 +815,11 @@ export function createAuthoringRenderController(host) {
       pendingPresentationPublication = publication;
       pendingPublicationStageSample = null;
       needsPresent = true;
-      while (!tryPresent()) {
+      // resize() may present this snapshot while the retry awaits a browser
+      // frame. In that case needsPresent is already clear; tryPresent() returns
+      // false for "nothing to draw", not a failed presentation. Do not wait for
+      // a second frame that the retained renderer correctly considers clean.
+      while (needsPresent && !tryPresent()) {
         if (
           stopped ||
           bootstrapGeneration !== frameLoopGeneration ||
@@ -677,7 +827,8 @@ export function createAuthoringRenderController(host) {
         ) {
           return;
         }
-        await nextRenderOpportunity();
+        if (video?.waiting) await video.wait();
+        else await nextRenderOpportunity();
         if (stopped || bootstrapGeneration !== frameLoopGeneration) {
           return;
         }
@@ -749,8 +900,9 @@ export function createAuthoringRenderController(host) {
       return false;
     }
     const renderStartedAtMs = performance.now();
+    video?.beginPresent();
     if (!renderer.render()) {
-      invalidatePointerReceipt();
+      if (!video?.waiting) invalidatePointerReceipt();
       drainGpuDiagnostics();
       return false;
     }
@@ -765,7 +917,21 @@ export function createAuthoringRenderController(host) {
     }
     if (continuousPresentation) {
       if (lastContinuousPresentationAtMs !== null) {
-        presentationIntervals.record(presentedAtMs - lastContinuousPresentationAtMs);
+        const intervalMs = presentedAtMs - lastContinuousPresentationAtMs;
+        presentationIntervals.record(intervalMs);
+        if (Number.isSafeInteger(rawPresentationIntervalOrdinal + 1)) {
+          rawPresentationIntervalOrdinal += 1;
+          if (rawPresentationIntervalCaptureEnabled) {
+            const sample = { ordinal: rawPresentationIntervalOrdinal,
+              session: presentedSession, presentedAtMs, intervalMs };
+            if (rawPresentationIntervalSamples.length < rawPresentationIntervalCapacity) {
+              rawPresentationIntervalSamples.push(sample);
+            } else {
+              rawPresentationIntervalSamples[rawPresentationIntervalNext] = sample;
+              rawPresentationIntervalNext = (rawPresentationIntervalNext + 1) % rawPresentationIntervalCapacity;
+            }
+          }
+        } else rawPresentationIntervalOrdinalOverflow = true;
       }
       lastContinuousPresentationAtMs = presentedAtMs;
     }
@@ -776,9 +942,20 @@ export function createAuthoringRenderController(host) {
     const observationPublication = pendingRendererObservationPublication;
     pendingPresentationPublication = null;
     pendingPublicationStageSample = null;
+    const displayedPublication = publication ?? lastPresentedPublication;
+    if (displayedPublication !== null) {
+      const displayedTime = renderer.time();
+      latestPresentationSample = {
+        session: displayedPublication.session,
+        sequence: displayedPublication.sequence,
+        time: displayedTime,
+        presentedAtMs,
+      };
+      if (stageSample !== null) stageSample.time = displayedTime;
+    }
     if (stageSample !== null) {
       // Preserve the displayed authored time even when metrics polling is late.
-      stageSample.time = renderer.time();
+      stageSample.time ??= renderer.time();
       stageSample.presentation = presentedFrames;
       stageSample.presentedAtMs = presentedAtMs;
       stageSample.applyMs = lastDeltaApplyMs;
@@ -820,7 +997,7 @@ export function createAuthoringRenderController(host) {
 
   function applyRendererDelta(json) {
     const startedAtMs = performance.now();
-    const applied = renderer.applyDeltaJson(json);
+    const applied = renderer.applyDeltaTransportJson(json);
     if (applied) lastDeltaApplyMs = Math.max(0, performance.now() - startedAtMs);
     return applied;
   }
@@ -838,6 +1015,7 @@ export function createAuthoringRenderController(host) {
       type: "execution_presented",
       session: publication.session,
       sequence: publication.sequence,
+      objectCount: renderer.objectCount(),
       ...(lastPointerReceipt === null ? {} : { pointerReceipt: lastPointerReceipt }),
     });
   }
@@ -977,7 +1155,7 @@ export function createAuthoringRenderController(host) {
       return;
     }
     const needsAnimationFrame = reserveRefresh || scheduledFrame?.reservedRefresh === true ||
-      needsPresent || engineWake === null ||
+      (needsPresent && !video?.waiting) || engineWake === null ||
       engineWake.cadence === "animation_frame";
     // Keep an already-requested refresh opportunity when a wake or delta still
     // needs it. Canceling after the browser snapshots callbacks can defer the
@@ -985,7 +1163,7 @@ export function createAuthoringRenderController(host) {
     if (needsAnimationFrame && scheduledFrame?.kind === "animation" &&
         scheduledFrame.generation === generation) return;
     cancelScheduledFrame();
-    if (!needsAnimationFrame && engineWake.cadence === "idle") return;
+    if ((!needsAnimationFrame && engineWake.cadence === "idle") || video?.waiting) return;
     const ticket = scheduleTicket;
     if (needsAnimationFrame && typeof host?.requestAnimationFrame === "function") {
       scheduledFrame = {
@@ -1024,13 +1202,14 @@ export function createAuthoringRenderController(host) {
       typeof host?.requestAnimationFrame === "function";
     const tickDue = engineWake === null || engineWake.cadence === "animation_frame" ||
       (engineWake.cadence === "timer" && performance.now() >= engineWake.deadline);
-    if (tickDue) {
+    const canTick = tickDue && !(video !== null && needsPresent);
+    if (canTick) {
       // One directive admits one engine drive. The response supplies the next
       // Rust-derived directive, so an idle/waiting continuation never RAF-polls.
       if (engineWake !== null) engineWake = { cadence: "idle", deadline: null };
       renderPort?.postMessage({ type: "tick", timestamp });
     }
-    scheduleFrame(generation, tickDue && reserveRefresh);
+    scheduleFrame(generation, canTick && reserveRefresh);
   }
 
   async function flushGpuDiagnostics() {
@@ -1066,7 +1245,8 @@ export function createAuthoringRenderController(host) {
     }
   }
 
-  function currentMetrics({ profileRenderSubstages, profileGpuCompletion } = {}) {
+  function currentMetrics({ profileRenderSubstages, profileGpuCompletion, includePresentationIntervals } = {}) {
+    const sampledAtMs = performance.now();
     const base = {
       ready: renderer !== null,
       mode,
@@ -1075,16 +1255,31 @@ export function createAuthoringRenderController(host) {
       presentedFrames,
       presentationIntervalMs: presentationIntervals.summary(),
       presentationIntervalSamples: presentationIntervals.size,
+      ...(includePresentationIntervals === true ? {
+        rawPresentationIntervals: {
+          enabled: rawPresentationIntervalCaptureEnabled,
+          capacity: rawPresentationIntervalCapacity,
+          generation: rawPresentationIntervalGeneration,
+          generationStartedAtMs: rawPresentationIntervalGenerationStartedAtMs,
+          latestOrdinal: rawPresentationIntervalOrdinal,
+          ordinalOverflow: rawPresentationIntervalOrdinalOverflow,
+          samples: rawPresentationIntervalSamples.length < rawPresentationIntervalCapacity
+            ? rawPresentationIntervalSamples.slice()
+            : rawPresentationIntervalSamples.slice(rawPresentationIntervalNext)
+              .concat(rawPresentationIntervalSamples.slice(0, rawPresentationIntervalNext)),
+        },
+      } : {}),
       lastDeltaApplyMs,
       lastRendererCallMs,
       modeSwitches,
       rendererRebuilds,
-      sampledAtMs: performance.now(),
+      sampledAtMs,
       performanceTimeOriginMs: performance.timeOrigin,
       rendererReadyAtMs,
       firstPresentedAtMs,
       presentedSession,
       firstPresentedSessionAtMs,
+      latestPresentationSample,
       transitionMode,
       lastFrameTimestamp,
       bufferedDeltas: bootstrapQueue.length + (transferableReceiver?.pendingCount() ?? 0),
@@ -1146,6 +1341,7 @@ export function createAuthoringRenderController(host) {
     if (renderer === null) {
       return;
     }
+    invalidateRawPresentationIntervalHistory();
     pendingPublicationStageSample = null;
     const retiredRenderer = renderer;
     renderer = null;
@@ -1160,6 +1356,13 @@ export function createAuthoringRenderController(host) {
     } else {
       retiredRenderer.free?.();
     }
+  }
+
+  function invalidateRawPresentationIntervalHistory() {
+    rawPresentationIntervalGeneration += 1;
+    rawPresentationIntervalGenerationStartedAtMs = performance.now();
+    rawPresentationIntervalSamples.length = 0;
+    rawPresentationIntervalNext = 0;
   }
 
   function modeFlags() {
@@ -1201,8 +1404,8 @@ export function createAuthoringRenderController(host) {
     return candidate;
   }
 
-  function respond(requestId, payload) {
-    postMain({ requestId: validateRequestId(requestId), ...payload });
+  function respond(requestId, payload, transfer) {
+    postMain({ requestId: validateRequestId(requestId), ...payload }, transfer);
   }
 
   function validateRequestId(requestId) {
@@ -1213,6 +1416,8 @@ export function createAuthoringRenderController(host) {
   }
 
   function fail(error, requestId) {
+    video?.close();
+    video = null;
     frameLoopGeneration += 1;
     running = false;
     const effectiveRequestId = requestId ?? transitionRequestId;
@@ -1226,7 +1431,7 @@ export function createAuthoringRenderController(host) {
     postMain({ type: "error", requestId: effectiveRequestId, message });
   }
 
-  function postMain(payload) {
+  function postMain(payload, transfer) {
     if (host === null) {
       throw new Error("authoring render host is not configured");
     }
@@ -1234,7 +1439,7 @@ export function createAuthoringRenderController(host) {
       channel: RENDER_CHANNEL,
       protocolVersion: RENDER_PROTOCOL_VERSION,
       ...payload,
-    });
+    }, transfer);
   }
 
   function validateMainMessage(message) {

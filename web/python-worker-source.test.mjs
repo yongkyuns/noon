@@ -1,8 +1,91 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { installPreparedSourceCounterProbe } from "../scripts/prepared-source-counter-probe.mjs";
 
 const source = await readFile(new URL("./python-worker.source.js", import.meta.url), "utf8");
+
+test("source counter probe matches the real worker and preserves awaited source cleanup", async () => {
+  let instrumented;
+  const evidence = {};
+  await installPreparedSourceCounterProbe({
+    async route(_match, handler) {
+      await handler({
+        request: () => ({ resourceType: () => "worker" }),
+        fetch: async () => ({ text: async () => source, headers: () => ({}) }),
+        fulfill: async ({ body }) => { instrumented = body; },
+      });
+    },
+  }, "counter-test", evidence);
+  assert.ok(instrumented.includes("return await observeQualificationRun(globals,"));
+  assert.notEqual(evidence.counterProbe.originalWorkerSha256, evidence.counterProbe.executedWorkerSha256);
+});
+
+function preparedSourceYieldHook(run, setTimer) {
+  const start = source.indexOf("  self.noonPreparedSourceYield = () => {");
+  const end = source.indexOf("  self.noonCreateCanonicalAuthoringSceneContext =", start);
+  assert.ok(start >= 0 && end > start, "prepared source yield hook boundaries must exist");
+  const worker = {};
+  return new Function("self", "initialRun", "yieldWorkerTask", "awaitOutsidePreparedSourceTurn", `
+    let activeAuthoringRun = initialRun;
+    ${source.slice(start, end)}
+    return { hook: self.noonPreparedSourceYield, replaceRun: next => { activeAuthoringRun = next; } };
+  `)(worker, run, () => new Promise(resolve => setTimer(resolve, 0)), (_run, _owner, operation) => operation());
+}
+
+test("cooperative source yield is disabled outside its attached prepared reader turn", () => {
+  for (const mutate of [
+    run => { run.preparedPlayback = false; },
+    run => { run.continuation.preparedPlayer = null; },
+    run => { run.continuation.terminal = true; },
+    run => { run.continuation.observedExecution = true; },
+    run => { run.continuation.callbackRequest = {}; },
+    run => { run.preparedDriver.state = () => "preparing"; },
+  ]) {
+    const run = {
+      sourceSceneOnly: true, preparedPlayback: true,
+      continuation: { preparedPlayer: {}, observedExecution: false, callbackRequest: null, terminal: false },
+      preparedDriver: { state: () => "running" },
+    };
+    mutate(run);
+    const timers = [];
+    const { hook } = preparedSourceYieldHook(run, (callback, delay) => timers.push({ callback, delay }));
+    assert.equal(hook(), false);
+    assert.deepEqual(timers, []);
+  }
+});
+
+test("cooperative source yield resumes once and rejects a retired reader turn", async () => {
+  const create = () => {
+    let state = "running";
+    const continuation = { preparedPlayer: {}, observedExecution: false, callbackRequest: null, terminal: false };
+    const run = { sourceSceneOnly: true, preparedPlayback: true, continuation,
+      preparedDriver: { state: () => state } };
+    const timers = [];
+    const controller = preparedSourceYieldHook(run, (callback, delay) => timers.push({ callback, delay }));
+    return { run, continuation, timers, ...controller, setState(value) { state = value; } };
+  };
+
+  const active = create();
+  const settled = active.hook();
+  assert.equal(active.timers.length, 1);
+  assert.equal(active.timers[0].delay, 0);
+  active.timers[0].callback();
+  await settled;
+
+  for (const retire of [
+    item => item.setState("cancelled"),
+    item => { item.continuation.preparedPlayer = {}; },
+    item => { item.continuation.observedExecution = true; },
+    item => item.replaceRun({}),
+  ]) {
+    const pending = create();
+    const rejected = pending.hook();
+    retire(pending);
+    pending.timers[0].callback();
+    await assert.rejects(rejected, /retired/);
+  }
+});
 
 test("source disposal retires canonical input before releasing its retained context", async () => {
   const begin = source.indexOf("function retireSemanticContext(");
@@ -111,9 +194,9 @@ test("table cell selections dispatch through the cold store or owning live conte
   new Function("self", source.slice(begin, end))(worker);
   for (const contextKind of ["null", "undefined", "live"]) {
     for (const [bridge, cold, live, colors] of [
-      ["noonTableCell", "getCell", "liveTableCell", []],
-      ["noonGetHighlightedTableCell", "getHighlightedCell", "liveGetHighlightedTableCell", [1, 0, 0, 1, 0.75]],
-      ["noonHighlightTableCell", "highlightCell", "liveHighlightTableCell", [0, 1, 0, 1, 0.5]],
+      ["noonTableCell", "getCell", "tableCell", []],
+      ["noonGetHighlightedTableCell", "getHighlightedCell", "getHighlightedTableCell", [1, 0, 0, 1, 0.75]],
+      ["noonHighlightTableCell", "highlightCell", "highlightTableCell", [0, 1, 0, 1, 0.5]],
     ]) {
       const calls = [], result = {};
       const selection = { [cold]: (...args) => { calls.push(args); return result; } };
@@ -143,9 +226,9 @@ test("Table constructors use the existing store outside a Scene and retain live 
     worker, authoringStore, Options, value => value);
   const options = [0.8, 1.3, false, true, 1, 1, 1, 1, 4, 1, 0, 0, 0, 0];
   for (const [bridge, cold, live, labels] of [
-    ["noonCreateAuthoringTableHandle", "createTable", "liveCreateTable", []],
-    ["noonCreateAuthoringTableWithLabelsHandle", "createTableWithLabels", "liveCreateTableWithLabels", [null, null, []]],
-    ["noonCreateAuthoringMobjectTableHandle", "createMobjectTableWithLabels", "liveCreateMobjectTableWithLabels", [[], [], []]],
+    ["noonCreateAuthoringTableHandle", "createTable", "createTable", []],
+    ["noonCreateAuthoringTableWithLabelsHandle", "createTableWithLabels", "createTableWithLabels", [null, null, []]],
+    ["noonCreateAuthoringMobjectTableHandle", "createMobjectTableWithLabels", "createMobjectTableWithLabels", [[], [], []]],
   ]) {
     for (const active of [false, true]) {
       const context = active ? { [live]: (...args) => { calls.push({ name: live, args }); return result; } } : undefined;
@@ -158,7 +241,7 @@ test("Table constructors use the existing store outside a Scene and retain live 
   }
 });
 
-test("numeric label members reuse the DecimalNumber getter and live-query facade", () => {
+test("numeric label members pass typed handles to Scene reads and writes", () => {
   const worker = {};
   const compiler = {};
   new Function("self", "latexCompiler", source.slice(
@@ -176,16 +259,19 @@ test("numeric label members reuse the DecimalNumber getter and live-query facade
   assert.equal(number.value(null), -1);
   assert.equal(number.fontSize(null), 18);
   assert.equal(number.mobject(), object);
-  const context = { queryMobjectDecimalValue: value => {
-    assert.equal(value, object); return 2;
-  }, queryMobjectDecimalFontSize: value => {
-    assert.equal(value, object); return 24;
-  } };
+  const context = {
+    decimalValue: value => { assert.equal(value, raw); return 2; },
+    decimalFontSize: value => { assert.equal(value, raw); return 24; },
+    setDecimalValue: (...args) => writes.push(args),
+    incrementDecimalValue: (...args) => writes.push(args),
+  };
   assert.equal(number.value(context), 2);
   assert.equal(number.fontSize(context), 24);
   number.setValue(3);
   number.incrementValue(1);
-  assert.deepEqual(writes, [[compiler, 3], [compiler, 1]]);
+  number.setValue(5, context);
+  number.incrementValue(2, context);
+  assert.deepEqual(writes, [[compiler, 3], [compiler, 1], [raw, compiler, 5], [raw, compiler, 2]]);
 });
 
 const callbackEntry = new Function(`${source.slice(
@@ -347,6 +433,7 @@ test("semantic continuation control bypasses the blocked interpreter request que
   const drained = new Function("self", "blocked", "handleRequest", "handleContinuationControl", `
     let fatalAuthoringFailure = false;
     let requestQueue = blocked;
+    const embeddedRuntime = null;
     const AUTHORING_CHANNEL = "noon.authoring";
     ${source.slice(source.indexOf("function isRecord(value)"))}
     ${source.slice(source.indexOf("function isContinuationControl"), source.indexOf("async function handleContinuationControl"))}
@@ -684,6 +771,7 @@ for (const trigger of ["interpreter rejection", "WASM trap"]) {
     };
     const drained = new Function("self", "postError", "handleRequest", "isContinuationControl",
       `let fatalAuthoringFailure = false; let requestQueue = Promise.resolve();
+       const embeddedRuntime = null;
        ${handlerSource}; return () => requestQueue;`)(
       scope, (requestId, error) => errors.push({ requestId, error }),
       () => { requests += 1; }, () => false,
@@ -717,7 +805,7 @@ test("a trapped host never publishes late success or request errors", () => {
   const posted = [];
   const dispatch = new Function("self", `
     const AUTHORING_CHANNEL = "noon.authoring";
-    const AUTHORING_PROTOCOL_VERSION = 7;
+    const AUTHORING_PROTOCOL_VERSION = 8;
     let fatalAuthoringFailure = false;
     ${source.slice(source.indexOf('function post(type,'), source.indexOf('function isRecord(value)'))}
     return { post, fail: () => { fatalAuthoringFailure = true; } };
@@ -752,7 +840,8 @@ test("source compilation never replays module effects or changes fixtures", asyn
 });
 
 test("explicit endpoint reconnect returns the existing runtime lease before reattaching", async () => {
-  const attachSource = source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
+  const attachSource = source.slice(source.indexOf("function observeSemanticExecution"), source.indexOf("function registerContinuationContext")) +
+    source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
   const contexts = new Map();
   const entry = { context: {}, endpoints: new Set(), released: false };
   contexts.set("scene", entry);
@@ -781,7 +870,8 @@ test("explicit endpoint reconnect returns the existing runtime lease before reat
 });
 
 test("a first callback added after attachment uses the suspended source handler and retires its session", async () => {
-  const attachSource = source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
+  const attachSource = source.slice(source.indexOf("function observeSemanticExecution"), source.indexOf("function registerContinuationContext")) +
+    source.slice(source.indexOf("async function attachSemanticExecutionRequest"), source.indexOf("function retireSemanticContext"));
   const context = {};
   const entry = { context, endpoints: new Set(), released: false };
   const contexts = new Map([["scene", entry]]);

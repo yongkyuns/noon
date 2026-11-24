@@ -2,7 +2,7 @@
 
 use crate::{
     AnimationOptions, ContinuationStep, ImageMobjectOptions, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, RasterImageSampling, RateFunction, Scene, SemanticFadeDirection,
+    Mobject, RasterImageSampling, RateFunction, Scene, SemanticFadeDirection,
 };
 
 /// Deliberately asymmetric straight-alpha fixture: top row red / half-green,
@@ -26,35 +26,46 @@ pub struct RasterImage {
 impl LiveContinuation for RasterImage {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
         let segment = match self.stage {
-            0 => live.declare_and_activate_fade(&self.image, SemanticFadeDirection::In, options),
+            0 => scene.live().declare_and_activate_fade(
+                &self.image,
+                SemanticFadeDirection::In,
+                options,
+            ),
             1 => {
                 // This constructor runs after bootstrap. The resource deduplicates,
                 // but the new object stays detached until the ordinary add operation.
-                let second = live.create_image(image_options(1.0)?).map_err(message)?;
-                if live.contains(&second).map_err(message)? {
+                let second = scene.image(image_options(1.0)?).map_err(message)?;
+                if scene.contains_direct(&second).map_err(message)? {
                     return Err("new image was admitted before add".into());
                 }
-                live.set_translation(&second, 2.0, 0.0).map_err(message)?;
-                live.add(&second).map_err(message)?;
-                let target = live.target_editor(&self.image).map_err(message)?;
-                live.set_translation(&target, 0.0, 0.0).map_err(message)?;
-                live.rotate(&target, std::f64::consts::FRAC_PI_4)
+                scene.set_translation(&second, 2.0, 0.0).map_err(message)?;
+                scene.add(&second).map_err(message)?;
+                let target = scene.target_editor(&self.image).map_err(message)?;
+                scene.set_translation(&target, 0.0, 0.0).map_err(message)?;
+                scene
+                    .rotate(&target, std::f64::consts::FRAC_PI_4)
                     .map_err(message)?;
-                live.scale(&target, 0.75, 0.75).map_err(message)?;
-                live.set_opacity(&target, 0.6).map_err(message)?;
-                live.declare_and_activate_transform_to(&self.image, &target, options)
+                scene.scale(&target, 0.75, 0.75).map_err(message)?;
+                scene.set_opacity(&target, 0.6).map_err(message)?;
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(&self.image, &target, options)
             }
-            2 => live.declare_and_activate_fade(&self.image, SemanticFadeDirection::Out, options),
+            2 => scene.live().declare_and_activate_fade(
+                &self.image,
+                SemanticFadeDirection::Out,
+                options,
+            ),
             3 => {
-                if live.contains(&self.image).map_err(message)? {
+                if scene.contains_direct(&self.image).map_err(message)? {
                     return Err("FadeOut did not remove its image".into());
                 }
-                live.wait_segment(1.0)
+                scene.live().wait_segment(1.0)
             }
             4 => return Ok(ContinuationStep::Finished),
             _ => return Err("image continuation resumed after completion".into()),

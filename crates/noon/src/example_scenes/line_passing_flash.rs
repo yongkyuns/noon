@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession,
+    AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
     ManimGeometryOptions, Mobject, RateFunction, Scene,
 };
 
@@ -16,32 +16,38 @@ pub struct LinePassingFlash {
 impl LiveContinuation for LinePassingFlash {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         match self.stage {
             0 => {
-                if live
-                    .contains(&self.line)
+                if scene
+                    .contains_direct(&self.line)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("PassingFlash Line must begin detached".into());
                 }
                 self.stage = 1;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             1 => {
-                let segment = live
-                    .declare_and_activate_passing_flash(
-                        &self.line,
-                        0.25,
-                        AnimationOptions::new()
-                            .run_time(2.0)
-                            .rate_func(RateFunction::Linear),
+                let segment = scene
+                    .live()
+                    .declare_and_activate_composition(
+                        &AnimationCompositionRequest::PassingFlash {
+                            target: &self.line,
+                            time_width: 0.25,
+                            options: AnimationOptions::new()
+                                .run_time(2.0)
+                                .rate_func(RateFunction::Linear),
+                        },
+                        AnimationOptions::new(),
                     )
                     .map_err(|error| error.to_string())?;
-                if !live
-                    .contains(&self.line)
+                if !scene
+                    .contains_direct(&self.line)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("PassingFlash did not admit its transient Line".into());
@@ -50,8 +56,8 @@ impl LiveContinuation for LinePassingFlash {
                 Ok(ContinuationStep::Await(segment))
             }
             2 => {
-                if live
-                    .contains(&self.line)
+                if scene
+                    .contains_direct(&self.line)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("PassingFlash did not remove its transient Line".into());
@@ -59,9 +65,9 @@ impl LiveContinuation for LinePassingFlash {
                 if self.line.node_id() != self.identity {
                     return Err("PassingFlash changed the Line semantic identity".into());
                 }
-                live.add(&self.line).map_err(|error| error.to_string())?;
-                if !live
-                    .contains(&self.line)
+                scene.add(&self.line).map_err(|error| error.to_string())?;
+                if !scene
+                    .contains_direct(&self.line)
                     .map_err(|error| error.to_string())?
                 {
                     return Err(
@@ -69,7 +75,9 @@ impl LiveContinuation for LinePassingFlash {
                     );
                 }
                 self.stage = 3;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
@@ -135,14 +143,16 @@ pub struct SignalTrains {
 impl LiveContinuation for SignalTrains {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         use crate::AnimationCompositionRequest as Request;
         use noon_core::SemanticAnimationCompositionKind as Kind;
 
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.wait_segment(0.5)
+                scene
+                    .live()
+                    .wait_segment(0.5)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
@@ -174,7 +184,8 @@ impl LiveContinuation for SignalTrains {
                         .lag_ratio(0.0)
                         .rate_func(RateFunction::Linear),
                 };
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_composition(&request, AnimationOptions::new())
                     .map_err(|error| error.to_string())?;
                 self.stage = 2;
@@ -183,13 +194,18 @@ impl LiveContinuation for SignalTrains {
             2 => {
                 for (signals, _) in &self.trains {
                     for signal in signals {
-                        if live.contains(signal).map_err(|error| error.to_string())? {
+                        if scene
+                            .contains_direct(signal)
+                            .map_err(|error| error.to_string())?
+                        {
                             return Err("PassingFlash did not retire a transient signal".into());
                         }
                     }
                 }
                 self.stage = 3;
-                live.wait_segment(0.5)
+                scene
+                    .live()
+                    .wait_segment(0.5)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
@@ -246,22 +262,22 @@ pub fn train_program() -> Result<LiveProgram<SignalTrains>, String> {
 /// After sealing, ordinary ExecutionSession::seek restores those revisions.
 pub fn train_playback() -> Result<crate::SceneExecution, String> {
     let record = || -> Result<_, Box<dyn std::error::Error>> {
-        let (scene, mut continuation) = train_scene()?;
+        let (mut scene, mut continuation) = train_scene()?;
         let mut execution = scene.execution_session()?;
         execution.begin_replay_retention(noon_runtime::ReplayLimits::default())?;
-        {
-            let mut live = scene.live(&mut execution);
-            loop {
-                let step = continuation.resume(&mut live)?;
-                let ContinuationStep::Await(segment) = step else {
-                    break;
-                };
-                live.advance_segment_to(segment, segment.end_time())?;
-                live.complete_segment(segment)?;
-            }
+        scene.install_execution(execution);
+        let mut scene = crate::ContinuationScene::new(scene);
+        loop {
+            let step = continuation.resume(&mut scene)?;
+            let ContinuationStep::Await(segment) = step else {
+                break;
+            };
+            let mut live = scene.live();
+            live.advance_segment_to(segment, segment.end_time())?;
+            live.complete_segment(segment)?;
         }
-        execution.seal_replay()?;
-        let mut source = scene.into_execution_with_session(execution)?;
+        scene.owned_execution_mut().seal_replay()?;
+        let mut source = scene.take().into_execution()?;
         source.seek(0.0)?;
         Ok(source)
     };
@@ -271,8 +287,8 @@ pub fn train_playback() -> Result<crate::SceneExecution, String> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveProgramStatus,
-        Mobject, RustHostCallbackTable, Scene,
+        AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation,
+        LiveProgram, LiveProgramStatus, Mobject, RustHostCallbackTable, Scene,
     };
 
     fn admit_completion<C>(
@@ -344,11 +360,11 @@ mod tests {
 
         fn resume(
             &mut self,
-            live: &mut crate::LiveSession<'_>,
+            scene: &mut crate::ContinuationScene,
         ) -> Result<ContinuationStep, Self::Error> {
             if self.activated {
-                if live
-                    .contains(&self.line)
+                if scene
+                    .contains_direct(&self.line)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("PassingFlash did not remove its initially present Line".into());
@@ -356,13 +372,18 @@ mod tests {
                 return Ok(ContinuationStep::Finished);
             }
             self.activated = true;
-            live.declare_and_activate_passing_flash(
-                &self.line,
-                0.25,
-                AnimationOptions::new().run_time(1.0),
-            )
-            .map(ContinuationStep::Await)
-            .map_err(|error| error.to_string())
+            scene
+                .live()
+                .declare_and_activate_composition(
+                    &AnimationCompositionRequest::PassingFlash {
+                        target: &self.line,
+                        time_width: 0.25,
+                        options: AnimationOptions::new().run_time(1.0),
+                    },
+                    AnimationOptions::new(),
+                )
+                .map(ContinuationStep::Await)
+                .map_err(|error| error.to_string())
         }
     }
 
@@ -411,6 +432,9 @@ mod tests {
                     let publication = program.take_renderer_publication().context();
                     assert_eq!(publication, expected);
                     program.admit_publication(publication).unwrap();
+                }
+                LiveProgramStatus::PreparingResources => {
+                    panic!("signal train has no external effect resources")
                 }
                 LiveProgramStatus::Finished => break,
                 LiveProgramStatus::Terminal => panic!("signal train terminated"),

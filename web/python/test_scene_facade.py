@@ -59,7 +59,7 @@ class SceneFacadeTests(unittest.TestCase):
             try:
                 asyncio.run(canonical.await_source_barrier(overridden.wait, 1.0))
             except RuntimeError as error:
-                assert "canonical play/wait" in str(error)
+                assert "canonical operation on the current Scene" in str(error)
             else:
                 raise AssertionError("custom wait must retain its original execution path")
         """)
@@ -88,7 +88,7 @@ class SceneFacadeTests(unittest.TestCase):
             scene = Scene()
             calls = []
             scene._canonical_authoring_context = SimpleNamespace(
-                liveBindClickIndicate=lambda *args: calls.append(args))
+                bindClickIndicate=lambda *args: calls.append(args))
             circle = identity_only_wrapper(Circle)
             circle._scene = scene
             circle._semantic_handle = object()
@@ -152,8 +152,8 @@ class SceneFacadeTests(unittest.TestCase):
             scene = Scene()
             calls = []
             scene._canonical_authoring_context = SimpleNamespace(
-                liveBindClickGlowPulse=lambda *args: calls.append(("pulse", args)),
-                liveClearClickAction=lambda *args: calls.append(("clear", args)))
+                bindClickGlowPulse=lambda *args: calls.append(("pulse", args)),
+                clearClickAction=lambda *args: calls.append(("clear", args)))
             circle = identity_only_wrapper(Circle)
             circle._scene = scene
             circle._semantic_handle = object()

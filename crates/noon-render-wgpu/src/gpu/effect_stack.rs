@@ -1,7 +1,8 @@
-//! Retained ordered composition of the qualified finite LDR operators.
+//! Retained ordered composition of finite compatibility operators and linear Blur.
 //! This is derived GPU work over a caller-owned padded capture, not a scene,
 //! attachment registry, scheduler or clock. Authored scope admission and capture
 //! bounds remain with their existing compiler/renderer owners.
+use super::GpuLease;
 use noon_core::{EffectDefinition, GlowSource};
 
 use super::{
@@ -9,15 +10,19 @@ use super::{
         GaussianBlurCapture, GaussianBlurFilter, GaussianBlurParameters, GaussianBlurScope,
     },
     shadow_filter::{ShadowFilter, ShadowScope},
-    EffectCaptureParameters, EffectPrepareError, EffectRasterStats, GlowCapture, GlowFilter,
-    GlowParameters, GlowScope,
+    EffectCaptureParameters, EffectPixelBounds, EffectPrepareError, EffectRasterStats, GlowCapture,
+    GlowFilter, GlowParameters, GlowScope, PreparedShaderProgram, SampleFilter, SampleParameters,
+    SampleScope,
 };
 
 /// The fixed-quality finite operator profile; no silent truncation of a stack.
 pub use noon_core::MAX_EFFECT_STACK_LEN;
 
 #[derive(Clone, Copy, Debug)]
-pub struct EffectStackParameters {
+pub struct EffectStackParameters<'a> {
+    pub shader: Option<&'a super::ShaderSampleContext>,
+    /// Derived raster working format, shared by capture and every active pass.
+    pub working_format: wgpu::TextureFormat,
     pub output_height: u32,
     pub world_view_height: f64,
     /// Applied once, by the final non-neutral pass.
@@ -25,6 +30,32 @@ pub struct EffectStackParameters {
     /// All currently retained filter images, including warm neutral slots.
     /// Source/mask images and in-flight host resources are accounted separately.
     pub scratch_budget_bytes: u64,
+    /// Original source extent in capture pixels, excluding padding and rounded
+    /// capacity. None describes a raw capture whose entire image is the source.
+    pub source_bounds: Option<EffectPixelBounds>,
+}
+
+impl<'a> EffectStackParameters<'a> {
+    fn dissolve(
+        self,
+        definition: &EffectDefinition,
+        source: &wgpu::Texture,
+        opacity: f32,
+        budget: u64,
+    ) -> SampleParameters<'a> {
+        SampleParameters {
+            shader: self.shader,
+            definition: definition.clone(),
+            output_height: self.output_height,
+            world_view_height: self.world_view_height,
+            source_bounds: self.source_bounds.unwrap_or(EffectPixelBounds {
+                min: [0.0; 2],
+                max: [f64::from(source.width()), f64::from(source.height())],
+            }),
+            scope_opacity: opacity,
+            scratch_budget_bytes: budget,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -32,21 +63,39 @@ enum PassFilter {
     Glow(Box<GlowScope>),
     Blur(Box<GaussianBlurScope>),
     Shadow(Box<ShadowScope>),
+    Sample(Box<SampleScope>),
 }
 impl PassFilter {
-    fn new(definition: EffectDefinition) -> Self {
+    fn new(definition: &EffectDefinition) -> Self {
         match definition {
+            EffectDefinition::Bloom(_) => {
+                unreachable!("authored-view input rejected by capture preflight")
+            }
             EffectDefinition::Glow(_) => Self::Glow(Box::default()),
-            EffectDefinition::Blur(_) => Self::Blur(Box::default()),
+            EffectDefinition::Blur(_) | EffectDefinition::BackdropBlur(_) => {
+                Self::Blur(Box::default())
+            }
             EffectDefinition::Shadow(_) => Self::Shadow(Box::default()),
+            EffectDefinition::NoiseDissolve(_)
+            | EffectDefinition::Pixelate(_)
+            | EffectDefinition::Shader(_) => Self::Sample(Box::default()),
         }
     }
-    fn matches(&self, definition: EffectDefinition) -> bool {
+    fn matches(&self, definition: &EffectDefinition) -> bool {
         matches!(
             (self, definition),
             (Self::Glow(_), EffectDefinition::Glow(_))
-                | (Self::Blur(_), EffectDefinition::Blur(_))
+                | (
+                    Self::Blur(_),
+                    EffectDefinition::Blur(_) | EffectDefinition::BackdropBlur(_)
+                )
                 | (Self::Shadow(_), EffectDefinition::Shadow(_))
+                | (
+                    Self::Sample(_),
+                    EffectDefinition::NoiseDissolve(_)
+                        | EffectDefinition::Pixelate(_)
+                        | EffectDefinition::Shader(_)
+                )
         )
     }
     fn output(&self) -> Option<&wgpu::Texture> {
@@ -54,6 +103,7 @@ impl PassFilter {
             Self::Glow(v) => v.output(),
             Self::Blur(v) => v.output(),
             Self::Shadow(v) => v.output(),
+            Self::Sample(v) => v.output(),
         }
     }
     fn output_view(&self) -> Option<&wgpu::TextureView> {
@@ -61,6 +111,7 @@ impl PassFilter {
             Self::Glow(v) => v.output_view(),
             Self::Blur(v) => v.output_view(),
             Self::Shadow(v) => v.output_view(),
+            Self::Sample(v) => v.output_view(),
         }
     }
     fn scratch_bytes(&self) -> u64 {
@@ -68,6 +119,7 @@ impl PassFilter {
             Self::Glow(v) => v.scratch_bytes(),
             Self::Blur(v) => v.scratch_bytes(),
             Self::Shadow(v) => v.scratch_bytes(),
+            Self::Sample(v) => v.scratch_bytes(),
         }
     }
     fn invalidate(&mut self) {
@@ -75,6 +127,7 @@ impl PassFilter {
             Self::Glow(v) => v.invalidate(),
             Self::Blur(v) => v.invalidate(),
             Self::Shadow(v) => v.invalidate(),
+            Self::Sample(v) => v.invalidate(),
         }
     }
 }
@@ -92,8 +145,28 @@ struct RetainedPass {
 pub struct EffectStackScope {
     passes: Vec<RetainedPass>,
     output: Option<usize>,
+    // One disposable pointwise destination can survive removal of a trailing
+    // mask while this capture still owns authored effects. No semantic identity
+    // or mask parameters live here; an empty/retired scope releases it normally.
+    warm_sample: Option<Box<SampleScope>>,
 }
 impl EffectStackScope {
+    pub(super) fn take_placement_blur(&mut self) -> Option<super::glow_filter::BlurJob> {
+        self.placement_glow()?;
+        let PassFilter::Glow(scope) = &mut self.passes[0].filter else {
+            unreachable!()
+        };
+        GlowFilter::take_blur_job(scope)
+    }
+    pub(super) fn placement_glow(&self) -> Option<&GlowScope> {
+        if self.output != Some(0) || self.passes.len() != 1 {
+            return None;
+        }
+        match &self.passes[0].filter {
+            PassFilter::Glow(scope) if scope.output().is_none() => Some(scope),
+            _ => None,
+        }
+    }
     /// None means ordinary source submission, including an entirely neutral stack.
     pub fn output(&self) -> Option<&wgpu::Texture> {
         self.output
@@ -110,7 +183,11 @@ impl EffectStackScope {
         self.passes
             .iter()
             .map(|pass| pass.filter.scratch_bytes())
-            .sum()
+            .sum::<u64>()
+            + self
+                .warm_sample
+                .as_ref()
+                .map_or(0, |mask| mask.scratch_bytes())
     }
     pub fn clear(&mut self) {
         *self = Self::default();
@@ -124,19 +201,97 @@ impl EffectStackScope {
         self.passes
             .iter()
             .zip(effects)
-            .filter(|(pass, effect)| pass.filter.matches(**effect))
+            .filter(|(pass, effect)| pass.filter.matches(effect))
             .map(|(pass, _)| pass.filter.scratch_bytes())
-            .sum()
+            .sum::<u64>()
+            + self.sample_candidate_bytes(effects)
     }
-    /// An invisible/neutral capture still retires removed or replaced slots.
-    /// Surviving warm resources remain charged; no GPU work is necessary.
-    pub(super) fn deactivate_profile(&mut self, effects: &[EffectDefinition]) {
-        self.passes.truncate(effects.len());
-        for (pass, &effect) in self.passes.iter_mut().zip(effects) {
-            if !pass.filter.matches(effect) {
-                pass.filter = PassFilter::new(effect);
+    fn sample_candidate_bytes(&self, effects: &[EffectDefinition]) -> u64 {
+        if effects.is_empty() {
+            return 0;
+        }
+        self.passes
+            .iter()
+            .skip(effects.len())
+            .rev()
+            .find_map(|pass| match &pass.filter {
+                PassFilter::Sample(mask) => Some(mask.scratch_bytes()),
+                _ => None,
+            })
+            .or_else(|| self.warm_sample.as_ref().map(|mask| mask.scratch_bytes()))
+            .unwrap_or(0)
+    }
+    fn sample_reuse_index(&self, effects: &[EffectDefinition]) -> Option<usize> {
+        (self.sample_candidate_bytes(effects) > 0)
+            .then(|| {
+                effects.iter().enumerate().find_map(|(index, effect)| {
+                    (matches!(
+                        effect,
+                        EffectDefinition::NoiseDissolve(_)
+                            | EffectDefinition::Pixelate(_)
+                            | EffectDefinition::Shader(_)
+                    ) && self
+                        .passes
+                        .get(index)
+                        .is_none_or(|pass| !pass.filter.matches(effect)))
+                    .then_some(index)
+                })
+            })
+            .flatten()
+    }
+    fn sync_profile(&mut self, effects: &[EffectDefinition]) {
+        if effects.is_empty() {
+            self.clear();
+            return;
+        }
+        for pass in self.passes.drain(effects.len().min(self.passes.len())..) {
+            if let PassFilter::Sample(mut mask) = pass.filter {
+                mask.retire_shader_program();
+                self.warm_sample = Some(mask);
             }
         }
+        for (index, effect) in effects.iter().enumerate() {
+            if self
+                .passes
+                .get(index)
+                .is_some_and(|pass| pass.filter.matches(effect))
+            {
+                continue;
+            }
+            let filter = if matches!(
+                effect,
+                EffectDefinition::NoiseDissolve(_)
+                    | EffectDefinition::Pixelate(_)
+                    | EffectDefinition::Shader(_)
+            ) {
+                self.warm_sample
+                    .take()
+                    .map(|mut mask| {
+                        mask.invalidate();
+                        PassFilter::Sample(mask)
+                    })
+                    .unwrap_or_else(|| PassFilter::new(effect))
+            } else {
+                PassFilter::new(effect)
+            };
+            let pass = RetainedPass {
+                filter,
+                revision: 0,
+            };
+            if index == self.passes.len() {
+                self.passes.push(pass);
+            } else {
+                self.passes[index] = pass;
+            }
+        }
+    }
+    /// Surviving warm resources remain charged; no GPU work is necessary.
+    pub(super) fn deactivate_profile(&mut self, effects: &[EffectDefinition]) {
+        if self.passes.is_empty() {
+            self.output = None;
+            return;
+        }
+        self.sync_profile(effects);
         self.output = None;
     }
 }
@@ -148,13 +303,164 @@ pub struct EffectStackFilter {
     glow: GlowFilter,
     blur: GaussianBlurFilter,
     shadow: ShadowFilter,
+    pub(super) sample: SampleFilter,
 }
 
 impl EffectStackFilter {
-    /// Every active pass consumes the preceding encoded-premultiplied RGBA8
-    /// output. Painted glow uses that input alpha; silhouette glow uses the
-    /// original declared geometry mask. Transparent border and sample grid are
-    /// unchanged. Caller must provide the full cumulative padded source extent.
+    pub(super) fn supports_glow_placement(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> bool {
+        let limits = device.limits();
+        matches!(
+            format,
+            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+        ) && limits.max_bind_groups >= 2
+            && limits.max_uniform_buffers_per_shader_stage >= 2
+            && limits.max_sampled_textures_per_shader_stage >= 3
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_glow_placement(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        scope: &mut EffectStackScope,
+        capture: GlowCapture<'_>,
+        effects: &[EffectDefinition],
+        parameters: EffectStackParameters,
+        layout: &wgpu::BindGroupLayout,
+        defer_blur: bool,
+    ) -> Result<EffectRasterStats, EffectPrepareError> {
+        let prepared = preflight(device, &self.sample, scope, capture, effects, parameters)?;
+        let [EffectDefinition::Glow(definition)] = effects else {
+            unreachable!("only a standalone Glow can use placement composition");
+        };
+        assert_eq!(prepared.last, Some(0));
+        scope.sync_profile(effects);
+        let pass = &mut scope.passes[0];
+        let PassFilter::Glow(glow) = &mut pass.filter else {
+            unreachable!()
+        };
+        let stats = self.glow.prepare_placement(
+            device,
+            queue,
+            encoder,
+            glow,
+            capture,
+            GlowParameters {
+                definition: *definition,
+                output_height: parameters.output_height,
+                world_view_height: parameters.world_view_height,
+                scope_opacity: parameters.scope_opacity,
+                scratch_budget_bytes: prepared.budgets[0],
+            },
+            layout,
+            parameters.working_format,
+            defer_blur,
+            parameters.source_bounds,
+        )?;
+        if stats.bytes_uploaded != 0 || stats.blur_passes != 0 {
+            pass.revision += 1;
+        }
+        scope.output = Some(0);
+        Ok(EffectRasterStats {
+            scratch_bytes: scope.scratch_bytes(),
+            ..stats
+        })
+    }
+
+    pub(super) fn encode_glow_blurs(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        jobs: Vec<super::glow_filter::BlurJob>,
+    ) -> EffectRasterStats {
+        self.glow.encode_blur_jobs(device, encoder, jobs)
+    }
+
+    pub(super) fn draw_glow_placement<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        scope: &'a EffectStackScope,
+        placement: &'a wgpu::BindGroup,
+        single_sample: bool,
+    ) -> bool {
+        let Some(glow) = scope.placement_glow() else {
+            return false;
+        };
+        self.glow
+            .draw_placement(pass, glow, placement, single_sample);
+        true
+    }
+    pub(super) fn shader_program(
+        &self,
+        device: &wgpu::Device,
+        source: &noon_core::WgslEffectProgram,
+    ) -> Result<GpuLease<PreparedShaderProgram>, EffectPrepareError> {
+        self.sample.shader_program(device, source)
+    }
+    pub(super) fn remember_shader_program(&mut self, program: &GpuLease<PreparedShaderProgram>) {
+        self.sample.remember_shader_program(program);
+    }
+    pub(super) fn live_shader_programs(&self) -> usize {
+        self.sample.live_shader_programs()
+    }
+
+    pub(super) fn copy_shader_program_cache_from(
+        &mut self,
+        device: &wgpu::Device,
+        previous: &Self,
+    ) {
+        self.sample
+            .copy_shader_program_cache_from(device, &previous.sample);
+    }
+
+    pub(super) fn pin_shader_programs(
+        &self,
+        device: &wgpu::Device,
+        scope: Option<&EffectStackScope>,
+        definitions: &[EffectDefinition],
+    ) -> Result<[Option<GpuLease<PreparedShaderProgram>>; MAX_EFFECT_STACK_LEN], EffectPrepareError>
+    {
+        if definitions.len() > MAX_EFFECT_STACK_LEN {
+            return Err(EffectPrepareError::StackExceedsProfile);
+        }
+        let mut programs = std::array::from_fn(|_| None);
+        for (index, definition) in definitions.iter().enumerate() {
+            if let Some(shader) = definition.as_shader() {
+                let previous = scope
+                    .and_then(|scope| scope.passes.get(index))
+                    .and_then(|pass| match &pass.filter {
+                        PassFilter::Sample(scope) => Some(scope.as_ref()),
+                        _ => None,
+                    });
+                programs[index] = Some(self.sample.shader_program_for_scope(
+                    device,
+                    shader.program(),
+                    previous,
+                )?);
+            }
+        }
+        Ok(programs)
+    }
+
+    /// Fallible device preparation shared with the ordinary sampled filter.
+    /// Keep the lease alive through the first coherent stack preparation.
+    pub async fn prepare_shader_program(
+        &mut self,
+        device: &wgpu::Device,
+        source: &noon_core::WgslEffectProgram,
+    ) -> Result<(GpuLease<PreparedShaderProgram>, EffectRasterStats), wgpu::Error> {
+        self.sample.prepare_shader_program(device, source).await
+    }
+
+    /// Each pass consumes the preceding output in the declared working format.
+    /// Compatibility operators use encoded-premultiplied RGBA8; linear Blur
+    /// preserves associated RGBA16Float radiance. Painted glow uses input alpha;
+    /// silhouette glow uses the original geometry mask. Caller provides the full
+    /// cumulative padded extent on the unchanged transparent-border sample grid.
     ///
     /// All profile/capability/budget checks precede resource changes or queue
     /// writes, including checks for later passes. Clean preparation allocates,
@@ -174,27 +480,18 @@ impl EffectStackFilter {
             budgets,
             active,
             last,
-        } = preflight(device, scope, capture, effects, parameters)?;
-        scope.passes.truncate(effects.len());
+            _programs,
+        } = preflight(device, &self.sample, scope, capture, effects, parameters)?;
         if last.is_none() && scope.passes.is_empty() {
             scope.output = None;
             return Ok(EffectRasterStats::default());
         }
-        for (index, &effect) in effects.iter().enumerate() {
-            if index == scope.passes.len() {
-                scope.passes.push(RetainedPass {
-                    filter: PassFilter::new(effect),
-                    revision: 0,
-                });
-            } else if !scope.passes[index].filter.matches(effect) {
-                scope.passes[index].filter = PassFilter::new(effect);
-            }
-        }
+        scope.sync_profile(effects);
         let mut stats = EffectRasterStats::default();
         let mut input = capture.source.clone();
         let mut revision = capture.revision;
         if last.is_some() {
-            for (index, (&effect, &budget)) in effects.iter().zip(&budgets).enumerate() {
+            for (index, (effect, &budget)) in effects.iter().zip(&budgets).enumerate() {
                 if !active[index] {
                     continue;
                 }
@@ -210,6 +507,22 @@ impl EffectStackFilter {
                     revision,
                 };
                 let work = match (&mut pass.filter, effect) {
+                    (
+                        PassFilter::Sample(filter),
+                        definition @ (EffectDefinition::NoiseDissolve(_)
+                        | EffectDefinition::Pixelate(_)
+                        | EffectDefinition::Shader(_)),
+                    ) => self.sample.prepare_encode(
+                        device,
+                        queue,
+                        encoder,
+                        filter,
+                        GaussianBlurCapture {
+                            source: capture.source,
+                            revision,
+                        },
+                        parameters.dissolve(definition, capture.source, opacity, budget),
+                    )?,
                     (PassFilter::Glow(filter), EffectDefinition::Glow(definition)) => {
                         let upload = self.glow.prepare(
                             device,
@@ -217,7 +530,7 @@ impl EffectStackFilter {
                             filter,
                             capture,
                             GlowParameters {
-                                definition,
+                                definition: *definition,
                                 output_height: parameters.output_height,
                                 world_view_height: parameters.world_view_height,
                                 scope_opacity: opacity,
@@ -231,9 +544,13 @@ impl EffectStackFilter {
                             ..upload
                         }
                     }
-                    (PassFilter::Blur(filter), EffectDefinition::Blur(definition)) => {
+                    (PassFilter::Blur(filter), definition)
+                        if definition.as_blur().is_some()
+                            || definition.as_backdrop_blur().is_some() =>
+                    {
                         let sigma_pixels = definition
                             .radius()
+                            .expect("Gaussian radius")
                             .to_output_pixels(
                                 parameters.output_height,
                                 parameters.world_view_height,
@@ -280,7 +597,7 @@ impl EffectStackFilter {
                                 source: capture.source,
                                 revision,
                             },
-                            definition,
+                            *definition,
                             parameters.output_height,
                             parameters.world_view_height,
                             opacity,
@@ -311,10 +628,12 @@ struct PreparedStack {
     budgets: [u64; MAX_EFFECT_STACK_LEN],
     active: [bool; MAX_EFFECT_STACK_LEN],
     last: Option<usize>,
+    _programs: [Option<GpuLease<PreparedShaderProgram>>; MAX_EFFECT_STACK_LEN],
 }
 
 fn preflight(
     device: &wgpu::Device,
+    samples: &SampleFilter,
     scope: &EffectStackScope,
     capture: GlowCapture<'_>,
     effects: &[EffectDefinition],
@@ -331,27 +650,66 @@ fn preflight(
         .map_err(EffectPrepareError::Parameter)?;
     let limits = device.limits();
     let size = [capture.source.width(), capture.source.height()];
+    if scope.passes.iter().any(|p| {
+        p.filter
+            .output()
+            .is_some_and(|output| output == capture.source)
+    }) || scope
+        .warm_sample
+        .as_ref()
+        .and_then(|mask| mask.output())
+        .is_some_and(|output| output == capture.source)
+    {
+        return Err(EffectPrepareError::UnsupportedCapture);
+    }
+    let linear = capture.source.format() == wgpu::TextureFormat::Rgba16Float;
+    if linear != (parameters.working_format == wgpu::TextureFormat::Rgba16Float) {
+        return Err(EffectPrepareError::UnsupportedCapture);
+    }
     let pixels = u64::from(size[0]) * u64::from(size[1]);
     let mut budgets = [0; MAX_EFFECT_STACK_LEN];
     let mut active = [false; MAX_EFFECT_STACK_LEN];
     let mut total = 0_u64;
+    let mut programs = std::array::from_fn(|_| None);
+    let sample_reuse = scope.sample_reuse_index(effects);
+    let warm_sample_bytes = scope.sample_candidate_bytes(effects);
     let mut last = None;
-    for (index, &effect) in effects.iter().enumerate() {
+    for (index, effect) in effects.iter().enumerate() {
         let values = EffectCaptureParameters {
-            definition: effect,
+            definition: effect.clone(),
             output_height: parameters.output_height,
             world_view_height: parameters.world_view_height,
             scope_opacity: parameters.scope_opacity,
         };
+        let cost = values.filter_bytes_per_pixel(parameters.working_format)?;
+        if let Some(shader) = effect.as_shader() {
+            // Pin every program through encoding: a later pass can never lose
+            // its last external lease after earlier passes changed resources.
+            let previous = scope.passes.get(index).and_then(|pass| match &pass.filter {
+                PassFilter::Sample(scope) => Some(scope.as_ref()),
+                _ => None,
+            });
+            programs[index] =
+                Some(samples.shader_program_for_scope(device, shader.program(), previous)?);
+        }
         let sigma = values.sigma_pixels()?;
         if values.is_neutral_at_sigma(sigma) || parameters.scope_opacity == 0.0 {
             budgets[index] = scope
                 .passes
                 .get(index)
                 .filter(|pass| pass.filter.matches(effect))
-                .map_or(0, |pass| pass.filter.scratch_bytes());
+                .map_or_else(
+                    || {
+                        if sample_reuse == Some(index) {
+                            warm_sample_bytes
+                        } else {
+                            0
+                        }
+                    },
+                    |pass| pass.filter.scratch_bytes(),
+                );
         } else {
-            super::glow_filter::validate_capture(capture.source)?;
+            super::glow_filter::validate_working_capture(capture.source)?;
             values.offset_pixels()?;
             if size.contains(&0) || size.iter().any(|&v| v > limits.max_texture_dimension_2d) {
                 return Err(EffectPrepareError::ExtentExceedsDevice);
@@ -360,8 +718,8 @@ fn preflight(
                 effect,
                 EffectDefinition::Blur(_) | EffectDefinition::Shadow(_)
             ) && sigma > 0.0
-                && (limits.max_color_attachments < 3
-                    || limits.max_color_attachment_bytes_per_sample < 12)
+                && (limits.max_color_attachments < if linear { 1 } else { 3 }
+                    || limits.max_color_attachment_bytes_per_sample < if linear { 8 } else { 12 })
             {
                 return Err(EffectPrepareError::Blur(
                     super::GaussianBlurPrepareError::InsufficientColorAttachments,
@@ -386,10 +744,26 @@ fn preflight(
             {
                 return Err(EffectPrepareError::RevisionExhausted);
             }
-            let cost = values.filter_bytes_per_pixel();
             budgets[index] = pixels
                 .checked_mul(cost)
                 .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
+            if let definition @ (EffectDefinition::NoiseDissolve(_)
+            | EffectDefinition::Pixelate(_)
+            | EffectDefinition::Shader(_)) = effect
+            {
+                super::sample_filter::validate_input(
+                    GaussianBlurCapture {
+                        source: capture.source,
+                        revision: capture.revision,
+                    },
+                    parameters.dissolve(
+                        definition,
+                        capture.source,
+                        parameters.scope_opacity,
+                        budgets[index],
+                    ),
+                )?;
+            }
             active[index] = true;
             last = Some(index);
         }
@@ -397,10 +771,16 @@ fn preflight(
             .checked_add(budgets[index])
             .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
     }
+    if sample_reuse.is_none() {
+        total = total
+            .checked_add(warm_sample_bytes)
+            .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
+    }
     if total > parameters.scratch_budget_bytes {
         return Err(EffectPrepareError::ScratchBudgetExceeded);
     }
     Ok(PreparedStack {
+        _programs: programs,
         budgets,
         active,
         last,

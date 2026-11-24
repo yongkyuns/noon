@@ -3,8 +3,8 @@
 //! Artwork is supplied by the caller, never bundled or fetched by the engine.
 //! The same continuation can be hosted natively or in a direct Rust/WASM host.
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    MobjectFamily, RateFunction, Scene, SvgImportOptions,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, Mobject, MobjectFamily,
+    RateFunction, Scene, SvgImportOptions,
 };
 use std::rc::Rc;
 
@@ -18,29 +18,41 @@ pub struct SvgMorph {
 impl LiveContinuation for SvgMorph {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         let segment = match self.stage {
-            0 => live.wait_segment(0.5).map_err(|error| error.to_string())?,
+            0 => scene
+                .live()
+                .wait_segment(0.5)
+                .map_err(|error| error.to_string())?,
             1 | 3 => {
                 let target = if self.stage == 1 {
                     &self.target
                 } else {
                     &self.restored
                 };
-                live.declare_and_activate_family_transform_to(
-                    &self.source,
-                    target,
-                    AnimationOptions::new()
-                        .run_time(1.8)
-                        .rate_func(RateFunction::Smooth),
-                )
-                .map_err(|error| error.to_string())?
+                scene
+                    .live()
+                    .declare_and_activate_family_transform_to(
+                        &self.source,
+                        target,
+                        AnimationOptions::new()
+                            .run_time(1.8)
+                            .rate_func(RateFunction::Smooth),
+                    )
+                    .map_err(|error| error.to_string())?
             }
-            2 => live.wait_segment(0.75).map_err(|error| error.to_string())?,
-            4 => live.wait_segment(0.85).map_err(|error| error.to_string())?,
+            2 => scene
+                .live()
+                .wait_segment(0.75)
+                .map_err(|error| error.to_string())?,
+            4 => scene
+                .live()
+                .wait_segment(0.85)
+                .map_err(|error| error.to_string())?,
             5 => {
                 // Completion/hold must not leave execution-only padding hidden.
-                live.copy_family(&self.source)
+                scene
+                    .copy_family(&self.source)
                     .map_err(|error| error.to_string())?;
                 self.stage = 6;
                 return Ok(ContinuationStep::Finished);

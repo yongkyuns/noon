@@ -43,10 +43,37 @@ impl Mobject {
     }
 }
 
+impl crate::Scene {
+    /// Count only the addressed root's own points. Running scenes observe the
+    /// current publication, with authored counts for detached family roots.
+    pub fn own_point_count(&self, target: MobjectTarget<'_>) -> Result<usize, AuthoringError> {
+        let store = self.integration_store();
+        target.require_store(store)?;
+        let Some(execution) = self.running_execution() else {
+            return target.get_num_points();
+        };
+        match target {
+            MobjectTarget::Object(object) => {
+                effective_mobject_point_count(store, execution, object)
+            }
+            MobjectTarget::Family(family) => {
+                execution.require_published_store(&store.borrow())?;
+                match family.own_object()? {
+                    Some(object) if execution.semantic_object_is_reachable(object.node_id()) => {
+                        effective_mobject_point_count(store, execution, &object)
+                    }
+                    Some(object) => object.get_num_points(),
+                    None => Ok(0),
+                }
+            }
+        }
+    }
+}
+
 /// Count this object's own points from one coherent effective publication.
 /// Geometry retains the same morph/reveal observation as a live path query;
 /// image quads and text roots do not require a vector-path conversion.
-pub fn effective_mobject_point_count(
+pub(crate) fn effective_mobject_point_count(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     object: &Mobject,
@@ -61,7 +88,7 @@ pub fn effective_mobject_point_count(
         .map_err(AuthoringError::from)?;
     match observed.object.content {
         noon_core::ObjectContentRef::Image(_) => Ok(4),
-        noon_core::ObjectContentRef::Text(_) => Ok(0),
+        noon_core::ObjectContentRef::Text(_) | noon_core::ObjectContentRef::Composed(_) => Ok(0),
         noon_core::ObjectContentRef::Geometry(_) => {
             let path = effective_geometry_path(&observed)?;
             PathQuery::prepare(&path, SemanticTransform2_5D::default())

@@ -1,5 +1,5 @@
 use super::*;
-use noon::{ContinuationStep, LiveSession, LiveSessionError, RateFunction, Scene, SemanticVec3};
+use noon::{ContinuationStep, LiveSessionError, RateFunction, Scene, SemanticVec3};
 use noon_core::{
     HostCallbackId, NativeInputModifiers, NativePointerInputKind, NativePointerPosition,
     PlaybackControl, SemanticMutationTransaction,
@@ -27,6 +27,47 @@ fn moving_source() -> StaticExecutionSource {
         scene.into_execution().unwrap(),
         RustHostCallbackTable::new(),
     )
+}
+
+#[test]
+fn native_viewer_replays_completed_source_history_without_rerunning_source() {
+    let mut scene = Scene::new();
+    let point = scene.circle(0.25).unwrap();
+    scene.add(&point).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    session
+        .session_mut()
+        .begin_replay_retention(Default::default())
+        .unwrap();
+    for step in 0..2 {
+        if step == 1 {
+            session
+                .scene_mut()
+                .shift_3d(&point, noon::SemanticVec3::new(2.0, 0.0, 0.0))
+                .unwrap();
+        }
+        let segment = session.live().wait_segment(1.0).unwrap();
+        session
+            .session_mut()
+            .advance_to(segment.end_time())
+            .unwrap();
+        session.live().complete_segment(segment).unwrap();
+    }
+    session.session_mut().seal_replay_for_viewer().unwrap();
+    let mut execution = session;
+    execution.seek(0.0).unwrap();
+    let mut source = StaticExecutionSource::new(execution, RustHostCallbackTable::new());
+    assert_eq!(source.finite_transport_end(), Some(2.0));
+    for (time, x) in [(0.5, 0.0), (1.5, 2.0), (0.5, 0.0)] {
+        source.seek_to(time).unwrap();
+        assert_eq!(
+            source.session().frame().objects[0].transform.translation.x,
+            x
+        );
+    }
+    source.advance_to(1.5).unwrap();
+    assert_eq!(source.frame_time(), 1.5);
+    source.retire_execution_source().unwrap();
 }
 
 #[test]
@@ -91,26 +132,29 @@ fn invalid_native_seek_preserves_committed_frame_and_publication() {
 }
 
 #[test]
-fn native_transport_does_not_adopt_finished_source_continuations() {
+fn native_transport_adopts_a_completed_static_source_at_the_exact_zero_range() {
     struct Finished;
     impl LiveContinuation for Finished {
+        const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
         type Error = LiveSessionError;
-        fn resume(&mut self, _live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            _scene: &mut noon::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
             Ok(ContinuationStep::Finished)
         }
     }
-    let mut source = LiveProgramExecutionSource::new(
+    let mut source = PlaybackExecutionSource::new(
         Scene::new().into_live_program(Finished).unwrap(),
         RustHostCallbackTable::new(),
     )
     .unwrap();
     assert!(!source.source_active());
     assert_eq!(source.session().finite_timeline_end_time(), Some(0.0));
-    assert_eq!(source.finite_transport_end(), None);
-    assert!(matches!(
-        source.seek_to(0.0),
-        Err(NativeHostError::PlaybackControlsUnavailable)
-    ));
+    assert_eq!(source.finite_transport_end(), Some(0.0));
+    source.seek_to(0.0).unwrap();
+    assert_eq!(source.frame_time(), 0.0);
+    assert!(!source.can_seek_to(0.001));
 }
 
 #[test]
@@ -135,7 +179,7 @@ fn native_transport_rejects_a_completed_live_projection_even_after_seek_to_zero(
         .unwrap();
     session.session_mut().advance_to(1.0).unwrap();
     session.live().complete_segment(segment).unwrap();
-    session.live().remove(&marker).unwrap();
+    session.scene_mut().remove(&marker).unwrap();
     session.seek(0.0).unwrap();
     // The completed source removed its marker without retaining history; the
     // current finite plan cannot reconstruct the former time-zero membership.

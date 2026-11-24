@@ -74,10 +74,11 @@ fn tracked_fixture(
     );
     let committed = transaction.apply(&mut store).unwrap();
     store.attach_to_scene(root).unwrap();
-    let mut session = ExecutionSession::from_semantic_root_with_animation_root(
+    let mut session = ExecutionSession::from_semantic_root_with_animation_root_at(
         &store,
         root,
         committed.resolve(animation).unwrap(),
+        0.0,
     )
     .unwrap();
     session

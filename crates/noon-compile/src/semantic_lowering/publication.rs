@@ -1,4 +1,5 @@
 //! Local lowering for an exclusively prepared authored transaction.
+mod composed;
 mod effect;
 use std::collections::{HashMap, HashSet};
 
@@ -47,11 +48,6 @@ pub enum SemanticPublicationLoweringError {
         index: usize,
     },
     UnsupportedReactiveMembership {
-        object: SemanticTransactionNodeRef,
-    },
-    /// A transaction-local text object has no stable semantic identity through
-    /// which its pre-owned resource dependencies can be attributed.
-    UnsupportedTextMembership {
         object: SemanticTransactionNodeRef,
     },
     UnsupportedCameraMembership {
@@ -114,10 +110,6 @@ impl std::fmt::Display for SemanticPublicationLoweringError {
             Self::UnsupportedReactiveMembership { object } => write!(
                 f,
                 "semantic object {object:?} has reactive bindings that require incremental reactive lowering"
-            ),
-            Self::UnsupportedTextMembership { object } => write!(
-                f,
-                "transaction-local text object {object:?} requires a pre-owned semantic resource scope"
             ),
             Self::UnsupportedCameraMembership { object } => write!(
                 f,
@@ -232,6 +224,136 @@ pub struct PreparedSemanticPublication {
 impl PreparedSemanticPublication {
     pub fn value_transaction(&self) -> &ExecutionMutationTransaction {
         &self.values
+    }
+
+    /// Newly executable bindings only. Detached edits and parameter changes do
+    /// not require a GPU module, and unrelated execution rows are never visited.
+    pub fn introduced_shader_programs(
+        &self,
+    ) -> impl Iterator<Item = &noon_core::WgslEffectProgram> {
+        let entries = self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.compiled.effects.as_ref())
+            .flat_map(|stack| stack.definitions())
+            .filter_map(|definition| definition.as_shader().map(|shader| shader.program()));
+        let additions = self
+            .values
+            .mutations()
+            .iter()
+            .filter_map(|patch| match patch {
+                ExecutionPatch::SetEffectStack {
+                    expected,
+                    effects: Some(stack),
+                    ..
+                } => Some((expected, stack)),
+                _ => None,
+            })
+            .flat_map(|(expected, stack)| {
+                stack
+                    .attachments()
+                    .iter()
+                    .zip(stack.definitions())
+                    .filter_map(move |(attachment, definition)| {
+                        (!expected.contains(attachment))
+                            .then(|| definition.as_shader())
+                            .flatten()
+                            .map(|shader| shader.program())
+                    })
+            });
+        entries.chain(additions)
+    }
+
+    /// Admit the finite shader color profile against final proposed membership.
+    /// A view-profile change has a whole-view dependency closure; otherwise only
+    /// changed shader owners and their proposed ancestors are visited.
+    pub fn validate_shader_view_profile(
+        &self,
+        prepared: &PreparedSemanticMutationTransaction<'_>,
+        index: &SemanticExecutionIndex,
+        reachability: &SemanticExecutionReachability,
+        camera: SemanticNodeId,
+    ) -> Result<(), SemanticPublicationLoweringError> {
+        use noon_core::ViewColorProfile;
+        if prepared.node_is_removed(camera)
+            || prepared.proposed_object_state(camera)?.view_color_profile()
+                != ViewColorProfile::LinearHdr
+        {
+            return Ok(());
+        }
+        let unsupported = || SemanticLoweringError::UnsupportedEffectProfile { owner: camera };
+        let current_hdr = prepared
+            .store()
+            .node(camera)
+            .and_then(|node| node.semantic_object_state())
+            .is_some_and(|state| state.view_color_profile() == ViewColorProfile::LinearHdr);
+        if !current_hdr {
+            let mut pending = reachability
+                .execution_roots()
+                .filter(|root| !prepared.node_is_removed(*root))
+                .map(SemanticTransactionNodeRef::Existing)
+                .collect::<Vec<_>>();
+            let mut seen = HashSet::new();
+            while let Some(owner) = pending.pop() {
+                if !seen.insert(owner) {
+                    continue;
+                }
+                if prepared
+                    .animation_effect_snapshot(owner)?
+                    .iter()
+                    .any(|effect| effect.definition.as_shader().is_some())
+                {
+                    return Err(unsupported().into());
+                }
+                match prepared.family_members(owner) {
+                    Ok(members) => pending.extend(members),
+                    Err(SemanticTransactionReadError::NotFamily(_)) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            return Ok(());
+        }
+        let uses_shader = |effects: Option<&std::sync::Arc<crate::CompiledEffectStack>>| {
+            effects.is_some_and(|stack| {
+                stack
+                    .definitions()
+                    .iter()
+                    .any(|effect| effect.as_shader().is_some())
+            })
+        };
+        let owners = self
+            .entries
+            .iter()
+            .filter(|entry| uses_shader(entry.compiled.effects.as_ref()))
+            .map(|entry| entry.object)
+            .chain(self.values.mutations().iter().filter_map(|patch| {
+                match patch {
+                    ExecutionPatch::SetEffectStack {
+                        object, effects, ..
+                    } if uses_shader(effects.as_ref()) => Some(
+                        index
+                            .semantic_object_id(*object)
+                            .expect("prepared effect owner is indexed")
+                            .into(),
+                    ),
+                    _ => None,
+                }
+            }));
+        let mut pending = owners.collect::<Vec<_>>();
+        let mut seen = HashSet::new();
+        while let Some(owner) = pending.pop() {
+            if !seen.insert(owner) {
+                continue;
+            }
+            if owner
+                .existing()
+                .is_some_and(|node| reachability.is_execution_root(node))
+            {
+                return Err(unsupported().into());
+            }
+            pending.extend(prepared.family_parents(owner)?);
+        }
+        Ok(())
     }
 
     pub fn resource_additions(&self) -> &CompiledResources {
@@ -537,10 +659,13 @@ fn validate_mutations(
                 | SemanticMutation::ReplaceContent { .. }
                 | SemanticMutation::SetBarMetadata { .. }
                 | SemanticMutation::SetInset2DView { .. }
+                | SemanticMutation::SetViewColorProfile { .. }
                 | SemanticMutation::SetAngleValue { .. }
                 | SemanticMutation::AddUpdater { .. }
                 | SemanticMutation::RemoveUpdater { .. }
                 | SemanticMutation::ClearUpdaters { .. }
+                | SemanticMutation::SetUpdatingSuspended { .. }
+                | SemanticMutation::SetViewerDraggable { .. }
                 | SemanticMutation::SetClickAction { .. }
                 | SemanticMutation::ReplaceDecimalNumber { .. }
                 | SemanticMutation::ReplaceTextPresentationBaseline { .. }
@@ -611,6 +736,7 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
     validate_mutations(prepared.mutations(), handled_scalar_signals, Some(prepared))?;
     let (mut values, mut resource_additions, numeric_text) =
         lower_semantic_publication(prepared, index, reachability, handled_scalar_signals)?;
+    super::viewer_groups::prepare(prepared, reachability, &mut values)?;
     let inset_updates = prepare_inset_updates(prepared)?;
     // Existing display updates precede removals. Entry relations are installed
     // after their CreateObject patch below; pending identities are already planned.
@@ -706,10 +832,23 @@ fn prepare_semantic_publication_with_handled_scalar_signals(
         }
     }
 
+    composed::prepare(
+        prepared,
+        reachability,
+        &mut values,
+        &mut possible_entry_refs,
+        &mut possible_exit_nodes,
+    )?;
     let entries = possible_entry_refs
         .into_iter()
         .map(|object| {
-            lower_prepared_entry(prepared, object, &inset_updates, &mut resource_additions)
+            lower_prepared_entry(
+                prepared,
+                reachability,
+                object,
+                &inset_updates,
+                &mut resource_additions,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -1210,7 +1349,17 @@ fn collect_prepared_entry_leaves(
             | SemanticTransactionReadError::Existing(
                 noon_core::SemanticSceneOperationError::NotSemanticObject(_),
             ),
-        ) => {}
+        ) => {
+            if (!prepared.animation_effect_snapshot(node)?.is_empty()
+                || prepared.family_style(node)?.object_opacity != 1.0
+                || prepared.has_family_appearance_target(node))
+                && node
+                    .existing()
+                    .is_none_or(|id| !reachability.is_object_reachable(id))
+            {
+                leaves.push(node);
+            }
+        }
         Err(error) => return Err(error.into()),
     }
     for member in prepared.family_members(node)? {
@@ -1272,10 +1421,14 @@ fn collect_existing_exit_leaves(
 
 fn lower_prepared_entry(
     prepared: &PreparedSemanticMutationTransaction<'_>,
+    reachability: &SemanticExecutionReachability,
     object: SemanticTransactionNodeRef,
     inset_updates: &HashMap<SemanticTransactionNodeRef, Option<CompiledInset2DView>>,
     resource_additions: &mut CompiledResources,
 ) -> Result<PreparedEntry, SemanticPublicationLoweringError> {
+    if composed::unrendered_family(prepared, object)? {
+        return composed::entry(prepared, reachability, object);
+    }
     let state = prepared.proposed_object_state(object)?;
     let semantic_id = prepared
         .planned_node_id(object)
@@ -1290,30 +1443,20 @@ fn lower_prepared_entry(
         return Err(SemanticPublicationLoweringError::UnsupportedReactiveMembership { object });
     }
     let (content, text_bounds) = match state.content {
-        SemanticObjectContent::Geometry(content) => lower_content(
-            semantic_id,
-            SemanticObjectContent::Geometry(content),
-            Some(prepared.store()),
-            resource_additions,
-        )
-        .map_err(|error| SemanticPublicationLoweringError::PreparedContent { object, error })?,
+        content @ (SemanticObjectContent::Geometry(_) | SemanticObjectContent::Text(_)) => {
+            lower_content(
+                semantic_id,
+                content,
+                Some(prepared.store()),
+                resource_additions,
+            )
+            .map_err(|error| SemanticPublicationLoweringError::PreparedContent { object, error })?
+        }
         SemanticObjectContent::Image(image) => {
             let content = resource_additions
                 .capture_image(prepared.store(), image)
                 .map_err(SemanticPublicationLoweringError::Resource)?;
             (content.into(), None)
-        }
-        SemanticObjectContent::Text(text) => {
-            let node = object
-                .existing()
-                .ok_or(SemanticPublicationLoweringError::UnsupportedTextMembership { object })?;
-            lower_content(
-                node,
-                SemanticObjectContent::Text(text),
-                Some(prepared.store()),
-                resource_additions,
-            )
-            .map_err(|error| SemanticPublicationLoweringError::PreparedContent { object, error })?
         }
     };
     let lowered = super::projection::lower_object_state(semantic_id, &state, prepared.store())
@@ -1324,6 +1467,7 @@ fn lower_prepared_entry(
         lowered.base_transform,
         lowered.base_style,
     );
+    compiled.view_color_profile = lowered.view_color_profile;
     compiled.effects = effect::lower_prepared_attachment(prepared, object)?;
     if let Some(paint) = lowered.fill_paint.as_deref() {
         resource_additions
@@ -1335,6 +1479,9 @@ fn lower_prepared_entry(
     compiled.spatial = lowered.spatial.map(Box::new);
     compiled.base_z_index = state.z_index();
     compiled.draw_enabled = state.draw_enabled();
+    compiled.click_indicate = lowered.click_indicate;
+    compiled.viewer_draggable = lowered.viewer_draggable;
+    compiled.viewer_group = super::viewer_groups::proposed(prepared, object, reachability);
     let numeric_text = lower_numeric_text_driver(&state, prepared.store(), resource_additions)?;
     let inset_view = inset_updates
         .get(&object)
@@ -1356,11 +1503,14 @@ fn lower_prepared_entry(
 
 #[derive(Default)]
 struct PublicationDomains {
+    view_color_profile: bool,
     transform: bool,
     style: bool,
     content: bool,
     z_index: bool,
     draw_enabled: bool,
+    click_indicate: bool,
+    viewer_draggable: bool,
     numeric: bool,
     semantic_transform: bool,
     spatial_state: bool,
@@ -1398,6 +1548,11 @@ fn lower_semantic_publication(
                     _ => flags.style = true,
                 }
             }
+            SemanticMutation::SetViewColorProfile { object, .. } => {
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().view_color_profile = true;
+                }
+            }
             SemanticMutation::SetObjectTransform { object, .. } => {
                 if let Some(object) = object.existing() {
                     domains.entry(object).or_default().semantic_transform = true;
@@ -1432,6 +1587,16 @@ fn lower_semantic_publication(
             SemanticMutation::SetDrawEnabled { node, .. } => {
                 if let Some(object) = node.existing() {
                     domains.entry(object).or_default().draw_enabled = true;
+                }
+            }
+            SemanticMutation::SetViewerDraggable { object, .. } => {
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().viewer_draggable = true;
+                }
+            }
+            SemanticMutation::SetClickAction { object, .. } => {
+                if let Some(object) = object.existing() {
+                    domains.entry(object).or_default().click_indicate = true;
                 }
             }
             SemanticMutation::SetZIndex { node, .. } => {
@@ -1471,7 +1636,7 @@ fn lower_semantic_publication(
             | SemanticMutation::AddUpdater { .. }
             | SemanticMutation::RemoveUpdater { .. }
             | SemanticMutation::ClearUpdaters { .. }
-            | SemanticMutation::SetClickAction { .. } => {}
+            | SemanticMutation::SetUpdatingSuspended { .. } => {}
             _ => unreachable!("supported vocabulary checked above"),
         }
     }
@@ -1492,7 +1657,7 @@ fn lower_semantic_publication(
         // glow outside the same finite profile accepted at initial lowering.
         effect::lower_prepared_attachment(prepared, node.into())?;
         super::paint::lower_fill(node, &state, prepared.store())?;
-        // Object-owned interaction/metadata declarations have no render-value patch.
+        // Non-executable metadata declarations need no object-row patch.
         let Some(flags) = domains.get(&node) else {
             continue;
         };
@@ -1506,6 +1671,12 @@ fn lower_semantic_publication(
                 )?,
             });
         }
+        if flags.viewer_draggable {
+            mutations.push(ExecutionPatch::SetViewerDraggable {
+                object,
+                enabled: state.viewer_draggable(),
+            });
+        }
         if flags.draw_enabled {
             mutations.push(ExecutionPatch::SetDrawEnabled {
                 object,
@@ -1516,6 +1687,14 @@ fn lower_semantic_publication(
             mutations.push(ExecutionPatch::SetZIndex {
                 object,
                 value: state.z_index(),
+            });
+        }
+        // Release an action before changing its analytic content domain. Install
+        // a new action only after content reaches the proposed target domain.
+        if flags.click_indicate && super::projection::click_indicate_binding(&state).is_none() {
+            mutations.push(ExecutionPatch::SetClickIndicate {
+                object,
+                binding: None,
             });
         }
         if flags.content {
@@ -1546,6 +1725,12 @@ fn lower_semantic_publication(
                 text_bounds,
             });
         }
+        if flags.click_indicate && super::projection::click_indicate_binding(&state).is_some() {
+            mutations.push(ExecutionPatch::SetClickIndicate {
+                object,
+                binding: super::projection::click_indicate_binding(&state),
+            });
+        }
         if flags.transform || flags.semantic_transform || flags.spatial_state {
             let prior = prepared
                 .store()
@@ -1572,6 +1757,12 @@ fn lower_semantic_publication(
                     transform: lower_semantic_transform(node, &state)?,
                 });
             }
+        }
+        if flags.view_color_profile {
+            mutations.push(ExecutionPatch::SetViewColorProfile {
+                object,
+                profile: state.view_color_profile(),
+            });
         }
         if flags.style {
             if let Some(paint) = state.style.fill.as_ref() {
@@ -1622,6 +1813,14 @@ fn lower_numeric_text_driver(
         },
         font_size: number.font_size(),
         point_to_scene_scale: binding.point_to_scene_scale(),
+        anchor_left: state
+            .content
+            .text()
+            .and_then(|handle| store.text_resources().get(handle))
+            .expect("semantic numeric metadata has an authored text resource")
+            .bounds
+            .min
+            .x,
         token_resources: binding.token_resources().to_vec().into(),
     }))
 }

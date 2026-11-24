@@ -381,7 +381,7 @@ export function assertFollowingDirectLifecycle(observation, oracle, backend) {
   assert.ok(observation.before?.publication && typeof observation.before.publication === "object"
     && Object.keys(observation.before.publication).length > 0, "missing direct publication identity");
   assertFollowingState(observation.before, oracle.terminal_state, `${backend}/direct-completion`);
-  assert.equal(observation.denial, "typed execution APIs require a direct session source",
+  assert.equal(observation.denial, "live continuation does not support arbitrary seek",
     "seekDirect must reject access to the live program's owned session");
   assert.deepEqual(observation.after, observation.before,
     "rejected direct seek must preserve the complete effective publication");

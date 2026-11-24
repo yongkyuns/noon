@@ -1,5 +1,6 @@
 //! Deterministic scalar history uses authored tracks, not sampled host results.
-use noon::{ExecutionSession, RateFunction, RustHostCallbackTable, Scene};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::{RateFunction, RustHostCallbackTable, Scene, SceneExecution, ValueTracker};
 use noon_core::{
     HostCallbackId, ReactiveValue, SemanticMutationTransaction, SemanticNodeId,
     SemanticObjectState, SemanticStore, StoredGeometry, TrackTiming,
@@ -23,6 +24,15 @@ fn fixture() -> (SemanticStore, SemanticNodeId, SemanticNodeId) {
     scope.apply(&mut store).unwrap();
     (store, tracker, external)
 }
+fn scene_fixture() -> (SceneExecution, ValueTracker, ValueTracker) {
+    let mut scene = Scene::new();
+    let object = scene.circle(0.5).unwrap();
+    scene.add(&object).unwrap();
+    let tracker = scene.value_tracker(0.0).unwrap();
+    let external = scene.value_tracker(4.0).unwrap();
+    (scene.into_execution().unwrap(), tracker, external)
+}
+
 fn scalar(session: &ExecutionSession, signal: SemanticNodeId) -> f32 {
     match session.effective_signal_value(signal).unwrap() {
         ReactiveValue::Scalar(value) => *value,
@@ -71,56 +81,75 @@ fn predeclared_curve_playback_stays_sparse_and_replay_matches_authored_evaluatio
         assert_eq!(session.runtime_identity(), identity);
         assert_eq!(store.scene_revision(), authored);
     }
-    assert_eq!(session.replay_stats().payloads_retained, 0);
+    assert_eq!(session.replay_stats().revisions_retained, 0);
+    // The two immutable authored tracks are charged once, without sampled
+    // revisions or additional payloads from forward evaluation and seeking.
+    assert_eq!(session.replay_stats().payloads_retained, 2);
 }
 
 #[test]
 fn appended_segments_and_holds_keep_their_historical_values() {
-    let (mut store, tracker, _) = fixture();
-    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
-    session
+    let (mut execution, tracker, _) = scene_fixture();
+    execution
+        .session_mut()
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();
-    let first = session
-        .declare_and_activate_value_tracker(&mut store, tracker, 2.0, 2.0, RateFunction::Linear)
+    let first = execution
+        .live()
+        .declare_and_activate_value_tracker(&tracker, 2.0, 2.0, RateFunction::Linear)
         .unwrap();
-    assert_eq!(session.seal_replay(), Err(ReplayError::Incomplete));
-    session.advance_segment_to(first, first.end_time()).unwrap();
-    session.complete_segment(&mut store, first).unwrap();
-    session.advance_to(3.0).unwrap();
-    session
-        .set_scalar_signal_value(&mut store, tracker, -1.0)
+    assert_eq!(
+        execution.session_mut().seal_replay(),
+        Err(ReplayError::Incomplete)
+    );
+    execution
+        .live()
+        .advance_segment_to(first, first.end_time())
         .unwrap();
-    let second = session
-        .declare_and_activate_value_tracker(&mut store, tracker, 3.0, 2.0, RateFunction::Smooth)
+    execution.live().complete_segment(first).unwrap();
+    execution.session_mut().advance_to(3.0).unwrap();
+    execution.scene_mut().set_value(&tracker, -1.0).unwrap();
+    let second = execution
+        .live()
+        .declare_and_activate_value_tracker(&tracker, 3.0, 2.0, RateFunction::Smooth)
         .unwrap();
-    session
+    execution
+        .live()
         .advance_segment_to(second, second.end_time())
         .unwrap();
-    session.complete_segment(&mut store, second).unwrap();
-    session.advance_to(6.0).unwrap();
-    session.seal_replay().unwrap();
-    assert_eq!(session.replay_stats().revisions_retained, 5);
-    assert_eq!(session.replay_stats().payloads_retained, 5);
-    let authored = store.scene_revision();
+    execution.live().complete_segment(second).unwrap();
+    execution.session_mut().advance_to(6.0).unwrap();
+    execution.session_mut().seal_replay().unwrap();
+    assert_eq!(execution.session().replay_stats().revisions_retained, 5);
+    assert_eq!(execution.session().replay_stats().payloads_retained, 5);
+    let store = std::rc::Rc::clone(execution.scene().integration_store());
+    let authored = store.borrow().scene_revision();
     for time in [0.0, 0.5, 1.5, 2.0, 2.99, 3.0, 3.75, 5.0, 6.0, 1.0] {
-        session.seek(time).unwrap();
+        execution.seek(time).unwrap();
+        let expected = store
+            .borrow()
+            .semantic_input_scalar_value_at(tracker.node_id(), time)
+            .unwrap();
         assert_eq!(
-            scalar(&session, tracker),
-            store.semantic_input_scalar_value_at(tracker, time).unwrap() as f32
+            execution.scene().value_tracker_value(&tracker).unwrap(),
+            f64::from(expected as f32)
         );
-        assert_eq!(session.publication_context().scene_revision(), authored);
-        assert!(session
-            .set_scalar_signal_value(&mut store, tracker, 7.0)
-            .is_err());
+        let publication = execution.session().publication_context();
+        assert_eq!(publication.scene_revision(), authored);
+        assert!(execution.scene_mut().set_value(&tracker, 7.0).is_err());
+        assert_eq!(execution.session().publication_context(), publication);
     }
-    session.discard_replay_retention();
-    assert_eq!(session.frame().time, 6.0);
-    assert_eq!(scalar(&session, tracker), 3.0);
-    session
-        .set_scalar_signal_value(&mut store, tracker, 7.0)
-        .unwrap();
-    assert_eq!(scalar(&session, tracker), 7.0);
+    execution.session_mut().discard_replay_retention();
+    assert_eq!(execution.session().frame().time, 6.0);
+    assert_eq!(
+        execution.scene().value_tracker_value(&tracker).unwrap(),
+        3.0
+    );
+    execution.scene_mut().set_value(&tracker, 7.0).unwrap();
+    assert_eq!(
+        execution.scene().value_tracker_value(&tracker).unwrap(),
+        7.0
+    );
 }
 
 #[test]
@@ -168,17 +197,25 @@ fn scalar_extensions_obey_shared_budgets_without_breaking_first_execution() {
             payloads: 0,
         },
     ] {
-        let (mut store, tracker, _) = fixture();
-        let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
-        session.begin_replay_retention(limits).unwrap();
-        let segment = session
-            .declare_and_activate_value_tracker(&mut store, tracker, 2.0, 2.0, RateFunction::Linear)
+        let (mut execution, tracker, _) = scene_fixture();
+        execution
+            .session_mut()
+            .begin_replay_retention(limits)
             .unwrap();
-        session
+        let segment = execution
+            .live()
+            .declare_and_activate_value_tracker(&tracker, 2.0, 2.0, RateFunction::Linear)
+            .unwrap();
+        execution
+            .live()
             .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        session.complete_segment(&mut store, segment).unwrap();
-        assert_eq!(scalar(&session, tracker), 2.0);
+        execution.live().complete_segment(segment).unwrap();
+        assert_eq!(
+            execution.scene().value_tracker_value(&tracker).unwrap(),
+            2.0
+        );
+        let session = execution.session_mut();
         assert_eq!(session.seal_replay(), Err(ReplayError::RetentionLimit));
         assert_eq!(session.replay_stats().revisions_retained, 0);
         session.discard_replay_retention();
@@ -192,29 +229,34 @@ fn scalar_extensions_obey_shared_budgets_without_breaking_first_execution() {
 
 #[test]
 fn external_inputs_remain_unrecorded_and_failed_scalar_edits_do_not_poison_history() {
-    let (mut store, tracker, external) = fixture();
-    let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
-    session
+    let (mut execution, tracker, external) = scene_fixture();
+    execution
+        .session_mut()
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();
-    assert!(session
-        .declare_and_activate_value_tracker(
-            &mut store,
-            tracker,
-            f64::NAN,
-            1.0,
-            RateFunction::Linear
-        )
+    assert!(execution
+        .live()
+        .declare_and_activate_value_tracker(&tracker, f64::NAN, 1.0, RateFunction::Linear)
         .is_err());
-    assert_eq!(session.replay_stats().revisions_retained, 0);
-    session
-        .set_scalar_signal_value(&mut store, tracker, 2.0)
+    assert_eq!(execution.session().replay_stats().revisions_retained, 0);
+    execution.scene_mut().set_value(&tracker, 2.0).unwrap();
+    execution
+        .session_mut()
+        .set_reactive_input(external.node_id(), 4.0_f32)
         .unwrap();
-    session.set_reactive_input(external, 4.0_f32).unwrap();
-    session.advance_to(1.0).unwrap();
-    session.set_reactive_input(external, 5.0_f32).unwrap();
-    assert_eq!(session.seal_replay(), Err(ReplayError::UnrecordedInput));
-    assert_eq!(scalar(&session, tracker), 2.0);
+    execution.session_mut().advance_to(1.0).unwrap();
+    execution
+        .session_mut()
+        .set_reactive_input(external.node_id(), 5.0_f32)
+        .unwrap();
+    assert_eq!(
+        execution.session_mut().seal_replay(),
+        Err(ReplayError::UnrecordedInput)
+    );
+    assert_eq!(
+        execution.scene().value_tracker_value(&tracker).unwrap(),
+        2.0
+    );
 }
 
 #[test]
@@ -236,7 +278,7 @@ fn opaque_callbacks_are_not_misclassified_as_replayable_scalar_curves() {
             None,
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
     session
         .begin_replay_retention(ReplayLimits::default())
         .unwrap();

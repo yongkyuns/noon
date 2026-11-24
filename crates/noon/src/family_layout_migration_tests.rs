@@ -1,5 +1,5 @@
 use crate::{
-    AnimationOptions, AuthoringError, FamilyArrangeOptions, FamilyGridOptions, LiveLayoutTarget,
+    AnimationOptions, AuthoringError, FamilyArrangeOptions, FamilyGridOptions, LayoutTarget,
     MobjectTarget, RateFunction, Scene, UnsupportedAuthoringOperation,
 };
 
@@ -82,7 +82,7 @@ fn scene_family_arrangement_and_placement_publish_through_one_owner() {
     scene
         .move_family_to(
             &family,
-            LiveLayoutTarget::Point(5.0, 3.0),
+            LayoutTarget::Point(5.0, 3.0),
             (0.0, 0.0),
             (1.0, 1.0),
         )
@@ -101,7 +101,7 @@ fn scene_family_arrangement_and_placement_publish_through_one_owner() {
     let error = scene
         .move_family_to(
             &family,
-            LiveLayoutTarget::Mobject(&foreign),
+            LayoutTarget::Mobject(&foreign),
             (0.0, 0.0),
             (1.0, 1.0),
         )
@@ -146,7 +146,7 @@ fn scene_family_placement_rejects_active_affine_driver_atomically() {
     let error = scene
         .move_family_to(
             &family,
-            LiveLayoutTarget::Point(10.0, 0.0),
+            LayoutTarget::Point(10.0, 0.0),
             (0.0, 0.0),
             (1.0, 1.0),
         )

@@ -23,10 +23,14 @@ pub struct SampleObservation {
 pub enum ForwardSampleStatus {
     /// One source resume or shared segment drive completed; call `advance` again.
     Progress,
+    /// Prepare the program's owned immutable requests without holding a frame borrow.
+    ResourcePreparationPending,
     /// Consume this exact endpoint publication, then acknowledge its admission.
     /// It is not an additional output frame.
     PublicationPending(PublicationContext),
-    /// Required callbacks and same-time source work have settled at the request.
+    /// Required callbacks and available source work have settled. An externally
+    /// driven source with no queued boundary reports its actual current time,
+    /// which may precede the request; it does not invent a future observation.
     Ready(SampleObservation),
     /// The finite source completed at or before the request. Do not relabel its
     /// endpoint as a later frame; the outer export range/hold policy decides.
@@ -110,6 +114,16 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
         self.program.status()
     }
 
+    pub fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+        self.program.pending_effect_programs()
+    }
+    pub fn publish_prepared_effects(&mut self) -> Result<(), ForwardSampleError<C::Error>> {
+        self.program
+            .publish_prepared_effects()
+            .map(|_| ())
+            .map_err(ForwardSampleError::Program)
+    }
+
     /// Query the existing runtime-owned spatial cache without advancing time,
     /// invoking callbacks, consuming a publication or admitting a continuation.
     pub fn query_viewport(
@@ -162,6 +176,9 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
         }
 
         match self.program.status() {
+            LiveProgramStatus::PreparingResources => {
+                Ok(ForwardSampleStatus::ResourcePreparationPending)
+            }
             LiveProgramStatus::PublicationPending(context) => {
                 self.phase = Phase::Endpoint {
                     context,
@@ -183,6 +200,15 @@ impl<'a, C: LiveContinuation> ForwardSample<'a, C> {
                 Err(ForwardSampleError::Inactive)
             }
             LiveProgramStatus::ReadyToResume => {
+                if !self.program.can_resume() {
+                    let observation = self.observation();
+                    self.phase = Phase::Observed {
+                        observation,
+                        finished: false,
+                        consumed: false,
+                    };
+                    return Ok(ForwardSampleStatus::Ready(observation));
+                }
                 self.spend_transition()?;
                 if let Err(error) = self.program.resume() {
                     self.phase = Phase::Failed;

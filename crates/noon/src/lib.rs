@@ -1,25 +1,106 @@
 //! Direct Rust authoring and coherent live execution for Noon.
 //!
-//! Start with [`Scene`] and [`Mobject`]. Scene-owned persistent operations such as
-//! geometry creation, family translation and linear/grid arrangement use the same
-//! route before and after execution bootstrap. Raw handle edits remain authored
+//! [`BlockingScene`] also supports ordinary synchronous helper functions through
+//! a platform runner. Its `play` and `wait` return only after logical completion
+//! and publication admission while the host continues rendering and input.
+//! The native desktop prototype is `noon_native::run_scene`; direct WASM support
+//! is opt-in through the browser host's experimental `blocking-scene` feature.
+//!
+//! Start with [`Scene::script`] for sequential animation authoring:
+//!
+//! ```no_run
+//! use noon::{Color, Create, LiveProgram, Scene, SceneScript, ScriptError, Vec2};
+//!
+//! fn lesson() -> Result<LiveProgram<SceneScript>, ScriptError> {
+//!     Scene::script(|scene| async move {
+//!         let circle = scene.circle(0.6)?;
+//!         scene.set_fill(&circle, Color::BLUE, 1.0)?;
+//!         scene.play(Create::new(&circle)).await?;
+//!         scene.play(circle.animate().shift(Vec2::new(2.0, 0.0))).await?;
+//!         scene.wait(0.5).await?;
+//!         Ok(())
+//!     })
+//! }
+//! ```
+//!
+//! Pass the returned program to a native or direct Rust/WASM host. Scene setup
+//! runs through the first await during construction; subsequent source code runs
+//! after each exact completion/publication boundary. [`ScriptScene`] exposes
+//! short authoring operations without holding a scene borrow across an await.
+//! Owned animation requests capture effective state when play starts. Tuples,
+//! arrays and vectors compose simultaneous animations in one play.
+//!
+//! Families use the same capability before and after a boundary:
+//!
+//! ```no_run
+//! use noon::{FamilyArrangeOptions, FamilyGridOptions, Scene};
+//! # fn example() -> Result<(), noon::ScriptError> {
+//! let program = Scene::script(|scene| async move {
+//!     let first = scene.circle(0.4)?;
+//!     let second = scene.square(0.8)?;
+//!     let group = scene.family([&first, &second])?;
+//!     scene.arrange_family_with_options(
+//!         &group,
+//!         &FamilyArrangeOptions::new(1.0, 0.0, 0.3, true),
+//!     )?;
+//!     scene.add(&group)?;
+//!     scene.wait(0.5).await?;
+//!     let third = scene.circle(0.3)?;
+//!     scene.add_family_members(&group, [&third])?;
+//!     scene.arrange_family_in_grid_with_options(
+//!         &group,
+//!         &FamilyGridOptions { columns: Some(2), ..Default::default() },
+//!     )?;
+//!     scene.wait(0.5).await?;
+//!     Ok(())
+//! })?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Mixed groups accept [`MobjectTarget::Object`] and [`MobjectTarget::Family`].
+//! Membership edits preserve handles and use one atomic publication. Layout
+//! observes authored bounds during setup and effective bounds during execution.
+//! [`ScriptScene::effective_layout`] and [`ScriptScene::effective_family_layout`]
+//! explicitly query the current publication. Fluent animation requests support
+//! individual planar objects and independent ordinary vector families in one play.
+//! Animating shared members through separate requests in the same play is
+//! rejected atomically. Nested or content-owning groups and effect-bearing
+//! families are outside this method-target profile; see [`Animate`].
+//!
+//! [`ScriptScene`] also constructs images and coordinate families through the
+//! shared Scene operations. With their provider features enabled, `text`, `typst`,
+//! `math_typst`, and `code` construct ordinary retained content through the same
+//! capability. [`BlockingScene`] exposes those short operations as well, so a
+//! synchronous helper can construct a title or equation after a completed play
+//! without borrowing raw scene storage. Constructors leave content detached;
+//! use `add` (or a supported introducer animation) to display it.
+//!
+//! [`Scene`] and [`Mobject`] also support explicit authoring. Scene-owned operations such as
+//! geometry/family creation, membership, paint edits, translation and linear/grid arrangement use
+//! the same route before and after execution bootstrap. [`ScriptScene`] delegates
+//! its persistent edits to these Scene-owned operations. Raw handle edits remain authored
 //! operations; they do not publish to an already running execution.
 //!
-//! [`Scene::live`] is for explicit borrowed-execution integration. Continuations
-//! also receive a [`LiveSession`] for their segment and callback capabilities.
+//! [`Scene::into_execution`] keeps authoring and execution together. Borrow
+//! [`SceneExecution::live`] or [`ContinuationScene::live`] for segment control.
+//! Scene scripts manage segments and callback phases internally. Hosts that
+//! configure a runtime before installation use [`integration::scene_execution`].
 //!
 //! # Public surface
 //!
 //! - The crate root and [`prelude`] contain explicit authoring values, handles,
 //!   live operations, logical completion, and their errors.
 //! - [`integration`] contains raw arena access types, host/callback plumbing and
-//!   renderer observations. These are advanced facilities, not ordinary authoring.
+//!   renderer observations. Host-managed runtimes use
+//!   [`integration::scene_execution::ExecutionSession`].
 //! - `diagnostics` (feature gated) provides explicit debug/export observations.
 //!
 //! Use [`Scene::authored`] for base state and [`Scene::effective`] for the current
-//! published value; a cold scene has no effective observation. Complete a segment with
-//! [`LiveSession::complete_segment`] before resuming dependent authoring. Ordinary
-//! completion is not a GPU-retirement fence. See the `shared_authoring` example.
+//! published value; a cold scene has no effective observation. Script awaits use
+//! the shared logical completion contract automatically. Explicit integrations
+//! complete their segments with [`LiveSession::complete_segment`]. Completion is
+//! not a GPU-retirement fence. See the `shared_authoring` example.
 //!
 //! A glob import cannot accidentally expose raw semantic storage or frame plumbing:
 //!
@@ -30,6 +111,10 @@
 //!
 //! ```compile_fail,E0432
 //! use noon::FrameState;
+//! ```
+//!
+//! ```compile_fail,E0603
+//! use noon::ExecutionSession;
 //! ```
 //!
 //! Implementation modules are not an alternative public facade:
@@ -58,6 +143,7 @@ mod angle_authoring;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod animated_number_line_example;
 mod animation_authoring;
+mod animation_request;
 mod arc_authoring;
 pub use angle_authoring::ManimAngleOptions;
 pub mod angle_example;
@@ -66,6 +152,8 @@ mod arrow_endpoints;
 mod arrow_queries;
 mod arrow_scale;
 mod authoring_error;
+mod binding_error;
+mod binding_options;
 mod boolean_authoring;
 mod brace_authoring;
 mod camera_authoring;
@@ -87,13 +175,17 @@ mod effect_authoring;
 mod effective_capture;
 pub mod number_line_example;
 
-/// Finite leaf effects through shared semantic identity, ordinary animation
-/// channels and retained source capture. Groups/stacks have separate admission.
+/// Checked appearance definitions using shared semantic identity and ordinary
+/// animation channels. Source roles and host capabilities have explicit admission.
 pub mod effects {
     pub use crate::effect_authoring::{EffectHandle, EffectSelector};
     pub use noon_core::{
-        Blur, EffectDefinition, EffectOffset, EffectParameterError, EffectRadius, EffectUpdate,
-        Glow, GlowSource, Pixels, Shadow,
+        BackdropBlur, Bloom, Blur, DissolveDirection, DissolveStyle, EffectDefinition,
+        EffectOffset, EffectParameterError, EffectRadius, EffectUpdate, Glow, GlowSource,
+        NoiseDissolve, NoiseDissolveError, Pixelate, Pixels, ShaderCoordinates, ShaderDependencies,
+        ShaderEffect, ShaderParameterDefinition, ShaderParameterKey, ShaderParameterType,
+        ShaderProfile, ShaderProgramError, ShaderSchema, ShaderUnit, ShaderValue, Shadow,
+        WgslEffectProgram,
     };
 }
 mod drawing;
@@ -145,6 +237,10 @@ mod host_callbacks;
 mod image_authoring;
 #[cfg(feature = "image-decode")]
 mod image_decode;
+#[cfg(all(feature = "video-decode", not(target_arch = "wasm32")))]
+mod video_decode;
+#[cfg(all(feature = "video-decode", not(target_arch = "wasm32")))]
+pub use video_decode::{NativeVideoAsset, NativeVideoCache, NativeVideoFrames};
 mod inspection_view;
 pub mod integration;
 #[cfg(feature = "latex")]
@@ -175,6 +271,7 @@ mod scalar_authoring;
 mod scene;
 mod scene_membership;
 mod scene_ordering;
+mod scene_script;
 mod sector_authoring;
 mod semantic_mobject;
 mod source_reconciliation;
@@ -196,11 +293,15 @@ pub mod time_series_plotting_example;
 #[cfg(feature = "latex")]
 mod variable_authoring;
 mod vector_field_authoring;
+mod vector_field_options;
 mod vector_space_authoring;
 mod z_index;
 mod zoomed_scene;
 
 pub use animation_authoring::DeclaredAnimation;
+pub use animation_request::{
+    parallel, Animate, AnimationRequest, Create, FadeOut, IntoAnimationRequest,
+};
 pub use arc_authoring::ArcAuthoringError;
 pub use arrow_authoring::{
     ManimArrow, ManimArrowOptions, DEFAULT_ARROW_STROKE_WIDTH, DEFAULT_ARROW_STROKE_WIDTH_RATIO,
@@ -236,13 +337,19 @@ pub use elbow_authoring::ElbowAuthoringError;
 pub use execution_segment::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentError, ExecutionSegmentState,
 };
+use execution_session::ExecutionSession;
 pub use execution_session::{
-    ExecutionSegmentCompletionError, ExecutionSession, ExecutionSessionAnimationError,
-    ExecutionSessionCallbackError, ExecutionSessionCallbackReadError, ExecutionSessionCameraError,
-    ExecutionSessionContentError, ExecutionSessionCreateError, ExecutionSessionFadeError,
-    ExecutionSessionInputError, ExecutionSessionInset2DError, ExecutionSessionMaintenanceError,
+    ExecutionSegmentCompletionError, ExecutionSessionAnimationError, ExecutionSessionCallbackError,
+    ExecutionSessionCallbackReadError, ExecutionSessionCameraError, ExecutionSessionContentError,
+    ExecutionSessionCreateError, ExecutionSessionFadeError, ExecutionSessionInputError,
+    ExecutionSessionInset2DError, ExecutionSessionMaintenanceError,
     ExecutionSessionPublicationError, InspectionNavigationError, PointerHoverTransition,
-    SignalTimelineAppendError, TranslationDragError, TranslationDragReceipt, TranslationDragUndo,
+    SignalTimelineAppendError, StagedEffectPublication, TranslationDragError,
+    TranslationDragReceipt, TranslationDragUndo,
+};
+pub use execution_session::{
+    PlanarPickCache, PlanarPickFrame, PlanarViewerPointer, SpatialPickCache, SpatialPickFrame,
+    SpatialPointerInput, SpatialPointerPhase, ViewerIndication,
 };
 pub use family_arrangement::FamilyArrangeOptions;
 pub use family_authoring::{MobjectFamily, MobjectTarget};
@@ -253,7 +360,7 @@ pub use family_callback_paint::{FamilyCallbackPaintError, FamilyPaint};
 pub use family_callback_translation::{CallbackFamilyTranslation, FamilyCallbackTranslationError};
 pub use family_copy::{FamilyCopy, MobjectCopy, SemanticCopy};
 pub use family_grid::{FamilyGridOptions, GridFlow};
-pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor, LiveLayoutTarget};
+pub use family_layout::{FamilyLayout, FamilyLayoutTarget, LayoutAnchor, LayoutTarget};
 pub use family_style::StyleUpdate;
 pub use focus_on_authoring::FocusOnOptions;
 pub use host_callbacks::{RustHostCallbackContext, RustHostCallbackError, RustHostCallbackTable};
@@ -262,7 +369,7 @@ pub use image_authoring::{
 };
 #[cfg(feature = "image-decode")]
 pub use image_decode::{ImageDecodeError, ImageDecodeLimits};
-pub use inspection_view::{InspectionView2D, InspectionViewError};
+pub use inspection_view::{InspectionView2D, InspectionViewError, SpatialInspectionMotion};
 pub use integer_index::IntegerIndex;
 #[cfg(feature = "latex")]
 pub use latex_authoring::{
@@ -270,13 +377,18 @@ pub use latex_authoring::{
     DEFAULT_LATEX_FONT_SIZE, LATEX_POINT_TO_SCENE_SCALE,
 };
 pub use live_program::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
+    ContinuationEffects, ContinuationScene, ContinuationStep, LiveContinuation, LiveProgram,
+    LiveProgramError, LiveProgramStatus,
+};
+#[cfg(feature = "prepared-prefix")]
+pub use live_program::{
+    PlaybackProgram, PlaybackProgramError, PreparedSource, PreparedSourceError,
+    PreparedSourceStatus,
 };
 pub use live_session::{
     AffineLifecycleDirection, AffineLifecycleEndpoint, AnimationCompositionRequest,
-    DrawBorderThenFillOptions, EffectiveMobjectLayout, EffectiveMobjectState, FadeEndpoint,
-    FadeTranslation, IndicateOptions, LiveSession, LiveSessionError, SubsetDisplayMode,
-    TransformToRequest,
+    DrawBorderThenFillOptions, FadeEndpoint, FadeTranslation, IndicateOptions, LiveSession,
+    LiveSessionError, SubsetDisplayMode, TransformToRequest,
 };
 #[cfg(feature = "latex")]
 pub use matrix_display::{
@@ -315,6 +427,7 @@ pub use noon_core::{
     SemanticProjection3D, SemanticRotation3D, SemanticSpatialCompositionDomain,
     SemanticSpatialMaterial, SemanticWorldTransform3D,
 };
+pub use noon_core::{Emission, EmissionError};
 pub use noon_core::{
     GradientError, GradientStop, LinearGradient, PaintTransitionError, RadialGradient,
 };
@@ -322,6 +435,10 @@ pub use noon_core::{HatchPaint, HatchPaintError, HatchPaintOptions};
 pub use noon_core::{ImageAddressMode, ImageFit, ImageMapping, ImagePaintError, ImageUvTransform};
 pub use noon_core::{NoisePaint, NoisePaintError};
 pub use noon_core::{PlaybackControl, PointArrayShape, PointArrayShapeError, RasterImageSampling};
+pub use scene_script::{
+    BlockingScene, SceneScript, ScriptBoundary, ScriptError, ScriptScene, UpdaterFrame,
+    UpdaterRegistration, UpdaterTarget,
+};
 #[cfg(test)]
 mod gradient_authoring_tests;
 #[cfg(test)]
@@ -361,8 +478,9 @@ pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use sample_space::{SampleSpace, SampleSpaceError, SampleSpaceOptions};
 pub use scalar_authoring::{TrackerPosition, ValueTracker, ValueTrackerPlay};
 pub use scene::{
-    Scene, SceneExecution, SceneExecutionError, SceneSection, SceneSectionNavigation,
-    SectionNavigation, SectionType,
+    AuthoredLayoutCenter, EffectiveMobjectLayout, EffectiveMobjectState, MobjectLayout, Scene,
+    SceneExecution, SceneExecutionError, SceneSection, SceneSectionNavigation, SectionNavigation,
+    SectionType,
 };
 pub use scene_membership::SceneMembershipRequest;
 pub use semantic_mobject::{ManimGeometryOptions, ManimLineEndpoints, ManimNextToArgs, Mobject};
@@ -398,6 +516,7 @@ pub use text_part_authoring::TextPartAuthoringError;
 #[cfg(feature = "latex")]
 pub use variable_authoring::{Variable, VariableAuthoringError};
 pub use vector_field_authoring::{ArrowVectorFieldAuthoringError, ManimArrowVectorField};
+pub use vector_field_options::ArrowVectorFieldOptions;
 pub use vector_space_authoring::{
     linear_transformation_path_arc, LinearTransformationAuthoring, LinearTransformationOptions,
 };
@@ -417,9 +536,14 @@ pub mod prelude {
         UvSurfacePlan,
     };
     pub use crate::{
+        parallel, Animate, AnimationRequest, BlockingScene, Create, FadeOut, IntoAnimationRequest,
+        SceneScript, ScriptBoundary, ScriptError, ScriptScene, UpdaterFrame, UpdaterRegistration,
+        UpdaterTarget,
+    };
+    pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,
-        BooleanOperation, Color, ContinuationStep, DeclaredAnimation, DiGraph,
-        DrawBorderThenFillOptions, EffectiveMobjectState, ExecutionSession, FadeEndpoint,
+        BooleanOperation, Color, ContinuationEffects, ContinuationScene, ContinuationStep,
+        DeclaredAnimation, DiGraph, DrawBorderThenFillOptions, EffectiveMobjectState, FadeEndpoint,
         FadeTranslation, Graph, GraphAuthoringError, GraphEdgeMobject, GraphOptions,
         LiveContinuation, LiveProgram, LiveSession, LiveSessionError, ManimArrow,
         ManimArrowOptions, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget,
@@ -448,6 +572,12 @@ pub mod prelude {
 }
 
 pub use family_gradient::color_gradient;
+
+#[cfg(feature = "prepared-prefix")]
+pub use execution_session::PrefixReader;
+pub use execution_session::SourceExecutionRequirement;
+#[cfg(feature = "prepared-prefix")]
+pub use noon_runtime::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher};
 
 #[cfg(all(test, feature = "diagnostics"))]
 mod object_member_queries;

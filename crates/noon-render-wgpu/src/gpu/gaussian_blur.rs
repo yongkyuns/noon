@@ -1,18 +1,39 @@
 //! Retained RGBA Gaussian raster operator for #1897's blur/shadow integration.
 //!
-//! Input and output are encoded-premultiplied LDR. The host supplies a padded
-//! source and its revision, places the result in painter order, and owns queue
-//! submission. This operator owns no semantic identity, scope graph or clock.
+//! Compatibility inputs/outputs are encoded-premultiplied RGBA8; float inputs
+//! stay linear and alpha-associated in RGBA16Float without a unit clamp. The host
+//! supplies a padded source and revision, places the result in painter order and
+//! owns queue submission. There is no semantic identity, scope graph or clock.
 use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const BYTES_PER_PIXEL: u64 = 28; // six packed intermediates and one RGBA8 output
+const LINEAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const LINEAR_BYTES_PER_PIXEL: u64 = 24; // one float image per axis and output
+
+fn working_format(source: wgpu::TextureFormat) -> Option<wgpu::TextureFormat> {
+    match source {
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm => Some(FORMAT),
+        LINEAR_FORMAT => Some(LINEAR_FORMAT),
+        _ => None,
+    }
+}
+fn program_index(format: wgpu::TextureFormat) -> usize {
+    usize::from(format == LINEAR_FORMAT)
+}
+fn bytes_per_pixel(format: wgpu::TextureFormat) -> u64 {
+    if format == LINEAR_FORMAT {
+        LINEAR_BYTES_PER_PIXEL
+    } else {
+        BYTES_PER_PIXEL
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct GaussianBlurCapture<'a> {
-    /// Encoded-premultiplied source, before final scope opacity.
+    /// Associated source in its declared working format, before scope opacity.
     pub source: &'a wgpu::Texture,
     /// Existing source-content revision; advance after in-place source draws.
     pub revision: u64,
@@ -105,7 +126,7 @@ struct Image {
 }
 
 impl Image {
-    fn new(device: &wgpu::Device, size: [u32; 2]) -> Self {
+    fn new(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Noon RGBA Gaussian image"),
             size: wgpu::Extent3d {
@@ -116,7 +137,7 @@ impl Image {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
@@ -128,10 +149,45 @@ impl Image {
 }
 
 #[derive(Debug)]
+enum ReconstructionImages {
+    Packed(Box<[Image; 3]>),
+    Linear(Image),
+}
+impl ReconstructionImages {
+    fn new(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) -> Self {
+        if format == LINEAR_FORMAT {
+            Self::Linear(Image::new(device, size, format))
+        } else {
+            Self::Packed(Box::new(std::array::from_fn(|_| {
+                Image::new(device, size, format)
+            })))
+        }
+    }
+    fn views(&self) -> [&wgpu::TextureView; 3] {
+        match self {
+            Self::Packed(images) => images.each_ref().map(|image| &image.view),
+            Self::Linear(image) => [&image.view; 3],
+        }
+    }
+    fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipeline: &wgpu::RenderPipeline,
+        binding: &wgpu::BindGroup,
+    ) {
+        match self {
+            Self::Packed(images) => encode_pass(encoder, images.each_ref(), pipeline, binding),
+            Self::Linear(image) => encode_pass(encoder, [image], pipeline, binding),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct Resources {
     size: [u32; 2],
-    horizontal: [Image; 3],
-    vertical: [Image; 3],
+    format: wgpu::TextureFormat,
+    horizontal: ReconstructionImages,
+    vertical: ReconstructionImages,
     output: Image,
     uniform: wgpu::Buffer,
     bindings: [wgpu::BindGroup; 3],
@@ -176,7 +232,7 @@ impl GaussianBlurScope {
     }
     pub fn scratch_bytes(&self) -> u64 {
         self.resources.as_ref().map_or(0, |r| {
-            u64::from(r.size[0]) * u64::from(r.size[1]) * BYTES_PER_PIXEL
+            u64::from(r.size[0]) * u64::from(r.size[1]) * bytes_per_pixel(r.format)
         })
     }
     /// Retry all derived commands after abandoning an encoder before submission.
@@ -191,6 +247,7 @@ impl GaussianBlurScope {
 
 #[derive(Debug)]
 struct Programs {
+    format: wgpu::TextureFormat,
     layout: wgpu::BindGroupLayout,
     pipelines: [wgpu::RenderPipeline; 3],
 }
@@ -199,7 +256,7 @@ struct Programs {
 /// capability, sampler, device polling or queue submission is required here.
 #[derive(Debug, Default)]
 pub struct GaussianBlurFilter {
-    programs: Option<Programs>,
+    programs: [Option<Programs>; 2],
 }
 
 impl GaussianBlurFilter {
@@ -229,10 +286,9 @@ impl GaussianBlurFilter {
             return Ok(stats);
         }
         let source = capture.source;
-        if !matches!(
-            source.format(),
-            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
-        ) || source.dimension() != wgpu::TextureDimension::D2
+        let format =
+            working_format(source.format()).ok_or(GaussianBlurPrepareError::UnsupportedCapture)?;
+        if source.dimension() != wgpu::TextureDimension::D2
             || source.depth_or_array_layers() != 1
             || source.sample_count() != 1
             || !source
@@ -242,8 +298,9 @@ impl GaussianBlurFilter {
             return Err(GaussianBlurPrepareError::UnsupportedCapture);
         }
         let size = [source.width(), source.height()];
-        if device.limits().max_color_attachments < 3
-            || device.limits().max_color_attachment_bytes_per_sample < 12
+        let linear = format == LINEAR_FORMAT;
+        if device.limits().max_color_attachments < if linear { 1 } else { 3 }
+            || device.limits().max_color_attachment_bytes_per_sample < if linear { 8 } else { 12 }
         {
             return Err(GaussianBlurPrepareError::InsufficientColorAttachments);
         }
@@ -256,7 +313,7 @@ impl GaussianBlurFilter {
         }
         let scratch_bytes = u64::from(size[0])
             .checked_mul(u64::from(size[1]))
-            .and_then(|pixels| pixels.checked_mul(BYTES_PER_PIXEL))
+            .and_then(|pixels| pixels.checked_mul(bytes_per_pixel(format)))
             .filter(|bytes| *bytes <= parameters.scratch_budget_bytes)
             .ok_or(GaussianBlurPrepareError::ScratchBudgetExceeded)?;
         let uniform = BlurUniform::new(
@@ -269,15 +326,18 @@ impl GaussianBlurFilter {
         );
         // Every input rejection above leaves the prior coherent scope intact.
         stats.kernel_builds = usize::from(scope.sigma != Some(sigma));
-        let programs = self.programs.get_or_insert_with(|| {
+        let programs = self.programs[program_index(format)].get_or_insert_with(|| {
             stats.pipeline_compiles = 3;
-            Programs::new(device)
+            Programs::new(device, format)
         });
-        let recreate = scope.resources.as_ref().is_none_or(|r| r.size != size);
+        let recreate = scope
+            .resources
+            .as_ref()
+            .is_none_or(|r| r.size != size || r.format != format);
         let source_changed = scope.resources.as_ref().is_none_or(|r| r.source != *source);
         if recreate {
             scope.resources = Some(programs.resources(device, source, size));
-            stats.texture_allocations = 7;
+            stats.texture_allocations = if linear { 3 } else { 7 };
             stats.buffer_allocations = 1;
             stats.bind_group_creations = 3;
         } else if source_changed {
@@ -326,21 +386,15 @@ impl GaussianBlurFilter {
         if !scope.active {
             return stats;
         }
-        let programs = self.programs.as_ref().expect("active blur programs");
         let r = scope.resources.as_ref().expect("active blur resources");
+        let programs = self.programs[program_index(r.format)]
+            .as_ref()
+            .expect("active blur programs");
         if scope.blur_dirty {
-            encode_pass(
-                encoder,
-                r.horizontal.each_ref(),
-                &programs.pipelines[0],
-                &r.bindings[0],
-            );
-            encode_pass(
-                encoder,
-                r.vertical.each_ref(),
-                &programs.pipelines[1],
-                &r.bindings[1],
-            );
+            r.horizontal
+                .encode(encoder, &programs.pipelines[0], &r.bindings[0]);
+            r.vertical
+                .encode(encoder, &programs.pipelines[1], &r.bindings[1]);
             stats.blur_passes = 2;
         }
         if scope.output_dirty {
@@ -384,7 +438,18 @@ fn encode_pass<const N: usize>(
 }
 
 impl Programs {
-    fn new(device: &wgpu::Device) -> Self {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Self::with_shader(
+            device,
+            format,
+            if format == LINEAR_FORMAT {
+                include_str!("gaussian_blur_linear.wgsl")
+            } else {
+                include_str!("gaussian_blur.wgsl")
+            },
+        )
+    }
+    fn with_shader(device: &wgpu::Device, format: wgpu::TextureFormat, source: &str) -> Self {
         let uniform = wgpu::BindGroupLayoutEntry {
             binding: 0,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -414,15 +479,18 @@ impl Programs {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("gaussian_blur.wgsl"));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Noon working-color Gaussian"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
         let pipelines = std::array::from_fn(|at| {
             let entry = ["fs_horizontal", "fs_vertical", "fs_output"][at];
             let target = Some(wgpu::ColorTargetState {
-                format: FORMAT,
+                format,
                 blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
             });
-            let targets = if at == 2 {
+            let targets = if at == 2 || format == LINEAR_FORMAT {
                 vec![target]
             } else {
                 vec![target.clone(), target.clone(), target]
@@ -449,7 +517,11 @@ impl Programs {
                 cache: None,
             })
         });
-        Self { layout, pipelines }
+        Self {
+            format,
+            layout,
+            pipelines,
+        }
     }
 
     fn binding(
@@ -488,9 +560,9 @@ impl Programs {
         source: &wgpu::Texture,
         size: [u32; 2],
     ) -> Resources {
-        let horizontal = std::array::from_fn(|_| Image::new(device, size));
-        let vertical = std::array::from_fn(|_| Image::new(device, size));
-        let output = Image::new(device, size);
+        let horizontal = ReconstructionImages::new(device, size, self.format);
+        let vertical = ReconstructionImages::new(device, size, self.format);
+        let output = Image::new(device, size, self.format);
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Noon RGBA Gaussian uniform"),
             size: size_of::<BlurUniform>() as u64,
@@ -500,19 +572,12 @@ impl Programs {
         let view = source.create_view(&Default::default());
         let bindings = [
             self.binding(device, &uniform, [&view; 3]),
-            self.binding(
-                device,
-                &uniform,
-                horizontal.each_ref().map(|image| &image.view),
-            ),
-            self.binding(
-                device,
-                &uniform,
-                vertical.each_ref().map(|image| &image.view),
-            ),
+            self.binding(device, &uniform, horizontal.views()),
+            self.binding(device, &uniform, vertical.views()),
         ];
         Resources {
             size,
+            format: self.format,
             horizontal,
             vertical,
             output,

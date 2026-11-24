@@ -8,7 +8,7 @@ use super::{Text, NATIVE_POINT_TO_SCENE_SCALE};
 use noon_typst::TypstMode;
 
 #[cfg(feature = "typst")]
-pub(crate) struct TypstAdmission {
+struct TypstAdmission {
     identity: noon_core::TextCompilationIdentity,
     resource: noon_core::TextResource,
     fonts: noon_core::FontResourceArena,
@@ -30,7 +30,7 @@ trait CompiledTextAdmission {
 
 #[cfg(feature = "typst")]
 impl TypstAdmission {
-    pub(crate) fn publish<T>(
+    fn publish<T>(
         self,
         store: &mut noon_core::SemanticStore,
         publish: impl FnOnce(
@@ -167,12 +167,12 @@ pub(crate) fn prepare_native_text(text: Text) -> Result<NativeTextAdmission, Tex
 }
 
 #[cfg(feature = "typst")]
-pub(crate) fn prepare_typst(text: Typst) -> Result<TypstAdmission, TextAuthoringError> {
+fn prepare_typst(text: Typst) -> Result<TypstAdmission, TextAuthoringError> {
     prepare_typst_spec(text.0, TypstMode::Markup)
 }
 
 #[cfg(feature = "typst")]
-pub(crate) fn prepare_math_typst(text: MathTypst) -> Result<TypstAdmission, TextAuthoringError> {
+fn prepare_math_typst(text: MathTypst) -> Result<TypstAdmission, TextAuthoringError> {
     prepare_typst_spec(text.0, TypstMode::Math)
 }
 
@@ -180,63 +180,37 @@ impl crate::Scene {
     /// Shape and atomically admit one detached native text Mobject.
     #[cfg(feature = "native-text")]
     pub fn text(&mut self, text: impl Into<Text>) -> Result<crate::Mobject, TextAuthoringError> {
-        self.publish_text_admission(prepare_native_text(text.into())?)
+        self.require_resource_admission()
+            .map_err(TextAuthoringError::Semantic)?;
+        self.publish_compiled_text_admission(prepare_native_text(text.into())?)
     }
 
     /// Create an ordinary detached Typst Mobject in this scene's shared store.
     #[cfg(feature = "typst")]
     pub fn typst(&mut self, text: Typst) -> Result<crate::Mobject, TextAuthoringError> {
-        self.publish_typst_admission(prepare_typst(text)?)
+        self.require_resource_admission()
+            .map_err(TextAuthoringError::Semantic)?;
+        self.publish_compiled_text_admission(prepare_typst(text)?)
     }
 
     /// Create an ordinary detached MathTypst Mobject in this scene's shared store.
     #[cfg(feature = "typst")]
     pub fn math_typst(&mut self, text: MathTypst) -> Result<crate::Mobject, TextAuthoringError> {
-        self.publish_typst_admission(prepare_math_typst(text)?)
-    }
-}
-
-impl crate::Scene {
-    #[cfg(feature = "native-text")]
-    fn publish_text_admission(
-        &mut self,
-        admission: NativeTextAdmission,
-    ) -> Result<crate::Mobject, TextAuthoringError> {
-        self.publish_compiled_text_admission(admission)
-    }
-
-    #[cfg(feature = "typst")]
-    fn publish_typst_admission(
-        &mut self,
-        admission: TypstAdmission,
-    ) -> Result<crate::Mobject, TextAuthoringError> {
-        self.publish_compiled_text_admission(admission)
+        self.require_resource_admission()
+            .map_err(TextAuthoringError::Semantic)?;
+        self.publish_compiled_text_admission(prepare_math_typst(text)?)
     }
 
     fn publish_compiled_text_admission<A: CompiledTextAdmission>(
         &mut self,
         admission: A,
     ) -> Result<crate::Mobject, TextAuthoringError> {
-        let root = self.root();
         let store_rc = std::rc::Rc::clone(self.integration_store());
-        let result = if let Some(execution) = self.running_execution_mut() {
-            execution
-                .require_resource_creation_at_root(&store_rc.borrow(), root)
-                .map_err(|error| TextAuthoringError::Semantic(error.into()))?;
-            let mut store = store_rc.borrow_mut();
-            admission.publish(&mut store, |store, transaction| {
-                execution
-                    .apply_semantic_transaction_at_root(store, root, transaction)
-                    .map_err(|error| TextAuthoringError::Semantic(error.into()))
-            })?
-        } else {
-            let mut store = store_rc.borrow_mut();
-            admission.publish(&mut store, |store, transaction| {
-                transaction
-                    .apply(store)
-                    .map_err(|error| TextAuthoringError::Semantic(error.into()))
-            })?
-        };
+        let result = self.with_semantic_publication(|store, publish| {
+            admission.publish(store, |store, transaction| {
+                publish(store, transaction).map_err(TextAuthoringError::Semantic)
+            })
+        })?;
         let [noon_core::SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
             unreachable!("one text admission creates one detached semantic node")
         };
@@ -409,14 +383,20 @@ mod tests {
         label.shift(1.0, 0.0).unwrap();
         scene.add(&circle).unwrap();
         scene.add(&label).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        assert_eq!(session.frame().objects.len(), 2);
-        assert!(session.frame().objects[0].geometry().is_some());
-        assert!(session.frame().objects[1].text().is_some());
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        assert_eq!(session.session().frame().objects.len(), 2);
+        assert!(session.session().frame().objects[0].geometry().is_some());
+        assert!(session.session().frame().objects[1].text().is_some());
         let resource = label.state().unwrap().content.text().unwrap();
-        let before = scene.integration_store().borrow().text_resources().stats();
-        assert!(scene
+        let before = session
+            .scene()
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .stats();
+        assert!(session
+            .scene()
             .integration_store()
             .borrow()
             .text_resources()
@@ -425,25 +405,37 @@ mod tests {
             .runs
             .iter()
             .all(|run| run.fill.is_none()));
-        let mut live = scene.live(&mut session);
-        live.set_translation(&label, 3.0, -1.0).unwrap();
+        session
+            .scene_mut()
+            .set_translation(&label, 3.0, -1.0)
+            .unwrap();
         assert_eq!(
-            live.effective(&label).unwrap().transform.translation,
+            session
+                .scene()
+                .effective(&label)
+                .unwrap()
+                .transform
+                .translation,
             noon_core::Vec2::new(3.0, -1.0)
         );
         assert_eq!(
-            live.authored(&label).unwrap().content.text(),
+            session.scene().authored(&label).unwrap().content.text(),
             Some(resource)
         );
-        let mut style = live.authored(&label).unwrap().style;
+        let mut style = session.scene().authored(&label).unwrap().style;
         style.fill = Some(noon_core::SemanticPaint::Solid(noon_core::RED));
-        live.replace_style(&label, style).unwrap();
+        session.scene_mut().replace_style(&label, style).unwrap();
         assert_eq!(
-            live.effective(&label).unwrap().style.fill,
+            session.scene().effective(&label).unwrap().style.fill,
             Some(noon_core::RED)
         );
         assert_eq!(
-            scene.integration_store().borrow().text_resources().stats(),
+            session
+                .scene()
+                .integration_store()
+                .borrow()
+                .text_resources()
+                .stats(),
             before
         );
     }
@@ -624,30 +616,37 @@ mod tests {
     #[test]
     fn live_text_created_after_an_empty_wait_enters_through_the_same_session() {
         let scene = crate::Scene::new();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
+        let mut execution = scene.into_execution().unwrap();
+        execution.session_mut().take_frame_changes();
 
         let label = {
-            let mut live = scene.live(&mut session);
+            let mut live = execution.live();
             let wait = live.wait_segment(1.0).unwrap();
             live.advance_segment_to(wait, wait.end_time()).unwrap();
             live.complete_segment(wait).unwrap();
-            live.create_text(super::Text::new("Late")).unwrap()
+            execution
+                .scene_mut()
+                .text(super::Text::new("Late"))
+                .unwrap()
         };
         let resource = label.state().unwrap().content.text().unwrap();
-        assert_eq!(session.frame().time, 1.0);
-        assert!(session.frame().objects.is_empty());
-        assert!(session.take_frame_changes().is_empty());
-        assert!(session.text_resources().get(resource).is_none());
+        assert_eq!(execution.session().frame().time, 1.0);
+        assert!(execution.session().frame().objects.is_empty());
+        assert!(execution.session_mut().take_frame_changes().is_empty());
+        assert!(execution.session().text_resources().get(resource).is_none());
         assert_eq!(
-            scene.integration_store().borrow().scene_revision(),
-            session.publication_context().scene_revision()
+            execution
+                .scene()
+                .integration_store()
+                .borrow()
+                .scene_revision(),
+            execution.session().publication_context().scene_revision()
         );
 
         let fade = {
-            let mut live = scene.live(&mut session);
-            assert!(!live.contains(&label).unwrap());
-            let fade = live
+            assert!(!execution.scene().contains_direct(&label).unwrap());
+            let fade = execution
+                .live()
                 .declare_and_activate_fade(
                     &label,
                     SemanticFadeDirection::In,
@@ -657,58 +656,80 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(fade.start_time(), 1.0);
-            assert!(live.contains(&label).unwrap());
-            assert_eq!(live.effective(&label).unwrap().appearance, 0.0);
+            assert!(execution.scene().contains_direct(&label).unwrap());
+            assert_eq!(execution.scene().effective(&label).unwrap().appearance, 0.0);
             fade
         };
-        assert_eq!(session.frame().objects.len(), 1);
-        assert!(session.text_resources().get(resource).is_some());
-        assert_eq!(session.take_frame_changes().added_indices(), &[0]);
+        assert_eq!(execution.session().frame().objects.len(), 1);
+        assert!(execution.session().text_resources().get(resource).is_some());
+        assert_eq!(
+            execution.session_mut().take_frame_changes().added_indices(),
+            &[0]
+        );
 
-        let mut live = scene.live(&mut session);
+        let mut live = execution.live();
         live.advance_segment_to(fade, fade.end_time()).unwrap();
         live.complete_segment(fade).unwrap();
-        assert!(live.contains(&label).unwrap());
-        assert_eq!(live.effective(&label).unwrap().appearance, 1.0);
+        assert!(execution.scene().contains_direct(&label).unwrap());
+        assert_eq!(execution.scene().effective(&label).unwrap().appearance, 1.0);
     }
 
     #[test]
     fn invalid_live_text_after_wait_changes_neither_resources_nor_publication() {
         let scene = crate::Scene::new();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
+        let mut execution = scene.into_execution().unwrap();
+        execution.session_mut().take_frame_changes();
         {
-            let mut live = scene.live(&mut session);
+            let mut live = execution.live();
             let wait = live.wait_segment(1.0).unwrap();
             live.advance_segment_to(wait, wait.end_time()).unwrap();
             live.complete_segment(wait).unwrap();
         }
-        let revision = scene.integration_store().borrow().scene_revision();
-        let resources = scene.integration_store().borrow().text_resources().stats();
-        let publication = session.publication_context();
-        let frame = session.frame().clone();
+        let revision = execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision();
+        let resources = execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .stats();
+        let publication = execution.session().publication_context();
+        let frame = execution.session().frame().clone();
 
         {
-            let mut live = scene.live(&mut session);
-            assert!(live
-                .create_text(super::Text::new("invalid scale").scale(f32::NAN))
+            assert!(execution
+                .scene_mut()
+                .text(super::Text::new("invalid scale").scale(f32::NAN))
                 .is_err());
-            assert!(live
-                .create_text(super::Text::new("invalid size").with_font_size(0.0))
+            assert!(execution
+                .scene_mut()
+                .text(super::Text::new("invalid size").with_font_size(0.0))
                 .is_err());
         }
 
         assert_eq!(
-            scene.integration_store().borrow().scene_revision(),
+            execution
+                .scene()
+                .integration_store()
+                .borrow()
+                .scene_revision(),
             revision
         );
         assert_eq!(
-            scene.integration_store().borrow().text_resources().stats(),
+            execution
+                .scene()
+                .integration_store()
+                .borrow()
+                .text_resources()
+                .stats(),
             resources
         );
-        assert_eq!(session.publication_context(), publication);
-        assert_eq!(session.frame(), &frame);
-        assert!(session.take_frame_changes().is_empty());
+        assert_eq!(execution.session().publication_context(), publication);
+        assert_eq!(execution.session().frame(), &frame);
+        assert!(execution.session_mut().take_frame_changes().is_empty());
     }
 
     #[test]
@@ -763,27 +784,26 @@ mod tests {
             resources
         );
 
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let publication = session.publication_context();
+        let mut execution = scene.into_execution().unwrap();
+        execution.session_mut().take_frame_changes();
+        let publication = execution.session().publication_context();
         {
-            let mut live = scene.live(&mut session);
             assert!(matches!(
-                live.create_text(super::Text::new("é").with_source_fills([
-                    noon_core::TextSourceFill::new(
-                        noon_core::TextSourceSpan::new(1, 2),
-                        noon_core::RED,
-                    ),
-                ])),
-                Err(crate::LiveSessionError::Text(
-                    super::TextAuthoringError::TextSourceStyle(
-                        noon_core::TextSourceStyleError::InvalidSourceSpan
-                    )
+                execution
+                    .scene_mut()
+                    .text(super::Text::new("é").with_source_fills([
+                        noon_core::TextSourceFill::new(
+                            noon_core::TextSourceSpan::new(1, 2),
+                            noon_core::RED,
+                        ),
+                    ])),
+                Err(super::TextAuthoringError::TextSourceStyle(
+                    noon_core::TextSourceStyleError::InvalidSourceSpan
                 ))
             ));
         }
-        assert_eq!(session.publication_context(), publication);
-        assert!(session.take_frame_changes().is_empty());
+        assert_eq!(execution.session().publication_context(), publication);
+        assert!(execution.session_mut().take_frame_changes().is_empty());
     }
 
     #[test]
@@ -814,68 +834,94 @@ mod tests {
     #[test]
     fn live_constructor_range_colors_admit_and_publish_normally() {
         let scene = crate::Scene::new();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
+        let mut execution = scene.into_execution().unwrap();
+        execution.session_mut().take_frame_changes();
         let label = {
-            let mut live = scene.live(&mut session);
-            let label = live
-                .create_text(
-                    super::Text::new("live color").with_text2color([("color", noon_core::RED)]),
-                )
+            let label = execution
+                .scene_mut()
+                .text(super::Text::new("live color").with_text2color([("color", noon_core::RED)]))
                 .unwrap();
-            live.add(&label).unwrap();
+            execution.scene_mut().add(&label).unwrap();
             label
         };
         let handle = label.state().unwrap().content.text().unwrap();
-        assert!(session
+        assert!(execution
+            .session()
             .text_resources()
             .get(handle)
             .unwrap()
             .runs
             .iter()
             .any(|run| run.fill == Some(noon_core::RED)));
-        assert_eq!(session.take_frame_changes().added_indices().len(), 1);
+        assert_eq!(
+            execution
+                .session_mut()
+                .take_frame_changes()
+                .added_indices()
+                .len(),
+            1
+        );
     }
 
     #[test]
     fn live_typst_created_after_an_empty_wait_reuses_the_same_session() {
         let scene = crate::Scene::new();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
+        let mut execution = scene.into_execution().unwrap();
+        execution.session_mut().take_frame_changes();
         let (label, equation) = {
-            let mut live = scene.live(&mut session);
+            let mut live = execution.live();
             let wait = live.wait_segment(1.0).unwrap();
             live.advance_segment_to(wait, wait.end_time()).unwrap();
             live.complete_segment(wait).unwrap();
             (
-                live.create_typst(super::Typst::new("#text[Late]")).unwrap(),
-                live.create_math_typst(super::MathTypst::new("x^2"))
+                execution
+                    .scene_mut()
+                    .typst(super::Typst::new("#text[Late]"))
+                    .unwrap(),
+                execution
+                    .scene_mut()
+                    .math_typst(super::MathTypst::new("x^2"))
                     .unwrap(),
             )
         };
         let label_resource = label.state().unwrap().content.text().unwrap();
         let equation_resource = equation.state().unwrap().content.text().unwrap();
-        assert!(session.frame().objects.is_empty());
-        assert!(session.take_frame_changes().is_empty());
-        assert!(session.text_resources().get(label_resource).is_none());
-        assert!(session.text_resources().get(equation_resource).is_none());
+        assert!(execution.session().frame().objects.is_empty());
+        assert!(execution.session_mut().take_frame_changes().is_empty());
+        assert!(execution
+            .session()
+            .text_resources()
+            .get(label_resource)
+            .is_none());
+        assert!(execution
+            .session()
+            .text_resources()
+            .get(equation_resource)
+            .is_none());
         assert_eq!(
-            scene.integration_store().borrow().scene_revision(),
-            session.publication_context().scene_revision()
+            execution
+                .scene()
+                .integration_store()
+                .borrow()
+                .scene_revision(),
+            execution.session().publication_context().scene_revision()
         );
 
-        {
-            let mut live = scene.live(&mut session);
-            live.add(&label).unwrap();
-            live.add(&equation).unwrap();
-        }
-        assert_eq!(session.frame().objects.len(), 2);
+        execution.scene_mut().add(&label).unwrap();
+        execution.scene_mut().add(&equation).unwrap();
+        assert_eq!(execution.session().frame().objects.len(), 2);
         assert_eq!(
-            session.text_resources().get(label_resource).unwrap().kind,
+            execution
+                .session()
+                .text_resources()
+                .get(label_resource)
+                .unwrap()
+                .kind,
             noon_core::TextSourceKind::Typst
         );
         assert_eq!(
-            session
+            execution
+                .session()
                 .text_resources()
                 .get(equation_resource)
                 .unwrap()
@@ -887,19 +933,29 @@ mod tests {
     #[test]
     fn invalid_live_typst_changes_neither_resources_nor_publication() {
         let scene = crate::Scene::new();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let revision = scene.integration_store().borrow().scene_revision();
-        let resources = scene.integration_store().borrow().text_resources().stats();
-        let publication = session.publication_context();
+        let mut execution = scene.into_execution().unwrap();
+        execution.session_mut().take_frame_changes();
+        let revision = execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .scene_revision();
+        let resources = execution
+            .scene()
+            .integration_store()
+            .borrow()
+            .text_resources()
+            .stats();
+        let publication = execution.session().publication_context();
 
         {
-            let mut live = scene.live(&mut session);
-            assert!(live
-                .create_typst(super::Typst::new("invalid").with_font_size(0.0))
+            assert!(execution
+                .scene_mut()
+                .typst(super::Typst::new("invalid").with_font_size(0.0))
                 .is_err());
-            assert!(live
-                .create_math_typst(
+            assert!(execution
+                .scene_mut()
+                .math_typst(
                     super::MathTypst::new("invalid").color(noon_core::Color::rgba(
                         f32::NAN,
                         1.0,
@@ -911,16 +967,25 @@ mod tests {
         }
 
         assert_eq!(
-            scene.integration_store().borrow().scene_revision(),
+            execution
+                .scene()
+                .integration_store()
+                .borrow()
+                .scene_revision(),
             revision
         );
         assert_eq!(
-            scene.integration_store().borrow().text_resources().stats(),
+            execution
+                .scene()
+                .integration_store()
+                .borrow()
+                .text_resources()
+                .stats(),
             resources
         );
-        assert_eq!(session.publication_context(), publication);
-        assert!(session.frame().objects.is_empty());
-        assert!(session.take_frame_changes().is_empty());
+        assert_eq!(execution.session().publication_context(), publication);
+        assert!(execution.session().frame().objects.is_empty());
+        assert!(execution.session_mut().take_frame_changes().is_empty());
     }
 
     #[test]
@@ -935,42 +1000,78 @@ mod tests {
         let unused_handle = unused_text.state().unwrap().content.text().unwrap();
         scene.add(&target).unwrap();
         scene.add(&untouched).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        session.take_frame_changes();
-        let target_slot = session.execution_slot_for_frame_index(0).unwrap();
-        let untouched_before = session.frame().objects[1].clone();
-        assert!(session.text_resources().get(text_handle).is_none());
-        assert!(session.text_resources().get(unused_handle).is_none());
+        let mut session = scene.into_execution().unwrap();
+        session.session_mut().take_frame_changes();
+        let target_slot = session.session().execution_slot_for_frame_index(0).unwrap();
+        let untouched_before = session.session().frame().objects[1].clone();
+        assert!(session
+            .session()
+            .text_resources()
+            .get(text_handle)
+            .is_none());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(unused_handle)
+            .is_none());
 
         {
-            let mut live = scene.live(&mut session);
-            live.set_translation(&target, 3.0, -2.0).unwrap();
-            live.replace_content(&target, &replacement_text).unwrap();
+            session
+                .scene_mut()
+                .set_translation(&target, 3.0, -2.0)
+                .unwrap();
+            session
+                .scene_mut()
+                .replace_content(&target, &replacement_text)
+                .unwrap();
             assert_eq!(
-                live.authored(&target).unwrap().content.text(),
+                session.scene().authored(&target).unwrap().content.text(),
                 Some(text_handle)
             );
             assert_eq!(
-                live.effective(&target).unwrap().transform.translation.x,
+                session
+                    .scene()
+                    .effective(&target)
+                    .unwrap()
+                    .transform
+                    .translation
+                    .x,
                 3.0
             );
         }
-        assert_eq!(session.execution_slot_for_frame_index(0), Some(target_slot));
-        assert_eq!(session.frame().objects[1], untouched_before);
-        assert_eq!(session.frame().objects[0].text(), Some(text_handle));
-        assert!(session.frame().objects[0].text_bounds.is_some());
-        assert!(session.text_resources().get(text_handle).is_some());
-        assert!(session.text_resources().get(unused_handle).is_none());
-        assert_eq!(session.last_patch_stats().objects_recomputed, 0);
-        assert_eq!(session.take_frame_changes().object_indices(), &[0]);
+        assert_eq!(
+            session.session().execution_slot_for_frame_index(0),
+            Some(target_slot)
+        );
+        assert_eq!(session.session().frame().objects[1], untouched_before);
+        assert_eq!(
+            session.session().frame().objects[0].text(),
+            Some(text_handle)
+        );
+        assert!(session.session().frame().objects[0].text_bounds.is_some());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(text_handle)
+            .is_some());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(unused_handle)
+            .is_none());
+        assert_eq!(session.session().last_patch_stats().objects_recomputed, 0);
+        assert_eq!(
+            session.session_mut().take_frame_changes().object_indices(),
+            &[0]
+        );
 
-        scene
-            .live(&mut session)
+        session
+            .scene_mut()
             .replace_content(&target, &replacement_geometry)
             .unwrap();
-        assert!(session.frame().objects[0].geometry().is_some());
-        assert!(session.frame().objects[0].text_bounds.is_none());
-        assert_eq!(session.frame().objects[1], untouched_before);
+        assert!(session.session().frame().objects[0].geometry().is_some());
+        assert!(session.session().frame().objects[0].text_bounds.is_none());
+        assert_eq!(session.session().frame().objects[1], untouched_before);
     }
 
     #[test]
@@ -982,14 +1083,22 @@ mod tests {
         let unrelated_resource = unrelated.state().unwrap().content.text().unwrap();
         let semantic_id = label.node_id();
         let authored = label.state().unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene.into_execution().unwrap();
 
-        assert!(session.text_resources().get(label_resource).is_none());
-        assert!(session.text_resources().get(unrelated_resource).is_none());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(label_resource)
+            .is_none());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(unrelated_resource)
+            .is_none());
 
         let segment = {
-            let mut live = scene.live(&mut session);
-            let segment = live
+            let segment = session
+                .live()
                 .declare_and_activate_affine_lifecycle(
                     &label,
                     crate::AffineLifecycleDirection::RemoveTo,
@@ -998,22 +1107,34 @@ mod tests {
                 )
                 .unwrap();
 
-            assert!(live.contains(&label).unwrap());
+            assert!(session.scene_mut().contains_direct(&label).unwrap());
             assert_eq!(label.node_id(), semantic_id);
-            assert_eq!(live.authored(&label).unwrap(), authored);
+            assert_eq!(session.scene().authored(&label).unwrap(), authored);
             segment
         };
-        assert_eq!(session.frame().objects.len(), 1);
-        assert_eq!(session.frame().objects[0].text(), Some(label_resource));
-        assert!(session.frame().objects[0].text_bounds.is_some());
-        assert!(session.text_resources().get(label_resource).is_some());
-        assert!(session.text_resources().get(unrelated_resource).is_none());
+        assert_eq!(session.session().frame().objects.len(), 1);
+        assert_eq!(
+            session.session().frame().objects[0].text(),
+            Some(label_resource)
+        );
+        assert!(session.session().frame().objects[0].text_bounds.is_some());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(label_resource)
+            .is_some());
+        assert!(session
+            .session()
+            .text_resources()
+            .get(unrelated_resource)
+            .is_none());
 
-        let mut live = scene.live(&mut session);
-        live.advance_segment_to(segment, segment.end_time())
+        session
+            .live()
+            .advance_segment_to(segment, segment.end_time())
             .unwrap();
-        live.complete_segment(segment).unwrap();
-        assert!(!live.contains(&label).unwrap());
+        session.live().complete_segment(segment).unwrap();
+        assert!(!session.scene_mut().contains_direct(&label).unwrap());
         assert_eq!(label.node_id(), semantic_id);
         assert_eq!(label.state().unwrap(), authored);
     }
@@ -1084,8 +1205,13 @@ mod tests {
             )
             .replace_content(target.node_id(), foreign.state().unwrap().content);
         assert!(matches!(
-            scene.live(&mut session).apply(transaction),
-            Err(crate::LiveSessionError::Publication(_))
+            crate::integration::scene_execution::publish_at_root(
+                scene.integration_store(),
+                scene.root(),
+                &mut session,
+                transaction
+            ),
+            Err(crate::ExecutionSessionPublicationError::Semantic(_))
         ));
         assert_eq!(target.state().unwrap(), authored_before);
         assert_eq!(session.frame(), &frame_before);

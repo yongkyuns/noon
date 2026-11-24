@@ -2,14 +2,16 @@
 //! Drag the green rectangle; click the blue circle to indicate it.
 //! The ordinary native host forwards input; Rust owns capture and translation.
 use noon::{
-    AnimationOptions, ContinuationStep, IndicateOptions, LiveContinuation, LiveSession, Scene,
-    BLUE, GREEN,
+    AnimationOptions, ContinuationStep, IndicateOptions, LiveContinuation, Scene, BLUE, GREEN,
 };
 
 struct Finish;
 impl LiveContinuation for Finish {
     type Error = std::convert::Infallible;
-    fn resume(&mut self, _: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        _scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
         Ok(ContinuationStep::Finished)
     }
 }

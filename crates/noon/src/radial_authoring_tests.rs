@@ -59,7 +59,7 @@ fn radial_live_animation_keeps_identity_exact_completion_and_independent_opacity
         .advance_segment_to(segment, 1.0)
         .unwrap();
     scene.live(&mut session).complete_segment(segment).unwrap();
-    let authored = scene.live(&mut session).authored(&source).unwrap();
+    let authored = scene.authored(&source).unwrap();
     assert_eq!(
         authored.style.fill,
         Some(SemanticPaint::RadialGradient(endpoint.clone()))
@@ -85,27 +85,24 @@ fn rejected_live_radial_profile_preserves_authored_frame_and_publication() {
         .set_fill_radial_gradient(paint([0.5; 2], [0.5; 2]), Some(0.25))
         .unwrap();
     scene.add(&source).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let before = session.frame().clone();
-    let publication = session.publication_context();
-    let authored = scene.live(&mut session).authored(&source).unwrap();
-    assert!(scene
-        .live(&mut session)
+    let mut running = scene.into_execution().unwrap();
+    let before = running.session().frame().clone();
+    let publication = running.session().publication_context();
+    let authored = running.scene().authored(&source).unwrap();
+    assert!(running
+        .scene_mut()
         .set_fill_radial_gradient(&source, paint([0.5; 2], [1e-60, 0.5]), Some(0.75))
         .is_err());
-    assert_eq!(session.frame(), &before);
-    assert_eq!(session.publication_context(), publication);
-    assert_eq!(
-        scene.live(&mut session).authored(&source).unwrap(),
-        authored
-    );
-    scene
-        .live(&mut session)
+    assert_eq!(running.session().frame(), &before);
+    assert_eq!(running.session().publication_context(), publication);
+    assert_eq!(running.scene().authored(&source).unwrap(), authored);
+    running
+        .scene_mut()
         .set_fill_radial_gradient(&source, paint([0.75; 2], [0.75; 2]), None)
         .unwrap();
     assert_eq!(
-        scene
-            .live(&mut session)
+        running
+            .scene()
             .authored(&source)
             .unwrap()
             .style

@@ -5,12 +5,13 @@ import { createHash } from "node:crypto";
 import { assertCaptureTime, assertCompletedCapture, captureSchedule } from "./showcase-capture-checks.mjs";
 
 function assertInteractionEvidence(entry, interaction, image) {
-  if (entry.playback_capability === "nonreplayable-native-input") {
+  if (entry.features.includes("set_viewer_draggable")) {
     assert.equal(interaction?.automaticRestore, true, `${entry.id}: automaticRestore evidence is missing`);
     assert.equal(interaction?.backgroundNoOp, true, `${entry.id}: backgroundNoOp evidence is missing`);
     assert.equal(interaction?.pointerDrag, true, `${entry.id}: pointerDrag evidence is missing`);
+    assert.equal(interaction?.undoRestoresBase, true, `${entry.id}: undoRestoresBase evidence is missing`);
     assert.equal(interaction?.changedPixelsOutsideRightSideRoi, 0, `${entry.id}: ROI confinement evidence is missing`);
-    assert.equal(interaction?.runRestoresBase, true, `${entry.id}: runRestoresBase evidence is missing`);
+    assert.equal(interaction?.restartRestoresBase, true, `${entry.id}: restartRestoresBase evidence is missing`);
   } else if (entry.features.includes("on_click")) {
     assert.equal(interaction?.automaticRestore, true);
     assert.equal(interaction?.backgroundNoOp, true);
@@ -120,9 +121,7 @@ export function assertRetainedCudaFidelityPoster(entry, record, source, png) {
   assert.equal(record.sample.column, 3);
   const capture = record.capture;
   assert.equal(capture.repository, "yongkyuns/noon");
-  assert.equal(capture.workflowRunId, 39055762669);
-  assert.equal(capture.artifactId, 12110234543);
-  assert.equal(capture.testedPrHead, "70f6b0d84c0ac7926ebc1c04affe2d1616622d2d");
+  assert.equal(capture.script, "scripts/cuda-transpose-qualification.mjs");
   assert.equal(capture.reportStatus, "passed");
   assert.ok(Number.isFinite(capture.authoredDurationSeconds) &&
     Math.abs(capture.authoredDurationSeconds - entry.duration) <= 1e-9,

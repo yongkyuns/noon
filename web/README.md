@@ -11,6 +11,55 @@ python3 -m http.server --directory web 8080
 
 Then open <http://localhost:8080> in a WebGPU-capable browser. The JavaScript `requestAnimationFrame` timestamp is converted to deterministic scene time in Rust; JavaScript only owns browser scheduling and canvas sizing.
 
+## Visual design and animated explanations
+
+Two showcase scenes put the existing effects to work in complete compositions:
+
+- **Interference is addition** (`/?catalog=showcase&example=showcase-wave-interference`)
+  ([source](python/examples/showcase_wave_interference.py)) draws two analytic
+  wave fields and their signed sum on the same color scale. One shared shader
+  material shades three persistent rectangles; ordinary typed parameter tracks
+  animate phase without a Python updater or a grid of animated cells. This is
+  an analytic illustration, not a numerical wave simulation.
+- **Make it move** (`/?catalog=showcase&example=showcase-editorial-cover`)
+  ([source](python/examples/showcase_editorial_cover.py)) combines editable type,
+  animated radial color, seeded procedural grain and a frosted caption into an
+  editorial cover. The backdrop blurs the artwork beneath the caption while
+  keeping its text sharp.
+
+Both use the gallery's existing playback, seek and restart controls. They show
+procedural surfaces and ordinary animation working together in browser-ready
+lessons and motion design; they do not establish a speed advantage over Manim.
+
+## Lesson key points
+
+Use `self.next_section("Name")` between ordinary `play` and `wait` calls to
+annotate the current authored time. After a replayable lesson finishes, the
+viewer shows cue ticks, the active cue name/index, Previous/Next, and a named
+jump menu. Click a timeline marker to jump to its exact cue; hover for its name
+and time. The markers also support native button keyboard activation. These
+controls work with or without audio; the wave-interference and editorial-cover
+demos include examples.
+
+Tab to the playback panel itself for keyboard controls: **Space** plays/pauses,
+**Left/Right** seek five seconds, **Page Up/Page Down** navigate cues, and
+**Home** restarts. With audio, **Up/Down** adjust volume by five percentage points
+and **M** toggles mute without changing the volume. These match the native viewer.
+Use unmodified keys; holding a key does not repeat commands. Focused buttons,
+menus, sliders and the Python editor retain their normal keys.
+
+The timeline shows played time in purple and prepared time in gray. While the
+duration is unknown, the striped end and a readout such as `0.00 / 4.00+ s`
+show that four seconds are ready and preparation can continue.
+
+Previous/Next use the nearest boundary strictly before/after the playhead,
+without wrapping or an epsilon. Same-time cues use the first declaration;
+duplicate names and skip sections remain available in the jump menu. Explicit
+jumps preserve each cue's exact timestamp. Rust owns the navigation queries
+and playback clock; the viewer displays their observations. Live source,
+nonreplayable and open prepared-history profiles retain their existing seek
+gates. These navigation cues are separate from interpolation keyframes.
+
 ## Background audio and scene navigation
 
 Open <http://localhost:8080/background-audio.html> for the direct Rust/WASM audio
@@ -169,9 +218,32 @@ Transform semantics are authored in Rust and lowered into renderer-independent e
 
 `node scripts/manim-typst-authoring-smoke.mjs` qualifies native Text, multiline text, Rust-owned layout, Typst/MathTypst font scaling, and mixed painter order through shared execution and actual glyph rendering. Its optional `NOON_TEXT_AUTHORING_REPORT` contains read-only runtime observations; the harness does not export an authored scene document.
 
+## Video objects
+
+Choose **Video file** in the playground, paste
+[`video_object.py`](python/examples/video_object.py), and select **Run**.
+The file stays in the browser. Noon supports local H.264 MP4 clips with optional
+AAC audio, up to 60 seconds and 128 MiB.
+
+The clip moves right in two seconds using the same tracker binding as the
+[native Rust example](../crates/noon-native/examples/video_object.rs).
+The slider scrubs silently when paused. Select **Play with sound** to start
+audible playback. Use `start_time`, `source_start`, and `source_end` on
+`Scene.video` to place and trim a clip in seconds.
+
+After building the browser package, export the example with the same clip:
+
+```bash
+node scripts/export-python-scene.mjs web/python/examples/video_object.py /tmp/noon-video-capture \
+  --video clip.mp4 --mp4 python-video.mp4 --fps 30000/1001
+```
+
+The command also exports deterministic scenes with ordinary `play()` and
+`wait()` calls, including a trailing wait after the clip ends.
+
 ## Live authoring
 
-Edit **Python scene source** and click **Run** to author and attach a shared semantic execution session. A rerun replaces the session; it does not currently qualify incremental hot reload or identity preservation between independently authored scenes. Within a running session, shared Rust semantics own object identity and mutations.
+Edit **Python scene source** and click **Run** to author and attach a shared semantic execution session. Turn on **Auto-run** to submit edits after a 500 ms pause. Both use the same full scene restart. Within a running session, shared Rust semantics own object identity and mutations.
 
 Python loads lazily in a separate Pyodide worker. The normal playground does not serialize scene documents or allocate frontend semantic identities. Source continuations attach early so Rust execution can release each `play()`/`wait()` barrier. Direct Rust/WASM examples do not require Python.
 

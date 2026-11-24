@@ -38,6 +38,8 @@ pub(super) struct PreparedTranslationDragCancellation {
 pub(super) struct TranslationDragState {
     targets: Arc<BTreeSet<SemanticNodeId>>,
     active: Option<ActiveDrag>,
+    #[cfg(any(feature = "prepared-prefix", test))]
+    pub(super) viewer: super::viewer_drag::ViewerDragState,
 }
 
 impl TranslationDragState {
@@ -107,7 +109,13 @@ pub struct TranslationDragUndo {
 }
 impl TranslationDragUndo {
     /// Whether this receipt still names the unchanged authored drag result.
-    pub fn is_current(&self, session: &ExecutionSession, store: &SemanticStore) -> bool {
+    pub fn is_current(&self, scene: &crate::Scene) -> bool {
+        scene
+            .running_execution()
+            .is_some_and(|session| self.matches(session, &scene.integration_store().borrow()))
+    }
+
+    fn matches(&self, session: &ExecutionSession, store: &SemanticStore) -> bool {
         store.identity() == self.store
             && session.runtime_identity() == self.runtime
             && store.scene_revision() == self.scene_revision
@@ -116,12 +124,22 @@ impl TranslationDragUndo {
                 .is_ok_and(|state| state.transform.translation == self.after)
     }
 
-    pub fn undo(
+    /// Restore the previous translation on the running Scene that issued the receipt.
+    pub fn undo(self, scene: &mut crate::Scene) -> Result<(), TranslationDragError> {
+        let store = std::rc::Rc::clone(scene.integration_store());
+        let session = scene
+            .running_execution_mut()
+            .ok_or(TranslationDragError::StaleUndo)?;
+        let mut store = store.borrow_mut();
+        self.undo_in_session(session, &mut store)
+    }
+
+    pub(super) fn undo_in_session(
         self,
         session: &mut ExecutionSession,
         store: &mut SemanticStore,
     ) -> Result<(), TranslationDragError> {
-        if !self.is_current(session, store) {
+        if !self.matches(session, store) {
             return Err(TranslationDragError::StaleUndo);
         }
         session.apply_drag_authored_translation(store, self.node, self.before)
@@ -137,7 +155,7 @@ pub struct TranslationDragReceipt {
 impl ExecutionSession {
     /// Configure the complete native target policy. Frontends supply only typed
     /// pointer occurrences; they never choose an object identity per event.
-    pub fn set_translation_drag_targets(
+    pub(crate) fn set_translation_drag_targets(
         &mut self,
         targets: impl IntoIterator<Item = SemanticNodeId>,
     ) -> Result<(), TranslationDragError> {
@@ -155,7 +173,15 @@ impl ExecutionSession {
     }
 
     pub fn translation_drag_active(&self) -> bool {
+        #[cfg(any(feature = "prepared-prefix", test))]
+        if self.translation_drag.viewer.is_active() {
+            return true;
+        }
         self.translation_drag.active.is_some()
+    }
+
+    pub fn has_translation_drag_targets(&self) -> bool {
+        self.translation_drag.has_targets()
     }
 
     pub(super) fn prepare_translation_drag_cancellation(
@@ -417,7 +443,11 @@ impl ExecutionSession {
         let publication = self.apply_prepared_semantic_transaction_with_execution_contract(
             prepared_semantic,
             Vec::new(),
-            PreparedRuntimePublication { effective, frame },
+            PreparedRuntimePublication {
+                effective,
+                frame,
+                ..Default::default()
+            },
             SemanticPublicationPurpose::TranslationDrag(active.node),
             None,
             None,
@@ -466,7 +496,7 @@ impl ExecutionSession {
             .map_err(TranslationDragError::Publication)
     }
 
-    fn empty_effective_batch(&self) -> PreparedEffectivePropertyBatch {
+    pub(super) fn empty_effective_batch(&self) -> PreparedEffectivePropertyBatch {
         self.runtime
             .prepare_effective_property_batch(&[])
             .expect("an empty effective-property batch is always valid")

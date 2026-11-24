@@ -194,16 +194,6 @@ impl ManimNumberPlane {
         ))
     }
 
-    pub fn effective_frame(
-        &self,
-        execution: &ExecutionSession,
-    ) -> Result<AxesFrame, CoordinateAuthoringError> {
-        Ok(AxesFrame::new(
-            self.x_axis()?.effective_frame(execution)?,
-            self.y_axis()?.effective_frame(execution)?,
-        ))
-    }
-
     fn grid_family(&self, index: usize) -> Result<MobjectFamily, CoordinateAuthoringError> {
         let id = plane_members(&self.family)?[index];
         MobjectFamily::from_node(Rc::clone(self.family.integration_store()), id).map_err(Into::into)
@@ -235,17 +225,30 @@ impl Scene {
         )?)
     }
 
+    /// Observe this coordinate family through the Scene in setup or playback.
+    pub fn number_plane_frame(
+        &self,
+        coordinates: &ManimNumberPlane,
+    ) -> Result<AxesFrame, CoordinateAuthoringError> {
+        crate::MobjectTarget::from(coordinates.family()).require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            self.effective_number_plane_frame(coordinates)
+        } else {
+            coordinates.authored_frame()
+        }
+    }
+
+    /// Read a coherent plane frame, including validated authored paths for detached shafts.
     pub fn effective_number_plane_frame(
         &self,
         plane: &ManimNumberPlane,
     ) -> Result<AxesFrame, CoordinateAuthoringError> {
+        let store = self.integration_store();
+        let execution = self.coordinate_query_execution(plane.family())?;
+        let mut query = |shaft: &Mobject| coordinate_path_query(store, execution, shaft);
         Ok(AxesFrame::new(
-            plane
-                .x_axis()?
-                .snapshot_with(&mut |shaft| self.effective_path_query(shaft))?,
-            plane
-                .y_axis()?
-                .snapshot_with(&mut |shaft| self.effective_path_query(shaft))?,
+            plane.x_axis()?.snapshot_with(&mut query)?,
+            plane.y_axis()?.snapshot_with(&mut query)?,
         ))
     }
 }
@@ -277,7 +280,7 @@ pub(crate) struct PreparedNumberPlane {
     axes: [PreparedNumberLine; 2],
 }
 
-pub(crate) fn publish_prepared_number_plane(
+fn publish_prepared_number_plane(
     prepared: PreparedNumberPlane,
     store: &mut SemanticStore,
     mut publish: impl FnMut(

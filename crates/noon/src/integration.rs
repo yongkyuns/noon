@@ -1,9 +1,8 @@
 //! Explicit low-level integration with Noon's existing authorities.
 //!
-//! Ordinary authoring uses [`Scene`](crate::Scene), [`Mobject`](crate::Mobject),
-//! and [`LiveSession`](crate::LiveSession). This module exposes only the specific
-//! types needed by language wrappers, platform hosts, resource adapters and
-//! diagnostics; it owns no scene, runtime, registry or scheduler.
+//! Ordinary authoring uses [`Scene`](crate::Scene) and its authored handles.
+//! This module exposes services for language wrappers, platform hosts,
+//! resource adapters and diagnostics.
 //!
 //! # Raw semantic access
 //!
@@ -14,19 +13,34 @@
 //!
 //! Mutating the arena (including through an authored handle) after lowering does
 //! **not** publish that change into a live session. Existing revision and identity
-//! checks reject the resulting stale or foreign context. They are never disabled
-//! by using this module. Prefer `scene.live(&mut session)` for live mutation; raw
-//! callers must use the session's coherent semantic-transaction publication API.
+//! checks reject the resulting stale or foreign context. Use the owning `Scene`
+//! for authoring, and `scene_execution` for host execution controls and publication.
 //! If raw edits have already invalidated a session, explicitly discard/rebuild it
 //! rather than overwriting its publication revision or treating old frames as new.
 //!
 
+mod callback_membership;
+#[cfg(feature = "code")]
+pub mod code_input;
+#[cfg(feature = "prepared-prefix")]
+mod completed_prefix_export;
+pub use callback_membership::{
+    callback_line_path, callback_provisional_key, commit_callback_path,
+    commit_inline_callback_content, resolve_callback_provisional, CallbackMembershipCollector,
+    CallbackVisualContent, MAX_CALLBACK_MEMBERSHIP_STAGES,
+};
 mod export_frames;
 mod forward_sample;
 mod frame_grid;
-mod path_edits;
+#[cfg(feature = "latex")]
+mod latex_input;
+#[cfg(feature = "latex")]
+pub use latex_input::{latex_member_colors, LatexInput};
 mod pixel_readback;
+pub mod spatial_input;
 
+#[cfg(feature = "prepared-prefix")]
+pub use completed_prefix_export::{CompletedPrefixExport, CompletedPrefixExportError};
 pub use export_frames::{
     ExportAudioGrid, ExportAudioGridError, ExportEndReason, ExportFrame, ExportFrameOptions,
     ExportFramePolicy, ExportFramePolicyError, ExportFramePolicyStatus, ExportFrameSummary,
@@ -37,15 +51,33 @@ pub use forward_sample::{
     ForwardSample, ForwardSampleError, ForwardSampleStatus, SampleObservation,
 };
 pub use frame_grid::{FrameGrid, FrameGridError, FrameRate, FrameSample};
-pub use path_edits::{publish_borrowed_path_edit, BorrowedPathEdit};
 pub use pixel_readback::{
     PixelChannelOrder, PixelReadbackError, PixelRowOrder, Rgba8ReadbackLayout,
 };
 
+pub use crate::live_program::BlockingReplayError;
+pub use crate::scene_script::{
+    BlockingBoundary, BlockingContinuation, BlockingSceneHost, BlockingSceneSetup,
+};
+
+/// Prepare the bundled finite background score for a language host.
+pub fn small_discovery_audio() -> Result<crate::AudioResource, AuthoringFailure> {
+    use crate::example_scenes::background_audio::{music, SAMPLE_RATE};
+    let pcm = music::render_music(SAMPLE_RATE)
+        .map_err(|error| AuthoringFailure::unclassified("audio.music_preparation", &error))?;
+    crate::AudioResource::from_interleaved(
+        pcm.sample_rate(),
+        music::CHANNELS as u16,
+        pcm.into_samples(),
+        crate::DEFAULT_AUDIO_RESOURCE_BYTE_BUDGET,
+    )
+    .map_err(crate::AuthoringError::from)
+    .map_err(Into::into)
+}
+
 /// Conversion from Manim Cairo pixel stroke widths to Noon scene units.
 pub const MANIM_CAIRO_LINE_WIDTH_MULTIPLE: f64 = 0.01;
 
-pub use crate::boolean_authoring::effective_boolean_geometry_options;
 pub use crate::compact_value_authoring::semantic_object_state_from_compact;
 pub use crate::execution_segment::{ExecutionSegmentSequence, ExecutionSegmentToken};
 pub use crate::execution_session::{
@@ -57,38 +89,25 @@ pub use crate::execution_session::{
     CallbackReadValue, CallbackRegionAdvance, CallbackRendererDirtyClassification,
     CallbackRendererObservationOutcome, CallbackSequence, CallbackTermination,
     CallbackTerminationKind, CommittedCallbackRendererObservation, EffectivePropertyBatch,
-    EffectiveSemanticObject, EffectiveSemanticPropertyWrite, ExecutionViewportQuery,
-    RequiredCallbackInvocation, StaleViewportQuery, StructuralPublicationStats,
+    EffectiveSemanticPropertyWrite, ExecutionViewportQuery, RequiredCallbackInvocation,
+    StaleViewportQuery, StructuralPublicationStats,
 };
+pub use crate::execution_session::{FeedbackTarget, FeedbackTargets};
 pub use crate::execution_session::{NativePointerInputPublication, NativePointerInputToken};
 pub use crate::execution_session::{PointerFrameError, PointerFrameSnapshot, PointerFrameView};
-pub use crate::family_points::{
-    publish_append_family_points, publish_append_family_points_3d, publish_clear_family_points,
-    publish_empty_family_point_array, publish_family_points, publish_family_points_3d,
-};
 pub use crate::host_callbacks::{
     effective_style_with_color, effective_style_with_fade, effective_style_with_fade_to,
     effective_style_with_fill, effective_style_with_fill_color, effective_style_with_fill_opacity,
     effective_style_with_paint_opacity, effective_style_with_stroke_color,
     rotate_effective_transform_about_point,
 };
-pub use crate::path_alignment::{publish_alignment, publish_root_alignment};
-pub use crate::path_queries::{
-    effective_all_points, effective_all_points_3d, effective_boundary_point,
-    effective_center_of_mass, effective_critical_point_3d, effective_extremum_along_dim,
-    effective_length_over_dim, effective_mobject_point_count,
-    effective_path_boundary_extremum_along_dim, effective_path_boundary_point,
-    effective_path_boundary_points, effective_path_boundary_points_3d, effective_path_query,
-    effective_point_array, effective_point_reduction_tree, effective_requires_content_boundary,
-    effective_vector_boundary_points, effective_vector_boundary_points_3d,
-};
-pub use crate::point_matching::publish_match_points;
+pub use crate::scene::host_execution as scene_execution;
+pub use crate::scene::video::place_video;
 pub use crate::semantic_mobject::{authoring_render_f64, authoring_xy_f64, line_match_transform};
 #[cfg(feature = "native-text")]
 pub use crate::text_authoring::NATIVE_POINT_TO_SCENE_SCALE;
 #[cfg(feature = "typst")]
 pub use crate::text_authoring::SCALE_FACTOR_PER_FONT_POINT;
-pub use crate::z_index::{effective_z_index, publish_z_index};
 pub use noon_core::{
     GeometryResource, GeometryResourceArena, GeometryResourceError, GeometryResourceHandle,
     GeometryResourceLookup, HostCallbackId, SemanticFamilyPairingError, SemanticLoweringError,
@@ -105,223 +124,128 @@ pub use noon_core::{
 };
 pub use noon_runtime::{
     AudioMixError, AudioMixFormat, EffectiveObjectProperties, FrameChanges, FrameObjectState,
-    FrameState, PreparedAudioMix, RendererPublication, RuntimeIdentity, RuntimeWakeState,
-    TimelineWakeState, MAX_AUDIO_MIX_BLOCK_FRAMES,
+    FrameState, PreparedAudioMix, RendererPublication, ReplayError, ReplayLimits, RuntimeIdentity,
+    RuntimeWakeState, TimelineWakeState, ViewerPresentation, MAX_AUDIO_MIX_BLOCK_FRAMES,
 };
 
-/// Construct one detached family through an explicitly supplied live execution
-/// authority. This is for platform integrations that intentionally own the
-/// store/root/session pairing outside [`Scene`](crate::Scene); ordinary Rust
-/// authoring uses [`Scene::family_with_z_index`](crate::Scene::family_with_z_index).
-pub fn publish_family_creation(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    members: &[crate::MobjectTarget<'_>],
-    z_index: f64,
-) -> Result<crate::MobjectFamily, crate::AuthoringError> {
-    publish_family_creation_with_color(
-        store,
-        root,
-        execution,
-        members,
-        z_index,
-        crate::Color::WHITE,
-    )
+pub mod graph;
+
+mod vector_path;
+pub use crate::binding_error::AuthoringFailure;
+
+/// Preserve the language host's live Variable construction errors.
+#[cfg(feature = "latex")]
+pub fn live_variable_failure(error: crate::VariableAuthoringError) -> AuthoringFailure {
+    use crate::{LiveSessionError, VariableAuthoringError};
+    match error {
+        VariableAuthoringError::Text(error) => LiveSessionError::Text(error).into(),
+        VariableAuthoringError::Numeric(error) => AuthoringFailure::from_scene_number(error, true),
+        VariableAuthoringError::Authoring(error) => LiveSessionError::from(error).into(),
+    }
+}
+pub use crate::binding_options::*;
+pub use vector_path::{authoring_path_point, AuthoringVectorPath};
+
+mod image_options;
+pub use image_options::image_sampling;
+#[cfg(feature = "native-text")]
+mod text_options;
+#[cfg(feature = "native-text")]
+pub use text_options::{native_text_options, text_color_channel};
+
+pub fn family_color(
+    enabled: bool,
+    red: f64,
+    green: f64,
+    blue: f64,
+    alpha: f64,
+) -> Result<Option<crate::Color>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    if ![red, green, blue, alpha]
+        .iter()
+        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+    {
+        return Err("family color components must be finite and between zero and one".into());
+    }
+    Ok(Some(crate::Color::rgba(
+        red as f32,
+        green as f32,
+        blue as f32,
+        alpha as f32,
+    )))
 }
 
-/// Publish family metadata and membership through one existing live transaction.
-pub fn publish_family_creation_with_color(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    members: &[crate::MobjectTarget<'_>],
-    z_index: f64,
-    color: crate::Color,
-) -> Result<crate::MobjectFamily, crate::AuthoringError> {
-    publish_family_creation_with_presentation(store, root, execution, members, z_index, color, true)
+/// Decode RGBA components for per-member gradient authoring.
+pub fn gradient_colors(values: &[f64]) -> Result<Vec<crate::Color>, AuthoringFailure> {
+    if !values.len().is_multiple_of(4) {
+        return Err(AuthoringFailure::new(
+            "invalid_input",
+            "gradient.invalid_components",
+            "gradient colors require RGBA components",
+        ));
+    }
+    values
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&[r, g, b, a]| {
+            family_color(true, r, g, b, a)
+                .map(|color| color.expect("enabled color"))
+                .map_err(|error| {
+                    AuthoringFailure::new("invalid_input", "gradient.invalid_color", error)
+                })
+        })
+        .collect()
 }
 
-/// Publish all constructor metadata in the ordinary family membership transaction.
-pub fn publish_family_creation_with_presentation(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    members: &[crate::MobjectTarget<'_>],
-    z_index: f64,
-    color: crate::Color,
-    draw_enabled: bool,
-) -> Result<crate::MobjectFamily, crate::AuthoringError> {
-    let (transaction, family) = crate::family_authoring::family_creation_presentation_transaction(
-        store,
-        members,
-        z_index,
-        color,
-        draw_enabled,
-    )?;
-    let result = crate::Scene::publish_running_transaction(store, root, execution, transaction)?;
-    let node = result
-        .resolve(family)
-        .expect("committed family token resolves to one semantic identity");
-    crate::MobjectFamily::from_node(std::rc::Rc::clone(store), node)
+/// Decode the inner and outer colors of a per-member radial gradient.
+pub fn radial_gradient_colors(
+    values: &[f64],
+) -> Result<(crate::Color, crate::Color), AuthoringFailure> {
+    let colors = gradient_colors(values)?;
+    match colors.as_slice() {
+        [inner, outer] => Ok((*inner, *outer)),
+        _ => Err(AuthoringFailure::new(
+            "invalid_input",
+            "radial_gradient.color_count",
+            "radial gradients require exactly two RGBA colors",
+        )),
+    }
 }
 
-/// Create and enroll a scalar tracker through an explicitly supplied live
-/// execution authority.
-///
-/// This is for integrations that own a store/root/session pairing outside a
-/// [`Scene`](crate::Scene). Ordinary authoring uses
-/// [`Scene::value_tracker`](crate::Scene::value_tracker).
-pub fn publish_value_tracker_creation(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    initial: f64,
-) -> Result<crate::ValueTracker, crate::AuthoringError> {
-    let mut semantic_store = store.borrow_mut();
-    let node = execution
-        .create_scoped_value_tracker(&mut semantic_store, root, initial)
-        .map_err(crate::AuthoringError::from)?;
-    Ok(crate::ValueTracker::from_semantic_node(
-        std::rc::Rc::clone(store),
-        node,
-    ))
+mod effect_options;
+pub use effect_options::{effect_color, effect_update, mask_parameters};
+
+mod paint_options;
+pub use paint_options::{
+    hatch_paint, image_mapping, linear_gradient, noise_paint, radial_gradient,
+};
+
+mod plot_error;
+pub use plot_error::{
+    coordinate_failure, coordinate_math_failure, live_coordinate_failure,
+    live_coordinate_publication_failure, plot_failure, sampling_failure,
+};
+mod plot_input;
+pub use plot_input::{
+    data_points as plot_data_points, optional_range as plot_optional_range,
+    three_d_axis_label_targets, PlotSamplingInput, RiemannInput,
+};
+
+/// Decode the optional frontend spelling of an existing camera working profile.
+pub fn camera_color_profile(value: &str) -> Result<noon_core::ViewColorProfile, AuthoringFailure> {
+    match value {
+        "compatibility" => Ok(noon_core::ViewColorProfile::Compatibility),
+        "linear_hdr" => Ok(noon_core::ViewColorProfile::LinearHdr),
+        _ => Err(AuthoringFailure::new(
+            "invalid_input",
+            "camera.color_profile",
+            "view color profile must be compatibility or linear_hdr",
+        )),
+    }
 }
 
-/// Associate an existing detached scalar tracker through an explicitly
-/// supplied live execution authority.
-///
-/// This is for integrations that own a store/root/session pairing outside a
-/// [`Scene`](crate::Scene). Ordinary authoring uses
-/// [`Scene::associate_value_tracker`](crate::Scene::associate_value_tracker).
-pub fn publish_value_tracker_association(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    tracker: &crate::ValueTracker,
-) -> Result<(), crate::AuthoringError> {
-    tracker.require_store(store)?;
-    let mut store = store.borrow_mut();
-    execution
-        .associate_value_tracker(&mut store, root, tracker.node_id())
-        .map_err(crate::AuthoringError::from)
-}
-
-/// Publish a family translation through the existing coherent execution authority.
-pub fn publish_family_shift(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    family: &crate::MobjectFamily,
-    x: f64,
-    y: f64,
-) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
-    crate::family_layout::publish_shift_family(
-        store,
-        root,
-        execution,
-        family,
-        noon_core::SemanticVec3::new(x, y, 0.0),
-    )
-}
-
-/// Publish linear family arrangement without constructing a `LiveSession` facade.
-pub fn publish_family_arrangement(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    family: &crate::MobjectFamily,
-    options: &crate::FamilyArrangeOptions,
-) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
-    crate::family_layout::publish_arrange_family(store, root, execution, family, options)
-}
-
-/// Publish grid family arrangement without constructing a `LiveSession` facade.
-pub fn publish_family_grid_arrangement(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    family: &crate::MobjectFamily,
-    options: &crate::FamilyGridOptions,
-) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
-    crate::family_layout::publish_arrange_family_in_grid(store, root, execution, family, options)
-}
-
-/// Publish object placement from one coherent effective layout observation.
-pub fn publish_mobject_move_to(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    object: &crate::Mobject,
-    target: crate::LiveLayoutTarget<'_>,
-    edge: (f64, f64),
-    mask: (f64, f64),
-) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
-    crate::family_layout::publish_move_to(store, root, execution, object, target, edge, mask)
-}
-
-/// Publish family placement from one coherent effective layout observation.
-pub fn publish_family_move_to(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    family: &crate::MobjectFamily,
-    target: crate::LiveLayoutTarget<'_>,
-    edge: (f64, f64),
-    mask: (f64, f64),
-) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
-    crate::family_layout::publish_move_family_to(store, root, execution, family, target, edge, mask)
-}
-
-/// Publish family next-to placement from one coherent effective layout observation.
-pub fn publish_family_next_to(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    family: &crate::MobjectFamily,
-    target: crate::LiveLayoutTarget<'_>,
-    args: crate::ManimNextToArgs,
-) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
-    crate::family_layout::publish_next_family_to(store, root, execution, family, target, args)
-}
-
-/// Publish selected-layout next-to placement with a distinct effective aligner.
-pub fn publish_layout_next_to_aligned(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    source: &crate::LayoutAnchor,
-    target: crate::LiveLayoutTarget<'_>,
-    aligner: &crate::LayoutAnchor,
-    args: crate::ManimNextToArgs,
-) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
-    crate::family_layout::publish_next_layout_to_aligned(
-        store, root, execution, source, target, aligner, args,
-    )
-}
-
-/// Publish family alignment to the default frame.
-pub fn publish_family_align_on_frame(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    family: &crate::MobjectFamily,
-    direction: (f64, f64),
-    buff: f64,
-) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
-    crate::family_layout::publish_align_family_on_frame(
-        store, root, execution, family, direction, buff,
-    )
-}
-
-/// Publish family alignment against another effective target.
-pub fn publish_family_align_to(
-    store: &std::rc::Rc<std::cell::RefCell<SemanticStore>>,
-    root: crate::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    family: &crate::MobjectFamily,
-    target: crate::LiveLayoutTarget<'_>,
-    axis: (f64, f64),
-) -> Result<SemanticMutationTransactionResult, crate::AuthoringError> {
-    crate::family_layout::publish_align_family_to(store, root, execution, family, target, axis)
-}
+mod style_input;
+pub use style_input::{style_update, style_update_with_background_stroke};

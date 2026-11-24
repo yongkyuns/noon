@@ -17,8 +17,8 @@ and mute change the device output without changing the authored gain or fades.
 The Python source is [background_music_lesson.py](background_music_lesson.py).
 Its direct Rust counterpart is
 [`noon::example_scenes::background_music_lesson::scene`](../../../crates/noon/src/example_scenes/background_music_lesson.rs).
-The Rust function returns an ordinary `Scene` for `Scene::execution_session`
-and native MP4 export. The same authored buttons also work in the native window:
+The Rust function returns an ordinary `Scene` for `Scene::into_execution`
+and native MP4 export. To try the authored playback buttons in the native Rust window:
 
 ```bash
 cargo run -p noon-native --features audio --example background_music_lesson

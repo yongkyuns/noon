@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use crate::{
     AnimationOptions, Color, ContinuationStep, IndicateOptions, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, MobjectFamily, RateFunction, Scene,
+    Mobject, MobjectFamily, RateFunction, Scene,
 };
 
 pub struct FamilyTransformIndicate {
@@ -21,10 +21,11 @@ pub struct FamilyTransformIndicate {
 impl LiveContinuation for FamilyTransformIndicate {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         match self.stage {
             0 => {
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_family_transform_to(
                         &self.source,
                         &self.target,
@@ -39,8 +40,9 @@ impl LiveContinuation for FamilyTransformIndicate {
             }
             1 => {
                 self.require_source_member_count(3)?;
-                self.require_positions(live, -1.0, 1.0)?;
-                let segment = live
+                self.require_positions(scene, -1.0, 1.0)?;
+                let segment = scene
+                    .live()
                     .declare_and_activate_family_indicate(
                         &self.source,
                         IndicateOptions::default(),
@@ -55,14 +57,16 @@ impl LiveContinuation for FamilyTransformIndicate {
             }
             2 => {
                 self.require_source_member_count(3)?;
-                self.require_positions(live, -1.0, 1.0)?;
+                self.require_positions(scene, -1.0, 1.0)?;
                 self.stage = 3;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             3 => {
-                let copied = live
+                let copied = scene
                     .copy_family_with_references(&self.source, &[(&self.saved_left).into()])
                     .map_err(|e| e.to_string())?;
                 if copied
@@ -77,22 +81,26 @@ impl LiveContinuation for FamilyTransformIndicate {
                 let left_target = copied
                     .mobject(&self.left)
                     .map_err(|error| error.to_string())?;
-                live.shift(&left_target, 1.0, 0.0)
+                scene
+                    .shift_3d(&left_target, crate::SemanticVec3::new(1.0, 0.0, 0.0))
                     .map_err(|e| e.to_string())?;
-                live.become_mobject(
-                    &self.left,
-                    &left_target,
-                    crate::ManimBecomeOptions::default(),
-                )
-                .map_err(|e| e.to_string())?;
+                scene
+                    .become_mobject(
+                        &self.left,
+                        &left_target,
+                        crate::ManimBecomeOptions::default(),
+                    )
+                    .map_err(|e| e.to_string())?;
                 self.stage = 4;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             4 => {
                 self.require_source_member_count(3)?;
-                self.require_positions(live, 0.0, 1.0)?;
+                self.require_positions(scene, 0.0, 1.0)?;
                 self.stage = 5;
                 Ok(ContinuationStep::Finished)
             }
@@ -116,16 +124,11 @@ impl FamilyTransformIndicate {
         Ok(())
     }
 
-    fn require_positions(
-        &self,
-        live: &LiveSession<'_>,
-        left_x: f32,
-        right_x: f32,
-    ) -> Result<(), String> {
-        let left = live
+    fn require_positions(&self, scene: &Scene, left_x: f32, right_x: f32) -> Result<(), String> {
+        let left = scene
             .effective(&self.left)
             .map_err(|error| error.to_string())?;
-        let right = live
+        let right = scene
             .effective(&self.right)
             .map_err(|error| error.to_string())?;
         if (left.transform.translation.x - left_x).abs() > 1e-6

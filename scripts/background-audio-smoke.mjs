@@ -12,14 +12,19 @@ import pngjs from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
 import { observeAudio } from "./browser-audio-observation.mjs";
+import { releaseRetirementWitness } from "./audio-retirement-reference.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifacts = path.resolve(process.env.NOON_AUDIO_ARTIFACTS ??
   path.join(root, "browser-smoke-artifacts/background-audio"));
 const backend = process.env.NOON_AUDIO_BACKEND ?? "webgpu";
 assert.ok(["webgpu", "webgl"].includes(backend), "unknown audio qualification renderer backend");
+const requestedSampleRate = process.env.NOON_AUDIO_SAMPLE_RATE === undefined
+  ? undefined : Number(process.env.NOON_AUDIO_SAMPLE_RATE);
+assert.ok(requestedSampleRate === undefined || [44100,48000].includes(requestedSampleRate),
+  "audio qualification sample rate must be 44100 or 48000");
 const report = {
-  scope: "finite-direct-rust-wasm-web-audio", status: "running", backend,
+  scope: "finite-direct-rust-wasm-web-audio", status: "running", backend, requestedSampleRate,
   revision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
   sourceDirty: execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim() !== "",
   cases: [], browserErrors: [], consoleErrors: [],
@@ -27,7 +32,7 @@ const report = {
 await mkdir(artifacts, { recursive: true });
 for (const source of ["web/pkg/noon_web_bg.wasm", "web/pkg/noon_web.js", "web/background-audio.js",
   "web/native-inputs.js", "web/browser-pointer-input.js", "web/browser-wheel-units.js",
-  "web/background-audio.html", "web/background-audio.css", "scripts/background-audio-smoke.mjs", "scripts/browser-audio-observation.mjs"]) {
+  "web/background-audio.html", "web/background-audio.css", "scripts/background-audio-smoke.mjs", "scripts/browser-audio-observation.mjs", "scripts/audio-retirement-reference.mjs"]) {
   report[source] = createHash("sha256").update(await readFile(path.join(root, source))).digest("hex");
 }
 
@@ -160,7 +165,7 @@ async function newProductPage() {
   result.on("pageerror", error => report.browserErrors.push(String(error)));
   result.on("console", message => { if (message.type() === "error") report.consoleErrors.push(message.text()); });
   await result.route("**/favicon.ico", route => route.fulfill({ status: 204, body: "" }));
-  await result.addInitScript(observeAudio);
+  await result.addInitScript(observeAudio, { sampleRate: requestedSampleRate });
   if (backend === "webgl") {
     await result.addInitScript(() => Object.defineProperty(navigator, "gpu", { value: undefined }));
   }
@@ -240,10 +245,9 @@ try {
     const settled = await state();
     near(settled.transport.time, pausedTime, "paused time", 0);
     assert.equal(settled.transport.voices, 0, "native ended cleanup releases the paused graph");
-    assert.ok(settled.ended.some(event => event.node === source.node));
-    assert.ok(settled.disconnects.some(event => event.node === source.busNode
-      && event.observedAt >= release.ramp.args[1]), "releasing bus disconnects after its envelope finishes");
-    return { paused, release, stop, silence, settled };
+    const retirement = releaseRetirementWitness(settled, source, release.ramp.args[1]);
+    assert.ok(retirement, "release retires after the exact native stop or completed device time");
+    return { paused, release, stop, silence, settled, retirement };
   });
   await record("resume preserves the PCM phase and immutable buffer", async () => {
     await page.locator("#play").click();
@@ -412,7 +416,7 @@ try {
     assert.equal(rejected.before, rejected.after);
     return { scrubbed, restarted, rejected };
   });
-  await record("transport release and attack use separate native ramps without moving source anchors", async () => {
+  await record("transport release and attack use separate native ramps without moving source anchors", async evidence => {
     await seek(8);
     await page.locator("#play").click();
     await playing();
@@ -428,17 +432,25 @@ try {
       const newSource = qualification.starts.at(-1);
       const admitted = qualification.snapshot();
       const observations = [];
-      // These values come from the real native AudioParams while the device
-      // renders. Event inspection below separately verifies exact deadlines.
-      for (let index = 0; index < 35; index++) {
-        observations.push({ deviceTime: qualification.contexts[newSource.context].context.currentTime,
+      // Observe actual native render quanta in one bounded device probe. A
+      // timer yield can let an unrelated RAF consume the entire 60ms release.
+      // Keep the same 140ms budget and retain only one read per device quantum;
+      // this measures native gain behavior, not UI frame pacing.
+      const context = qualification.contexts[newSource.context].context;
+      const until = performance.now() + 140;
+      while (performance.now() < until) {
+        const deviceTime = context.currentTime;
+        if (observations.at(-1)?.deviceTime === deviceTime) continue;
+        observations.push({ deviceTime,
           oldBus: qualification.parameterValue(oldSource.busParameter),
           newBus: qualification.parameterValue(newSource.busParameter),
           output: qualification.sample()[newSource.context] });
-        await new Promise(resolve => setTimeout(resolve, 4));
       }
+      // Let trusted ended events and the existing retirement task drain.
+      await new Promise(resolve => setTimeout(resolve, 0));
       return { before, admitted, oldSource, newSource, observations, settled: qualification.snapshot() };
     });
+    Object.assign(evidence, transition);
     const { oldSource, newSource, admitted, observations, settled } = transition;
     const release = rampTo(admitted, oldSource.busParameter, 0, releaseSeconds, "seek release");
     const attack = rampTo(admitted, newSource.busParameter, 1, attackSeconds, "seek attack");
@@ -450,7 +462,10 @@ try {
     near(admitted.transport.time, 10, "output transition does not advance authored time", 0);
     assert.ok(newSource.args[0] < attack.hold.args[1], "new PCM runs behind the muted bus before attack");
     assert.equal(admitted.transport.sceneRevision, transition.before.transport.sceneRevision);
-    const waiting = observations.filter(sample => sample.deviceTime < attack.hold.args[1]);
+    // A device quantum can advance between the clock, gain and analyser reads.
+    // Require the complete observation to precede the attack deadline.
+    const waiting = observations.filter(sample => sample.deviceTime < attack.hold.args[1]
+      && sample.output.deviceTime < attack.hold.args[1]);
     assert.ok(waiting.length > 0, "observe the replacement's muted waiting interval");
     assert.ok(waiting.every(sample => sample.newBus === 0));
     assert.ok(observations.some(sample => sample.oldBus > 0.01 && sample.oldBus < 0.99),
@@ -512,7 +527,7 @@ try {
     assert.ok(result.settled.transport.time > result.before.transport.time);
     return { ...result, firstRamp: first, secondRamp: second, thirdRamp: third };
   });
-  await record("rapid admitted seeks keep only the latest muted replacement and one releasing graph", async () => {
+  await record("rapid admitted seeks keep only the latest muted replacement and one releasing graph", async evidence => {
     const burst = await page.evaluate(() => {
       const qualification = audioQualification;
       const renderer = qualification.renderer;
@@ -528,10 +543,12 @@ try {
         steps.push({ target, time: renderer.time(), voices: renderer.audioVoiceCount(),
           revision: String(renderer.directSceneRevision()), source,
           busGain: qualification.parameterValue(source.busParameter),
+          deviceTime: qualification.contexts[source.context].context.currentTime,
           bus: structuredClone(qualification.parameters[source.busParameter]) });
       }
       return { before, oldSource, steps, after: qualification.snapshot() };
     });
+    Object.assign(evidence, burst);
     const release = rampTo(burst.after, burst.oldSource.busParameter, 0, releaseSeconds, "burst initial release");
     sourceStoppedAt(burst.after, burst.oldSource, release.ramp.args[1], "burst initial graph");
     assert.equal(burst.after.starts.length - burst.before.starts.length, burst.steps.length,
@@ -543,7 +560,9 @@ try {
       assert.equal(step.revision, burst.before.transport.sceneRevision);
       assert.ok(step.voices >= 1 && step.voices <= 2, "voice lifetime is bounded during every admitted seek");
     }
-    const waiting = burst.steps.filter(step => step.source.args[0] < release.ramp.args[1]);
+    // The device clock can pass the deadline between source start and gain read.
+    // Require the complete observation to precede it, as in the ramp test above.
+    const waiting = burst.steps.filter(step => step.deviceTime < release.ramp.args[1]);
     assert.ok(waiting.length >= 2, "burst must exercise multiple commands inside one release interval");
     for (const step of waiting) {
       const attack = rampTo({ parameters: { [step.source.busParameter]: step.bus } },

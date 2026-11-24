@@ -16,7 +16,7 @@ fn object() -> CompiledObject {
     )
 }
 
-fn animation(start: f64, duration: f64, reverse: bool) -> CompiledFamilyAnimation {
+pub(super) fn animation(start: f64, duration: f64, reverse: bool) -> CompiledFamilyAnimation {
     let object = object();
     let mut semantics = SemanticStore::new();
     let leaf = semantics.insert_authoring_object();
@@ -39,7 +39,7 @@ fn animation(start: f64, duration: f64, reverse: bool) -> CompiledFamilyAnimatio
     }
 }
 
-fn runtime() -> SceneInstance {
+pub(super) fn runtime() -> SceneInstance {
     SceneInstance::new(CompiledScene::compile_objects(vec![object()], &[]).unwrap())
 }
 

@@ -28,8 +28,12 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         .map_err(|error| error.to_string())?;
     let dashed = Mobject::manim_dashed_line(store(), -1.0, -2.0, 1.0, -2.0, 0.2, 0.5)
         .map_err(|error| error.to_string())?;
-    let mut underline =
-        Mobject::manim_underline(&rectangle, 0.2).map_err(|error| error.to_string())?;
+    let underline_options = scene
+        .underline_options(&rectangle, 0.2)
+        .map_err(|error| error.to_string())?;
+    let mut underline = scene
+        .geometry(underline_options)
+        .map_err(|error| error.to_string())?;
     underline
         .shift(8.0, -1.3)
         .map_err(|error| error.to_string())?;

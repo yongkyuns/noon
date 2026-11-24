@@ -289,15 +289,26 @@ pub enum SemanticTransformInterpolation {
 }
 
 /// Correspondence policy for one authored family Transform.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum SemanticFamilyTransformMode {
     /// Preserve authored family order/topology and derive positional correspondence.
     #[default]
     Structural,
+    /// Pair a fixed membership tree, including geometry owned by family roots.
+    FixedTopology,
     /// Match normalized vector-path shape keys at the activation boundary.
     MatchingShapes,
     /// Match ordinary retained text leaves by compiler-authored source identity.
     MatchingSourceKeys,
+    /// Pair different retained text keys explicitly, with a moving crossfade.
+    MatchingMappedSourceKeys(std::sync::Arc<[(String, String)]>),
+}
+
+impl SemanticFamilyTransformMode {
+    /// Use positional pairing rather than a shape or text matching policy.
+    pub const fn is_structural(&self) -> bool {
+        matches!(self, Self::Structural | Self::FixedTopology)
+    }
 }
 
 /// One authored animation operation before execution scheduling/lowering.
@@ -336,6 +347,14 @@ pub enum SemanticAnimationIntent {
         /// Ordinary Transform leaves source priority unchanged.
         complete_priority: bool,
     },
+    /// Drive only existing effect attachments toward an authored target column.
+    /// This addresses either an object or an unrendered composed family owner;
+    /// geometry, membership and affine state are outside this operation.
+    EffectTargetTo {
+        target: SemanticNodeId,
+        target_state: SemanticNodeId,
+        method_target: bool,
+    },
     /// Animate an object's effective world pose to a typed spatial endpoint.
     /// The source pose is captured from the current effective frame at activation.
     WorldTransformTo {
@@ -365,6 +384,11 @@ pub enum SemanticAnimationIntent {
     },
     /// Temporarily drive only glow intensity from its activation-effective value.
     /// Attachment enrollment and restoration belong to shared activation/completion.
+    Dissolve {
+        target: SemanticNodeId,
+        direction: crate::DissolveDirection,
+        style: crate::DissolveStyle,
+    },
     GlowPulse {
         target: SemanticNodeId,
         intensity: f64,
@@ -444,10 +468,12 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { target, .. }
             | Self::MoveAlongPath { target, .. }
             | Self::TransformTo { target, .. }
+            | Self::EffectTargetTo { target, .. }
             | Self::WorldTransformTo { target, .. }
             | Self::CameraProfileTo { target, .. }
             | Self::Indicate { target, .. }
             | Self::GlowPulse { target, .. }
+            | Self::Dissolve { target, .. }
             | Self::DrawBorderThenFill { target, .. }
             | Self::PassingFlash { target, .. }
             | Self::SubsetDisplayMember { target, .. }
@@ -465,6 +491,7 @@ impl SemanticAnimationIntent {
     pub const fn target_state(&self) -> Option<SemanticNodeId> {
         match self {
             Self::TransformTo { target_state, .. }
+            | Self::EffectTargetTo { target_state, .. }
             | Self::FamilyTransformTo { target_state, .. } => Some(*target_state),
             Self::WorldTransformTo { .. } | Self::CameraProfileTo { .. } => None,
             Self::ObjectPropertyTrack { .. }
@@ -472,6 +499,7 @@ impl SemanticAnimationIntent {
             | Self::Rotate { .. }
             | Self::Indicate { .. }
             | Self::GlowPulse { .. }
+            | Self::Dissolve { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -499,9 +527,9 @@ impl SemanticAnimationIntent {
     }
 
     /// Return the authored correspondence policy for one family Transform.
-    pub const fn family_transform_mode(&self) -> Option<SemanticFamilyTransformMode> {
+    pub fn family_transform_mode(&self) -> Option<SemanticFamilyTransformMode> {
         match self {
-            Self::FamilyTransformTo { mode, .. } => Some(*mode),
+            Self::FamilyTransformTo { mode, .. } => Some(mode.clone()),
             _ => None,
         }
     }
@@ -511,11 +539,13 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
             | Self::TransformTo { .. }
+            | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }
             | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::GlowPulse { .. }
+            | Self::Dissolve { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -536,11 +566,13 @@ impl SemanticAnimationIntent {
             Self::ObjectPropertyTrack { .. }
             | Self::MoveAlongPath { .. }
             | Self::TransformTo { .. }
+            | Self::EffectTargetTo { .. }
             | Self::WorldTransformTo { .. }
             | Self::CameraProfileTo { .. }
             | Self::FamilyTransformTo { .. }
             | Self::Indicate { .. }
             | Self::GlowPulse { .. }
+            | Self::Dissolve { .. }
             | Self::DrawBorderThenFill { .. }
             | Self::PassingFlash { .. }
             | Self::SubsetDisplayMember { .. }
@@ -1014,6 +1046,30 @@ impl SemanticStore {
         Ok(
             self.insert_semantic_animation_state(SemanticAnimationState::new(
                 SemanticAnimationIntent::GlowPulse { target, intensity },
+                options,
+            )),
+        )
+    }
+
+    pub fn insert_semantic_dissolve_animation(
+        &mut self,
+        target: SemanticNodeId,
+        direction: crate::DissolveDirection,
+        style: crate::DissolveStyle,
+        options: AnimationOptions,
+    ) -> Result<SemanticNodeId, SemanticAnimationError> {
+        self.set_last_mutation_writes(0);
+        if !self.node(target).is_some_and(|node| node.can_own_members()) {
+            return Err(SemanticSceneOperationError::NotSemanticAuthoringNode(target).into());
+        }
+        validate_authored_animation_options(options)?;
+        Ok(
+            self.insert_semantic_animation_state(SemanticAnimationState::new(
+                SemanticAnimationIntent::Dissolve {
+                    target,
+                    direction,
+                    style,
+                },
                 options,
             )),
         )

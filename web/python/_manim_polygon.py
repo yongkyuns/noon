@@ -36,7 +36,7 @@ def _finish(self, method, args, kwargs):
 class Polygram(_compat.VMobject):
     """Closed planar vertex groups; geometry is constructed by Rust."""
     def __init__(self, *vertex_groups, color=_base.BLUE, **kwargs):
-        from pyodide.ffi import to_js
+        from _noon_host import array_value as to_js
         groups = [[_base._as_vec2(point) for point in group] for group in vertex_groups]
         coordinates = to_js([component for group in groups for point in group for component in point])
         lengths = to_js([len(group) for group in groups])

@@ -27,7 +27,7 @@ class MethodTargetContentRoutingTests(unittest.TestCase):
         tree = ast.parse(path.read_text())
         candidate = next(node for node in tree.body
                          if isinstance(node, ast.FunctionDef)
-                         and node.name == "_build_canonical_composition_candidate")
+                         and node.name == "_build_canonical_composition_candidate_steps")
         branch = next(node for node in ast.walk(candidate)
                       if isinstance(node, ast.If)
                       and ast.unparse(node.test) == "affine is not None")
@@ -49,7 +49,9 @@ class MethodTargetContentRoutingTests(unittest.TestCase):
                 reverse_rate_function=False,
             ),
         }
-        exec(compile(module, str(path) + ":affine-transport", "exec"), namespace)
+        # Preserve the real source filename for source-based coverage reporting.
+        # A synthetic suffix cannot be resolved by coverage.py at report time.
+        exec(compile(module, str(path), "exec"), namespace)
         cls.route = staticmethod(namespace["route"])
 
     def setUp(self):
@@ -72,6 +74,12 @@ class MethodTargetContentRoutingTests(unittest.TestCase):
     def invoke(self, leaf=None):
         self.route(self.builder, (self.source, self.target,
                                  MethodTarget() if leaf is None else leaf), {}, self.reserve)
+
+    def test_isolated_route_uses_resolvable_production_source_filename(self):
+        self.assertEqual(
+            Path(self.route.__code__.co_filename),
+            Path(__file__).with_name("_manim_scene.py"),
+        )
 
     def test_bound_content_uses_live_rust_classification_for_affine_method_target(self):
         self.invoke()

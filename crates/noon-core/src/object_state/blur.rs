@@ -29,17 +29,8 @@ impl Blur {
 
 impl sealed::Sealed for Blur {}
 impl EffectValue for Blur {
-    fn apply_effect_update(self, update: EffectUpdate) -> Result<Self, EffectParameterError> {
-        for parameter in [
-            EffectParameter::Color,
-            EffectParameter::Offset,
-            EffectParameter::Intensity,
-            EffectParameter::Source,
-        ] {
-            if update.writes(parameter) {
-                return Err(EffectParameterError::UnsupportedParameter(parameter));
-            }
-        }
+    fn apply_effect_update(self, update: &EffectUpdate) -> Result<Self, EffectParameterError> {
+        update.require_parameters(&[EffectParameter::Radius])?;
         if let Some(radius) = update.radius {
             radius.validate()?;
         }
@@ -47,7 +38,7 @@ impl EffectValue for Blur {
             radius: update.radius.unwrap_or(self.radius),
         })
     }
-    fn validate_effect_transition(self, target: Self) -> Result<(), EffectParameterError> {
+    fn validate_effect_transition(&self, target: &Self) -> Result<(), EffectParameterError> {
         if !self.radius.same_unit(target.radius) {
             return Err(EffectParameterError::DiscreteTransition(
                 EffectParameter::Radius,
@@ -56,9 +47,9 @@ impl EffectValue for Blur {
         Ok(())
     }
     fn sample_effect_parameters(
-        self,
-        target: Self,
-        request: EffectUpdate,
+        &self,
+        target: &Self,
+        request: &EffectUpdate,
         alpha: f64,
     ) -> Result<EffectUpdate, EffectParameterError> {
         let update = EffectUpdate {
@@ -67,7 +58,7 @@ impl EffectValue for Blur {
                 .map(|_| self.radius.interpolate(target.radius, alpha)),
             ..EffectUpdate::default()
         };
-        update.apply_to(self)?;
+        update.apply_to(*self)?;
         Ok(update)
     }
 }
@@ -136,7 +127,7 @@ mod tests {
             .is_err());
         assert_eq!(
             EffectDefinition::Blur(initial)
-                .validate_effect_transition(crate::Glow::default().into()),
+                .validate_effect_transition(&crate::Glow::default().into()),
             Err(EffectParameterError::IncompatibleDefinition)
         );
         assert!(Blur::new(EffectUpdate::default().radius(0.0))

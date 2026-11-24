@@ -57,9 +57,10 @@ remain fatal and original reports and PNG/debug frames are retained. Missing
 classification evidence keeps the CUDA suite enabled. The fifteen-minute
 qualification budget and every positive/negative case are unchanged.
 
-The scene uses explicit async construction and awaited animation helpers. The
-normal source runner owns construct execution; the observer wraps that entry to
-install read-only checks. Renderer sampling races the actual authoring failure
+The scene uses ordinary Python construction and animation helpers. The normal
+source runner owns construct execution, and the observer installs read-only
+checks in setup. The qualification disables JSPI in the authoring worker.
+Renderer sampling races the actual authoring failure
 promise, so a failed check cannot leave a sample waiting on a stopped source.
 The existing pinned Pyodide resource cache reuses immutable downloads across
 fresh per-case contexts without sharing scene or interpreter state.

@@ -1,19 +1,28 @@
 [package]
 name = "noon-native"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
 description = "Native window host for typed Noon execution sessions"
 
 [features]
+wgsl-effects = ["noon/wgsl-effects"]
+video-decode = ["noon/video-decode"]
 audio = ["dep:cpal"]
 latex = ["noon/latex"]
 
+[[example]]
+name = "shader_sweep"
+required-features = ["wgsl-effects"]
+
 [dependencies]
 cpal = { version = "=0.18.2", default-features = false, optional = true }
-noon = { path = "../noon" }
-noon-core = { path = "../noon-core" }
-noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["native"] }
+noon = { version = "0.1.0", path = "../noon", features = ["prepared-prefix"] }
+noon-core = { version = "0.1.0", path = "../noon-core" }
+noon-render-wgpu = { version = "0.1.0", path = "../noon-render-wgpu", default-features = false, features = ["native"] }
 pollster = "1.0"
 wgpu = { version = "30.0.1", default-features = false, features = ["std"] }
 winit = "0.30.13"
@@ -26,5 +35,12 @@ required-features = ["audio"]
 name = "background_music_lesson"
 required-features = ["audio"]
 
+[[example]]
+name = "video_object"
+required-features = ["video-decode", "audio"]
+
 [dev-dependencies]
+noon-export = { path = "../noon-export" }
+serde_json = "1"
+half = "2"
 wgpu = { version = "30.0.1", default-features = false, features = ["noop"] }

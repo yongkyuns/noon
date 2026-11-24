@@ -1,4 +1,5 @@
 mod affine;
+mod dissolve;
 mod glow_pulse;
 mod glow_target;
 pub use glow_target::EffectTargetLoweringError;

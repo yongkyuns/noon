@@ -326,13 +326,14 @@ mod tests {
             family_animation_plan_indices: vec![],
         };
         let mut preparer = crate::FramePreparer::new();
-        preparer.prepare(&frame);
+        preparer.prepare(&frame).unwrap();
         let first = batch(0, 0);
         let (sin, cos) = transform.rotation.sin_cos();
         for progress in [0.0, 0.25, 0.5, 0.75, 1.0] {
             frame.morphs[0] = progress;
-            let prepared =
-                preparer.prepare_incremental(&frame, &noon_runtime::FrameChanges::objects(vec![0]));
+            let prepared = preparer
+                .prepare_incremental(&frame, &noon_runtime::FrameChanges::objects(vec![0]))
+                .unwrap();
             assert_eq!(prepared.stats.geometry_cache_misses, 0);
             let box_world = path_bounds(&prepared, &first, Vec2::new(0.01, 0.02)).unwrap();
             for vertex in prepared.path_vertices {
@@ -347,8 +348,9 @@ mod tests {
                 assert!(world.y > box_world.min.y && world.y < box_world.max.y);
             }
         }
-        let prepared =
-            preparer.prepare_incremental(&frame, &noon_runtime::FrameChanges::objects(vec![]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &noon_runtime::FrameChanges::objects(vec![]))
+            .unwrap();
         let glyph = RetainedRenderItem::Glyph {
             object_id: ObjectId::new(2),
             object_index: 0,
@@ -404,7 +406,7 @@ mod tests {
             family_animation_plan_indices: vec![],
         };
         let mut preparer = crate::FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         let first = OrderedRenderBatch {
             primitive: RenderPrimitive::Circle,
             instance_range: 0..1,

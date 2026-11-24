@@ -23,6 +23,24 @@ impl SceneSectionNavigation {
         &self.sections
     }
 
+    /// The latest boundary at or before `time`, using the first declaration
+    /// when several cues share that boundary. All section types participate.
+    pub fn current(&self, time: f64) -> Result<Option<(usize, &SceneSection)>, String> {
+        if !time.is_finite() || time < 0.0 {
+            return Err("section navigation time must be finite and non-negative".into());
+        }
+        let through = self
+            .sections
+            .partition_point(|section| section.time <= time);
+        let Some(last) = through.checked_sub(1) else {
+            return Ok(None);
+        };
+        let index = self
+            .sections
+            .partition_point(|section| section.time < self.sections[last].time);
+        Ok(Some((index, &self.sections[index])))
+    }
+
     /// The same strict, non-wrapping query as [`Scene::section_target`].
     pub fn target(
         &self,
@@ -119,6 +137,37 @@ mod tests {
                 assert!(std::ptr::eq(section, &scene.sections()[index]));
                 (index, section.time)
             })
+    }
+
+    #[test]
+    fn current_cue_uses_exact_boundaries_and_first_same_time_declaration() {
+        let mut scene = Scene::new();
+        assert!(scene.section_navigation().current(0.0).unwrap().is_none());
+        for (name, time, kind) in [
+            ("Start", 0.5, SectionType::Normal),
+            ("Same", 1.0, SectionType::Skip),
+            ("Same", 1.0, SectionType::Normal),
+            ("Close", 1.0000000001, SectionType::Normal),
+        ] {
+            scene.next_section_at(name, kind, time).unwrap();
+        }
+        let cues = scene.section_navigation();
+        for (time, expected) in [
+            (0.0, None),
+            (0.5, Some(0)),
+            (0.75, Some(0)),
+            (1.0, Some(1)),
+            (1.0000000001, Some(3)),
+            (2.0, Some(3)),
+        ] {
+            assert_eq!(
+                cues.current(time).unwrap().map(|(index, _)| index),
+                expected
+            );
+        }
+        for time in [-1.0, f64::NAN, f64::INFINITY] {
+            assert!(cues.current(time).is_err());
+        }
     }
 
     #[test]

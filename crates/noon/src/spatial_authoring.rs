@@ -428,7 +428,7 @@ fn validate_surface_options(options: SurfaceOptions) -> Result<(), AuthoringErro
     Ok(())
 }
 
-pub(crate) fn publish_mesh_creation(
+fn publish_mesh_creation(
     store: &mut noon_core::SemanticStore,
     options: MeshOptions,
     publish: impl FnOnce(
@@ -450,7 +450,7 @@ pub(crate) fn publish_mesh_creation(
     })
 }
 
-pub(crate) fn publish_mesh_family(
+fn publish_mesh_family(
     store: &mut noon_core::SemanticStore,
     options: Vec<MeshOptions>,
     publish: impl FnOnce(
@@ -461,7 +461,7 @@ pub(crate) fn publish_mesh_family(
     publish_meshes_and_paths_family(store, options, Vec::new(), publish)
 }
 
-pub(crate) fn publish_meshes_and_paths_family(
+fn publish_meshes_and_paths_family(
     store: &mut noon_core::SemanticStore,
     meshes: Vec<MeshOptions>,
     paths: Vec<SpatialPathOptions>,
@@ -540,6 +540,23 @@ impl Scene {
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
+    /// Read the current pose. Detached objects use their authored pose after
+    /// checking the Scene's ownership and execution provenance.
+    pub fn world_transform(
+        &self,
+        object: &Mobject,
+    ) -> Result<SemanticWorldTransform3D, AuthoringError> {
+        self.require_object(object)?;
+        match self.running_execution() {
+            Some(session) => effective_world_or_authored(
+                session,
+                &self.integration_store().borrow(),
+                object.node_id(),
+            ),
+            None => object.world_transform(),
+        }
+    }
+
     /// Read current published pose without substituting authored base state.
     pub fn effective_world_transform(
         &self,
@@ -560,20 +577,11 @@ impl Scene {
     /// the authored pose is the effective pose; detached live objects fall
     /// back to their authored pose after session provenance has been checked.
     pub fn effective_world_center(&self, object: &Mobject) -> Result<SemanticVec3, AuthoringError> {
-        self.require_object(object)?;
-        let state = object.state()?;
-        let world = match self.running_execution() {
-            Some(session) => effective_world_or_authored(
-                session,
-                &self.integration_store().borrow(),
-                object.node_id(),
-            )?,
-            None => object.world_transform()?,
-        };
+        let world = self.world_transform(object)?;
         crate::world_affine::world_bounds_center(
             &self.integration_store().borrow(),
             object.node_id(),
-            &state,
+            &object.state()?,
             world,
         )
     }
@@ -756,8 +764,43 @@ impl Scene {
         )?)
     }
 
+    /// Regenerate only this mesh's resource after a dependency changes. Old
+    /// immutable versions remain available to snapshots and submitted draw work.
+    pub fn replace_mesh_geometry(
+        &mut self,
+        object: &Mobject,
+        mesh: noon_core::MeshResource,
+    ) -> Result<(), AuthoringError> {
+        self.require_object(object)?;
+        let old = object
+            .state()?
+            .content
+            .geometry()
+            .and_then(|geometry| geometry.resource_handle())
+            .ok_or(AuthoringError::NonFiniteGeometry)?;
+        {
+            let store = self.integration_store().borrow();
+            if !matches!(
+                store.geometry_resources().get(old),
+                Some(noon_core::GeometryResource::Mesh(_))
+            ) {
+                return Err(AuthoringError::NonFiniteGeometry);
+            }
+        }
+        self.with_semantic_publication(|store, publish| {
+            store.with_geometry_mesh(mesh, |store, handle| {
+                let mut transaction = SemanticMutationTransaction::new();
+                transaction.replace_content(
+                    object.node_id(),
+                    noon_core::StoredGeometry::Resource(handle),
+                );
+                publish(store, transaction).map(|_| ())
+            })
+        })
+    }
+
     /// Atomically recolor a sampled Surface through the owning Scene. The same
-    /// prepared edit is used for cold authoring and active LiveSession work.
+    /// prepared edit is used before and after execution starts.
     pub fn set_surface_checkerboard(
         &mut self,
         surface: &SurfaceFamily,
@@ -774,16 +817,7 @@ impl Scene {
     /// Initialize this Scene's one 3D camera before root content is attached.
     /// It remains an ordinary semantic Mobject whose world tracks drive Runtime.
     pub fn camera_3d(&mut self, camera: SemanticCamera3D) -> Result<Mobject, AuthoringError> {
-        if !self
-            .integration_store()
-            .borrow()
-            .node(self.root())
-            .ok_or(AuthoringError::NonFiniteObjectState)?
-            .members()
-            .is_empty()
-        {
-            return Err(AuthoringError::CameraRequiresEmptyScene(self.root()));
-        }
+        self.require_camera_setup()?;
         let mut state = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
         state.set_role(SemanticObjectRole::Camera3D);
         state
@@ -796,7 +830,7 @@ impl Scene {
         )
         .ok_or(AuthoringError::NonFiniteObjectState)?
         .into();
-        self.create_spatial_role(state, true)
+        self.create_role_object(state, true)
     }
 
     /// Create a detached point light. Color and intensity use ordinary effective
@@ -823,10 +857,10 @@ impl Scene {
             stroke_width: 0.0,
             ..SemanticStyle::default()
         };
-        self.create_spatial_role(state, false)
+        self.create_role_object(state, false)
     }
 
-    pub(crate) fn create_spatial_role(
+    pub(crate) fn create_role_object(
         &mut self,
         state: SemanticObjectState,
         attach: bool,
@@ -857,48 +891,38 @@ impl Scene {
         self.apply_semantic_transaction(transaction).map(|_| ())
     }
 
-    /// Declare shared world-transform-to intent before execution bootstrap.
+    /// Declare shared world-transform-to intent on this Scene.
     /// Activation captures the then-current effective pose through the ordinary
     /// LiveSession animation path.
     pub fn declare_world_transform(
-        &self,
+        &mut self,
         object: &Mobject,
         target: SemanticWorldTransform3D,
         options: noon_core::AnimationOptions,
-    ) -> Result<DeclaredAnimation, String> {
-        self.require_object(object)
-            .map_err(|error| error.to_string())?;
-        if self.running_execution().is_some() {
-            return Err(
-                "world track declaration requires unstarted execution; use a live composition"
-                    .into(),
-            );
-        }
+    ) -> Result<DeclaredAnimation, AuthoringError> {
+        self.require_object(object)?;
         if options.lag_ratio.is_some()
             || options.path_arc.is_some()
             || options.reverse_rate_function.is_some()
             || options.remover.is_some()
             || options.introducer.is_some()
         {
-            return Err("world tracks support duration and rate function options".into());
+            return Err(AuthoringError::InvalidAnimationDeclaration(
+                "world tracks support duration and rate function options",
+            ));
         }
-        let mut transaction = SemanticMutationTransaction::new();
-        let animation =
-            transaction.create_world_transform_animation(object.node_id(), target, options);
-        let node = transaction
-            .apply(&mut self.integration_store().borrow_mut())
-            .map_err(|error| error.to_string())?
-            .resolve(animation)
-            .ok_or_else(|| "world track declaration was not resolved".to_owned())?;
-        Ok(DeclaredAnimation::new(
-            Rc::clone(self.integration_store()),
-            node,
-        ))
+        self.declare_animation(
+            noon_core::SemanticAnimationIntent::WorldTransformTo {
+                target: object.node_id(),
+                transform: target,
+            },
+            options,
+        )
     }
 }
 
 impl MobjectFamily {
-    /// Authored world affine edit; Scene/LiveSession publish edits into execution.
+    /// Edit authored world placement. Use [`Scene::world_affine`] during playback.
     pub fn world_affine(&mut self, edit: crate::WorldAffineEdit) -> Result<(), AuthoringError> {
         let transaction = crate::world_affine::prepare_world_affine(
             self.integration_store(),
@@ -940,7 +964,7 @@ impl MobjectFamily {
 }
 
 impl Mobject {
-    /// Authored world affine edit; Scene/LiveSession publish edits into execution.
+    /// Edit authored world placement. Use [`Scene::world_affine`] during playback.
     pub fn world_affine(&mut self, edit: crate::WorldAffineEdit) -> Result<(), AuthoringError> {
         let transaction = crate::world_affine::prepare_world_affine(
             self.integration_store(),
@@ -999,7 +1023,7 @@ impl Mobject {
     }
 }
 
-pub(crate) fn effective_world(
+fn effective_world(
     session: &crate::ExecutionSession,
     store: &noon_core::SemanticStore,
     node: noon_core::SemanticNodeId,
@@ -1027,5 +1051,7 @@ pub(crate) fn effective_world_or_authored(
     effective_world(session, store, node)
 }
 
+#[cfg(test)]
+mod mesh_edit_tests;
 #[cfg(test)]
 mod tests;

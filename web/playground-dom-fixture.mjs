@@ -6,12 +6,17 @@ export class Element extends EventTarget {
     this.tagName = tag.toUpperCase();
     this.children = [];
     this.dataset = {};
+    this.style = {
+      setProperty(name, value) { this[name] = value; },
+      removeProperty(name) { delete this[name]; },
+    };
     this.attributes = new Map();
     this.className = "";
     this.value = "";
     this.title = "";
     this.disabled = false;
   }
+  click() { if (!this.disabled) this.dispatchEvent(new Event("click")); }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
   removeAttribute(name) {

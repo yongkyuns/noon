@@ -12,3 +12,8 @@ export function isSquareToCircleTransformFrame(sample) {
     && sample.time < SQUARE_TO_CIRCLE_TRANSFORM_END
     && sample.objectCount === 1;
 }
+
+export function isSquareToCircleNaturalWrap(previousTime, currentTime, madeForwardProgress) {
+  return Number.isFinite(previousTime) && Number.isFinite(currentTime) && madeForwardProgress === true
+    && previousTime > 2.5 && currentTime < 0.5 && currentTime < previousTime;
+}

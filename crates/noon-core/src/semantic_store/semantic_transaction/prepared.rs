@@ -335,6 +335,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 }
             }
         }
+        super::view_effect::validate(transaction, &preflight, store)?;
         for mutation in &transaction.mutations {
             let SemanticMutation::AddAnimation { token, animation } = mutation else {
                 continue;
@@ -342,7 +343,17 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             if !planned_nodes.contains_key(token) {
                 continue;
             }
+            if let crate::SemanticTransactionAnimationIntent::EffectTargetTo { target, .. } =
+                animation.intent()
+            {
+                preflight.appearance_targets.insert(*target);
+            }
             if let crate::SemanticTransactionAnimationIntent::TransformTo {
+                target,
+                target_state,
+                ..
+            }
+            | crate::SemanticTransactionAnimationIntent::EffectTargetTo {
                 target,
                 target_state,
                 ..
@@ -484,8 +495,10 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
         debug_assert_eq!(payloads.len(), tokens.len());
         let resource_tokens = payloads.iter().map(|(token, _)| *token).collect::<Vec<_>>();
         let final_states = preflight.staged_pending_paths.clone();
-        store.with_geometry_paths(
-            payloads.into_iter().map(|(_, path)| path),
+        store.with_geometry_resources(
+            payloads
+                .into_iter()
+                .map(|(_, path)| crate::GeometryResource::VectorPath(path)),
             move |store, handles| {
                 let resources = resource_tokens
                     .iter()
@@ -571,6 +584,46 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             .filter_map(|(mutation, changed)| changed.then_some(mutation))
     }
 
+    /// Sparse declaration dependency read, including transaction-local targets
+    /// and reverse-reference removal closure. No scene or animation scan.
+    pub fn has_family_appearance_target(
+        &self,
+        owner: impl Into<SemanticTransactionNodeRef>,
+    ) -> bool {
+        let owner = owner.into();
+        !self.node_is_removed(owner)
+            && (self.preflight.appearance_targets.contains(&owner)
+                || owner.existing().is_some_and(|id| {
+                    self.store
+                        .family_appearance_animations(id)
+                        .any(|animation| !self.preflight.removed_existing.contains(&animation))
+                }))
+    }
+
+    pub fn family_appearance_scope_changes(&self) -> Vec<SemanticTransactionNodeRef> {
+        let mut owners = self.preflight.appearance_targets.clone();
+        for removed in &self.preflight.removed_existing {
+            if let Ok(state) = self.store.semantic_animation_state(*removed) {
+                if let crate::SemanticAnimationIntent::EffectTargetTo { target, .. } =
+                    state.intent()
+                {
+                    owners.insert((*target).into());
+                }
+            }
+        }
+        let mut owners = owners
+            .into_iter()
+            .filter(|owner| {
+                owner
+                    .existing()
+                    .is_some_and(|id| self.store.has_family_appearance_target(id))
+                    != self.has_family_appearance_target(*owner)
+            })
+            .collect::<Vec<_>>();
+        owners.sort_by_key(|owner| self.planned_node_id(*owner));
+        owners
+    }
+
     /// Staged callback registrations computed by the semantic transaction's own
     /// preflight. Compiler preparation reads these rather than reimplementing
     /// updater insertion, occurrence identity, or interval-closing semantics.
@@ -619,9 +672,11 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 | SemanticMutation::SetFamilyStyle { node: object, .. }
                 | SemanticMutation::SetProperty { object, .. }
                 | SemanticMutation::SetObjectTransform { object, .. }
+                | SemanticMutation::SetViewerDraggable { object, .. }
                 | SemanticMutation::SetClickAction { object, .. }
                 | SemanticMutation::SetSpatialCompositionDomain { object, .. }
                 | SemanticMutation::SetCameraProfile { object, .. }
+                | SemanticMutation::SetViewColorProfile { object, .. }
                 | SemanticMutation::SetCameraMotions { object, .. }
                 | SemanticMutation::ReplaceStyle { object, .. }
                 | SemanticMutation::ReplaceContent { object, .. }
@@ -848,6 +903,25 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     }
 
     /// Observe staged own vector style on an existing or pending family.
+    pub fn family_opacity_copy_provenance(
+        &self,
+        node: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<Option<crate::SemanticFamilyOpacityCopyProvenance>, SemanticTransactionReadError>
+    {
+        let node = node.into();
+        self.family_style(node)?;
+        Ok(self
+            .preflight
+            .staged_family_opacity_copies
+            .get(&node)
+            .copied()
+            .unwrap_or_else(|| {
+                node.existing()
+                    .and_then(|id| self.store.node(id))
+                    .and_then(|node| node.family_opacity_copy_provenance())
+            }))
+    }
+
     pub fn family_style(
         &self,
         node: impl Into<SemanticTransactionNodeRef>,
@@ -1077,6 +1151,26 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                 Ok(state.transform_start())
             }
         }
+    }
+
+    /// Read final direct parents through the same sparse edge overlay as member
+    /// order. Removed edges and parents are absent; provisional parents retain
+    /// their transaction-local identity until the atomic commit.
+    pub fn family_parents(
+        &self,
+        node: impl Into<SemanticTransactionNodeRef>,
+    ) -> Result<Vec<SemanticTransactionNodeRef>, SemanticTransactionReadError> {
+        let node = node.into();
+        // This checked read accepts exactly the shared authoring-node domain.
+        // Its bounded attachment list is not used as a membership authority.
+        self.animation_effect_snapshot(node)?;
+        Ok(self
+            .preflight
+            .family_edges
+            .parents_for_read(self.store, node)
+            .into_iter()
+            .filter(|parent| !self.is_removed_ref(*parent))
+            .collect())
     }
 
     /// Read final direct family order through the transaction-local overlay.
@@ -1373,6 +1467,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
     /// semantic identity once, then bind those local names without reacquiring or
     /// revalidating a separate store reference.
     pub fn commit_with_store(self) -> (SemanticMutationTransactionResult, &'a mut SemanticStore) {
+        let appearance_scope_changes = self.family_appearance_scope_changes();
         let Self {
             store,
             mut transaction,
@@ -1468,14 +1563,16 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .semantic_effect_state(effect)
                         .expect("validated effect");
                     let owner = previous.owner();
-                    let next = previous.updated(update).expect("preflighted effect update");
+                    let next = previous
+                        .updated(&update)
+                        .expect("preflighted effect update");
                     let previous = previous.definition();
                     let prepared = preflight.staged_effects[&effect].definition();
                     // Publish this mutation's disjoint channels in order. The
                     // final value was validated before any semantic commit.
                     for parameter in update.parameters() {
-                        debug_assert!(!next.definition().parameter_changed(prepared, parameter));
-                        if previous.parameter_changed(next.definition(), parameter) {
+                        debug_assert!(!next.definition().parameter_changed(&prepared, parameter));
+                        if previous.parameter_changed(&next.definition(), parameter) {
                             impacts.push(SemanticMutationImpact::EffectParameter {
                                 owner,
                                 effect,
@@ -1593,6 +1690,17 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         impacts.push(SemanticMutationImpact::SpatialAnchorChanged { object });
                     }
                 }
+                SemanticMutation::SetViewerDraggable { object, enabled } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .expect("preflighted semantic object")
+                        .semantic_object_state_mut()
+                        .expect("preflighted semantic object state")
+                        .set_viewer_draggable(enabled);
+                    written_slots.insert(object);
+                    impacts.push(SemanticMutationImpact::ViewerDraggable { object });
+                }
                 SemanticMutation::SetClickAction { object, binding } => {
                     let object = resolve_node_ref(object, &committed_nodes);
                     store
@@ -1619,6 +1727,18 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                         .set_bar_metadata(metadata);
                     written_slots.insert(object);
                     impacts.push(SemanticMutationImpact::BarMetadata { object });
+                }
+                SemanticMutation::SetViewColorProfile { object, profile } => {
+                    let object = resolve_node_ref(object, &committed_nodes);
+                    store
+                        .node_mut(object)
+                        .and_then(|node| node.semantic_object_state_mut())
+                        .expect("preflighted semantic camera remains live")
+                        .set_view_color_profile(profile);
+                    written_slots.insert(object);
+                    // This is camera-role configuration; the role and identity
+                    // themselves remain on the same semantic object.
+                    impacts.push(SemanticMutationImpact::ObjectRole { object });
                 }
                 SemanticMutation::SetInset2DView {
                     object,
@@ -1680,7 +1800,9 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                     background_stroke_color,
                     background_stroke_width,
                     background_stroke_opacity,
+                    ..
                 } => {
+                    let copy = preflight.staged_family_opacity_copies[&node];
                     let node = resolve_node_ref(node, &committed_nodes);
                     store.mutate_semantic_style(node, |family| {
                         family.set_family_style(style);
@@ -1689,6 +1811,7 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
                             background_stroke_width,
                             background_stroke_opacity,
                         );
+                        family.set_family_opacity_copy_provenance(copy);
                     });
                     written_slots.insert(node);
                     impacts.push(SemanticMutationImpact::FamilyStyle { node });
@@ -2007,6 +2130,14 @@ impl<'a> PreparedSemanticMutationTransaction<'a> {
             }
         }
 
+        for owner in appearance_scope_changes {
+            let node = resolve_node_ref(owner, &committed_nodes);
+            if store.node(node).is_some_and(|node| {
+                node.semantic_object_state().is_none() && node.family_style().is_some()
+            }) {
+                impacts.push(SemanticMutationImpact::FamilyAppearanceScope { node });
+            }
+        }
         for (node, source_identity) in pending_source_assignments {
             store
                 .set_source_identity(node, Some(source_identity))

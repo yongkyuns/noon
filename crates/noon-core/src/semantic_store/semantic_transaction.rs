@@ -28,6 +28,7 @@ use crate::{CompositionTimeMap, TrackTiming};
 mod inset_view;
 mod pending_resources;
 mod prepared;
+mod view_effect;
 pub use prepared::{
     PendingGeometryPublicationError, PendingResourceExtensionError,
     PreparedSemanticMutationTransaction, SemanticTransactionReadError,
@@ -106,10 +107,20 @@ pub enum SemanticMutation {
         object: SemanticTransactionNodeRef,
         transform: SemanticTransform,
     },
+    /// Enable or disable presentation-only viewer drag for one object.
+    SetViewerDraggable {
+        object: SemanticTransactionNodeRef,
+        enabled: bool,
+    },
     /// Replace or clear one object-owned click action declaration.
     SetClickAction {
         object: SemanticTransactionNodeRef,
         binding: Option<SemanticClickAction>,
+    },
+    /// Select color/energy processing on the existing semantic 2D camera.
+    SetViewColorProfile {
+        object: SemanticTransactionNodeRef,
+        profile: crate::ViewColorProfile,
     },
     SetInset2DView {
         object: SemanticTransactionNodeRef,
@@ -173,6 +184,11 @@ pub enum SemanticMutation {
     SetFamilyStyle {
         node: SemanticTransactionNodeRef,
         style: SemanticStyle,
+        /// A selected opacity write remains intent even when its value equals
+        /// a copied baseline. Ordinary paint metadata edits omit this domain.
+        opacity_write: bool,
+        /// Initialize weak copy intent from this exact source generation.
+        copy_source: Option<SemanticNodeId>,
         background_stroke_color: Option<crate::Color>,
         background_stroke_width: Option<f64>,
         background_stroke_opacity: Option<f64>,
@@ -282,7 +298,9 @@ impl SemanticMutation {
             | Self::SetObjectTransform { object, .. }
             | Self::SetCameraProfile { object, .. }
             | Self::SetCameraMotions { object, .. }
+            | Self::SetViewerDraggable { object, .. }
             | Self::SetClickAction { object, .. }
+            | Self::SetViewColorProfile { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
             | Self::ReplaceTextPresentationBaseline { object, .. }
@@ -378,7 +396,9 @@ impl SemanticMutation {
             | Self::SetDrawEnabled { node: object, .. }
             | Self::SetProperty { object, .. }
             | Self::SetObjectTransform { object, .. }
+            | Self::SetViewerDraggable { object, .. }
             | Self::SetClickAction { object, .. }
+            | Self::SetViewColorProfile { object, .. }
             | Self::ReplaceContent { object, .. }
             | Self::ReplaceDecimalNumber { object, .. }
             | Self::ReplaceTextPresentationBaseline { object, .. }
@@ -422,12 +442,18 @@ impl SemanticMutation {
             Self::SetObjectTransform { object, .. } => {
                 Some(SemanticMutationKey::ObjectTransform(*object))
             }
+            Self::SetViewerDraggable { object, .. } => {
+                Some(SemanticMutationKey::ViewerDraggable(*object))
+            }
             Self::SetClickAction { object, .. } => Some(SemanticMutationKey::ClickAction(*object)),
             Self::ReplaceContent { object, .. } => {
                 Some(SemanticMutationKey::ObjectContent(*object))
             }
             Self::SetBarMetadata { object, .. } => {
                 Some(SemanticMutationKey::ObjectBarMetadata(*object))
+            }
+            Self::SetViewColorProfile { object, .. } => {
+                Some(SemanticMutationKey::ViewColorProfile(*object))
             }
             Self::SetInset2DView { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
             Self::SetAngleValue { object, .. } => Some(SemanticMutationKey::ObjectRole(*object)),
@@ -506,8 +532,10 @@ pub(super) enum SemanticMutationKey {
     CameraMotions(SemanticTransactionNodeRef),
     ObjectContent(SemanticTransactionNodeRef),
     ClickAction(SemanticTransactionNodeRef),
+    ViewerDraggable(SemanticTransactionNodeRef),
     ObjectBarMetadata(SemanticTransactionNodeRef),
     ObjectRole(SemanticTransactionNodeRef),
+    ViewColorProfile(SemanticTransactionNodeRef),
     SpatialCompositionDomain(SemanticTransactionNodeRef),
     DecimalNumber(SemanticTransactionNodeRef),
     TextPresentationBaseline(SemanticTransactionNodeRef),
@@ -565,6 +593,10 @@ pub enum SemanticMutationImpact {
     FamilyStyle {
         node: SemanticNodeId,
     },
+    /// A real family appearance animation began or ceased requiring a row.
+    FamilyAppearanceScope {
+        node: SemanticNodeId,
+    },
     ZIndex {
         node: SemanticNodeId,
     },
@@ -585,6 +617,9 @@ pub enum SemanticMutationImpact {
         object: SemanticNodeId,
     },
     ObjectContent {
+        object: SemanticNodeId,
+    },
+    ViewerDraggable {
         object: SemanticNodeId,
     },
     ClickAction {
@@ -688,6 +723,8 @@ pub(super) struct SemanticTransactionPreflight {
     pending_effect_order: HashMap<SemanticTransactionNodeRef, Vec<SemanticLocalNodeToken>>,
     staged_family_colors: HashMap<SemanticTransactionNodeRef, crate::Color>,
     staged_family_styles: HashMap<SemanticTransactionNodeRef, SemanticStyle>,
+    staged_family_opacity_copies:
+        HashMap<SemanticTransactionNodeRef, Option<crate::SemanticFamilyOpacityCopyProvenance>>,
     staged_family_z: HashMap<SemanticTransactionNodeRef, f64>,
     staged_drawing: HashMap<SemanticTransactionNodeRef, bool>,
     staged_objects: HashMap<SemanticTransactionNodeRef, SemanticObjectState>,
@@ -700,6 +737,7 @@ pub(super) struct SemanticTransactionPreflight {
     family_edges: FamilyEdgePreflight,
     pending_creations: HashMap<SemanticLocalNodeToken, SemanticNodeCreation>,
     pending_animations: HashMap<SemanticLocalNodeToken, SemanticTransactionAnimation>,
+    appearance_targets: HashSet<SemanticTransactionNodeRef>,
     staged_signal_scope_additions: Vec<(SemanticTransactionNodeRef, SemanticTransactionNodeRef)>,
     staged_foreground: HashMap<SemanticTransactionNodeRef, Vec<SemanticTransactionNodeRef>>,
     removed_existing: HashSet<SemanticNodeId>,
@@ -759,8 +797,8 @@ impl SemanticMutationTransaction {
     }
 
     /// Create an ordered named appearance attachment using the ordinary allocator.
-    /// This initial semantic slice supports leaf owners only; renderer admission
-    /// remains separately gated until effect lowering is available.
+    /// Objects own local appearance; a family owns one composed treatment.
+    /// Execution admission validates the supported source/isolation profile.
     pub fn create_effect(
         &mut self,
         owner: impl Into<SemanticTransactionNodeRef>,
@@ -769,7 +807,22 @@ impl SemanticMutationTransaction {
     ) -> SemanticLocalNodeToken {
         self.create_node(SemanticNodeCreation::Effect {
             owner: owner.into(),
-            name: name.into(),
+            name: crate::SemanticEffectName::Authored(name.into()),
+            definition: definition.into(),
+            copy_provenance: None,
+        })
+    }
+
+    /// Internal semantic visibility role; normal authored names remain distinct.
+    /// Allocation and validation use the same effect-node transaction path.
+    pub fn create_visibility_effect(
+        &mut self,
+        owner: impl Into<SemanticTransactionNodeRef>,
+        definition: crate::NoiseDissolve,
+    ) -> SemanticLocalNodeToken {
+        self.create_node(SemanticNodeCreation::Effect {
+            owner: owner.into(),
+            name: crate::SemanticEffectName::Visibility,
             definition: definition.into(),
             copy_provenance: None,
         })
@@ -947,12 +1000,36 @@ impl SemanticMutationTransaction {
     }
 
     /// Author a restoring indication through the common click-action mutation.
+    pub fn set_viewer_draggable(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        enabled: bool,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetViewerDraggable {
+            object: object.into(),
+            enabled,
+        });
+        self
+    }
+
     pub fn set_click_indicate(
         &mut self,
         object: impl Into<SemanticTransactionNodeRef>,
         binding: Option<SemanticClickIndicate>,
     ) -> &mut Self {
         self.set_click_action(object, binding.map(SemanticClickAction::Indicate))
+    }
+
+    pub fn set_view_color_profile(
+        &mut self,
+        object: impl Into<SemanticTransactionNodeRef>,
+        profile: crate::ViewColorProfile,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetViewColorProfile {
+            object: object.into(),
+            profile,
+        });
+        self
     }
 
     /// Bind ordinary rectangles as an inset display and camera in one publication.
@@ -1172,9 +1249,72 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetFamilyStyle {
             node: node.into(),
             style,
+            opacity_write: false,
+            copy_source: None,
             background_stroke_color: None,
             background_stroke_width: None,
             background_stroke_opacity: None,
+        });
+        self
+    }
+
+    /// Replace the style with an explicitly selected composite-opacity domain.
+    /// This retains same-valued writes on copied targets without claiming any
+    /// other style field as a new animation driver.
+    pub fn set_family_style_with_explicit_object_opacity(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        style: SemanticStyle,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetFamilyStyle {
+            node: node.into(),
+            style,
+            opacity_write: true,
+            copy_source: None,
+            background_stroke_color: None,
+            background_stroke_width: None,
+            background_stroke_opacity: None,
+        });
+        self
+    }
+
+    /// Stage an explicit composite-opacity edit on a family animation endpoint.
+    pub fn set_copied_family_opacity_target(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        source: SemanticNodeId,
+        style: SemanticStyle,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetFamilyStyle {
+            node: node.into(),
+            style,
+            opacity_write: true,
+            copy_source: Some(source),
+            background_stroke_color: None,
+            background_stroke_width: None,
+            background_stroke_opacity: None,
+        });
+        self
+    }
+
+    /// One copied family style plus its weak appearance-target provenance.
+    pub fn set_copied_family_style_with_background_stroke_update(
+        &mut self,
+        node: impl Into<SemanticTransactionNodeRef>,
+        source: SemanticNodeId,
+        style: SemanticStyle,
+        background_stroke_color: Option<crate::Color>,
+        background_stroke_width: Option<f64>,
+        background_stroke_opacity: Option<f64>,
+    ) -> &mut Self {
+        self.mutations.push(SemanticMutation::SetFamilyStyle {
+            node: node.into(),
+            style,
+            opacity_write: false,
+            copy_source: Some(source),
+            background_stroke_color,
+            background_stroke_width,
+            background_stroke_opacity,
         });
         self
     }
@@ -1209,6 +1349,8 @@ impl SemanticMutationTransaction {
         self.mutations.push(SemanticMutation::SetFamilyStyle {
             node: node.into(),
             style,
+            opacity_write: false,
+            copy_source: None,
             background_stroke_color,
             background_stroke_width,
             background_stroke_opacity,
@@ -1593,6 +1735,51 @@ impl SemanticMutationTransaction {
             false,
             options,
         )
+    }
+
+    /// Stage an existing-attachment target without manufacturing object geometry.
+    pub fn create_effect_target_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        target_state: impl Into<SemanticTransactionNodeRef>,
+        method_target: bool,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::EffectTargetTo {
+                    target: target.into(),
+                    target_state: target_state.into(),
+                    method_target,
+                },
+                options,
+            ),
+        });
+        token
+    }
+
+    pub fn create_dissolve_animation(
+        &mut self,
+        target: impl Into<SemanticTransactionNodeRef>,
+        direction: crate::DissolveDirection,
+        style: crate::DissolveStyle,
+        options: AnimationOptions,
+    ) -> SemanticLocalNodeToken {
+        let token = self.allocate_local_node_token();
+        self.mutations.push(SemanticMutation::AddAnimation {
+            token,
+            animation: SemanticTransactionAnimation::new(
+                SemanticTransactionAnimationIntent::Dissolve {
+                    target: target.into(),
+                    direction,
+                    style,
+                },
+                options,
+            ),
+        });
+        token
     }
 
     pub fn create_move_along_path_animation(
@@ -2386,6 +2573,10 @@ impl SemanticMutationTransaction {
         let mut staged_family_colors = HashMap::new();
         let mut staged_family_styles: HashMap<SemanticTransactionNodeRef, SemanticStyle> =
             HashMap::new();
+        let mut staged_family_opacity_copies: HashMap<
+            SemanticTransactionNodeRef,
+            Option<crate::SemanticFamilyOpacityCopyProvenance>,
+        > = HashMap::new();
         let mut staged_sheen_directions = HashMap::new();
         let mut staged_updating_suspended = HashMap::new();
         let mut staged_family_z = HashMap::new();
@@ -2637,7 +2828,10 @@ impl SemanticMutationTransaction {
                     property,
                     value,
                 } => {
-                    if *property == SemanticObjectProperty::Presence {
+                    if matches!(
+                        property,
+                        SemanticObjectProperty::Presence | SemanticObjectProperty::Reveal
+                    ) {
                         return Err(SemanticMutationTransactionError::UnsupportedPropertyWrite {
                             index,
                             object: *object,
@@ -2653,6 +2847,14 @@ impl SemanticMutationTransaction {
                         return Err(property_type_error(
                             index, *object, *property, expected, actual,
                         ));
+                    }
+                    if *property == SemanticObjectProperty::Emission
+                        && matches!(value, SemanticSignalValue::Scalar(strength) if crate::Emission::new(*strength).is_err())
+                    {
+                        return Err(SemanticMutationTransactionError::InvalidEmissionValue {
+                            index,
+                            object: *object,
+                        });
                     }
                     if let SemanticTransactionNodeRef::Pending(token) = object {
                         if let Some(path) = staged_pending_paths.get_mut(token) {
@@ -2754,6 +2956,17 @@ impl SemanticMutationTransaction {
                     }
                     changed.push(did_change);
                 }
+                SemanticMutation::SetViewerDraggable { object, enabled } => {
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    let did_change = state.viewer_draggable() != *enabled;
+                    state.set_viewer_draggable(*enabled);
+                    changed.push(did_change);
+                }
                 SemanticMutation::SetClickAction { object, binding } => {
                     let state = catalog.staged_object_state(
                         &mut staged_objects,
@@ -2850,6 +3063,21 @@ impl SemanticMutationTransaction {
                         state.set_bar_metadata(metadata.clone());
                     }
                     changed.push(did_change);
+                }
+                SemanticMutation::SetViewColorProfile { object, profile } => {
+                    let state = catalog.staged_object_state(
+                        &mut staged_objects,
+                        &mut staged_object_order,
+                        *object,
+                        index,
+                    )?;
+                    if state.role() != SemanticObjectRole::Camera2D {
+                        return Err(SemanticMutationTransactionError::InvalidNodeObjectState {
+                            index,
+                        });
+                    }
+                    changed.push(state.view_color_profile() != *profile);
+                    state.set_view_color_profile(*profile);
                 }
                 SemanticMutation::SetInset2DView {
                     object,
@@ -3109,6 +3337,8 @@ impl SemanticMutationTransaction {
                 SemanticMutation::SetFamilyStyle {
                     node,
                     style,
+                    opacity_write,
+                    copy_source,
                     background_stroke_color,
                     background_stroke_width,
                     background_stroke_opacity,
@@ -3119,6 +3349,18 @@ impl SemanticMutationTransaction {
                         &mut staged_object_order,
                         *node,
                     );
+                    if let Some(source) = copy_source {
+                        catalog.ensure_family((*source).into(), index)?;
+                        if staged_objects.contains_key(node) {
+                            return Err(
+                                SemanticMutationTransactionError::UnsupportedPropertyWrite {
+                                    index,
+                                    object: *node,
+                                    property: SemanticObjectProperty::ObjectOpacity,
+                                },
+                            );
+                        }
+                    }
                     if !style.is_finite() {
                         return Err(invalid_style_error(index, *node));
                     }
@@ -3158,7 +3400,37 @@ impl SemanticMutationTransaction {
                     if let Some(opacity) = background_stroke_opacity {
                         next_style.background_stroke_opacity = *opacity;
                     }
-                    changed.push(previous_style != next_style || previous_color != next_color);
+                    let previous_copy = staged_family_opacity_copies
+                        .get(node)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            node.existing()
+                                .and_then(|id| store.node(id))
+                                .and_then(|node| node.family_opacity_copy_provenance())
+                        });
+                    let next_copy = if let Some(source) = copy_source {
+                        let copy = crate::SemanticFamilyOpacityCopyProvenance::new(
+                            *source,
+                            next_style.object_opacity,
+                        );
+                        Some(if *opacity_write {
+                            copy.with_object_opacity_write()
+                        } else {
+                            copy
+                        })
+                    } else if *opacity_write
+                        || previous_style.object_opacity != next_style.object_opacity
+                    {
+                        previous_copy.map(|copy| copy.with_object_opacity_write())
+                    } else {
+                        previous_copy
+                    };
+                    changed.push(
+                        previous_style != next_style
+                            || previous_color != next_color
+                            || previous_copy != next_copy,
+                    );
+                    staged_family_opacity_copies.insert(*node, next_copy);
                     if let Some(state) = staged_objects.get_mut(node) {
                         state.style = next_style.clone();
                     }
@@ -3583,7 +3855,7 @@ impl SemanticMutationTransaction {
                         .semantic_effect_state(*effect)
                         .map_err(|error| SemanticMutationTransactionError::Node { index, error })?;
                     let previous = staged_effects.get(effect).unwrap_or(state);
-                    let next = previous.updated(*update).map_err(|error| {
+                    let next = previous.updated(update).map_err(|error| {
                         SemanticMutationTransactionError::EffectParameter {
                             index,
                             effect: *effect,
@@ -3613,13 +3885,27 @@ impl SemanticMutationTransaction {
                             }
                         }
                     }
-                    if let SemanticNodeCreation::Effect { owner, name, .. } = creation {
-                        catalog.ensure_object(*owner, index)?;
-                        if name.is_empty() {
+                    if let SemanticNodeCreation::Effect {
+                        owner,
+                        name,
+                        definition,
+                        ..
+                    } = creation
+                    {
+                        catalog.ensure_authoring_node(*owner, index)?;
+                        if name.authored().is_some_and(str::is_empty) {
                             return Err(
                                 SemanticMutationTransactionError::InvalidEffectAttachment {
                                     index,
                                     reason: "effect name is empty",
+                                },
+                            );
+                        }
+                        if name.is_visibility() && definition.as_noise_dissolve().is_none() {
+                            return Err(
+                                SemanticMutationTransactionError::InvalidEffectAttachment {
+                                    index,
+                                    reason: "visibility requires a checked mask definition",
                                 },
                             );
                         }
@@ -3630,7 +3916,7 @@ impl SemanticMutationTransaction {
                                 }
                                 if !removed_pending.contains(token)
                                     && store
-                                        .effect_by_name(*owner, name)
+                                        .effect_by_attachment_name(*owner, name)
                                         .map_err(|error| SemanticMutationTransactionError::Node {
                                             index,
                                             error,
@@ -3852,7 +4138,11 @@ impl SemanticMutationTransaction {
                 } = animation.intent()
                 {
                     for resource in values.image_resources() {
-                        if store.raster_image_resources().get(resource).is_none() {
+                        if store
+                            .raster_image_resources()
+                            .get(resource)
+                            .is_none_or(|image| image.video().is_some())
+                        {
                             return Err(
                                 SemanticMutationTransactionError::InvalidPaintImageResource {
                                     object: SemanticTransactionNodeRef::Pending(*token),
@@ -3873,6 +4163,7 @@ impl SemanticMutationTransaction {
             staged_effects,
             staged_family_colors,
             staged_family_styles,
+            staged_family_opacity_copies,
             staged_family_z,
             staged_drawing,
             changed,
@@ -3886,6 +4177,7 @@ impl SemanticMutationTransaction {
             staged_foreground,
             pending_creations,
             pending_animations,
+            appearance_targets: HashSet::new(),
             removed_existing: removed_nodes,
             removed_pending,
             spatial_anchor_cleared,
@@ -4220,8 +4512,8 @@ fn object_property_value(
     property: SemanticObjectProperty,
 ) -> SemanticSignalValue {
     match property {
-        SemanticObjectProperty::Presence => {
-            unreachable!("presence is currently authored only through a typed signal binding")
+        SemanticObjectProperty::Presence | SemanticObjectProperty::Reveal => {
+            unreachable!("binding-only properties have no authored value")
         }
         SemanticObjectProperty::Translation => {
             SemanticSignalValue::Vec3(state.transform.translation)
@@ -4238,6 +4530,9 @@ fn object_property_value(
         }
         SemanticObjectProperty::StrokeWidth => {
             SemanticSignalValue::Scalar(state.style.stroke_width)
+        }
+        SemanticObjectProperty::Emission => {
+            SemanticSignalValue::Scalar(state.style.emission.strength())
         }
         SemanticObjectProperty::ObjectOpacity => {
             SemanticSignalValue::Scalar(state.style.object_opacity)
@@ -4303,8 +4598,8 @@ fn apply_object_property(
     value: SemanticSignalValue,
 ) {
     match (property, value) {
-        (SemanticObjectProperty::Presence, _) => {
-            unreachable!("presence property writes are rejected during transaction preflight")
+        (SemanticObjectProperty::Presence | SemanticObjectProperty::Reveal, _) => {
+            unreachable!("binding-only property writes are rejected during transaction preflight")
         }
         (SemanticObjectProperty::Translation, SemanticSignalValue::Vec3(value)) => {
             let mut transform = state.transform;
@@ -4329,6 +4624,10 @@ fn apply_object_property(
         }
         (SemanticObjectProperty::StrokeWidth, SemanticSignalValue::Scalar(value)) => {
             state.style.stroke_width = value;
+        }
+        (SemanticObjectProperty::Emission, SemanticSignalValue::Scalar(value)) => {
+            state.style.emission =
+                crate::Emission::new(value).expect("preflighted material strength");
         }
         (SemanticObjectProperty::ObjectOpacity, SemanticSignalValue::Scalar(value)) => {
             state.style.object_opacity = value;
@@ -4385,7 +4684,11 @@ fn validate_style_image_resources(
     object: SemanticTransactionNodeRef,
 ) -> Result<(), SemanticMutationTransactionError> {
     for resource in style.image_resources() {
-        if store.raster_image_resources().get(resource).is_none() {
+        if store
+            .raster_image_resources()
+            .get(resource)
+            .is_none_or(|image| image.video().is_some())
+        {
             return Err(
                 SemanticMutationTransactionError::InvalidPaintImageResource { object, resource },
             );
@@ -4419,6 +4722,7 @@ fn is_style_property(property: SemanticObjectProperty) -> bool {
         SemanticObjectProperty::FillOpacity
             | SemanticObjectProperty::StrokeOpacity
             | SemanticObjectProperty::StrokeWidth
+            | SemanticObjectProperty::Emission
             | SemanticObjectProperty::ObjectOpacity
     )
 }
@@ -4835,6 +5139,10 @@ pub enum SemanticMutationTransactionError {
     },
     InvalidObjectPropertyTrack {
         index: usize,
+    },
+    InvalidEmissionValue {
+        index: usize,
+        object: SemanticTransactionNodeRef,
     },
     NonFinitePropertyValue {
         index: usize,
@@ -5410,6 +5718,7 @@ impl std::fmt::Display for SemanticMutationTransactionError {
                 formatter,
                 "semantic transaction mutation {index} cannot add animation with non-finite path_arc"
             ),
+            Self::InvalidEmissionValue { index, object } => write!(formatter, "semantic mutation {index} on {object:?} requires finite emission strength in [0, 63]"),
             Self::InvalidObjectPropertyTrack { index } => write!(
                 formatter,
                 "semantic transaction mutation {index} has an invalid exact object property track"

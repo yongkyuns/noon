@@ -350,7 +350,7 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
         object: ObjectId::new(0),
         expected: Box::new([]),
         effects: Some(Arc::new(
-            noon_compile::CompiledEffectStack::new([*glow]).unwrap(),
+            noon_compile::CompiledEffectStack::new([glow.as_ref().clone()]).unwrap(),
         )),
     };
     let style = ExecutionPatch::SetStyle {
@@ -387,7 +387,7 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
                     .effects
                     .as_ref()
                     .and_then(|stack| stack.get(glow.attachment)),
-                Some(*glow)
+                Some(glow.as_ref().clone())
             );
             assert!(runtime.frame().objects[0].fill_paint.is_some());
             // Content remains independently checked; supported geometry can be
@@ -405,7 +405,7 @@ fn paint_and_glow_transactions_accept_both_orders_without_spatial_work() {
                     .effects
                     .as_ref()
                     .and_then(|stack| stack.get(glow.attachment)),
-                Some(*glow)
+                Some(glow.as_ref().clone())
             );
             runtime.take_spatial_changes();
             let mut style = runtime.frame().objects[0].style;

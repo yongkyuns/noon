@@ -74,8 +74,6 @@ pub enum GraphAuthoringError {
     StoreBorrowed,
     /// The live root has no authored graph declaration.
     MissingDeclaration(SemanticNodeId),
-    /// A graph operation could not publish through the active live session.
-    Live(crate::LiveSessionError),
     DuplicateVertexKey {
         vertex_index: usize,
     },
@@ -105,19 +103,12 @@ impl From<GraphTopologyError> for GraphAuthoringError {
     }
 }
 
-impl From<crate::LiveSessionError> for GraphAuthoringError {
-    fn from(value: crate::LiveSessionError) -> Self {
-        Self::Live(value)
-    }
-}
-
 impl std::fmt::Display for GraphAuthoringError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Authoring(error) => error.fmt(formatter),
             Self::Topology(error) => error.fmt(formatter),
             Self::Store(error) => error.fmt(formatter),
-            Self::Live(error) => error.fmt(formatter),
             Self::StoreBorrowed => formatter.write_str("graph store is exclusively borrowed"),
             Self::MissingDeclaration(root) => write!(
                 formatter,
@@ -161,7 +152,6 @@ impl std::error::Error for GraphAuthoringError {
             Self::Authoring(error) => Some(error),
             Self::Topology(error) => Some(error),
             Self::Store(error) => Some(error),
-            Self::Live(error) => Some(error),
             _ => None,
         }
     }
@@ -321,35 +311,6 @@ impl<K: Clone + Eq + Hash> Graph<K> {
             inner: build_graph(scene, vertices, edges, false, options)?,
         })
     }
-
-    /// Construct through an already-running session without creating a second
-    /// Scene or execution owner.
-    pub fn new_live<V, E>(
-        live: &mut crate::LiveSession<'_>,
-        vertices: V,
-        edges: E,
-    ) -> Result<Self, GraphAuthoringError>
-    where
-        V: IntoIterator<Item = (K, (f64, f64))>,
-        E: IntoIterator<Item = (K, K)>,
-    {
-        Self::with_options_live(live, vertices, edges, GraphOptions::default())
-    }
-
-    pub fn with_options_live<V, E>(
-        live: &mut crate::LiveSession<'_>,
-        vertices: V,
-        edges: E,
-        options: GraphOptions,
-    ) -> Result<Self, GraphAuthoringError>
-    where
-        V: IntoIterator<Item = (K, (f64, f64))>,
-        E: IntoIterator<Item = (K, K)>,
-    {
-        Ok(Self {
-            inner: build_graph(live, vertices, edges, false, options)?,
-        })
-    }
 }
 
 impl<K: Eq + Hash> Graph<K> {
@@ -460,66 +421,6 @@ impl<K: Clone + Eq + Hash> Graph<K> {
     ) -> Result<(), GraphAuthoringError> {
         mutation::change_layout_positions(scene, &mut self.inner, positions)
     }
-
-    pub fn add_vertices_live<V>(
-        &mut self,
-        live: &mut crate::LiveSession<'_>,
-        vertices: V,
-    ) -> Result<GraphMutationResult, GraphAuthoringError>
-    where
-        V: IntoIterator<Item = (K, (f64, f64))>,
-    {
-        mutation::add_vertices(live, &mut self.inner, vertices)
-    }
-
-    pub fn add_edges_live<E>(
-        &mut self,
-        live: &mut crate::LiveSession<'_>,
-        edges: E,
-    ) -> Result<GraphMutationResult, GraphAuthoringError>
-    where
-        E: IntoIterator<Item = (K, K)>,
-    {
-        mutation::add_edges(live, &mut self.inner, edges)
-    }
-
-    pub fn remove_vertices_live<V>(
-        &mut self,
-        live: &mut crate::LiveSession<'_>,
-        vertices: V,
-    ) -> Result<GraphMutationResult, GraphAuthoringError>
-    where
-        V: IntoIterator<Item = K>,
-    {
-        mutation::remove_vertices(live, &mut self.inner, vertices)
-    }
-
-    pub fn remove_edges_live<E>(
-        &mut self,
-        live: &mut crate::LiveSession<'_>,
-        edges: E,
-    ) -> Result<GraphMutationResult, GraphAuthoringError>
-    where
-        E: IntoIterator<Item = (K, K)>,
-    {
-        mutation::remove_edges(live, &mut self.inner, edges)
-    }
-
-    pub fn change_layout_live(
-        &mut self,
-        live: &mut crate::LiveSession<'_>,
-        options: GraphLayoutOptions,
-    ) -> Result<(), GraphAuthoringError> {
-        mutation::change_layout(live, &mut self.inner, options)
-    }
-
-    pub fn change_layout_positions_live(
-        &mut self,
-        live: &mut crate::LiveSession<'_>,
-        positions: &[(f64, f64)],
-    ) -> Result<(), GraphAuthoringError> {
-        mutation::change_layout_positions(live, &mut self.inner, positions)
-    }
 }
 
 /// Explicit-position directed retained graph using shared Arrow geometry.
@@ -549,35 +450,6 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
     {
         Ok(Self {
             inner: build_graph(scene, vertices, edges, true, options)?,
-        })
-    }
-
-    /// Construct through an already-running session without creating a second
-    /// Scene or execution owner.
-    pub fn new_live<V, E>(
-        live: &mut crate::LiveSession<'_>,
-        vertices: V,
-        edges: E,
-    ) -> Result<Self, GraphAuthoringError>
-    where
-        V: IntoIterator<Item = (K, (f64, f64))>,
-        E: IntoIterator<Item = (K, K)>,
-    {
-        Self::with_options_live(live, vertices, edges, GraphOptions::default())
-    }
-
-    pub fn with_options_live<V, E>(
-        live: &mut crate::LiveSession<'_>,
-        vertices: V,
-        edges: E,
-        options: GraphOptions,
-    ) -> Result<Self, GraphAuthoringError>
-    where
-        V: IntoIterator<Item = (K, (f64, f64))>,
-        E: IntoIterator<Item = (K, K)>,
-    {
-        Ok(Self {
-            inner: build_graph(live, vertices, edges, true, options)?,
         })
     }
 }
@@ -684,66 +556,6 @@ impl<K: Clone + Eq + Hash> DiGraph<K> {
         positions: &[(f64, f64)],
     ) -> Result<(), GraphAuthoringError> {
         mutation::change_layout_positions(scene, &mut self.inner, positions)
-    }
-
-    pub fn add_vertices_live<V>(
-        &mut self,
-        live: &mut crate::LiveSession<'_>,
-        vertices: V,
-    ) -> Result<GraphMutationResult, GraphAuthoringError>
-    where
-        V: IntoIterator<Item = (K, (f64, f64))>,
-    {
-        mutation::add_vertices(live, &mut self.inner, vertices)
-    }
-
-    pub fn add_edges_live<E>(
-        &mut self,
-        live: &mut crate::LiveSession<'_>,
-        edges: E,
-    ) -> Result<GraphMutationResult, GraphAuthoringError>
-    where
-        E: IntoIterator<Item = (K, K)>,
-    {
-        mutation::add_edges(live, &mut self.inner, edges)
-    }
-
-    pub fn remove_vertices_live<V>(
-        &mut self,
-        live: &mut crate::LiveSession<'_>,
-        vertices: V,
-    ) -> Result<GraphMutationResult, GraphAuthoringError>
-    where
-        V: IntoIterator<Item = K>,
-    {
-        mutation::remove_vertices(live, &mut self.inner, vertices)
-    }
-
-    pub fn remove_edges_live<E>(
-        &mut self,
-        live: &mut crate::LiveSession<'_>,
-        edges: E,
-    ) -> Result<GraphMutationResult, GraphAuthoringError>
-    where
-        E: IntoIterator<Item = (K, K)>,
-    {
-        mutation::remove_edges(live, &mut self.inner, edges)
-    }
-
-    pub fn change_layout_live(
-        &mut self,
-        live: &mut crate::LiveSession<'_>,
-        options: GraphLayoutOptions,
-    ) -> Result<(), GraphAuthoringError> {
-        mutation::change_layout(live, &mut self.inner, options)
-    }
-
-    pub fn change_layout_positions_live(
-        &mut self,
-        live: &mut crate::LiveSession<'_>,
-        positions: &[(f64, f64)],
-    ) -> Result<(), GraphAuthoringError> {
-        mutation::change_layout_positions(live, &mut self.inner, positions)
     }
 }
 

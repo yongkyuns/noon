@@ -123,6 +123,7 @@ class KeyedSceneMembershipTests(unittest.TestCase):
                 "_append_membership_value",
                 "_sync_membership_wrapper_attachments",
                 "_canonical_edit_membership",
+                "_complete_prepared_publication",
             },
             self.ns,
         )

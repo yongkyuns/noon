@@ -8,8 +8,8 @@ use crate::integration::{
     SemanticMutationTransaction,
 };
 use crate::{
-    ContinuationStep, LiveContinuation, LiveProgram, LiveProgramStatus, LiveSession,
-    LiveSessionError, Mobject, RustHostCallbackTable, Scene,
+    ContinuationStep, LiveContinuation, LiveProgram, LiveProgramStatus, LiveSessionError, Mobject,
+    RustHostCallbackTable, Scene,
 };
 
 const CALLBACK: HostCallbackId = HostCallbackId::new(1_896);
@@ -25,21 +25,28 @@ struct Segments {
 impl LiveContinuation for Segments {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
         let stage = self.stage;
         self.stage += 1;
         self.resumes.borrow_mut().push(stage);
         match stage {
-            0 => Ok(ContinuationStep::Await(live.wait_segment(FIRST_END)?)),
+            0 => Ok(ContinuationStep::Await(
+                scene.live().wait_segment(FIRST_END)?,
+            )),
             1 => {
-                let y = f64::from(live.effective(&self.marker)?.transform.translation.y);
-                live.set_translation(&self.marker, 2.0, y)?;
-                Ok(ContinuationStep::Await(live.wait_segment(SECOND_DURATION)?))
+                let y = f64::from(scene.effective(&self.marker)?.transform.translation.y);
+                scene.set_translation(&self.marker, 2.0, y)?;
+                Ok(ContinuationStep::Await(
+                    scene.live().wait_segment(SECOND_DURATION)?,
+                ))
             }
-            2 => Ok(ContinuationStep::Await(live.wait_segment(0.0)?)),
+            2 => Ok(ContinuationStep::Await(scene.live().wait_segment(0.0)?)),
             3 => {
-                let y = f64::from(live.effective(&self.marker)?.transform.translation.y);
-                live.set_translation(&self.marker, 9.0, y)?;
+                let y = f64::from(scene.effective(&self.marker)?.transform.translation.y);
+                scene.set_translation(&self.marker, 9.0, y)?;
                 Ok(ContinuationStep::Finished)
             }
             _ => panic!("a completed source must never resume again"),
@@ -114,6 +121,9 @@ fn observe(
         let status = sample.advance().unwrap();
         match status {
             ForwardSampleStatus::Progress => {}
+            ForwardSampleStatus::ResourcePreparationPending => {
+                panic!("fixture contains no external effect resources")
+            }
             ForwardSampleStatus::PublicationPending(expected) => {
                 assert!(matches!(
                     sample.admit_endpoint(expected),
@@ -303,7 +313,11 @@ struct ZeroWaits;
 impl LiveContinuation for ZeroWaits {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         Ok(ContinuationStep::Await(live.wait_segment(0.0)?))
     }
 }
@@ -325,6 +339,62 @@ fn nonprogressing_zero_time_source_exhausts_the_transition_budget() {
         sample.advance(),
         Err(ForwardSampleError::Inactive)
     ));
+}
+
+#[test]
+fn idle_external_source_neither_resumes_nor_satisfies_a_future_export_sample() {
+    use crate::integration::{
+        BlockingSceneSetup, ExportFrameOptions, ExportFrames, ExportFramesError,
+        ExportFramesStatus, ExportStop,
+    };
+
+    let mut program = BlockingSceneSetup::new().into_program().unwrap();
+    let before = program.session().publication_context();
+    assert!(!program.can_resume());
+    assert!(matches!(
+        program.resume(),
+        Err(crate::LiveProgramError::InvalidState { .. })
+    ));
+    assert_eq!(program.status(), LiveProgramStatus::ReadyToResume);
+    let mut callbacks = RustHostCallbackTable::new();
+    {
+        let mut sample = ForwardSample::new(&mut program, &mut callbacks, 1.0, 1).unwrap();
+        for _ in 0..8 {
+            let ForwardSampleStatus::Ready(observation) = sample.advance().unwrap() else {
+                panic!("an empty external relay must remain idle");
+            };
+            assert_eq!(observation.requested_time, 1.0);
+            assert_eq!(observation.published_time, 0.0);
+            assert_eq!(observation.publication, before);
+        }
+    }
+    assert!(program.boundary_complete());
+
+    // The initial actual frame is valid. The next requested frame cannot be
+    // exported from the same idle observation or mislabeled as source completion.
+    let mut export = ExportFrames::new(
+        &mut program,
+        &mut callbacks,
+        ExportFrameOptions {
+            frame_rate: FrameRate::new(1, 1).unwrap(),
+            start_frame: 0,
+            stop: ExportStop::FrameCount(2),
+            max_frames: 2,
+            max_transitions_per_sample: 1,
+            final_hold_seconds: 0.0,
+        },
+    )
+    .unwrap();
+    let ExportFramesStatus::SampleReady(first) = export.advance().unwrap() else {
+        panic!("the actual initial frame is observable");
+    };
+    drop(export.take_renderer_publication().unwrap());
+    export.acknowledge_sample(first).unwrap();
+    assert!(matches!(
+        export.advance(),
+        Err(ExportFramesError::InvalidObservation)
+    ));
+    assert!(matches!(export.advance(), Err(ExportFramesError::Inactive)));
 }
 
 #[test]

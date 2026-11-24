@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ContinuationStep, LiveContinuation, LiveProgramError, LiveSession, Scene};
+use crate::{ContinuationStep, LiveContinuation, LiveProgramError, Scene};
 use noon_core::{
     AnimationOptions, NativeInputModifiers, NativePointerCancellation, NativePointerId,
     NativePointerInput, NativePointerInputKind, RateFunction, SemanticNodeId, SemanticObjectState,
@@ -489,7 +489,10 @@ fn snapshot_is_neither_a_pending_callback_bypass_nor_an_input_acknowledgement() 
 struct Finish;
 impl LiveContinuation for Finish {
     type Error = std::convert::Infallible;
-    fn resume(&mut self, _: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        _scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
         Ok(ContinuationStep::Finished)
     }
 }
@@ -566,7 +569,10 @@ fn cancellation_cannot_use_a_frame_token_from_a_retired_binding() {
 struct Fail;
 impl LiveContinuation for Fail {
     type Error = &'static str;
-    fn resume(&mut self, _: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        _scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
         Err("intentional terminal continuation")
     }
 }

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,20 +7,24 @@ import { PNG } from "pngjs";
 import playwright from "playwright";
 import { disableAuthoringJspi, playgroundLaunchOptions, waitForBrowserObservation } from "./playground-browser-support.mjs";
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
-import { createBrowserFailureTrace } from "./playground-browser-failure-evidence.mjs";
+import { captureAttemptedPage, createBrowserFailureTrace } from "./playground-browser-failure-evidence.mjs";
 import { layoutReplayViewport, replayViewport } from "./showcase-viewport.mjs";
-import { assertNonreplayableShowcase, readLiveState } from "./showcase-live-review.mjs";
+import { assertFirstPass, assertReplayAvailable, readLiveState } from "./showcase-live-review.mjs";
+import { seekPausedGallery } from "./showcase-playback.mjs";
 import { normalizeShowcaseManifest } from "../web/showcase-gallery.js";
+import { serveRepository } from "./browser-test-server.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = Number(process.env.NOON_GALLERY_SELECTION_PORT ?? 4217);
-const base = process.env.NOON_GALLERY_SELECTION_BASE ?? `http://127.0.0.1:${port}/web/`;
+const base = process.env.NOON_GALLERY_SELECTION_BASE ?? `http://127.0.0.1:${port}/web/index.html`;
 const artifacts = path.resolve(
   root,
   process.env.NOON_GALLERY_SELECTION_ARTIFACTS ??
     "browser-smoke-artifacts/gallery-pointer-selection",
 );
 const browserName = process.env.NOON_PLAYGROUND_BROWSER ?? "chromium";
+const playbackProfile = process.env.NOON_GALLERY_SELECTION_PLAYBACK ?? "default";
+assert.ok(["default", "live"].includes(playbackProfile));
 const profileName = process.env.NOON_PLAYGROUND_PROFILE ?? "desktop-dpr1";
 const profiles = {
   // Preserve the original gallery-selection smoke's viewport exactly.
@@ -41,12 +44,14 @@ await mkdir(artifacts, { recursive: true });
 
 let server;
 let browser;
+let page = null;
 let runtimeCache;
 const failureTrace = createBrowserFailureTrace();
 let detachFailureTrace;
 const captures = {};
 const report = {
   browser: browserName, profile: profileName, input: profile.hasTouch ? "touch" : "mouse",
+  playbackProfile,
   legacyInteraction: "pointer-fill-selection", authoredInteraction: "click-indicate", noJspi: true,
 };
 let failure;
@@ -102,7 +107,10 @@ async function waitForExactPixels(canvas, baseline, label) {
     if (changedPixels(baseline, last) === 0) return last;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  const error = new Error(`${label} did not restore the exact baseline pixels`);
+  const error = new assert.AssertionError({
+    message: `${label} did not restore the exact baseline pixels`,
+    actual: changedPixels(baseline, last), expected: 0, operator: "strictEqual",
+  });
   error.capture = last;
   throw error;
 }
@@ -121,18 +129,7 @@ async function assertSettled(page, label) {
 
 try {
   if (!process.env.NOON_GALLERY_SELECTION_BASE) {
-    server = spawn(
-      "python3",
-      ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", root],
-      { stdio: "ignore" },
-    );
-    let ready = false;
-    for (let i = 0; i < 100; i += 1) {
-      ready = await fetch(base).then((response) => response.ok).catch(() => false);
-      if (ready) break;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    assert.ok(ready, "gallery selection HTTP server did not start");
+    server = await serveRepository(root, port);
   }
 
   const worker = await fetch(new URL("python-worker.js", base));
@@ -141,9 +138,12 @@ try {
 
   browser = await browserType.launch(playgroundLaunchOptions(browserName));
   const context = await browser.newContext(profile);
+  if (playbackProfile === "live") await context.addInitScript(() => {
+    globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = { authoringRunOptions: () => ({ preparedPlayback: false }) };
+  });
   await runtimeCache.install(context);
   await disableAuthoringJspi(context);
-  const page = await context.newPage();
+  page = await context.newPage();
   detachFailureTrace = failureTrace.attach(browser, context, page);
   failureTrace.setPhase("gallery-selection");
   page.setDefaultTimeout(30000);
@@ -170,8 +170,8 @@ try {
   await waitForAuthoring(page);
   assert.equal(
     await page.evaluate(() => document.querySelector("#status")?.dataset.interaction),
-    "pointer-fill-selection",
-    "gallery manifest must enable selection on the public runtime",
+    "viewer",
+    "the public viewer enables selection",
   );
 
   report.captureViewport = await replayViewport(canvas, captureSize, { deviceScaleFactor: profile.deviceScaleFactor });
@@ -180,37 +180,46 @@ try {
   const baseline = await canvas.screenshot();
   captures.baseline = baseline;
 
-  const beforeSelect = await page.evaluate(async () =>
-    Number((await window.__noonExampleGallery.executionMetrics()).metrics.presentedFrames),
-  );
+  const waitChanged = async (surface, before, label) => {
+    let image;
+    let difference;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      image = await surface.screenshot();
+      difference = changedPixels(before, image);
+      if (difference > 500) return image;
+      await page.waitForTimeout(25);
+    }
+    const error = new Error(`${label} changed only ${difference} pixels`);
+    error.capture = image;
+    throw error;
+  };
   await tap(page,
     box.x + box.width / 2 - box.height / 4,
     box.y + box.height / 2,
   );
-  await waitForPresentation(page, beforeSelect);
-  const selected = await canvas.screenshot();
-  captures.selected = selected;
-  const selectedChanged = changedPixels(baseline, selected);
-  report.selectedChanged = selectedChanged;
-  assert.ok(selectedChanged > 500, `selection changed only ${selectedChanged} pixels`);
-
-  const beforeClear = await page.evaluate(async () =>
-    Number((await window.__noonExampleGallery.executionMetrics()).metrics.presentedFrames),
-  );
-  await tap(page, box.x + 18, box.y + 18);
-  await waitForPresentation(page, beforeClear);
-  const cleared = await canvas.screenshot();
-  captures.cleared = cleared;
-  const clearDifference = changedPixels(baseline, cleared);
-  report.clearDifference = clearDifference;
-  assert.equal(clearDifference, 0, "background clear must restore the authored image exactly");
+  let capture = "selected";
+  try {
+    captures.selected = await waitChanged(canvas, baseline, "default viewer Indicate");
+    capture = "cleared";
+    captures.cleared = await waitForExactPixels(canvas, baseline, "default viewer Indicate");
+  } catch (error) {
+    if (error.capture) {
+      captures[capture] = error.capture;
+      delete error.capture;
+    }
+    throw error;
+  } finally {
+    if (captures.selected) report.selectedChanged = changedPixels(baseline, captures.selected);
+    if (captures.cleared) report.clearDifference = changedPixels(baseline, captures.cleared);
+  }
+  await assertSettled(page, "default viewer Indicate");
   assert.deepEqual(errors, []);
 
   report.legacyRenderer = await page.evaluate(() => document.querySelector("#status")?.dataset.rendererBackend);
 
   // The curated lesson carries no manifest interaction policy. Its Rust-owned
   // click declaration must still work after the authored introduction has
-  // finished and replay has been paused at that endpoint.
+  // finished at its endpoint, with replay only when Rust admits it.
   await page.goto(`${base}?catalog=showcase&example=showcase-pointer-selection`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
   assert.equal(
@@ -246,23 +255,37 @@ try {
   await waitForAuthoring(page);
   assert.equal(
     await page.evaluate(() => document.querySelector("#status")?.dataset.interaction),
-    "none",
-    "source-declared click actions must not require manifest interaction policy",
+    "viewer",
+    "source-declared click actions coexist with viewer defaults",
   );
-  const pause = page.getByRole("button", { name: "Pause animation", exact: true });
-  if (await pause.count()) await pause.click();
-  const scrubber = page.locator(".playback-scrubber");
-  const endpoint = Number(await scrubber.getAttribute("max"));
-  await scrubber.evaluate((input, time) => {
-    input.value = String(time);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  }, endpoint);
-  await page.waitForFunction((time) => {
-    const controls = document.querySelector(".playback-controls");
-    return controls?.dataset.busy === "false" &&
-      controls.querySelector(".playback-toggle")?.getAttribute("aria-label") === "Play animation" &&
-      Math.abs(Number(controls.dataset.elapsedSeconds) - time) < 1e-7;
-  }, endpoint);
+  const authoredPlayback = await readLiveState(page);
+  report.authoredPlaybackBeforeSeek = authoredPlayback;
+  if (authoredPlayback.controls.controllable === "true") {
+    const manifest = await fetch(new URL("python/examples/noon_showcase_manifest.json", base)).then(response => response.json());
+    const lesson = manifest.entries.find(entry => entry.id === "showcase-pointer-selection");
+    assert.ok(lesson);
+    const endpoint = await seekPausedGallery(page, lesson.duration);
+    // Nonaudio seek acknowledgement can precede presentation. Baseline the
+    // actual endpoint, not an earlier Create frame that the click will replace.
+    await waitForBrowserObservation(page, async time => {
+      const metrics = (await window.__noonExampleGallery.executionMetrics()).metrics;
+      return metrics?.ready === true && metrics.needsPresent === false &&
+        metrics.bufferedDeltas === 0 && metrics.presentedFrames > 0 &&
+        Math.abs(metrics.time - time) < 1e-7;
+    }, endpoint, { timeout: 15000 });
+  } else {
+    const manifest = await fetch(new URL("python/examples/noon_showcase_manifest.json", base)).then(response => response.json());
+    const lesson = manifest.entries.find(entry => entry.id === "showcase-pointer-selection");
+    assert.ok(lesson);
+    assert.equal(authoredPlayback.controls.controllable, "false");
+    assert.equal(authoredPlayback.controls.busy, "false");
+    assert.equal(authoredPlayback.controls.playing, "false");
+    assert.ok(Math.abs(Number(authoredPlayback.controls.elapsedSeconds) - lesson.duration) < 1e-7);
+    assert.ok(Math.abs(authoredPlayback.publishedTime - lesson.duration) < 1e-7);
+    assert.match(authoredPlayback.replayReason, /^Replay unavailable:/);
+    for (const control of ["play", "restart", "scrubber"]) assert.equal(authoredPlayback.disabledReplayControls[control], true);
+  }
+  report.authoredPlayback = await readLiveState(page);
   const authoredBox = await authoredCanvas.boundingBox();
   assert.ok(authoredBox && authoredBox.width > 0 && authoredBox.height > 0, "authored canvas is not drawable");
   const authoredBaseline = await authoredCanvas.screenshot();
@@ -271,23 +294,15 @@ try {
     authoredBox.x + authoredBox.width * 0.36,
     authoredBox.y + authoredBox.height * 0.5,
   );
-  const waitChanged = async (baseline, label) => {
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      const image = await authoredCanvas.screenshot();
-      if (changedPixels(baseline, image) > 500) return image;
-      await page.waitForTimeout(25);
-    }
-    throw new Error(`${label} did not change trusted canvas pixels`);
-  };
   await clickCircle();
-  const indicated = await waitChanged(authoredBaseline, "first authored click");
+  const indicated = await waitChanged(authoredCanvas, authoredBaseline, "first authored click");
   captures.indicated = indicated;
   report.indicatedChanged = changedPixels(authoredBaseline, indicated);
   const restored = await waitForExactPixels(authoredCanvas, authoredBaseline, "first authored click");
   captures.restored = restored;
   await assertSettled(page, "first authored click");
   await clickCircle();
-  const repeated = await waitChanged(authoredBaseline, "repeated authored click");
+  const repeated = await waitChanged(authoredCanvas, authoredBaseline, "repeated authored click");
   captures.repeated = repeated;
   await waitForExactPixels(authoredCanvas, authoredBaseline, "repeated authored click");
   await assertSettled(page, "repeated authored click");
@@ -296,13 +311,13 @@ try {
   await page.waitForTimeout(150);
   assert.equal(changedPixels(authoredBaseline, await authoredCanvas.screenshot()), 0, "background click must not change the source-declared scene");
   assert.equal(await presentedFrames(page), beforeBackground, "background click must not create interaction work");
-  // Exercise the actual gallery opt-in, not a manually constructed client.
-  const domWheel = browserName === "webkit" && profile.hasTouch;
-  report.wheelInput = domWheel ? "DOM wheel (mobile WebKit automation limitation)" : "browser mouse wheel";
+  // Exercise the default inspection through the public gallery canvas.
+  const domWheel = profile.hasTouch;
+  report.wheelInput = domWheel ? "DOM wheel (touch profile)" : "browser mouse wheel";
   const dispatchWheel = async delta => {
     if (domWheel) {
-      // Playwright cannot drive a wheel in mobile WebKit. Keep the same DOM
-      // collector and real touch picking, without claiming native wheel input.
+      // Touch emulation does not provide portable native wheel injection. Keep
+      // the same DOM collector and real touch picking; label this input explicitly.
       await authoredCanvas.evaluate((canvas, deltaY) => {
         const rect = canvas.getBoundingClientRect();
         const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaMode: 0, deltaY,
@@ -333,7 +348,7 @@ try {
         { timeout: 5_000 },
       );
       const observation = await page.evaluate(index => window.__noonInspectionTest.wheelEvents[index], before.wheelEvents);
-      assert.ok(Math.abs(observation.deltaY - delta) < 1e-3,
+      assert.equal(observation.deltaY, delta,
         "gallery wheel receipt must belong to the dispatched input");
       let accepted = null;
       if (observation.defaultPrevented) {
@@ -353,24 +368,26 @@ try {
     }
     throw new Error("gallery inspection did not admit a fresh wheel occurrence");
   };
+  // Native wheel injection can round fractional input before the DOM sees it.
+  const zoomDelta = Math.round(500 * Math.log(2));
   const beforeZoom = await presentedFrames(page);
-  await wheel(-500 * Math.log(2));
+  await wheel(-zoomDelta);
   await waitForPresentation(page, beforeZoom);
   const zoomed = await authoredCanvas.screenshot();
   captures.zoomed = zoomed;
   report.zoomChanged = changedPixels(authoredBaseline, zoomed);
   assert.ok(report.zoomChanged > 500, "gallery wheel must change the composed view");
   await tap(page, authoredBox.x + authoredBox.width * 0.22, authoredBox.y + authoredBox.height * 0.5);
-  captures.zoomIndicated = await waitChanged(zoomed, "click through zoomed gallery view");
+  captures.zoomIndicated = await waitChanged(authoredCanvas, zoomed, "click through zoomed gallery view");
   captures.zoomRestored = await waitForExactPixels(authoredCanvas, zoomed, "zoomed authored click");
   await assertSettled(page, "zoomed authored click");
   const beforeZoomOut = await presentedFrames(page);
-  await wheel(500 * Math.log(2));
+  await wheel(zoomDelta);
   await waitForPresentation(page, beforeZoomOut);
   captures.zoomReset = await waitForExactPixels(authoredCanvas, authoredBaseline, "inverse gallery zoom");
   await assertSettled(page, "inverse gallery zoom");
 
-  if (browserName === "webkit" && profileName === "mobile-dpr2") {
+  if (browserName === "webkit" && profileName === "mobile-dpr2" && playbackProfile === "default") {
     const rawManifest = await fetch(new URL("python/examples/noon_showcase_manifest.json", base)).then(response => response.json());
     const normalizedEntry = normalizeShowcaseManifest(rawManifest).examples.find(entry => entry.id === "showcase-translation-drag");
     const declaredEntry = rawManifest.entries.find(entry => entry.id === "showcase-translation-drag");
@@ -378,11 +395,13 @@ try {
       ? { ...normalizedEntry, duration: declaredEntry.duration }
       : null;
     assert.ok(nativeInputEntry, "native-input drag lesson is missing from the curated showcase");
-    assert.equal(nativeInputEntry.playbackCapability, "nonreplayable-native-input");
+    assert.equal(nativeInputEntry.playbackCapability, "deterministic-retained-replay");
     await page.goto(`${base}?catalog=showcase&example=${nativeInputEntry.id}`, { waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
     assert.equal(await page.evaluate(() => window.__noonExampleGallery.selectedExampleId), nativeInputEntry.id);
     const dragCanvas = page.locator("#scene");
+    assert.match(await page.evaluate(() => window.getComputedStyle(document.querySelector("#scene")).touchAction),
+      /^(pinch-zoom|none)$/, "one-finger dragging must stay on the scene canvas");
     await layoutReplayViewport(dragCanvas, captureSize);
     await dragCanvas.evaluate(element => element.style.setProperty("pointer-events", "auto", "important"));
     await page.evaluate(() => window.__noonExampleGallery.run());
@@ -395,7 +414,8 @@ try {
     const nativeBackend = await page.locator("#status").getAttribute("data-renderer-backend");
     assert.ok(["WebGL2", "WebGPU"].includes(nativeBackend), "native drag did not use a real renderer backend");
     const firstPassState = await readLiveState(page);
-    assertNonreplayableShowcase(nativeInputEntry, firstPassState, nativeBackend);
+    assertFirstPass(nativeInputEntry, firstPassState, nativeBackend);
+    assertReplayAvailable(firstPassState);
     const dragBox = await dragCanvas.boundingBox();
     assert.ok(dragBox && dragBox.width > 0 && dragBox.height > 0, "native drag canvas is not drawable");
     const nativeBaseline = await dragCanvas.screenshot();
@@ -515,13 +535,12 @@ try {
       const controls = document.querySelector(".playback-controls")?.dataset;
       return Number(controls?.elapsedSeconds) >= duration - 1e-7;
     }, nativeInputEntry.duration, { timeout: 30000 });
-    assertNonreplayableShowcase(nativeInputEntry, await readLiveState(page), nativeBackend);
+    assertReplayAvailable(await readLiveState(page));
     const nativeReset = await waitForExactPixels(dragCanvas, nativeBaseline, "public Run after touch drag/cancel");
     captures.nativeDragRunReset = nativeReset;
     report.nativeInputDrag = {
       ...report.nativeInputDrag,
-      capability: nativeInputEntry.playbackCapability,
-      limitation: nativeInputEntry.playbackLimitation,
+      replayAvailable: true,
       backend: nativeBackend,
       deviceScaleFactor: profile.deviceScaleFactor,
       pointerSamples: samples,
@@ -541,6 +560,7 @@ try {
   assert.deepEqual(errors, []);
 } catch (error) {
   failure = error;
+  report.attemptedPage = await captureAttemptedPage(page);
   if (error.capture) captures.failure = error.capture;
   throw error;
 } finally {
@@ -569,7 +589,7 @@ try {
     try {
       await browser?.close();
     } finally {
-      server?.kill("SIGTERM");
+      await server?.close();
     }
   }
 }

@@ -604,7 +604,9 @@ mod tests {
         let view = target.create_view(&Default::default());
         for opacity in [0.0, 0.5, 1.0, 0.0] {
             frame.objects[0].style.opacity = opacity;
-            let stable = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+            let stable = preparer
+                .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+                .unwrap();
             assert_eq!(stable.rectangles.len(), 1);
             let mut encoder = device.create_command_encoder(&Default::default());
             renderer.upload(&device, &queue, &stable);
@@ -681,7 +683,7 @@ mod tests {
         let derived = prepare_derived_display(&publication).unwrap();
         let mut preparer = FramePreparer::new();
         preparer.set_painter_order(publication.frame(), publication.painter_order());
-        let stable = preparer.prepare(publication.frame());
+        let stable = preparer.prepare(publication.frame()).unwrap();
 
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
@@ -762,7 +764,7 @@ mod tests {
         assert!(derived.path_vertices.is_empty());
         assert!(derived.path_indices.is_empty());
         assert_eq!(derived.stats.resident_path_reuses, 1);
-        let stable = preparer.prepare(publication.frame());
+        let stable = preparer.prepare(publication.frame()).unwrap();
 
         let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
         let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
@@ -831,7 +833,7 @@ mod tests {
         let derived = prepare_derived_display(&publication).unwrap();
         let mut preparer = FramePreparer::new();
         preparer.set_painter_order(publication.frame(), publication.painter_order());
-        let stable = preparer.prepare(publication.frame());
+        let stable = preparer.prepare(publication.frame()).unwrap();
 
         let (resolved, stats) = resolve_transient_anchors(&stable, &derived);
         assert_eq!(stats.slot_index_entries, COUNT as usize);
@@ -885,7 +887,7 @@ mod tests {
         let derived = prepare_derived_display(&publication).unwrap();
         let mut preparer = FramePreparer::new();
         preparer.set_painter_order(publication.frame(), publication.painter_order());
-        let stable = preparer.prepare(publication.frame());
+        let stable = preparer.prepare(publication.frame()).unwrap();
 
         assert_eq!(stable.slots.len(), 2);
         let (resolved, stats) = resolve_transient_anchors(&stable, &derived);

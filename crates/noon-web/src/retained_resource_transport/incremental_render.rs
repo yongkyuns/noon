@@ -53,6 +53,15 @@ impl RetainedResourceBundle {
 }
 
 impl InstalledRetainedResources {
+    pub(crate) fn reserve_additions_with_render(
+        &mut self,
+        additions: &PreparedRetainedResourceAdditionsWithRender,
+    ) -> Result<(), RetainedResourceTransportError> {
+        self.geometries
+            .reserve_insertions(&additions.ordinary.mesh_insertions)
+            .map_err(|error| RetainedResourceTransportError::GeometryReservation(error.to_string()))
+    }
+
     pub(crate) fn prepare_additions_with_render(
         &self,
         mut bundle: RetainedResourceBundle,
@@ -160,6 +169,17 @@ impl InstalledRetainedResources {
 }
 
 impl PreparedRetainedResourceAdditionsWithRender {
+    pub(crate) fn shader_program_remap(&self) -> super::shader_programs::ShaderPrograms {
+        self.ordinary.shader_program_remap()
+    }
+    pub(crate) fn composed_source_remap(
+        &self,
+    ) -> std::collections::HashMap<
+        crate::TransportComposedSourceHandle,
+        Arc<noon_core::ComposedSource>,
+    > {
+        self.ordinary.composed_source_remap()
+    }
     pub(crate) fn geometry_for_transport(
         &self,
         handle: super::TransportGeometryResourceHandle,

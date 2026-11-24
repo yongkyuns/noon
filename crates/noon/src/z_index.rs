@@ -1,9 +1,7 @@
 //! Shared authored painter priority; the renderer consumes only derived order.
-use crate::{AuthoringError, ExecutionSession, LayoutAnchor, Mobject, MobjectFamily, Scene};
-use noon_core::{
-    SemanticMutationTransaction, SemanticNodeId, SemanticStore, SemanticStoreIdentity,
-};
-use std::{cell::RefCell, rc::Rc};
+use crate::{AuthoringError, LayoutAnchor, Mobject, MobjectFamily, Scene};
+use noon_core::{SemanticMutationTransaction, SemanticStoreIdentity};
+use std::rc::Rc;
 
 impl LayoutAnchor {
     /// Read the selected root's own priority, including non-rendered family roots.
@@ -54,53 +52,43 @@ impl LayoutAnchor {
     }
 }
 
-/// Observe one anchor's effective priority from an existing coherent execution.
-///
-/// Reachable semantic leaves use Runtime's current priority. Detached objects and
-/// non-rendered family roots retain their authored priority.
-pub fn effective_z_index(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    source: &LayoutAnchor,
-) -> Result<f64, AuthoringError> {
-    if !Rc::ptr_eq(store, source.integration_store()) {
-        return Err(AuthoringError::ForeignStore);
-    }
-    let node = source.resolve()?;
-    let store_ref = store.borrow();
-    execution
-        .require_published_store(&store_ref)
-        .map_err(AuthoringError::from)?;
-    if execution.semantic_object_is_reachable(node) {
-        return execution
-            .effective_semantic_object(&store_ref, node)
-            .map(|observed| observed.object.z_index)
-            .map_err(AuthoringError::from);
-    }
-    drop(store_ref);
-    source.z_index()
-}
-
-/// Publish one z-index edit through an already-lowered execution component.
-///
-/// This is migration plumbing for legacy standalone-session callers. Durable
-/// application control remains Scene-owned; the neutral operation keeps only the
-/// shared transaction preparation and coherent running-publication mechanics.
-pub fn publish_z_index(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    source: &LayoutAnchor,
-    value: f64,
-    family: bool,
-) -> Result<(), AuthoringError> {
-    let transaction = source.z_index_transaction(store.borrow().identity(), value, family)?;
-    Scene::publish_running_transaction(store, root, execution, transaction)
-        .map(|_| ())
-        .map_err(AuthoringError::from)
-}
-
 impl Scene {
+    /// Read painter priority from the owning Scene during setup or execution.
+    pub fn z_index(&self, source: &LayoutAnchor) -> Result<f64, AuthoringError> {
+        if self.running_execution().is_some() {
+            return self.effective_z_index(source);
+        }
+        if !source.belongs_to_store(self.integration_store()) {
+            return Err(AuthoringError::ForeignStore);
+        }
+        source.z_index()
+    }
+
+    /// Observe one anchor's priority from the current coherent publication.
+    ///
+    /// Reachable leaves use effective Runtime priority. Detached objects and
+    /// non-rendered family roots use authored priority. This requires execution.
+    pub fn effective_z_index(&self, source: &LayoutAnchor) -> Result<f64, AuthoringError> {
+        let execution = self.running_execution().ok_or(AuthoringError::Unsupported(
+            crate::UnsupportedAuthoringOperation::EffectiveStateUnavailable,
+        ))?;
+        let store = self.integration_store();
+        if !Rc::ptr_eq(store, source.integration_store()) {
+            return Err(AuthoringError::ForeignStore);
+        }
+        let node = source.resolve()?;
+        let store_ref = store.borrow();
+        execution.require_published_store(&store_ref)?;
+        if execution.semantic_object_is_reachable(node) {
+            return execution
+                .effective_semantic_object(&store_ref, node)
+                .map(|observed| observed.object.z_index)
+                .map_err(AuthoringError::from);
+        }
+        drop(store_ref);
+        source.z_index()
+    }
+
     /// Set authored priority through this Scene's persistent mutation path.
     ///
     /// Cold Scenes update authored state directly. Running Scenes publish the same
@@ -147,6 +135,8 @@ mod tests {
         let detached = scene.square(1.0).unwrap();
         detached.set_z_index(3.0).unwrap();
         let anchor = LayoutAnchor::from(&object);
+        scene.set_z_index(&anchor, 5.0, false).unwrap();
+        assert_eq!(scene.z_index(&anchor).unwrap(), 5.0);
         assert!(matches!(
             scene.effective_z_index(&anchor),
             Err(AuthoringError::Unsupported(
@@ -160,7 +150,7 @@ mod tests {
         scene.set_z_index(&anchor, 7.0, true).unwrap();
         assert_eq!(scene.revision().get(), before.get() + 1);
         assert_eq!(object.z_index().unwrap(), 7.0);
-        assert_eq!(scene.effective_z_index(&anchor).unwrap(), 7.0);
+        assert_eq!(scene.z_index(&anchor).unwrap(), 7.0);
         assert_eq!(
             scene
                 .effective_z_index(&LayoutAnchor::from(&detached))

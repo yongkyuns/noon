@@ -137,11 +137,9 @@ fn build(
     let options = AnimationOptions::new()
         .run_time(0.5)
         .rate_func(RateFunction::Smooth);
-    let mut session = scene
-        .execution_session()
-        .map_err(|error| error.to_string())?;
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
     {
-        let mut live = scene.live(&mut session);
+        let mut live = execution.live();
         let pause = live.wait_segment(0.25).map_err(|error| error.to_string())?;
         live.advance_segment_to(pause, pause.end_time())
             .map_err(|error| error.to_string())?;
@@ -174,10 +172,8 @@ fn build(
         )
         .map_err(|error| error.to_string())?;
     }
-    session.seek(0.0).map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    execution.seek(0.0).map_err(|error| error.to_string())?;
+    Ok(execution)
 }
 
 fn matrix_step<'a>(
@@ -228,6 +224,92 @@ mod tests {
 
     fn present_count(frame: &noon_runtime::FrameState) -> usize {
         frame.presences.iter().filter(|present| **present).count()
+    }
+
+    #[cfg(feature = "prepared-prefix")]
+    #[test]
+    fn matrix_and_vector_ghost_suffixes_preserve_paused_history() {
+        use super::*;
+        let mut scene = Scene::new();
+        let mut setup = scene
+            .linear_transformation_setup(&LinearTransformationOptions::default())
+            .unwrap();
+        let vector = setup
+            .add_vector(&mut scene, 2.0, 1.0, Color::YELLOW)
+            .unwrap()
+            .clone();
+        let plane = setup.foreground_plane().unwrap().family();
+        let vector_family = scene.family(&[vector.family().into()]).unwrap();
+        let family = scene
+            .family(&[plane.into(), vector.family().into()])
+            .unwrap();
+        let mut previous_vector = vector_family;
+        let mut steps = Vec::new();
+        for matrix in [SWAP_AXES, [1.0, 0.0, 0.0, 1.0]] {
+            let ghost = faded_copy(&previous_vector).unwrap();
+            let target_plane = plane.copy_family().unwrap();
+            target_plane
+                .root()
+                .apply_matrix(&matrix, 2, 2, 0.0, 0.0)
+                .unwrap();
+            let target_vector = setup
+                .vector_matrix_target(&scene, 0, &matrix, 2, 2)
+                .unwrap();
+            previous_vector = scene.family(&[target_vector.family().into()]).unwrap();
+            let target = scene
+                .family(&[target_plane.root().into(), target_vector.family().into()])
+                .unwrap();
+            steps.push((ghost, target));
+        }
+        let mut source = scene.execution_session().unwrap();
+        source
+            .begin_replay_retention(noon_runtime::ReplayLimits::default())
+            .unwrap();
+        let wait = source.wait_segment(0.5).unwrap();
+        source.advance_to(wait.end_time()).unwrap();
+        scene.live(&mut source).complete_segment(wait).unwrap();
+        let (mut publisher, mut reader) = source.create_prepared_prefix(wait).unwrap();
+        let paused = reader.frame().clone();
+        let publication = reader.publication_context();
+        let mut last = wait;
+        for (ghost, target) in steps {
+            last = scene
+                .live(&mut source)
+                .declare_and_activate_composition(
+                    &matrix_step(
+                        &family,
+                        &target,
+                        &ghost,
+                        AnimationOptions::new().run_time(0.5),
+                    ),
+                    AnimationOptions::new(),
+                )
+                .unwrap();
+            source.advance_to(last.end_time()).unwrap();
+            scene.live(&mut source).complete_segment(last).unwrap();
+            let suffix = source
+                .publish_prepared_prefix(last, &mut publisher)
+                .unwrap();
+            reader.reserve_append_capacity(&suffix).unwrap();
+            reader.preflight_append(&suffix).unwrap();
+            reader.append(suffix).unwrap();
+            assert_eq!(
+                reader.frame(),
+                &paused,
+                "future ghosts must not change a paused picture"
+            );
+            assert_eq!(reader.publication_context(), publication);
+        }
+        source.seal_replay().unwrap();
+        reader
+            .append(source.finish_prepared_prefix(last, &mut publisher).unwrap())
+            .unwrap();
+        for time in [0.0, 0.5, 0.75, 1.0, 1.25, 1.5, 0.75] {
+            source.seek(time).unwrap();
+            reader.seek(time).unwrap();
+            assert_eq!(reader.frame(), source.frame(), "at {time}");
+            assert_eq!(reader.painter_order(), source.painter_order());
+        }
     }
 
     #[test]

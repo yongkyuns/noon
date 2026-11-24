@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
+import { seekPausedGallery } from "./showcase-playback.mjs";
 
 export async function qualifyGlowViewport(browser, base, output, backend, cache) {
   const expectedBackend = backend === "webgpu" ? "WebGPU" : "WebGL2";
@@ -23,28 +24,56 @@ export async function qualifyGlowViewport(browser, base, output, backend, cache)
     if (cache) await cache.install(context);
     if (fixture.noJspi) await disableAuthoringJspi(context);
     const page = await context.newPage();
-    const result = { fixture, outcome: "fail", pageErrors: [] };
+    const result = { fixture, outcome: "fail", pageErrors: [], consoleErrors: [] };
     report.results.push(result);
     page.on("pageerror", error => result.pageErrors.push(String(error)));
+    page.on("console", message => {
+      if (message.type() === "error") result.consoleErrors.push(message.text());
+    });
     try {
       await page.goto(`${base}/index.html?catalog=showcase&example=showcase-gpu-glow`);
       if (fixture.resize) {
-        await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "error" ||
-          Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds) >= 2,
-        null, { timeout: 120000 });
+        await page.waitForFunction(() => {
+          if (document.querySelector("#patch-status")?.dataset.state === "error") return true;
+          const controls = document.querySelector(".playback-controls");
+          return Number(controls?.dataset.elapsedSeconds) >= 2 &&
+            controls?.dataset.playing === "true" && controls.dataset.durationKnown === "true" &&
+            !window.__noonExampleGallery?.runInFlight;
+        }, null, { timeout: 120000 });
         result.resizeAt = await page.evaluate(() => ({
           elapsed: document.querySelector(".playback-controls")?.dataset.elapsedSeconds,
           sourceRunning: window.__noonExampleGallery?.runInFlight,
+          playing: document.querySelector(".playback-controls")?.dataset.playing,
+          preparing: document.querySelector(".playback-controls")?.dataset.preparing,
+          buffering: document.querySelector(".playback-controls")?.dataset.buffering,
+          durationKnown: document.querySelector(".playback-controls")?.dataset.durationKnown,
+          timelineEnd: document.querySelector(".playback-scrubber")?.max,
         }));
-        assert.equal(result.resizeAt.sourceRunning, true, "resize must occur during source execution");
+        assert.equal(result.resizeAt.sourceRunning, false, "finite source must finish before the playback resize");
+        assert.equal(result.resizeAt.playing, "true", "resize must occur during active playback");
+        assert.equal(result.resizeAt.preparing, "false");
+        assert.equal(result.resizeAt.buffering, "false");
+        assert.equal(result.resizeAt.durationKnown, "true", "full source timeline must be available at resize");
+        assert.ok(Math.abs(Number(result.resizeAt.timelineEnd) - 12) < 1e-7,
+          "resize must retain the complete 12-second source timeline");
         await page.setViewportSize(fixture.resize);
       }
       await page.waitForFunction(() => {
         const state = document.querySelector("#patch-status")?.dataset.state;
+        const controls = document.querySelector(".playback-controls");
         return state === "error" || (state === "applied" &&
           window.__noonExampleGallery?.selectedExampleId === "showcase-gpu-glow" &&
-          !window.__noonExampleGallery.runInFlight);
+          !window.__noonExampleGallery.runInFlight &&
+          controls?.dataset.busy === "false" && controls.dataset.durationKnown === "true" &&
+          controls.dataset.buffering === "false" &&
+          window.__noonExampleGallery.executionDiagnostics?.events.some(event =>
+            event.stage === "disposition" && event.disposition === "looped" && event.loopCount >= 1));
       }, null, { timeout: 120000 });
+      // Layout qualification selects its endpoint through the normal controls;
+      // independent unseeked first-pass pixels are checked by the live review.
+      if (await page.locator("#patch-status").getAttribute("data-state") !== "error") {
+        await seekPausedGallery(page, 12);
+      }
       result.state = await page.evaluate(() => {
         const canvas = document.querySelector("#scene");
         const rect = canvas.getBoundingClientRect();
@@ -71,6 +100,7 @@ export async function qualifyGlowViewport(browser, base, output, backend, cache)
       assert.equal(metrics.metrics.objectCount, 11);
       assert.ok(metrics.metrics.presentedFrames > 0);
       assert.deepEqual(result.pageErrors, []);
+      assert.deepEqual(result.consoleErrors, []);
       result.outcome = "pass";
       console.log(`PASS glow viewport ${backend} ${fixture.name}: ${JSON.stringify(result.state)}`);
     } catch (error) {

@@ -15,6 +15,17 @@
       "beats": [{"time": 1.4, "label": "Create"}, {"time": 3.4, "label": "Move and rotate"}, {"time": 6.3, "label": "Resolve and emphasize"}]
     },
     {
+      "id": "showcase-group-animation", "title": "Move the whole diagram",
+      "lesson": "Bring in a labeled diagram and a glowing underline on their first play. Turn and move the underline toward the next step as the diagram and progress rail animate.",
+      "primary_feature": "group-animation", "category": "Visual design",
+      "path": "python/examples/showcase_group_animation.py", "features": ["VGroup", "Text", "animate", "shared pivot", "composed Glow"],
+      "duration": 6.5, "thumbnail_time": 6.5,
+      "thumbnail": "thumbnails/showcase/showcase-group-animation.png",
+      "thumbnail_alt": "Two orange outlined steps above a blue progress rail, with a glowing underline angled toward step 2",
+      "still_intervals": [[0, 0.75], [2, 2.5], [3.75, 4.25], [5.5, 6.5]],
+      "beats": [{"time": 1.375, "label": "Bring in the diagram and glow"}, {"time": 3.125, "label": "Rotate together"}, {"time": 4.875, "label": "Turn the glow toward step 2"}]
+    },
+    {
       "id": "showcase-dynamic-scene", "title": "A field in motion",
       "lesson": "Explore dense animation through six coordinated sequences: assembly, morphs, waves, a spiral, an object exchange, and a resolved finale.",
       "primary_feature": "dense-dynamic-composition", "category": "Dynamic scenes", "performance": true,
@@ -24,6 +35,28 @@
       "thumbnail_alt": "The actual 600-shape field recomposing into a colorful spiral beside 24 animated labels",
       "still_intervals": [[2.6, 2.9], [17.7, 19.0]],
       "beats": [{"time": 2.5, "label": "Assemble"}, {"time": 4.4, "label": "Morph"}, {"time": 7.8, "label": "Waves"}, {"time": 12.4, "label": "Spiral"}, {"time": 13.5, "label": "Exchange"}, {"time": 17.6, "label": "Finale"}]
+    },
+    {
+      "id": "showcase-group-opacity", "title": "Fade an overlay as one layer",
+      "lesson": "Slide in a transparent overlay while it fades as one layer. Compare its uniform color with the brighter overlap on the right.",
+      "primary_feature": "composite-group-opacity", "category": "Visual design",
+      "path": "python/examples/showcase_group_opacity.py", "features": ["VGroup", "animate", "composite opacity"],
+      "duration": 4.8, "thumbnail_time": 2.4,
+      "thumbnail": "thumbnails/showcase/showcase-group-opacity.png",
+      "thumbnail_alt": "Two pairs of faded blue circles. The left pair has uniform color and the right pair has a brighter overlap.",
+      "still_intervals": [[0, 0.6], [1.8, 3], [4, 4.8]],
+      "beats": [{"time": 1.2, "label": "Slide and fade the overlay"}, {"time": 2.4, "label": "Compare the overlap"}, {"time": 3.5, "label": "Reach full opacity"}]
+    },
+    {
+      "id": "showcase-mounted-callout", "title": "Move a labeled callout",
+      "lesson": "Tilt a callout as it slides in, then rotate and scale it around a shared center with the label still aligned.",
+      "primary_feature": "content-owning-group-animation", "category": "Visual design",
+      "path": "python/examples/showcase_mounted_callout.py", "features": ["VGroup", "Text", "animate", "shared pivot"],
+      "duration": 4.0, "thumbnail_time": 3.5,
+      "thumbnail": "thumbnails/showcase/showcase-mounted-callout.png",
+      "thumbnail_alt": "A tilted mint callout labeled Inspect above Sample B, with Sample A and B joined by a line",
+      "still_intervals": [[0, 0.5], [1.5, 2], [3, 4]],
+      "beats": [{"time": 0.25, "label": "See both samples"}, {"time": 1, "label": "Slide and tilt the callout"}, {"time": 2.5, "label": "Rotate and scale around one pivot"}]
     },
     {
       "id": "showcase-background-music", "title": "Double the input",
@@ -78,6 +111,92 @@
       "thumbnail_alt": "Three white orbs on a dark navy field, above a glowing curved path and typeset equation",
       "still_intervals": [[2.9, 3.4], [4.8, 5.8], [7.1, 7.45], [8.7, 9.5], [11.0, 12.0]],
       "beats": [{"time": 1.5, "label": "Introduce the sources"}, {"time": 2.9, "label": "Ignite the glow"}, {"time": 4.8, "label": "Tune intensity, radius and color"}, {"time": 7.1, "label": "Fade to neutral"}, {"time": 8.7, "label": "Re-ignite a new attachment"}, {"time": 10.2, "label": "Draw and write with light"}]
+    },
+    {
+      "id": "showcase-painted-surfaces", "title": "A changing surface",
+      "lesson": "Animate image UVs, a radial gradient, seeded noise and a woven hatch on four shapes.",
+      "primary_feature": "animated-surface-paints", "category": "Visual effects",
+      "path": "python/examples/showcase_painted_surfaces.py",
+      "features": ["ImagePaint", "ImageMapping", "RadialGradient", "NoisePaint", "HatchPaint", "animate.set_fill"],
+      "duration": 7.5, "thumbnail_time": 3.6,
+      "thumbnail": "thumbnails/showcase/showcase-painted-surfaces.png",
+      "thumbnail_alt": "Four real rendered surfaces: diagonal image stripes, a coral radial gradient, teal noise and a warm woven hatch",
+      "still_intervals": [[0, 0.6], [3.1, 3.9], [6.4, 7.5]],
+      "beats": [{"time": 0.6, "label": "Four paints"}, {"time": 2.2, "label": "Animate the surface"}, {"time": 3.6, "label": "Changed material"}, {"time": 6.4, "label": "Return to the starting look"}]
+    },
+    {
+      "id": "showcase-layered-effects", "title": "Treat the composition",
+      "lesson": "Compare a source group with ordered Blur and Glow, then dissolve and restore the composed result.",
+      "primary_feature": "composed-ordered-effects", "category": "Visual effects",
+      "path": "python/examples/showcase_layered_effects.py",
+      "features": ["VGroup", "Blur", "Glow", "Dissolve", "composed scope", "animate.set_effect"],
+      "duration": 9.0, "thumbnail_time": 3.0,
+      "thumbnail": "thumbnails/showcase/showcase-layered-effects.png",
+      "thumbnail_alt": "Matching coral, teal and gold shape groups, with soft blue light around the treated composition on the right",
+      "still_intervals": [[0, 0.6], [2.6, 3.4], [4.6, 4.95], [6.15, 6.5], [8, 9]],
+      "beats": [{"time": 0.6, "label": "Same source"}, {"time": 3.0, "label": "Blur then Glow"}, {"time": 4.15, "label": "Dissolve the composition"}, {"time": 5.55, "label": "Restore with the same seed"}, {"time": 8.0, "label": "Return to the source"}]
+    },
+    {
+      "id": "showcase-bloom-emission",
+      "title": "Brightness and Bloom",
+      "lesson": "Raise material radiance, spread the bright source with camera Bloom, then restore both independent controls.",
+      "primary_feature": "hdr-bloom-emission",
+      "category": "Visual effects",
+      "path": "python/examples/showcase_bloom_emission.py",
+      "features": [
+        "linear HDR",
+        "emission",
+        "camera Bloom",
+        "animate.set_effect"
+      ],
+      "duration": 10,
+      "thumbnail_time": 4.75,
+      "thumbnail": "thumbnails/showcase/showcase-bloom-emission.png",
+      "thumbnail_alt": "A bright cyan source with a soft halo between labels for independent material emission and camera Bloom",
+      "still_intervals": [
+        [
+          0,
+          0.75
+        ],
+        [
+          2.25,
+          3
+        ],
+        [
+          4.5,
+          5.25
+        ],
+        [
+          6.75,
+          10
+        ]
+      ],
+      "beats": [
+        {
+          "time": 0.35,
+          "label": "Neutral source"
+        },
+        {
+          "time": 1.5,
+          "label": "Raise material radiance"
+        },
+        {
+          "time": 2.6,
+          "label": "Bright source without Bloom"
+        },
+        {
+          "time": 3.75,
+          "label": "Add camera spread"
+        },
+        {
+          "time": 4.75,
+          "label": "Radiance and Bloom together"
+        },
+        {
+          "time": 6.75,
+          "label": "Restore the neutral source"
+        }
+      ]
     },
     {
       "id": "showcase-group-slicing", "title": "Animate part of a group",
@@ -173,11 +292,22 @@
       "id": "showcase-latex-create", "title": "Draw and write LaTeX",
       "lesson": "Compare Create and Write on compiled LaTeX glyphs and fraction bars.",
       "primary_feature": "latex-create", "category": "Text and mathematics",
-      "path": "python/examples/showcase_latex_create.py", "features": ["MathTex", "prepare_latex", "Create", "Write", "fraction"],
+      "path": "python/examples/showcase_latex_create.py", "features": ["MathTex", "Create", "Write", "fraction"],
       "duration": 3.5, "thumbnail_time": 3.1,
       "thumbnail": "thumbnails/showcase/showcase-latex-create.png", "thumbnail_alt": "Labeled blue Create and yellow Write equations with retained glyphs and fraction bars",
       "still_intervals": [[2.0, 3.5]],
       "beats": [{"time": 0.8, "label": "Create the blue equation"}, {"time": 1.6, "label": "Write the yellow equation"}, {"time": 3.1, "label": "Compare completed equations"}]
+    },
+    {
+      "id": "showcase-equation-card", "title": "Animate an equation card",
+      "lesson": "Move a MathTex equation and its frame together, then highlight the original first term.",
+      "primary_feature": "mathtex-group-animation", "category": "Text and mathematics",
+      "path": "python/examples/showcase_equation_card.py", "features": ["MathTex", "VGroup", "animate", "set_color"],
+      "duration": 2.75, "thumbnail_time": 2.5,
+      "thumbnail": "thumbnails/showcase/showcase-equation-card.png",
+      "thumbnail_alt": "A blue frame around x + 1 = 4, with the x highlighted in yellow",
+      "still_intervals": [[0, 0.5], [1.25, 1.5], [2, 2.75]],
+      "beats": [{"time": 0.875, "label": "Move the equation and frame"}, {"time": 1.75, "label": "Highlight x"}, {"time": 2.5, "label": "Read the highlighted term"}]
     },
     {
       "id": "showcase-coordinate-plotting", "title": "Functions and samples",
@@ -247,28 +377,29 @@
     {
       "id": "showcase-reactive-relationships",
       "title": "Relationships that follow motion",
-      "lesson": "Drive two dots with ValueTrackers and keep their connector attached using public updaters.",
+      "lesson": "Move two dots independently while a synchronized line morph keeps their connector attached.",
       "primary_feature": "reactive-relationships",
       "category": "Reactive animation",
       "path": "python/examples/showcase_reactive_relationships.py",
-      "features": ["ValueTracker", "add_updater", "remove_updater", "match_points", "animate"],
+      "features": ["Line", "Transform", "animate", "shared easing"],
+      "loop": false,
       "duration": 9.2,
       "thumbnail_time": 4.6,
-      "thumbnail_alt": "Blue and teal dots at different heights joined by a yellow updater-driven connector and axis guides",
+      "thumbnail_alt": "Blue and teal dots at different heights joined by a yellow connector and axis guides",
       "still_intervals": [[1.5, 2], [4.4, 5], [8, 9.2]],
       "beats": [{"time": 1.2, "label": "Introduce the relationship"}, {"time": 3.2, "label": "Drive both endpoints"}, {"time": 4.6, "label": "Connector stays attached"}, {"time": 6.2, "label": "Change both drivers again"}],
       "thumbnail": "thumbnails/showcase/showcase-reactive-relationships.png",
-      "playback_capability": "nonreplayable-host-callbacks",
-      "playback_limitation": "This lesson uses Python updater callbacks that cannot be retained for deterministic replay. After the first run, the endpoint remains visible and replay controls are disabled; use Run to execute the lesson again."
+      "playback_capability": "deterministic-retained-replay"
     },
     {
       "id": "showcase-camera-follows-path",
       "title": "Follow a moving point",
-      "lesson": "Move a point along a fixed curve while a finite camera-frame updater keeps it in view, then restore the full graph.",
+      "lesson": "Move a point and the camera along the same curve, then restore the full graph.",
       "primary_feature": "camera-following-path-motion",
       "category": "Camera motion",
       "path": "python/examples/showcase_camera_follows_path.py",
-      "features": ["MovingCameraScene", "MoveAlongPath", "camera.frame updater", "fixed axes and path", "Restore"],
+      "features": ["MovingCameraScene", "MoveAlongPath", "camera.frame", "fixed axes and path", "Restore"],
+      "loop": false,
       "duration": 9.8,
       "thumbnail_time": 7.1,
       "thumbnail": "thumbnails/showcase/showcase-camera-follows-path.png",
@@ -282,25 +413,24 @@
         {"time": 7.3, "label": "Reach the endpoint"},
         {"time": 8.8, "label": "Restore the full graph"}
       ],
-      "playback_capability": "nonreplayable-host-callbacks",
-      "playback_limitation": "This lesson uses a Python camera updater that cannot be retained for deterministic replay. After the first run, the endpoint remains visible and replay controls are disabled; use Run to execute the lesson again."
+      "playback_capability": "deterministic-retained-replay"
     },
     {
       "id": "showcase-always-redraw",
       "title": "Redraw from animated values",
-      "lesson": "Rebuild two bounded shapes from animated values with always_redraw producers.",
-      "primary_feature": "bounded-always-redraw",
+      "lesson": "Drive two shapes’ position, size, and angle from a single animated value.",
+      "primary_feature": "tracker-driven-shapes",
       "category": "Reactive animation",
       "path": "python/examples/showcase_always_redraw.py",
-      "features": ["always_redraw", "Circle", "Rectangle", "ValueTracker"],
+      "features": ["bind_sampled", "Circle", "Rectangle", "ValueTracker"],
+      "loop": false,
       "duration": 8.2,
       "thumbnail_time": 4.0,
-      "thumbnail_alt": "A blue circle and teal rectangle reshaped and repositioned by their always_redraw producers",
+      "thumbnail_alt": "A blue circle and teal rectangle reshaped and repositioned by a shared animated value",
       "still_intervals": [[0.8, 1.2], [3.6, 4.1], [7.0, 8.2]],
       "beats": [{"time": 1.2, "label": "Reveal both targets"}, {"time": 3.4, "label": "Rebuild from animated values"}, {"time": 6.5, "label": "Return to the resolved layout"}],
       "thumbnail": "thumbnails/showcase/showcase-always-redraw.png",
-      "playback_capability": "nonreplayable-host-callbacks",
-      "playback_limitation": "This lesson uses Python always_redraw callbacks that cannot be retained for deterministic replay. After the first run, the endpoint remains visible and replay controls are disabled; use Run to execute the lesson again."
+      "playback_capability": "deterministic-retained-replay"
     },
     {
       "id": "showcase-raster-images", "title": "Pixels in the scene",
@@ -315,8 +445,6 @@
     {
       "id": "showcase-pointer-selection", "title": "Select a shape",
       "lesson": "Click a shape to run the Indicate animation declared in Python, and scroll to inspect it while it animates.",
-      "inspection_zoom": true,
-      "host_setup": "This viewer enables cursor-anchored wheel/trackpad zoom. Inspection leaves the authored camera and playback unchanged.",
       "primary_feature": "authored-pointer-interaction", "category": "Interaction",
       "path": "python/examples/showcase_pointer_selection.py", "features": ["Create", "on_click", "Indicate"],
       "duration": 2.6, "thumbnail_time": 2.6,
@@ -328,13 +456,12 @@
       "id": "showcase-translation-drag", "title": "Move a shape",
       "lesson": "Click the fixed blue circle to indicate it, then drag the green rectangle to translate it directly.",
       "primary_feature": "native-translation-drag", "category": "Interaction",
-      "path": "python/examples/showcase_translation_drag.py", "features": ["Create", "on_click", "set_drag_targets"],
+      "path": "python/examples/showcase_translation_drag.py", "features": ["Create", "on_click", "set_viewer_draggable"],
       "duration": 2.6, "thumbnail_time": 2.6,
       "thumbnail": "thumbnails/showcase/showcase-translation-drag.png", "thumbnail_alt": "A fixed blue circle beside a green rectangle ready for direct manipulation",
       "still_intervals": [[2.1, 2.6]],
-      "beats": [{"time": 0.5, "label": "Instructions"}, {"time": 1.4, "label": "Reveal the shapes"}, {"time": 2.1, "label": "Ready to drag"}],
-      "playback_capability": "nonreplayable-native-input",
-      "playback_limitation": "Dragging changes this scene. Use Run to reset; seeking and restart are unavailable."
+      "beats": [{"time": 0.5, "label": "Instructions"}, {"time": 1.4, "label": "Reveal the shapes"}, {"time": 2.6, "label": "Ready to drag"}],
+      "loop": false
     },
     {
       "id": "showcase-triangle-light",
@@ -445,6 +572,500 @@
           "label": "Compare padded and unpadded read rounds"
         }
       ]
+    },
+    {
+      "id": "showcase-shader-material", "title": "A material that moves",
+      "lesson": "Animate a reusable shader's controls and compare a pattern that follows its object with one fixed in the scene.",
+      "primary_feature": "typed-shader-material", "category": "Appearance",
+      "path": "python/examples/showcase_shader_material.py",
+      "features": ["WgslEffectProgram", "typed parameters", "local and scene coordinates", "set_effect", "exact removal"],
+      "duration": 6, "thumbnail_time": 1.5,
+      "thumbnail": "thumbnails/showcase/showcase-shader-material.png",
+      "thumbnail_alt": "Two tilted teal striped panels compare object-local and scene-space material coordinates",
+      "still_intervals": [[0, 0.5], [2.5, 3], [5, 5.5], [5.5, 6]],
+      "beats": [{"time": 0.5, "label": "Attach the material"}, {"time": 1.5, "label": "Move the object and phase"}, {"time": 4, "label": "Return the controls"}, {"time": 5.6, "label": "Remove the treatment"}],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-glass-lens", "title": "Move the glass",
+      "lesson": "Move a glass card across a texture, animate its blur radius, then dissolve and reveal the same content.",
+      "primary_feature": "backdrop-glass", "category": "Visual effects",
+      "path": "python/examples/showcase_glass_lens.py",
+      "features": ["BackdropBlur", "Pixels", "ImageMobject", "VGroup", "Dissolve", "animate.set_effect"],
+      "duration": 8.5, "thumbnail_time": 2.25,
+      "thumbnail": "thumbnails/showcase/showcase-glass-lens.png",
+      "thumbnail_alt": "A translucent labeled glass card softens a blue and gold checkerboard behind its image and text",
+      "still_intervals": [[0, 0.5], [2, 2.5], [4, 4.5], [4.5, 5], [5, 5.5], [6.5, 7], [8, 8.5]],
+      "beats": [{"time": 0.5, "label": "Move the lens and soften the backdrop"}, {"time": 2.25, "label": "Glass over a texture"}, {"time": 4.25, "label": "Neutral radius"}, {"time": 4.75, "label": "Remove the lens"}, {"time": 5.25, "label": "Restore the lens"}, {"time": 6.5, "label": "Dissolve the card"}, {"time": 8.25, "label": "Reveal with the same seed"}],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-wave-interference",
+      "title": "Interference is addition",
+      "lesson": "Watch two circular wave fields add on a common signed color scale, then shift one source by half a cycle. Scrub the same phase animation forward and backward.",
+      "primary_feature": "analytic-wave-field-tutorial",
+      "category": "Visual explanations",
+      "path": "python/examples/showcase_wave_interference.py",
+      "features": ["analytic wave fields", "shared shader material", "typed phase controls", "signed color scale", "retained replay"],
+      "duration": 11,
+      "thumbnail_time": 5.4,
+      "thumbnail": "thumbnails/showcase/showcase-wave-interference.png",
+      "thumbnail_alt": "Two blue and gold circular wave fields beside their signed sum, with equal color scales and a half-cycle phase offset",
+      "still_intervals": [[0, 0.8], [3.2, 3.8], [5, 5.8], [8.2, 8.8], [10, 11]],
+      "beats": [
+        {"time": 0.5, "label": "Two sources, one color scale"},
+        {"time": 2, "label": "Wavefronts advance"},
+        {"time": 5.4, "label": "Shift the relative phase"},
+        {"time": 7, "label": "Add the opposite-phase fields"},
+        {"time": 10.5, "label": "Restore the starting pattern"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-editorial-cover",
+      "title": "Make it move",
+      "lesson": "Art-direct a finished editorial cover: move its color field and seeded grain while a frosted caption stays sharp and the typography holds its layout.",
+      "primary_feature": "editorial-motion-design",
+      "category": "Visual design",
+      "path": "python/examples/showcase_editorial_cover.py",
+      "features": ["editorial typography", "RadialGradient", "NoisePaint", "BackdropBlur", "ordinary parameter animation"],
+      "duration": 9,
+      "thumbnail_time": 4.1,
+      "thumbnail": "thumbnails/showcase/showcase-editorial-cover.png",
+      "thumbnail_alt": "A cream editorial cover with large navy MAKE IT MOVE typography, warm textured artwork and a sharp frosted-glass caption",
+      "still_intervals": [[0, 0.7], [3.7, 4.5], [7.5, 9]],
+      "beats": [
+        {"time": 0.4, "label": "Establish the layout"},
+        {"time": 2.2, "label": "Animate the surface"},
+        {"time": 4.1, "label": "Grain and glass"},
+        {"time": 8, "label": "Resolve the cover"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-cache-locality",
+      "title": "Why loop order changes cache misses",
+      "lesson": "Watch four neighboring values load together, then see why walking the same matrix by rows or columns changes how often a one-slot cache needs to fetch.",
+      "primary_feature": "cache-locality",
+      "category": "Algorithms and systems",
+      "path": "python/examples/showcase_cache_locality.py",
+      "features": ["GrowArrow", "Write", "Integer", "cache simulation", "simultaneous animation", "sections", "retained replay"],
+      "loop": false,
+      "duration": 38.6,
+      "thumbnail_time": 35.5,
+      "thumbnail": "thumbnails/showcase/showcase-cache-locality.png",
+      "thumbnail_alt": "Two traversal panels show the same matrix and one-slot cache, with four row-first misses and sixteen column-first misses.",
+      "still_intervals": [[1.2, 2.7], [4.9, 6.3], [8.3, 9.8], [11.2, 12.7], [14.7, 16.3], [17.8, 19.8], [34.8, 38.6]],
+      "beats": [
+        {"time": 1.6, "label": "Draw the two traversal directions"},
+        {"time": 5.6, "label": "Each row becomes a line of adjacent memory addresses"},
+        {"time": 7.8, "label": "A miss copies the whole line into the cache"},
+        {"time": 11.6, "label": "Address 1 is already in the cache"},
+        {"time": 15.2, "label": "Address 4 needs another line"},
+        {"time": 22.2, "label": "Rows reuse the line while columns replace it"},
+        {"time": 35.5, "label": "Compare the total lines fetched"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-doubling-curve",
+      "title": "Why a doubling curve becomes a straight line",
+      "lesson": "Follow the same growth ratio through a moving camera, then see the same values warp from a linear axis onto a log axis.",
+      "primary_feature": "log-scale-camera-warp",
+      "category": "Data and coordinates",
+      "path": "python/examples/showcase_doubling_curve.py",
+      "features": ["MovingCameraScene", "MoveAlongPath", "Create", "Write", "Transform", "sections"],
+      "loop": false,
+      "duration": 28.9,
+      "thumbnail_time": 26,
+      "thumbnail": "thumbnails/showcase/showcase-doubling-curve.png",
+      "thumbnail_alt": "Four equal vertical steps mark successive doublings on the straight log-scale plot.",
+      "still_intervals": [[1.7, 3.9], [6, 6.5], [7.6, 8.1], [9.2, 9.7], [11.3, 13.3], [14.6, 16.4], [19.9, 21.9], [25.2, 28.9]],
+      "beats": [
+        {"time": 2.2, "label": "Start on a linear scale"},
+        {"time": 7.8, "label": "Draw the step and label the same multiplier"},
+        {"time": 15.3, "label": "Predict a scale with evenly spaced ratios"},
+        {"time": 18.1, "label": "Preserve the data while the scale changes"},
+        {"time": 23.7, "label": "Draw equal vertical steps in order"},
+        {"time": 26, "label": "Equal steps form a straight line"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-channel-flow",
+      "title": "Why water speeds up through a narrow channel",
+      "lesson": "Follow a stretching dye pulse and measure how much water crosses two sections of a steady, constant-depth channel.",
+      "primary_feature": "spatial-flow-continuity",
+      "category": "Three dimensions",
+      "path": "python/examples/showcase_channel_flow.py",
+      "features": ["ThreeDScene", "Mesh3D", "WorldTransformTo", "finite camera movement", "fixed-frame label fades", "sections"],
+      "loop": false,
+      "duration": 24.3,
+      "thumbnail_time": 20.4,
+      "thumbnail": "thumbnails/showcase/showcase-channel-flow.png",
+      "thumbnail_alt": "Orange and mint prisms show the equal volumes of water swept out in one second in the wide and narrow channel.",
+      "still_intervals": [[3.5, 4.4], [7.8, 9.6], [11.4, 13.4], [16.4, 18.8], [19.9, 24.3]],
+      "beats": [
+        {"time": 0.8, "label": "Start with one pulse in the inlet"},
+        {"time": 4.1, "label": "The same pulse stretches in the throat"},
+        {"time": 7.5, "label": "Draw the second cross-section"},
+        {"time": 8.8, "label": "Compare the widths from above"},
+        {"time": 14.1, "label": "Sweep out one second of water on both sides"},
+        {"time": 20.4, "label": "Equal volumes travel different distances"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-neon-glow",
+      "title": "Why a neon sign glows beyond its edges",
+      "lesson": "Isolate the sharp neon stroke, blur a copy into a light layer, and see what happens when nearby halos overlap.",
+      "primary_feature": "layered-neon-light",
+      "category": "Visual effects",
+      "path": "python/examples/showcase_neon_glow.py",
+      "features": ["Create", "Write", "Transform", "Blur", "GPU glow", "effect parameter animation", "sections"],
+      "duration": 26.4,
+      "thumbnail_time": 13.8,
+      "thumbnail": "thumbnails/showcase/showcase-neon-glow.png",
+      "thumbnail_alt": "Three illuminated panels show a sharp pink stroke, its diffuse light layer, and the two layers combined.",
+      "still_intervals": [[2.1, 4], [6.4, 8], [9.8, 11.4], [13.1, 15.4], [19.6, 21.2], [22.8, 26.4]],
+      "beats": [
+        {"time": 2.9, "label": "Look at the area outside the sign"},
+        {"time": 5.9, "label": "Carry one stroke from the sign into the demonstration"},
+        {"time": 7.5, "label": "Isolate the sharp tube"},
+        {"time": 9.2, "label": "Blur a copy to make a light layer"},
+        {"time": 13.8, "label": "The sharp core sits over the halo"},
+        {"time": 18.4, "label": "Bring the two tubes closer together"},
+        {"time": 20.1, "label": "Two halos overlap"},
+        {"time": 23.4, "label": "Trace the illuminated sign"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-riemann-sums",
+      "title": "Rectangles become an integral",
+      "lesson": "Use rectangles to measure a curved area, split each strip in two, and watch the left-edge sum approach the definite integral.",
+      "primary_feature": "riemann-sum-refinement",
+      "category": "Calculus",
+      "path": "python/examples/showcase_riemann_sums.py",
+      "features": ["Axes", "MathTex", "retained path transforms", "Variable", "TransformMatchingTex", "get_area", "sections"],
+      "loop": false,
+      "duration": 18.3,
+      "thumbnail_time": 5.3,
+      "thumbnail": "thumbnails/showcase/showcase-riemann-sums.png",
+      "thumbnail_alt": "Eight blue-to-green rectangles under a yellow curve, with LaTeX labels for the strip width, live sum, and limiting area.",
+      "still_intervals": [[5.2, 5.35], [7.15, 7.3], [9.1, 9.25], [10.65, 10.8], [12.2, 12.35], [13.75, 14.3], [16.3, 18.3]],
+      "beats": [
+        {"time": 0.7, "label": "Trace the curve"},
+        {"time": 2.8, "label": "Grow four strips and write their sum"},
+        {"time": 4.4, "label": "The width changes as the rectangles split"},
+        {"time": 5.3, "label": "Eight rectangles with the new sum"},
+        {"time": 8.2, "label": "Keep the left half and resample the right half"},
+        {"time": 12.7, "label": "Follow the live sum as thin strips fill the area"},
+        {"time": 15.3, "label": "Match the terms from the sum to the integral"},
+        {"time": 17.3, "label": "The integral gives the limiting area"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-galton-board",
+      "title": "A Galton board",
+      "lesson": "Watch 480 beads bounce through ten peg rows and compare the final pile with the normal curve.",
+      "primary_feature": "galton-board-route-counts",
+      "category": "Probability",
+      "path": "python/examples/showcase_galton_board.py",
+      "loop": false,
+      "credits": [
+        {
+          "label": "Academa’s ManimGX Galton board",
+          "url": "https://manimgx.academa.ai/gallery/galton-board/"
+        }
+      ],
+      "features": ["sampled positions", "held visibility keys", "LaggedStart", "FunctionGraph", "MathTex", "sections"],
+      "duration": 17.174345642,
+      "thumbnail_time": 16.3,
+      "thumbnail": "thumbnails/showcase/showcase-galton-board.png",
+      "thumbnail_alt": "Ten rows of pegs and 480 beads piled beneath a yellow normal-distribution curve.",
+      "still_intervals": [[15.174345642, 17.174345642]],
+      "beats": [
+        {"time": 1.25, "label": "Release the first bead"},
+        {"time": 4.0, "label": "Follow three single-file drops"},
+        {"time": 9.0, "label": "Watch the stream of beads build a pile"},
+        {"time": 16.3, "label": "Fit the normal curve to the pile"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-vector-cutout",
+      "title": "Boolean operations on two ellipses",
+      "lesson": "Follow Manim Community’s gallery example as it moves the intersection, union, exclusion, and difference of two overlapping ellipses into a comparison.",
+      "primary_feature": "boolean-vector-cutout",
+      "category": "Geometry",
+      "path": "python/examples/showcase_vector_cutout.py",
+      "loop": false,
+      "credits": [
+        {
+          "label": "Manim Community’s BooleanOperations example",
+          "url": "https://docs.manim.community/en/stable/examples.html#booleanoperations"
+        }
+      ],
+      "features": ["Intersection", "Union", "Exclusion", "Difference", "Underline", "Transform"],
+      "duration": 9.0,
+      "thumbnail_time": 9.0,
+      "thumbnail": "thumbnails/showcase/showcase-vector-cutout.png",
+      "thumbnail_alt": "Two overlapping ellipses at left, with four labeled Boolean results at right.",
+      "still_intervals": [],
+      "beats": [
+        {"time": 1.0, "label": "Introduce the two overlapping ellipses"},
+        {"time": 3.0, "label": "Extract the shared region"},
+        {"time": 5.0, "label": "Join both ellipses"},
+        {"time": 7.0, "label": "Keep only the non-overlapping regions"},
+        {"time": 9.0, "label": "Compare the four results"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-fourier-epicycles",
+      "title": "Circles draw π",
+      "lesson": "Follow the tip of a 101-term Fourier series as it traces the letter π, then zoom in and follow the pen.",
+      "primary_feature": "fourier-epicycle-chain",
+      "category": "Periodic motion",
+      "path": "python/examples/showcase_fourier_epicycles.py",
+      "loop": false,
+      "credits": [
+        {
+          "label": "Academa’s ManimGX Circles draw π",
+          "url": "https://manimgx.academa.ai/gallery/fourier-pi/"
+        },
+        {
+          "label": "Grant Sanderson’s Fourier series lesson",
+          "url": "https://www.3blue1brown.com/lessons/fourier-series"
+        }
+      ],
+      "features": ["MovingCameraScene", "sampled poses", "screen-space strokes", "Fourier coefficients", "Create", "MathTex", "sections"],
+      "duration": 25.5,
+      "thumbnail_time": 11.3,
+      "thumbnail": "thumbnails/showcase/showcase-fourier-epicycles.png",
+      "thumbnail_alt": "A yellow stroke traces π from the tip of a chain of blue circles and grey arrows.",
+      "still_intervals": [[23.5, 25.5]],
+      "beats": [
+        {"time": 1.4, "label": "Reveal the letter π"},
+        {"time": 4.2, "label": "Build the chain of rotating arrows"},
+        {"time": 11.3, "label": "Trace π"},
+        {"time": 18.0, "label": "Zoom in and follow the pen"},
+        {"time": 24.1, "label": "Write the Fourier series"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-miura-ori",
+      "title": "Miura-ori",
+      "lesson": "Watch one fold angle move all 168 rigid panels, then pull the sheet open and see its width and length grow together.",
+      "primary_feature": "miura-ori-rigid-folding",
+      "category": "Three dimensions",
+      "path": "python/examples/showcase_miura_ori.py",
+      "loop": false,
+      "credits": [
+        {
+          "label": "Academa’s ManimGX Miura-ori",
+          "url": "https://manimgx.academa.ai/gallery/miura-ori/"
+        },
+        {
+          "label": "Schenk and Guest’s Miura-fold geometry",
+          "url": "https://doi.org/10.1073/pnas.1217998110"
+        }
+      ],
+      "features": ["ThreeDScene", "Mesh3D", "WorldTransformTo", "finite camera movement", "sampled HUD", "sections"],
+      "duration": 30.5,
+      "thumbnail_time": 22.05,
+      "thumbnail": "thumbnails/showcase/showcase-miura-ori.png",
+      "thumbnail_alt": "A folded Miura-ori sheet, dimension meters, and arrows showing how it opens in both directions.",
+      "still_intervals": [],
+      "beats": [
+        {"time": 3.6, "label": "Draw the mountain and valley creases"},
+        {"time": 8.5, "label": "Fold all the facets together"},
+        {"time": 14.3, "label": "Read the folded dimensions"},
+        {"time": 21.3, "label": "Pull in both directions"},
+        {"time": 28.9, "label": "Connect the fold to solar array deployment"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-pythagoras",
+      "title": "Pythagoras by rearrangement",
+      "lesson": "Follow the colored sides of four right triangles and compare the uncovered space before and after three slides.",
+      "primary_feature": "pythagoras-area-rearrangement",
+      "category": "Geometry",
+      "path": "python/examples/showcase_pythagoras.py",
+      "loop": false,
+      "credits": [
+        {
+          "label": "Academa’s ManimGX Pythagoras by rearrangement",
+          "url": "https://manimgx.academa.ai/gallery/pythagoras/"
+        }
+      ],
+      "features": ["Polygon", "MathTex", "retained quarter turns", "retained translations", "sections"],
+      "duration": 19.8,
+      "thumbnail_time": 18.5,
+      "thumbnail": "thumbnails/showcase/showcase-pythagoras.png",
+      "thumbnail_alt": "Four blue right triangles beside two color-coded uncovered squares and the equation a squared plus b squared equals c squared.",
+      "still_intervals": [[8.7, 9.2], [17.8, 19.8]],
+      "beats": [
+        {"time": 3.05, "label": "Identify the three sides"},
+        {"time": 5.55, "label": "Complete the quarter turns"},
+        {"time": 8.9, "label": "Move c squared into the equation"},
+        {"time": 11.8, "label": "Watch the uncovered space move"},
+        {"time": 15.9, "label": "Identify the two new squares"},
+        {"time": 18.5, "label": "Complete the equation"}
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-circle-area-signals",
+      "title": "Circle area from one radius",
+      "lesson": "Follow the circle, dimension arrows, and area readout as one radius changes.",
+      "primary_feature": "signal-circle-area",
+      "category": "Geometry",
+      "path": "python/examples/showcase_circle_area_signals.py",
+      "loop": false,
+      "credits": [
+        {
+          "label": "Motion Canvas Signals, circle-area scene",
+          "url": "https://github.com/motion-canvas/motion-canvas/blob/7b91435c301d530351dcf5ebb91dd139c002e405/packages/examples/src/scenes/node-signal.tsx"
+        }
+      ],
+      "features": [
+        "ValueTracker",
+        "sampled scale",
+        "sampled label positions",
+        "synchronized readouts"
+      ],
+      "duration": 5,
+      "thumbnail_time": 2,
+      "thumbnail": "thumbnails/showcase/showcase-circle-area-signals.png",
+      "thumbnail_alt": "A red circle with a dashed radius dimension and numerical radius and area readouts on white.",
+      "beats": [
+        {
+          "time": 0.1,
+          "label": "Read the initial radius and area"
+        },
+        {
+          "time": 1,
+          "label": "Watch the geometry and both readouts change"
+        },
+        {
+          "time": 2,
+          "label": "Compare the largest circle"
+        },
+        {
+          "time": 3,
+          "label": "Follow the return to the original radius"
+        }
+      ],
+      "playback_capability": "deterministic-retained-replay",
+      "still_intervals": [
+        [
+          4,
+          5
+        ]
+      ]
+    },
+    {
+      "id": "showcase-brand-value-race",
+      "title": "The world’s most valuable brands",
+      "lesson": "Follow the top 12 global brands from 2000 to 2019. Color groups brands by sector, and bar lengths show value in millions of US dollars.",
+      "primary_feature": "data-ranked-bars",
+      "category": "Data",
+      "path": "python/examples/showcase_brand_value_race.py",
+      "loop": false,
+      "credits": [
+        {
+          "label": "Mike Bostock’s D3 Bar Chart Race (revision 3087)",
+          "url": "https://observablehq.com/d/3ff9fa2c6593d814@3087"
+        },
+        {
+          "label": "Interbrand data used by the notebook",
+          "url": "https://static.observableusercontent.com/files/aec3792837253d4c6168f9bbecdf495140a5f9bb1cdb12c7c8113cec26332634a71ad29b446a1e8236e0a45732ea5d0b4e86d9d1568ff5791412f093ec06f4f1"
+        }
+      ],
+      "features": [
+        "interpolated rank crossings",
+        "animated value labels",
+        "adaptive axis",
+        "year ticker"
+      ],
+      "duration": 47.75,
+      "thumbnail_time": 33.25,
+      "thumbnail": "thumbnails/showcase/showcase-brand-value-race.png",
+      "thumbnail_alt": "Pastel horizontal bars rank twelve global brands by estimated value, with names and values inside each bar and a large year marker.",
+      "still_intervals": [],
+      "beats": [
+        {
+          "time": 0.25,
+          "label": "Start with Coca-Cola, Microsoft, and IBM"
+        },
+        {
+          "time": 12.75,
+          "label": "Compare Toyota and Mercedes-Benz in 2005"
+        },
+        {
+          "time": 30.25,
+          "label": "Follow Apple’s climb to the lead"
+        },
+        {
+          "time": 38.25,
+          "label": "Compare the values on the expanded axis"
+        },
+        {
+          "time": 47.75,
+          "label": "Read the final 2019 ranking"
+        }
+      ],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-drip-fill-gauge",
+      "title": "Drip Fill Gauge",
+      "lesson": "Watch a pour-over fill a carafe while the percentage and gauge bar mirror the same progress.",
+      "primary_feature": "crt-pixel-progress-gauge",
+      "category": "Appearance",
+      "path": "python/examples/showcase_drip_fill_gauge.py",
+      "loop": false,
+      "credits": [
+        {
+          "label": "RenderComp Drip Fill Gauge",
+          "url": "https://github.com/RenderComp/free-remotion-templates/blob/f648980e528defb7594e24c6447055f0540f340b/src/components/pourover-drip-fill-gauge/PouroverDripFillGauge.tsx"
+        }
+      ],
+      "features": [
+        "bitmap glyphs",
+        "sampled droplets",
+        "synchronized progress",
+        "WGSL scanlines and ordered dithering"
+      ],
+      "duration": 6,
+      "thumbnail_time": 4.65,
+      "thumbnail": "thumbnails/showcase/showcase-drip-fill-gauge.png",
+      "thumbnail_alt": "An amber pixel-art pour-over fills a carafe above a percentage readout and a horizontal gauge.",
+      "beats": [
+        {
+          "time": 0.47,
+          "label": "Follow the first visible fill"
+        },
+        {
+          "time": 2.33,
+          "label": "Compare liquid level, percentage, and gauge"
+        },
+        {
+          "time": 4.65,
+          "label": "Watch the gauge reach full"
+        },
+        {
+          "time": 5.6,
+          "label": "Observe the droplets and CRT grain on the final hold"
+        }
+      ],
+      "still_intervals": [],
+      "playback_capability": "deterministic-retained-replay"
     }
   ]
 }

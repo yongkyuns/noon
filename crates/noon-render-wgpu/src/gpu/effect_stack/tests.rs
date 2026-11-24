@@ -4,16 +4,26 @@ use noon_core::{Blur, Color, EffectOffset, EffectUpdate, Glow, Pixels, Shadow};
 mod pixels;
 mod reference;
 
-fn parameters() -> EffectStackParameters {
+fn parameters() -> EffectStackParameters<'static> {
     EffectStackParameters {
+        shader: None,
+        working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 240,
         world_view_height: 8.0,
         scope_opacity: 1.0,
         scratch_budget_bytes: 16 * 1024 * 1024,
+        source_bounds: None,
     }
 }
 fn blur(sigma: f64) -> EffectDefinition {
     Blur::new(EffectUpdate::default().radius(Pixels(sigma)))
+        .unwrap()
+        .into()
+}
+fn dissolve(seed: u32, softness: f64, progress: f64) -> EffectDefinition {
+    noon_core::NoiseDissolve::new(seed, softness)
+        .unwrap()
+        .with_progress(progress)
         .unwrap()
         .into()
 }
@@ -79,6 +89,131 @@ fn render(
         queue.submit([encoder.finish()]);
     }
     result
+}
+
+#[test]
+fn trailing_mask_destination_reuse_stays_charged_and_budget_failures_are_atomic() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let image = texture(&device, [33, 29]);
+    let capture = GlowCapture {
+        source: &image,
+        silhouette: None,
+        revision: 1,
+    };
+    let mut filter = EffectStackFilter::default();
+    let mut scope = EffectStackScope::default();
+    let effects = [blur(2.0), dissolve(7, 0.2, 0.5)];
+    let first = render(
+        &mut filter,
+        &mut scope,
+        &device,
+        &queue,
+        capture,
+        &effects,
+        parameters(),
+    )
+    .unwrap();
+    let mut budget = parameters();
+    budget.scratch_budget_bytes = first.scratch_bytes;
+    let mask_output = scope.output().unwrap().clone();
+    for seed in 0..16 {
+        render(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            capture,
+            &effects[..1],
+            budget,
+        )
+        .unwrap();
+        assert_eq!(
+            scope.scratch_bytes(),
+            first.scratch_bytes,
+            "warm destination remains budgeted"
+        );
+        assert_eq!(
+            scope.retained_profile_bytes(&effects[..1]),
+            first.scratch_bytes
+        );
+        let output = scope.output().unwrap().clone();
+        let revision = scope.output_revision();
+        assert!(matches!(
+            render(
+                &mut filter,
+                &mut scope,
+                &device,
+                &queue,
+                GlowCapture {
+                    source: &mask_output,
+                    ..capture
+                },
+                &effects,
+                budget
+            ),
+            Err(EffectPrepareError::UnsupportedCapture)
+        ));
+        assert!(matches!(
+            render(
+                &mut filter,
+                &mut scope,
+                &device,
+                &queue,
+                capture,
+                &effects[..1],
+                EffectStackParameters {
+                    scratch_budget_bytes: first.scratch_bytes - 1,
+                    ..budget
+                }
+            ),
+            Err(EffectPrepareError::ScratchBudgetExceeded)
+        ));
+        assert_eq!(scope.output(), Some(&output));
+        assert_eq!(scope.output_revision(), revision);
+        assert_eq!(scope.scratch_bytes(), first.scratch_bytes);
+        scope.deactivate_profile(&effects[..1]);
+        assert_eq!(scope.scratch_bytes(), first.scratch_bytes);
+        let neutral = [blur(2.0), dissolve(seed, 0.4, 0.0)];
+        let work = render(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            capture,
+            &neutral,
+            budget,
+        )
+        .unwrap();
+        assert_eq!(work.texture_allocations, 0);
+        assert_eq!(scope.scratch_bytes(), first.scratch_bytes);
+        let work = render(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            capture,
+            &[blur(2.0), dissolve(seed, 0.4, 0.5)],
+            budget,
+        )
+        .unwrap();
+        assert_eq!(work.texture_allocations, 0);
+        assert_eq!(scope.scratch_bytes(), first.scratch_bytes);
+    }
+    render(
+        &mut filter,
+        &mut scope,
+        &device,
+        &queue,
+        capture,
+        &[],
+        budget,
+    )
+    .unwrap();
+    assert_eq!(
+        scope.scratch_bytes(),
+        0,
+        "retired capture releases active and warm resources"
+    );
 }
 
 #[test]
@@ -345,6 +480,18 @@ fn late_invalid_pass_preserves_the_previous_coherent_stack_and_earlier_parameter
     for (capture, effects, params, error) in [
         (
             capture,
+            vec![blur(4.0), dissolve(7, 0.08, 0.5)],
+            EffectStackParameters {
+                source_bounds: Some(EffectPixelBounds {
+                    min: [0.0; 2],
+                    max: [0.0, 29.0],
+                }),
+                ..parameters()
+            },
+            EffectPrepareError::InvalidSourceBounds,
+        ),
+        (
+            capture,
             vec![blur(4.0), blur(65.0)],
             parameters(),
             EffectPrepareError::RadiusExceedsProfile,
@@ -480,7 +627,7 @@ fn maximum_stack_shares_programs_and_churn_stays_within_the_retained_budget() {
     };
     let mut filter = EffectStackFilter::default();
     let mut scope = EffectStackScope::default();
-    let mut effects = [blur(1.0); MAX_EFFECT_STACK_LEN];
+    let mut effects: [_; MAX_EFFECT_STACK_LEN] = std::array::from_fn(|_| blur(1.0));
     let mut params = EffectStackParameters {
         scratch_budget_bytes: 17 * 13 * 28 * 8,
         ..parameters()
@@ -591,6 +738,7 @@ fn blur_unit_underflow_uses_identity_and_final_opacity_belongs_to_the_active_pre
         "the authored scene radius is strictly positive"
     );
     let params = EffectStackParameters {
+        working_format: wgpu::TextureFormat::Rgba8Unorm,
         output_height: 1,
         world_view_height: f64::MAX,
         scope_opacity: 0.37,
@@ -610,7 +758,7 @@ fn blur_unit_underflow_uses_identity_and_final_opacity_belongs_to_the_active_pre
             &device,
             &queue,
             capture,
-            &[tiny],
+            std::slice::from_ref(&tiny),
             params
         )
         .unwrap(),
@@ -625,7 +773,7 @@ fn blur_unit_underflow_uses_identity_and_final_opacity_belongs_to_the_active_pre
         },
         [17, 13],
         EffectCaptureParameters {
-            definition: tiny,
+            definition: tiny.clone(),
             output_height: params.output_height,
             world_view_height: params.world_view_height,
             scope_opacity: params.scope_opacity
@@ -664,4 +812,127 @@ fn blur_unit_underflow_uses_identity_and_final_opacity_belongs_to_the_active_pre
         }
     );
     assert_eq!(scope.output(), Some(&output));
+}
+
+#[test]
+fn float_stack_rejects_later_unsupported_pass_before_allocating_or_mutating_prefix() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let image = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("float stack preflight"),
+        size: wgpu::Extent3d {
+            width: 17,
+            height: 13,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let p = EffectStackParameters {
+        working_format: wgpu::TextureFormat::Rgba16Float,
+        ..parameters()
+    };
+    let capture = GlowCapture {
+        source: &image,
+        silhouette: None,
+        revision: 1,
+    };
+    let mut filter = EffectStackFilter::default();
+    let mut scope = EffectStackScope::default();
+    // Even a neutral unsupported pass must be admitted before a prefix installs.
+    let unsupported = [blur(2.0), glow(0.0, GlowSource::Painted)];
+    assert_eq!(
+        render(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            capture,
+            &unsupported,
+            p
+        ),
+        Err(EffectPrepareError::UnsupportedCapture)
+    );
+    assert!(scope.passes.is_empty());
+    assert_eq!(scope.scratch_bytes(), 0);
+    let initial = render(
+        &mut filter,
+        &mut scope,
+        &device,
+        &queue,
+        capture,
+        &[blur(1.25), blur(0.65)],
+        p,
+    )
+    .unwrap();
+    assert_eq!(initial.scratch_bytes, 17 * 13 * 48);
+    assert_eq!(initial.texture_allocations, 6);
+    assert_eq!(initial.pipeline_compiles, 3);
+    let output = scope.output().unwrap().clone();
+    let revision = scope.output_revision();
+    assert_eq!(
+        render(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            capture,
+            &unsupported,
+            p
+        ),
+        Err(EffectPrepareError::UnsupportedCapture)
+    );
+    assert_eq!(scope.output(), Some(&output));
+    assert_eq!(scope.output_revision(), revision);
+    let clean = render(
+        &mut filter,
+        &mut scope,
+        &device,
+        &queue,
+        capture,
+        &[blur(1.25), blur(0.65)],
+        p,
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            clean.bytes_uploaded,
+            clean.blur_passes,
+            clean.composite_passes
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        render(
+            &mut filter,
+            &mut scope,
+            &device,
+            &queue,
+            capture,
+            &[blur(1.25)],
+            parameters()
+        ),
+        Err(EffectPrepareError::UnsupportedCapture)
+    );
+    assert_eq!(scope.output(), Some(&output));
+    let tile = super::super::EffectCaptureTile::prepare_stack(
+        EffectPixelBounds {
+            min: [4.0, 4.0],
+            max: [12.0, 10.0],
+        },
+        [64, 48],
+        &[blur(1.25), blur(0.65)],
+        p,
+        8192,
+        16 * 1024 * 1024,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        tile.capture_and_scratch_bytes,
+        u64::from(tile.size[0] * tile.size[1]) * (8 + 24 + 24)
+    );
 }

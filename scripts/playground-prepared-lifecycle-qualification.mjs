@@ -1,0 +1,587 @@
+// Exercise the real gallery/main.js, source restart router, controls, production
+// Python worker and renderer, with read-only owned-counter observation. No
+// runtime, clock, completion receipt or handoff is supplied by the harness.
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import playwright from "playwright";
+import { PNG } from "pngjs";
+import { serveRepository } from "./browser-test-server.mjs";
+import { browserArgs } from "./manim-raster-support.mjs";
+import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
+import { installPreparedSourceCounterProbe } from "./prepared-source-counter-probe.mjs";
+import { installPreparedGpuLossProbe, losePreparedRenderer } from "./prepared-gpu-loss-probe.mjs";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const output = path.join(root, "browser-smoke-artifacts/prepared-gallery");
+const source = `from noon import *
+events = []
+class PreparedGallery(Scene):
+    def construct(self):
+        events.append("start")
+        target = Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0)
+        self.add(target)
+        self.next_section("Start")
+        self.wait(0)
+        self.wait(30)
+        assert events == ["start"]
+        events.append("first")
+        self.next_section("Motion")
+        self.play(target.animate.shift(2 * RIGHT), run_time=1, rate_func=linear)
+        assert abs(target.get_center()[0] - 2) < 1e-6
+        assert events == ["start", "first"]
+        events.append("moved")
+        self.wait(30)
+        assert events == ["start", "first", "moved"]
+        target.shift(RIGHT)
+        self.next_section("End")
+`;
+const failureSource = source.slice(0, source.indexOf("        self.play(")) +
+  '        raise RuntimeError("intentional gallery source failure")\n';
+const staticSource = `from noon import *
+events = []
+class StaticPrepared(Scene):
+    def construct(self):
+        events.append("noon-static-source-invoked")
+        self.add(Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0))
+`;
+const zeroSource = `from noon import *
+events = []
+class ZeroPrepared(Scene):
+    def construct(self):
+        events.append("noon-zero-source-invoked")
+        target = Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0)
+        target.shift(RIGHT)
+        self.add(target)
+        self.wait(0)
+        self.wait(0)
+        target.shift(LEFT)
+`;
+const staticInputSource = staticSource.replace("class StaticPrepared", "class StaticInput")
+  .replace("noon-static-source-invoked", "noon-static-input-invoked")
+  .replace("        self.add(Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0))",
+    "        target = Circle(radius=0.6, color=BLUE, fill_opacity=1, stroke_width=0)\n        self.add(target)\n        self.set_drag_targets(target)");
+const zeroInputSource = staticInputSource.replace("noon-static-input-invoked", "noon-zero-input-invoked")
+  .replace("        self.set_drag_targets(target)", "        self.wait(0)\n        self.set_drag_targets(target)");
+const largeSource = `from noon import *
+events = []
+class LargePrepared(Scene):
+    def construct(self):
+        events.append("noon-large-source-invoked")
+        self.add(*[Circle(radius=0.06, fill=BLUE, fill_opacity=1, stroke=None,
+                          position=((i % 100 - 49.5) * 0.14, (i // 100 - 34.5) * 0.10))
+                   for i in range(7000)])
+`;
+const entries = ["prepared-lifecycle", "prepared-failure", "prepared-static", "prepared-zero", "prepared-large", "prepared-static-input", "prepared-zero-input"].map((id, order) => ({
+  id, order, title: id, status: "ready", parity_status: "candidate",
+  reuse: "manim-compatible-parity-v0.21", category: "qualification",
+  path: `python/examples/${id}.py`, thumbnail: "prepared-fixture.svg",
+  features: ["prepared-lifecycle"], summary: "Bounded lifecycle qualification fixture",
+}));
+const hash = value => createHash("sha256").update(value).digest("hex");
+const reportValue = (_key, value) => typeof value === "bigint" ? String(value) : value;
+const report = { status: "running", scope: "actual gallery lifecycle; bounded fixture, not gallery compatibility or performance",
+  runOptions: "default null lookahead except prepared-lifecycle and prepared-failure fixtures, which use the existing 1 s incremental reference",
+  sourceSha256: hash(source), staticSourceSha256: hash(staticSource), zeroSourceSha256: hash(zeroSource), largeSourceSha256: hash(largeSource), captureBackdrop: "opaque canvas-wrap; integer CSS origin; corner/shadow/border color normalized; unchanged backing size and full-canvas RGBA equality", cases: [] };
+report.staticInputSourceSha256 = hash(staticInputSource); report.zeroInputSourceSha256 = hash(zeroInputSource);
+const cache = createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.source.js"), "utf8"));
+let browser, server;
+const largePixelsByBackend = new Map();
+
+async function installFixture(page, evidence) {
+  await cache.install(page.context());
+  await installPreparedSourceCounterProbe(page.context(), null, evidence);
+  await installPreparedGpuLossProbe(page.context(), evidence);
+  await page.route("**/python/examples/manim_*_manifest.json", route => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ reference: { version: "0.21" },
+      entries: route.request().url().endsWith("manim_tutorial_manifest.json") ? entries : [] }),
+  }));
+  for (const entry of entries) {
+    await page.route(`**/${entry.path}`, route => route.fulfill({ contentType: "text/x-python",
+      body: entry.id === "prepared-static-input" ? staticInputSource : entry.id === "prepared-zero-input" ? zeroInputSource : entry.id === "prepared-large" ? largeSource : entry.id === "prepared-zero" ? zeroSource : entry.id === "prepared-static" ? staticSource : entry.id === "prepared-failure" ? failureSource : source }));
+  }
+  await page.route("**/prepared-fixture.svg", route => route.fulfill({ contentType: "image/svg+xml",
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><circle cx="80" cy="45" r="20" fill="blue"/></svg>' }));
+  await page.addInitScript(() => {
+    // Count native worker construction and record the actual authoring Run
+    // options without changing the message or its transfer list.
+    globalThis.galleryWorkers = [];
+    globalThis.galleryAuthoringRunOptions = [];
+    const NativeWorker = globalThis.Worker;
+    globalThis.Worker = class extends NativeWorker {
+      constructor(url, options) { super(url, options); galleryWorkers.push(options?.name ?? ""); }
+      postMessage(message, ...args) {
+        if (message?.channel === "noon.authoring" && message.type === "run") {
+          globalThis.galleryAuthoringRunOptions.push({
+            requestId: message.requestId,
+            exampleId: message.context?.playground?.example_id ?? null,
+            preparedPlayback: message.preparedPlayback ?? null,
+            preparationLookaheadSeconds: message.preparationLookaheadSeconds,
+          });
+        }
+        return super.postMessage(message, ...args);
+      }
+    };
+    globalThis.__NOON_PLAYGROUND_TEST_HOOKS__ = {
+      authoringRunOptions: ({ exampleId }) =>
+        exampleId === "prepared-lifecycle" || exampleId === "prepared-failure"
+          ? { preparationLookaheadSeconds: 1 } : {},
+    };
+  });
+}
+
+async function openReady(page, frontier = 30) {
+  const bits = new DataView(new ArrayBuffer(8));
+  bits.setFloat64(0, frontier);
+  bits.setBigUint64(0, bits.getBigUint64(0) - 1n);
+  const selectableEnd = bits.getFloat64(0);
+  await page.waitForFunction(expected => {
+    const c = document.querySelector(".playback-controls"), seek = document.querySelector(".playback-scrubber");
+    return c?.dataset.busy === "false" && c.dataset.durationKnown === "false" &&
+      seek && !seek.disabled && Number(seek.max) === expected &&
+      c.querySelector(".playback-live-status")?.textContent.includes("Available history:");
+  }, selectableEnd);
+}
+async function pause(page) {
+  if (await page.locator(".playback-controls").getAttribute("data-playing") === "true") {
+    await page.locator(".playback-toggle").click();
+  }
+  await page.waitForFunction(() => {
+    const c = document.querySelector(".playback-controls");
+    return c?.dataset.playing === "false" && c.dataset.busy === "false";
+  });
+}
+async function seekOpen(page, time, frontier = null) {
+  const field = page.locator(".playback-scrubber");
+  await field.evaluate((element, value) => {
+    element.value = String(value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  }, time);
+  await page.waitForFunction(t => {
+    const c = document.querySelector(".playback-controls");
+    return c?.dataset.busy === "false" && Number(c.dataset.elapsedSeconds) === t &&
+      !c.querySelector(".playback-live-status")?.textContent.includes("waiting for display");
+  }, time);
+  if (frontier !== null) await openReady(page, frontier);
+}
+async function seekSealed(page, time) {
+  await page.locator(".playback-scrubber").evaluate((element, time) => {
+    element.value = String(time); element.dispatchEvent(new Event("input", { bubbles: true }));
+  }, time);
+  await page.waitForFunction(t => {
+    const c = document.querySelector(".playback-controls");
+    return c?.dataset.busy === "false" && Number(c.dataset.elapsedSeconds) === t &&
+      !c.querySelector(".playback-live-status")?.textContent.includes("waiting for display");
+  }, time);
+}
+
+async function holdTimelineDuringGrowth(page, touch) {
+  const rail = page.locator(".playback-scrubber");
+  await rail.focus();
+  const before = await rail.evaluate(element => {
+    globalThis.gestureRail = element;
+    return { min: element.min, max: element.max };
+  });
+  const box = await rail.boundingBox(), y = box.y + box.height / 2;
+  const x = box.x + box.width / 2, endX = box.x + box.width - 10;
+  const device = touch ? await page.context().newCDPSession(page) : null;
+  const sendTouch = (type, x) => device.send("Input.dispatchTouchEvent", {
+    type, touchPoints: type === "touchEnd" ? [] : [{ x, y }],
+  });
+  try {
+    if (touch) await sendTouch("touchStart", x);
+    else { await page.mouse.move(x, y); await page.mouse.down(); }
+    if (touch) await sendTouch("touchMove", endX);
+    else await page.mouse.move(endX, y);
+    const heldValue = await rail.inputValue();
+    await page.waitForFunction(() => gestureRail.title.includes("31.00 seconds"));
+    assert.deepEqual(await rail.evaluate(element => ({ min: element.min, max: element.max })), before);
+    assert.equal(await rail.inputValue(), heldValue, "prefix growth must not move a held thumb");
+    assert.ok(Number(heldValue) > 29 && Number(heldValue) < 30);
+    assert.equal(await rail.evaluate(element => element === gestureRail && document.activeElement === element), true);
+  } finally {
+    if (touch) { await sendTouch("touchEnd"); await device.detach(); }
+    else await page.mouse.up();
+  }
+  await openReady(page, 31);
+  await rail.press("Home");
+  await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.elapsedSeconds === "0");
+  await rail.press("ArrowRight");
+  const keyboardTarget = Number(await rail.inputValue());
+  assert.ok(keyboardTarget > 0);
+  await page.waitForFunction(time => {
+    const controls = document.querySelector(".playback-controls");
+    return controls?.dataset.busy === "false" && Number(controls.dataset.elapsedSeconds) === time;
+  }, keyboardTarget);
+}
+async function assertGallerySourceFailure(page) {
+  // The status is the exception title. Its message belongs to the visible
+  // diagnostic panel, not the status or the echoed Python source excerpt.
+  const panel = page.locator("#authoring-problem");
+  await panel.waitFor({ state: "visible" });
+  assert.equal(await page.locator("#patch-status").evaluate(element => element.value ?? element.textContent), "Python raised RuntimeError");
+  assert.equal(await panel.locator("strong").textContent(), "Python raised RuntimeError");
+  assert.equal(await panel.locator("p").first().textContent(), "intentional gallery source failure");
+  assert.equal(await panel.getByRole("button", { name: /^Go to line / }).isVisible(), true,
+    "source diagnostics must retain the executed document after preview recovery");
+}
+async function selectGalleryExample(page, id) {
+  // The production picker keeps cards hidden until its trigger opens the dialog.
+  // Use ordinary DOM clicks; do not force a hidden click or bypass selection.
+  const layer = page.locator(".example-browser-layer");
+  await page.locator("#example-browser-trigger").click();
+  await layer.waitFor({ state: "visible" });
+  await layer.locator(`.example-card[data-example-id="${id}"]`).click();
+  await layer.waitFor({ state: "hidden" });
+}
+async function waitForObservation(page, observe, argument) {
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    const result = await page.evaluate(observe, argument);
+    if (result) return result;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error("timed out waiting for the gallery observation");
+}
+async function pixels(page, name) {
+  await waitForObservation(page, async () => {
+    const metrics = (await __noonExampleGallery.executionMetrics())?.metrics;
+    return metrics?.ready && Number.isFinite(metrics.firstPresentedSessionAtMs) &&
+      !metrics.needsPresent && metrics.bufferedDeltas === 0;
+  });
+  // Cue controls change vertical layout. Keep the original backing size while
+  // aligning the CSS capture origin, so compositing cannot shift equal pixels.
+  await page.locator("#scene").evaluate(canvas => {
+    canvas.style.transform = "none";
+    canvas.style.left = "0px";
+    canvas.style.top = "0px";
+    const { x, y } = canvas.getBoundingClientRect();
+    canvas.style.left = `${Math.round(x) - x}px`;
+    canvas.style.top = `${Math.round(y) - y}px`;
+    window.dispatchEvent(new Event("resize"));
+  });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  (report.captures ??= []).push({ name, ...await page.locator("#scene").evaluate(canvas => {
+    const { x, y, width, height } = canvas.getBoundingClientRect();
+    return { x, y, width, height, bitmap: { width: canvas.width, height: canvas.height } };
+  }) });
+  const bytes = await page.locator("#scene").screenshot();
+  await writeFile(path.join(output, `${name}.png`), bytes);
+  return PNG.sync.read(bytes).data;
+}
+
+await mkdir(output, { recursive: true });
+try {
+  report.harnessSha256 = hash(await readFile(fileURLToPath(import.meta.url)));
+  report.gpuLossProbeSha256 = hash(await readFile(path.join(root, "scripts/prepared-gpu-loss-probe.mjs")));
+  report.mainSha256 = hash(await readFile(path.join(root, "web/main.js")));
+  report.workerSha256 = hash(await readFile(path.join(root, "web/python-worker.js")));
+  report.wasmSha256 = hash(await readFile(path.join(root, "web/pkg/noon_web_bg.wasm")));
+  for (const backend of ["webgpu", "webgl"]) {
+    browser = await playwright.chromium.launch({ headless: true,
+      ...(process.env.NOON_BROWSER_EXECUTABLE ? { executablePath: process.env.NOON_BROWSER_EXECUTABLE } : { channel: "chromium" }),
+      args: browserArgs(backend, { gpuMode: process.env.NOON_RENDER_GPU_MODE ?? "software" }),
+      ...(process.env.NOON_BROWSER_PROXY ? { proxy: { server: process.env.NOON_BROWSER_PROXY, bypass: "127.0.0.1,localhost" } } : {}) });
+    for (const transport of ["transferable", "shared"]) {
+      const entry = { backend, transport, status: "running", checks: [] }; report.cases.push(entry);
+      server = await serveRepository(root, 0, { crossOriginIsolated: transport === "shared" });
+      const page = await browser.newPage({ viewport: { width: 1100, height: 900 }, deviceScaleFactor: 1, hasTouch: true });
+      page.setDefaultTimeout(180_000);
+      const pageErrors = []; page.on("pageerror", error => pageErrors.push(String(error)));
+      let staticInvocations = 0, zeroInvocations = 0, largeInvocations = 0, sourceInvocations = 0;
+      const inputInvocations = { static: 0, zero: 0 };
+      page.on("console", message => { if (message.text() === "noon-static-source-invoked") staticInvocations++;
+        if (message.text() === "start") sourceInvocations++;
+        if (message.text() === "noon-zero-source-invoked") zeroInvocations++;
+        if (message.text() === "noon-static-input-invoked") inputInvocations.static++;
+        if (message.text() === "noon-zero-input-invoked") inputInvocations.zero++;
+        if (message.text() === "noon-large-source-invoked") largeInvocations++; });
+      try {
+        await installFixture(page, entry);
+        await page.goto(`${server.baseUrl}/web/index.html?example=prepared-lifecycle`);
+        await page.waitForFunction(() => globalThis.__noonExampleGallery !== undefined);
+        // CSS corner/shadow compositing can vary by one byte across captures.
+        // Remove only that decoration and make its backdrop opaque. Keep canvas
+        // dimensions, renderer, full screenshot and exact RGBA assertions.
+        await page.addStyleTag({ content: ".canvas-wrap { background: #090c13 !important; } #scene { border-radius: 0 !important; box-shadow: none !important; border-color: #000 !important; }" });
+        await page.evaluate(() => {
+          if (!__noonExampleGallery.runInFlight && !document.querySelector(".playback-controls")) void __noonExampleGallery.run();
+        });
+        await openReady(page); await pause(page);
+        assert.equal(await page.evaluate(() => __noonExampleGallery.runInFlight), true);
+        assert.equal(await page.locator(".gallery-controls input").isDisabled(), false);
+        assert.equal(await page.locator('.example-card[data-example-id="prepared-failure"]').isDisabled(), false);
+        const metrics = await page.evaluate(async () => (await __noonExampleGallery.executionMetrics()).metrics);
+        assert.equal(metrics.backend, backend === "webgpu" ? "WebGPU" : "WebGL2");
+        assert.equal(await page.evaluate(() => __noonExampleGallery.transportMode), transport);
+        entry.checks.push("actual-gallery-prepared-start", "source-does-not-lock-controls-or-gallery");
+        const cueValues = () => page.locator(".playback-section-names option").evaluateAll(options =>
+          options.map(option => option.value));
+        assert.deepEqual(await cueValues(), ["", "0"], "future cues must stay hidden");
+        if (backend === "webgpu") {
+          await holdTimelineDuringGrowth(page, transport === "shared");
+          entry.checks.push(`${transport === "shared" ? "touch" : "mouse"}-held-range-and-focus-survive-growth`,
+            "native-home-and-arrow-seek");
+        }
+        await seekOpen(page, 5);
+        const baseline = await pixels(page, `${backend}-${transport}-baseline`);
+        const recoverGpu = async (phase, playing = false) => {
+          const invocations = sourceInvocations;
+          if (playing) {
+            await page.locator(".playback-toggle").click();
+            await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.playing === "true");
+          }
+          const before = await page.evaluate(async () => ({
+            runGeneration: __noonExampleGallery.runPhaseMetrics.runGeneration,
+            elapsed: document.querySelector(".playback-controls").dataset.elapsedSeconds,
+            metrics: (await __noonExampleGallery.executionMetrics()).metrics,
+          }));
+          await page.evaluate(() => { globalThis.canvasBeforeGpuLoss = document.querySelector("#scene"); });
+          const fault = await losePreparedRenderer(page, backend);
+          const recover = page.locator("#preview-recover");
+          if (backend === "webgpu") {
+            await recover.waitFor({ state: "visible" });
+            await recover.click();
+            await recover.waitFor({ state: "hidden" });
+            assert.equal(await page.evaluate(() => canvasBeforeGpuLoss !== document.querySelector("#scene")), true);
+            assert.equal(await page.locator("#authoring-problem").isVisible(), false);
+          } else {
+            await waitForObservation(page, async old => {
+              const metrics = (await __noonExampleGallery.executionMetrics()).metrics;
+              return metrics.gpuGeneration > old.gpuGeneration && metrics.presentedFrames > old.presentedFrames;
+            }, before.metrics);
+            assert.equal(await recover.isVisible(), false);
+          }
+          if (playing) {
+            await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.playing === "true");
+            assert.ok(Number(await page.locator(".playback-controls").getAttribute("data-elapsed-seconds")) >= Number(before.elapsed));
+            await pause(page); await seekSealed(page, 5);
+          } else {
+            assert.equal(await page.locator(".playback-controls").getAttribute("data-elapsed-seconds"), before.elapsed);
+          }
+          assert.ok(baseline.equals(await pixels(page, `${backend}-${transport}-${phase}-gpu-recovered`)));
+          assert.equal(await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.runGeneration), before.runGeneration);
+          assert.equal(sourceInvocations, invocations, "GPU recovery cannot execute source again");
+          assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
+          entry.checks.push(`${phase}-real-gpu-loss-exact-recovery-without-source-rerun`);
+          (entry.gpuRecovery ??= []).push({ phase, before, fault });
+        };
+        await recoverGpu("open");
+        assert.equal(sourceInvocations, 1);
+        await page.evaluate(() => { globalThis.originalGalleryCanvas = document.querySelector("#scene"); });
+        await seekOpen(page, 29.5, 31); await seekOpen(page, 30.5, 61);
+        assert.deepEqual(await cueValues(), ["", "0", "1"]);
+        await page.locator(".playback-previous-section").click();
+        await page.waitForFunction(() => {
+          const controls = document.querySelector(".playback-controls");
+          return controls?.dataset.busy === "false" && controls.dataset.elapsedSeconds === "30";
+        });
+        assert.equal(await page.locator(".playback-controls").getAttribute("data-playing"), "false");
+        assert.equal(await page.locator(".playback-next-section").isDisabled(), true);
+        await seekOpen(page, 60.5);
+        await page.waitForFunction(() => !__noonExampleGallery.runInFlight &&
+          document.querySelector(".playback-controls")?.dataset.durationKnown === "true");
+        assert.equal(await page.locator(".playback-scrubber").getAttribute("max"), "61");
+        assert.equal(await page.locator(".playback-controls").getAttribute("data-playing"), "false");
+        assert.equal(await page.evaluate(() => originalGalleryCanvas === document.querySelector("#scene")), true);
+        assert.deepEqual(await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.reconciliations), []);
+        entry.checks.push("terminal-adoption-keeps-reader-and-pause", "no-completion-reconciliation");
+        assert.deepEqual(await cueValues(), ["", "0", "1", "2"]);
+        await page.locator(".playback-section-names").selectOption("2");
+        await page.waitForFunction(() => {
+          const controls = document.querySelector(".playback-controls");
+          return controls?.dataset.busy === "false" && controls.dataset.elapsedSeconds === "61";
+        });
+        entry.checks.push("cues-follow-prefix-and-terminal-adoption", "cue-seek-preserves-pause-and-source");
+        await seekSealed(page, 61);
+        assert.equal(baseline.equals(await pixels(page, `${backend}-${transport}-terminal`)), false);
+        await seekSealed(page, 5);
+        assert.ok(baseline.equals(await pixels(page, `${backend}-${transport}-rewind`)));
+        await recoverGpu("completed");
+        await recoverGpu("completed-playing", true);
+        assert.equal(sourceInvocations, 1);
+        entry.checks.push("exact-endpoint", "exact-rewind-pixels");
+
+        // A real Run replaces the historical stream, retaining the renderer,
+        // canvas and healthy VM after acknowledged source retirement.
+        const beforeRerun = await page.evaluate(async () => {
+          globalThis.beforeRerunGalleryCanvas = document.querySelector("#scene");
+          return { metrics: (await __noonExampleGallery.executionMetrics()).metrics,
+            workers: galleryWorkers.length };
+        });
+        await page.locator("#replace-scene").click(); await openReady(page); await pause(page);
+        assert.equal(await page.evaluate(() => beforeRerunGalleryCanvas === document.querySelector("#scene")), true);
+        const afterRerun = await page.evaluate(async () => ({
+          metrics: (await __noonExampleGallery.executionMetrics()).metrics,
+          workers: galleryWorkers.length,
+        }));
+        assert.ok(afterRerun.metrics.presentedSession > beforeRerun.metrics.presentedSession);
+        assert.ok(afterRerun.metrics.presentedFrames > beforeRerun.metrics.presentedFrames);
+        assert.equal(afterRerun.workers, beforeRerun.workers);
+        assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
+        entry.checks.push("completed-rerun-fresh-reader-reuses-renderer-canvas-and-warm-interpreter");
+
+        // Select another source while preparation is demand-paused. This uses
+        // normal cooperative cancellation and the gallery's generation gates.
+        await selectGalleryExample(page, "prepared-failure");
+        await page.waitForFunction(() => __noonExampleGallery.selectedExampleId === "prepared-failure");
+        await openReady(page); await pause(page); await seekOpen(page, 5);
+        await recoverGpu("before-source-failure");
+        await seekOpen(page, 29.5);
+        await page.waitForFunction(() => !__noonExampleGallery.runInFlight &&
+          document.querySelector("#patch-status")?.dataset.state === "error");
+        await assertGallerySourceFailure(page);
+        await openReady(page); await seekOpen(page, 5);
+        assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
+        assert.ok(baseline.equals(await pixels(page, `${backend}-${transport}-partial-history`)));
+        entry.checks.push("gallery-selection-cancels-demand-wait", "source-error-retains-open-seekable-history");
+        const failedGeneration = await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.runGeneration);
+        await seekOpen(page, 29.9);
+        await page.locator(".playback-toggle").click();
+        await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.playing === "true");
+        await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.buffering === "true" &&
+          document.querySelector("#status")?.dataset.playbackPhase === "preparation failed");
+        await pause(page); await seekOpen(page, 5);
+        assert.equal(await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.runGeneration), failedGeneration);
+        assert.ok(baseline.equals(await pixels(page, `${backend}-${transport}-failed-source-rewind`)));
+        entry.checks.push("failed-source-does-not-advertise-active-buffering", "failed-source-rewind-without-rerun");
+        await selectGalleryExample(page, "prepared-lifecycle");
+        await page.waitForFunction(() => __noonExampleGallery.selectedExampleId === "prepared-lifecycle");
+        await openReady(page); await pause(page);
+        assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
+        assert.deepEqual(pageErrors, []);
+        entry.checks.push("new-run-after-source-failure", "no-page-errors");
+        await selectGalleryExample(page, "prepared-static");
+        await page.waitForFunction(() => !__noonExampleGallery.runInFlight &&
+          document.querySelector(".playback-controls")?.dataset.durationKnown === "true" &&
+          document.querySelector(".playback-scrubber")?.max === "0");
+        assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied");
+        assert.equal(await page.locator(".playback-toggle").isDisabled(), true);
+        assert.equal(await page.locator(".playback-scrubber").isDisabled(), true);
+        assert.equal(await page.locator(".playback-controls").getAttribute("data-playing"), "false");
+        const staticPixels = await pixels(page, `${backend}-${transport}-static`);
+        assert.ok(baseline.equals(staticPixels), "completed static reader must render the same circle");
+        await page.locator(".playback-restart").click();
+        await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false");
+        assert.ok(staticPixels.equals(await pixels(page, `${backend}-${transport}-static-restart`)));
+        assert.equal(staticInvocations, 1, "restart must not rerun static source");
+        const staticGeneration = await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.runGeneration);
+        await page.locator("#replace-scene").click();
+        await page.waitForFunction(previous => !__noonExampleGallery.runInFlight &&
+          __noonExampleGallery.runPhaseMetrics.runGeneration > previous &&
+          document.querySelector("#patch-status")?.dataset.state === "applied", staticGeneration);
+        assert.equal(staticInvocations, 2, "explicit Run executes static source once");
+        assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
+        assert.deepEqual(pageErrors, []);
+        entry.checks.push("completed-static-reader-exact-zero-pixels", "static-restart-never-reruns-source", "static-rerun-retains-warm-interpreter");
+        await selectGalleryExample(page, "prepared-zero");
+        await page.waitForFunction(() => !__noonExampleGallery.runInFlight &&
+          document.querySelector(".playback-controls")?.dataset.durationKnown === "true" &&
+          document.querySelector(".playback-scrubber")?.max === "0");
+        assert.equal(await page.locator("#patch-status").getAttribute("data-state"), "applied");
+        const zeroPixels = await pixels(page, `${backend}-${transport}-zero-only`);
+        assert.ok(baseline.equals(zeroPixels), "zero-only reader must include final same-time source edits");
+        await page.locator(".playback-restart").click();
+        await page.waitForFunction(() => document.querySelector(".playback-controls")?.dataset.busy === "false");
+        assert.ok(zeroPixels.equals(await pixels(page, `${backend}-${transport}-zero-restart`)));
+        assert.equal(zeroInvocations, 1);
+        const zeroGeneration = await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.runGeneration);
+        await page.locator("#replace-scene").click();
+        await page.waitForFunction(previous => !__noonExampleGallery.runInFlight &&
+          __noonExampleGallery.runPhaseMetrics.runGeneration > previous &&
+          document.querySelector("#patch-status")?.dataset.state === "applied", zeroGeneration);
+        assert.equal(zeroInvocations, 2);
+        assert.deepEqual(pageErrors, []);
+        entry.checks.push("initial-zero-wait-before-open-prefix", "zero-only-final-edits-exact-pixels", "zero-only-restart-and-rerun");
+        for (const kind of ["static", "zero"]) {
+          await selectGalleryExample(page, `prepared-${kind}-input`);
+          await page.waitForFunction(id => !__noonExampleGallery.runInFlight &&
+            __noonExampleGallery.selectedExampleId === id &&
+            document.querySelector("#patch-status")?.dataset.state === "applied", `prepared-${kind}-input`);
+          const initial = await pixels(page, `${backend}-${transport}-${kind}-input`);
+          assert.ok(baseline.equals(initial));
+          assert.equal(await page.locator(".playback-toggle").isDisabled(), true);
+          assert.equal(await page.locator(".playback-scrubber").isDisabled(), true);
+          const rect = await page.locator("#scene").boundingBox();
+          await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          await page.mouse.down();
+          await page.mouse.move(rect.x + rect.width * 0.625, rect.y + rect.height / 2, { steps: 4 });
+          await page.mouse.up();
+          assert.equal(initial.equals(await pixels(page, `${backend}-${transport}-${kind}-input-dragged`)), false);
+          assert.equal(await page.locator(".playback-controls").getAttribute("data-elapsed-seconds"), "0");
+          assert.equal(inputInvocations[kind], 1);
+          const generation = await page.evaluate(() => __noonExampleGallery.runPhaseMetrics.runGeneration);
+          await page.locator("#replace-scene").click();
+          await page.waitForFunction(previous => !__noonExampleGallery.runInFlight &&
+            __noonExampleGallery.runPhaseMetrics.runGeneration > previous &&
+            document.querySelector("#patch-status")?.dataset.state === "applied", generation);
+          assert.ok(initial.equals(await pixels(page, `${backend}-${transport}-${kind}-input-rerun`)));
+          assert.equal(inputInvocations[kind], 2);
+          assert.equal(await page.evaluate(() => galleryWorkers.filter(name => name === "noon-python-authoring").length), 1);
+          entry.checks.push(`${kind}-input-frozen-zero-drag`, `${kind}-input-rerun-warm-interpreter`);
+        }
+        await selectGalleryExample(page, "prepared-large");
+        await waitForObservation(page, async () => {
+          const gallery = __noonExampleGallery, run = gallery.runPhaseMetrics;
+          if (run.exampleId === "prepared-large" && document.querySelector("#patch-status")?.dataset.state === "error") {
+            throw new Error(document.querySelector("#authoring-problem")?.textContent || "large snapshot failed");
+          }
+          if (run.exampleId !== "prepared-large" || gallery.selectedExampleId !== "prepared-large" ||
+              gallery.runInFlight || !Number.isFinite(run.sourceRunCompletedAtMs) ||
+              document.querySelector("#patch-status")?.dataset.state !== "applied") return false;
+          const metrics = (await gallery.executionMetrics())?.metrics;
+          return run === gallery.runPhaseMetrics && !gallery.runInFlight &&
+            document.querySelector(".playback-scrubber")?.max === "0" && metrics?.objectCount === 7000;
+        });
+        entry.largeMetrics = (await page.evaluate(() => __noonExampleGallery.executionMetrics())).metrics;
+        const largePixels = await pixels(page, `${backend}-${transport}-large-snapshot`);
+        let painted = 0;
+        for (let i = 0; i < largePixels.length; i += 4) {
+          if (largePixels[i + 1] > largePixels[i] + 20 && largePixels[i + 2] > largePixels[i] + 20) painted++;
+        }
+        entry.largePaintedPixels = painted;
+        assert.ok(painted >= 7000, `large grid must visibly paint its blue objects; got ${painted} pixels`);
+        const reference = largePixelsByBackend.get(backend);
+        if (reference) assert.ok(reference.equals(largePixels), "shared chunks must match the complete transferable snapshot exactly");
+        else largePixelsByBackend.set(backend, largePixels);
+        assert.equal(largeInvocations, 1);
+        assert.deepEqual(pageErrors, []);
+        entry.checks.push("large-static-snapshot-all-7000-objects", "large-snapshot-shared-transferable-exact-pixels");
+        entry.postedRunOptions = await page.evaluate(() => globalThis.galleryAuthoringRunOptions);
+        assert.ok(entry.postedRunOptions.length > 0, "capture actual authoring Run payloads");
+        for (const options of entry.postedRunOptions) {
+          const expectedLookahead = ["prepared-lifecycle", "prepared-failure"].includes(options.exampleId) ? 1 : null;
+          assert.equal(options.preparationLookaheadSeconds, expectedLookahead,
+            `${options.exampleId}: actual posted preparation lookahead`);
+        }
+        entry.status = "passed";
+      } catch (error) {
+        entry.status = "failed"; entry.error = String(error.stack ?? error);
+        entry.pageErrors = pageErrors;
+        entry.postedRunOptions = await page.evaluate(() => globalThis.galleryAuthoringRunOptions).catch(() => []);
+        entry.diagnostics = await page.evaluate(() => ({
+          status: document.querySelector("#status")?.dataset,
+          message: document.querySelector("#patch-status")?.value,
+          diagnosticTitle: document.querySelector("#authoring-problem > strong")?.textContent,
+          diagnosticMessage: document.querySelector("#authoring-problem > p")?.textContent,
+          run: globalThis.__noonExampleGallery?.runPhaseMetrics,
+          controls: document.querySelector(".playback-controls")?.dataset,
+        })).catch(() => null);
+        await page.screenshot({ path: path.join(output, `${backend}-${transport}-failure.png`) }).catch(() => {});
+        throw error;
+      } finally { await page.close(); await server.close(); server = null; }
+    }
+    await browser.close(); browser = null;
+  }
+  report.status = "passed";
+} catch (error) {
+  report.status = "failed"; report.error = String(error.stack ?? error); process.exitCode = 1;
+} finally {
+  report.resourceCache = cache.stats();
+  await writeFile(path.join(output, "report.json"), `${JSON.stringify(report, reportValue, 2)}\n`);
+  await browser?.close(); await server?.close();
+}
+console.log(JSON.stringify(report, reportValue));

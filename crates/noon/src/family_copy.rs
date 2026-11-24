@@ -1,6 +1,9 @@
 //! Atomic copies of an addressed authoritative semantic membership graph.
 use crate::AuthoringError;
-use crate::{ManimArrow, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget};
+use crate::{
+    ExecutionSession, ManimArrow, ManimArrowVectorField, Mobject, MobjectFamily, MobjectTarget,
+    Scene,
+};
 use noon_core::{
     SemanticGraphEdgeDependency, SemanticLocalNodeToken, SemanticMutationTransaction,
     SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId, SemanticNodeKind,
@@ -130,6 +133,10 @@ impl PendingSemanticCopy {
         self.copied[&self.source_root]
     }
 
+    pub(crate) fn copied_token(&self, source: SemanticNodeId) -> SemanticLocalNodeToken {
+        self.copied[&source]
+    }
+
     pub(crate) fn resolve<R>(
         self,
         result: &SemanticMutationTransactionResult,
@@ -175,6 +182,11 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
     source: MobjectTarget<'_>,
     references: &[MobjectTarget<'_>],
     capture: impl FnMut(&Mobject, bool) -> Result<SemanticObjectState, E>,
+    capture_family_style: impl FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        &mut noon_core::SemanticStyle,
+    ) -> Result<(), E>,
     copy_effects: impl FnMut(
         &SemanticStore,
         SemanticNodeId,
@@ -187,6 +199,7 @@ pub(crate) fn prepare_semantic_copy<E: From<AuthoringError>>(
         references,
         CopyRootMembership::Preserve,
         capture,
+        capture_family_style,
         copy_effects,
     )
 }
@@ -204,7 +217,12 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
     references: &[MobjectTarget<'_>],
     root_membership: CopyRootMembership,
     mut capture: impl FnMut(&Mobject, bool) -> Result<SemanticObjectState, E>,
-    mut copy_effects: impl FnMut(
+    capture_family_style: impl FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        &mut noon_core::SemanticStyle,
+    ) -> Result<(), E>,
+    copy_effects: impl FnMut(
         &SemanticStore,
         SemanticNodeId,
         SemanticLocalNodeToken,
@@ -214,18 +232,62 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
     source.validate()?;
     let store = source.integration_store();
     let mut transaction = SemanticMutationTransaction::new();
+    let references = references
+        .iter()
+        .map(|target| target.require_store(store))
+        .collect::<Result<Vec<_>, _>>()?;
+    let copied = stage_semantic_copy(
+        &store.borrow(),
+        source.node_id(),
+        &references,
+        root_membership,
+        &mut transaction,
+        |id, graph_row| capture(&Mobject::from_node(Rc::clone(store), id)?, graph_row),
+        capture_family_style,
+        copy_effects,
+    )?;
+    Ok((
+        transaction,
+        PendingSemanticCopy {
+            store: Rc::clone(store),
+            source_root: source.node_id(),
+            copied,
+        },
+    ))
+}
+
+/// Stage a root-local copy in the caller's transaction. Tokens never escape a
+/// failed admission; existing copy and owned animation targets share this walk.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stage_semantic_copy<E: From<AuthoringError>>(
+    store: &SemanticStore,
+    source: SemanticNodeId,
+    references: &[SemanticNodeId],
+    root_membership: CopyRootMembership,
+    transaction: &mut SemanticMutationTransaction,
+    mut capture: impl FnMut(SemanticNodeId, bool) -> Result<SemanticObjectState, E>,
+    mut capture_family_style: impl FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        &mut noon_core::SemanticStyle,
+    ) -> Result<(), E>,
+    mut copy_effects: impl FnMut(
+        &SemanticStore,
+        SemanticNodeId,
+        SemanticLocalNodeToken,
+        &mut SemanticMutationTransaction,
+    ) -> Result<(), E>,
+) -> Result<BTreeMap<SemanticNodeId, SemanticLocalNodeToken>, E> {
     let mut copied = BTreeMap::new();
     let mut edges = Vec::new();
     let mut graph_declarations = Vec::new();
     let mut table_layouts = Vec::new();
     let mut inset_views = Vec::new();
     let mut queue = Vec::with_capacity(references.len() + 1);
-    for target in references {
-        queue.push(target.require_store(store)?);
-    }
-    queue.push(source.node_id());
-    let omitted_root = (root_membership == CopyRootMembership::Omit).then_some(source.node_id());
-    let graph_dependency_rows = graph_dependency_copy_rows(&store.borrow(), &queue, omitted_root)?;
+    queue.extend_from_slice(references);
+    queue.push(source);
+    let omitted_root = (root_membership == CopyRootMembership::Omit).then_some(source);
+    let graph_dependency_rows = graph_dependency_copy_rows(store, &queue, omitted_root)?;
     while let Some(id) = queue.pop() {
         if copied.contains_key(&id) {
             continue;
@@ -236,7 +298,7 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
             family_z,
             draw_enabled,
             family_color,
-            family_style,
+            mut family_style,
             family_background_stroke_color,
             family_background_stroke_width,
             family_background_stroke_opacity,
@@ -244,7 +306,6 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
             graph_declaration,
             updating_suspended,
         ) = {
-            let store = store.borrow();
             let node = store.node(id).ok_or_else(|| {
                 AuthoringError::from(noon_core::SemanticSceneOperationError::UnknownNode(id))
             })?;
@@ -299,7 +360,6 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
         }
         if is_family {
             if let Some(layout) = store
-                .borrow()
                 .semantic_table_layout(id)
                 .map_err(AuthoringError::from)?
             {
@@ -311,12 +371,13 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
         edges.push((id, members));
         let has_content = !is_family
             || store
-                .borrow()
                 .node(id)
                 .is_some_and(|node| node.semantic_object_state().is_some());
+        if !has_content {
+            capture_family_style(store, id, family_style.as_mut().expect("family style"))?;
+        }
         let state = if has_content {
-            let mobject = Mobject::from_node(Rc::clone(store), id)?;
-            let mut state = capture(&mobject, graph_dependency_rows.contains(&id))?;
+            let mut state = capture(id, graph_dependency_rows.contains(&id))?;
             if let noon_core::SemanticObjectRole::Inset2DView(view) = state.role() {
                 inset_views.push((id, view));
                 state.set_role(noon_core::SemanticObjectRole::Ordinary);
@@ -339,7 +400,7 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
         if updating_suspended {
             transaction.set_updating_suspended(pending, true);
         }
-        copy_effects(&store.borrow(), id, pending, &mut transaction)?;
+        copy_effects(store, id, pending, transaction)?;
         if let Some(z) = family_z {
             transaction.set_z_index(pending, z);
         }
@@ -357,8 +418,9 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
             family_background_stroke_width,
             family_background_stroke_opacity,
         ) {
-            transaction.set_family_style_with_background_stroke_update(
+            transaction.set_copied_family_style_with_background_stroke_update(
                 pending,
+                id,
                 style,
                 Some(background_stroke_color),
                 Some(background_stroke_width),
@@ -419,17 +481,10 @@ pub(crate) fn prepare_semantic_copy_with_root_membership<E: From<AuthoringError>
             }),
         );
     }
-    Ok((
-        transaction,
-        PendingSemanticCopy {
-            store: Rc::clone(store),
-            source_root: source.node_id(),
-            copied,
-        },
-    ))
+    Ok(copied)
 }
 
-fn graph_dependency_copy_rows<E: From<AuthoringError>>(
+pub(crate) fn graph_dependency_copy_rows<E: From<AuthoringError>>(
     store: &SemanticStore,
     roots: &[SemanticNodeId],
     omitted_root: Option<SemanticNodeId>,
@@ -499,28 +554,227 @@ impl Mobject {
     }
 }
 
+impl Scene {
+    /// Copy a family and its metadata from the Scene's authored or effective state.
+    pub fn copy_family(&mut self, family: &MobjectFamily) -> Result<FamilyCopy, AuthoringError> {
+        self.copy_family_with_references(family, &[])
+    }
+
+    pub fn copy_family_with_references(
+        &mut self,
+        family: &MobjectFamily,
+        references: &[MobjectTarget<'_>],
+    ) -> Result<FamilyCopy, AuthoringError> {
+        self.copy_target(family.into(), references, MobjectFamily::from_node)
+    }
+
+    pub fn copy_mobject(&mut self, object: &Mobject) -> Result<MobjectCopy, AuthoringError> {
+        self.copy_mobject_with_references(object, &[])
+    }
+
+    pub fn copy_mobject_with_references(
+        &mut self,
+        object: &Mobject,
+        references: &[MobjectTarget<'_>],
+    ) -> Result<MobjectCopy, AuthoringError> {
+        self.copy_target(object.into(), references, Mobject::from_node)
+    }
+
+    /// Prepare one detached editing target with the Scene's current state.
+    pub fn target_editor(&mut self, object: &Mobject) -> Result<Mobject, AuthoringError> {
+        self.copy_mobject(object).map(|copy| copy.root().clone())
+    }
+
+    fn copy_target<R>(
+        &mut self,
+        source: MobjectTarget<'_>,
+        references: &[MobjectTarget<'_>],
+        from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
+    ) -> Result<SemanticCopy<R>, AuthoringError> {
+        source.require_store(self.integration_store())?;
+        let Some(execution) = self.running_execution() else {
+            return authored_copy(source, references, from_node);
+        };
+        let store = self.integration_store();
+        crate::effective_capture::require_target_capture(execution, &store.borrow())?;
+        let (transaction, pending) =
+            prepare_running_copy(store, execution, source, references, |_, _| {})?;
+        let result = self.apply_semantic_transaction(transaction)?;
+        pending.resolve(&result, from_node)
+    }
+}
+
+pub(crate) fn prepare_running_copy(
+    store: &Rc<RefCell<SemanticStore>>,
+    execution: &ExecutionSession,
+    source: MobjectTarget<'_>,
+    references: &[MobjectTarget<'_>],
+    mut observe: impl FnMut(&Mobject, &SemanticObjectState),
+) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), AuthoringError> {
+    prepare_semantic_copy(
+        source,
+        references,
+        |mobject, graph_row| {
+            let state = crate::effective_capture::capture_mobject_state_with_graph_dependency(
+                store, execution, mobject, graph_row,
+            )?;
+            observe(mobject, &state);
+            Ok(state)
+        },
+        |store, source, style| {
+            crate::effective_capture::capture_family_style(store, execution, source, style)
+        },
+        |store, source, target, transaction| {
+            crate::effective_capture::stage_effect_copy(
+                store,
+                execution,
+                source,
+                target,
+                transaction,
+            )
+        },
+    )
+}
+
 fn authored_copy<R>(
     source: MobjectTarget<'_>,
     references: &[MobjectTarget<'_>],
     from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
 ) -> Result<SemanticCopy<R>, AuthoringError> {
-    let (transaction, pending) = prepare_semantic_copy(
+    let (transaction, pending) = prepare_authored_copy(source, references)?;
+    let result = transaction.apply(&mut source.integration_store().borrow_mut())?;
+    pending.resolve(&result, from_node)
+}
+
+pub(crate) fn prepare_authored_copy(
+    source: MobjectTarget<'_>,
+    references: &[MobjectTarget<'_>],
+) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), AuthoringError> {
+    prepare_semantic_copy(
         source,
         references,
         |mobject, _| mobject.state(),
+        |_, _, _| Ok(()),
         |store, source, target, transaction| {
             store
                 .copy_effects_into(source, target, transaction)
                 .map_err(AuthoringError::from)
         },
-    )?;
-    let result = transaction.apply(&mut source.integration_store().borrow_mut())?;
-    pending.resolve(&result, from_node)
+    )
 }
 
 #[cfg(test)]
 mod owned_root_fallback_copy_tests {
+    use super::*;
     use crate::{Color, MobjectFamily, Scene};
+
+    #[test]
+    fn prepared_family_copy_captures_effective_scope_opacity_without_crossing_live_barrier() {
+        use crate::{AnimationCompositionRequest, AnimationOptions, RateFunction};
+        for start in [0.512345678901, 1.0] {
+            let mut scene = Scene::new();
+            let leaf = scene.circle(0.4).unwrap();
+            let family = scene.family(&[(&leaf).into()]).unwrap();
+            family.set_object_opacity(start).unwrap();
+            scene.add_many(&[(&family).into()]).unwrap();
+            let mut session = scene.into_execution().unwrap();
+            let target = session.scene_mut().copy_family(&family).unwrap();
+            assert_eq!(target.root().own_style().unwrap().object_opacity, start);
+            session
+                .scene_mut()
+                .set_family_object_opacity(target.root(), 0.25)
+                .unwrap();
+            let segment = session
+                .live()
+                .declare_and_activate_composition(
+                    &AnimationCompositionRequest::FamilyTransformTo {
+                        source: &family,
+                        target_state: target.root(),
+                        options: AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear),
+                    },
+                    AnimationOptions::new(),
+                )
+                .unwrap();
+            session
+                .session_mut()
+                .advance_segment_to(segment, 0.5)
+                .unwrap();
+            let object = session
+                .session()
+                .execution_object_id(family.node_id())
+                .unwrap();
+            let effective = session
+                .session()
+                .frame()
+                .objects
+                .iter()
+                .find(|row| row.id == object)
+                .unwrap()
+                .style
+                .opacity;
+            let before = session.session().publication_context();
+            let count = session.scene().integration_store().borrow().len();
+            assert!(
+                session.scene_mut().copy_family(&family).is_err(),
+                "copy publication retains the ordinary pending-completion barrier"
+            );
+            let (copy, pending) = prepare_semantic_copy::<AuthoringError>(
+                (&family).into(),
+                &[],
+                |object, graph_row| {
+                    crate::effective_capture::capture_mobject_state_with_graph_dependency(
+                        session.scene().integration_store(),
+                        session.session(),
+                        object,
+                        graph_row,
+                    )
+                },
+                |store, source, style| {
+                    crate::effective_capture::capture_family_style(
+                        store,
+                        session.session(),
+                        source,
+                        style,
+                    )
+                },
+                |store, source, target, transaction| {
+                    crate::effective_capture::stage_effect_copy(
+                        store,
+                        session.session(),
+                        source,
+                        target,
+                        transaction,
+                    )
+                },
+            )
+            .unwrap();
+            {
+                let mut store = session.scene().integration_store().borrow_mut();
+                let prepared = copy.prepare(&mut store).unwrap();
+                assert_eq!(
+                    prepared
+                        .family_style(pending.root_token())
+                        .unwrap()
+                        .object_opacity,
+                    f64::from(effective),
+                    "copy preparation captures owned composite opacity"
+                );
+                let copy = prepared
+                    .family_opacity_copy_provenance(pending.root_token())
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(copy.source(), family.node_id());
+                assert_eq!(copy.copied_opacity(), f64::from(effective));
+                assert!(!copy.writes_object_opacity());
+            }
+            assert_eq!(family.own_style().unwrap().object_opacity, start);
+            assert_eq!(leaf.state().unwrap().style.object_opacity, 1.0);
+            assert_eq!(session.session().publication_context(), before);
+            assert_eq!(session.scene().integration_store().borrow().len(), count);
+        }
+    }
 
     fn fallback(family: &MobjectFamily) -> Color {
         let store = family.integration_store().borrow();
@@ -561,9 +815,9 @@ mod owned_root_fallback_copy_tests {
         let style = source.own_object().unwrap().unwrap().state().unwrap().style;
         let authored = source.copy_family().unwrap().root().clone();
         scene.add_many(&[(&source).into()]).unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let live = scene
-            .live(&mut session)
+        let mut session = scene.into_execution().unwrap();
+        let live = session
+            .scene_mut()
             .copy_family(&source)
             .unwrap()
             .root()

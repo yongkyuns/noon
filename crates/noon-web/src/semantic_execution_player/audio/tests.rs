@@ -29,7 +29,7 @@ fn player(action: PlaybackControl, audio: bool, canonical: bool) -> SemanticExec
             .unwrap();
     }
     let navigation = scene.section_navigation();
-    let session = scene.execution_session().unwrap();
+    let session = noon::integration::scene_execution::lower(&scene).unwrap();
     let mut p = if canonical {
         SemanticExecutionPlayer::from_live_session(
             session,
@@ -41,7 +41,7 @@ fn player(action: PlaybackControl, audio: bool, canonical: bool) -> SemanticExec
         .unwrap()
     } else {
         SemanticExecutionPlayer::from_scene_execution(
-            scene.into_execution_with_session(session).unwrap(),
+            noon::integration::scene_execution::consume_with_session(scene, session).unwrap(),
             6.0,
             7,
         )
@@ -117,12 +117,12 @@ fn every_action_is_an_exactly_once_receipt_without_changing_authored_state() {
         ] {
             let mut p = player(action, true, canonical);
             let receipt = present(&mut p, 1);
-            let before = p.session.publication_context();
-            let frame = p.session.frame().clone();
+            let before = p.source.session().publication_context();
+            let frame = p.source.session().frame().clone();
             let resources = p.audio_resource_bundle_bytes().unwrap();
             let sequence = click(&mut p, receipt, 1);
-            assert_eq!(p.session.publication_context(), before);
-            assert_eq!(p.session.frame(), &frame);
+            assert_eq!(p.source.session().publication_context(), before);
+            assert_eq!(p.source.session().frame(), &frame);
             assert_eq!(p.audio_resource_bundle_bytes().unwrap(), resources);
             assert!(!p.is_playing(), "input commits before host dispatch");
             assert_eq!(
@@ -131,7 +131,12 @@ fn every_action_is_an_exactly_once_receipt_without_changing_authored_state() {
             );
             assert_eq!(p.take_scene_control(sequence).unwrap(), None);
             assert!(p.pending_scene_control_json().is_none());
-            assert!(p.session.take_renderer_publication().changes().is_empty());
+            assert!(p
+                .source
+                .session_mut()
+                .take_renderer_publication()
+                .changes()
+                .is_empty());
         }
     }
 }
@@ -161,7 +166,7 @@ fn changed_publication_cannot_resume_from_a_delayed_unlock() {
     let mut p = player(PlaybackControl::TogglePlayback, true, false);
     let receipt = present(&mut p, 1);
     let sequence = click(&mut p, receipt, 1);
-    p.session.advance_to(0.25).unwrap();
+    p.source.session_mut().advance_to(0.25).unwrap();
     assert_eq!(p.take_scene_control(sequence).unwrap(), None);
     assert!(!p.is_playing());
 }
@@ -223,7 +228,7 @@ fn unpresented_seek_retired_dragged_cancelled_and_background_input_has_no_comman
         }
         match mode {
             "seek-retired" => {
-                p.session.seek(0.25).unwrap();
+                p.source.session_mut().seek(0.25).unwrap();
             }
             "drag" => {
                 assert!(input(&mut p, supplied, "move", 1, 480.0));
@@ -247,10 +252,10 @@ fn compatible_collected_click_dispatches_once_against_its_actual_commit_publicat
     for canonical in [false, true] {
         let mut p = player(PlaybackControl::NextSection, true, canonical);
         let receipt = present(&mut p, 1);
-        let collected = p.session.publication_context();
-        p.session.advance_to(0.25).unwrap();
+        let collected = p.source.session().publication_context();
+        p.source.session_mut().advance_to(0.25).unwrap();
         assert!(input(&mut p, Some(receipt), "press", 1, 400.0));
-        p.session.advance_to(0.5).unwrap();
+        p.source.session_mut().advance_to(0.5).unwrap();
         let unpresented = p.drain_delta_json().unwrap().unwrap();
         let unpresented: RetainedFamilyExecutionDeltaEnvelope =
             serde_json::from_str(&unpresented).unwrap();
@@ -258,7 +263,10 @@ fn compatible_collected_click_dispatches_once_against_its_actual_commit_publicat
         assert!(input(&mut p, Some(receipt), "release", 1, 400.0));
         let request = p.pending_scene_control.expect("committed shared click");
         assert_ne!(request.publication, collected);
-        assert_eq!(request.publication, p.session.publication_context());
+        assert_eq!(
+            request.publication,
+            p.source.session().publication_context()
+        );
         assert_eq!(p.time(), 0.5);
         assert!(
             !p.is_playing(),
@@ -279,7 +287,7 @@ fn finite_controls_without_audio_share_sections_and_exact_endpoint() {
     assert!(!p.has_audio_wasm());
     assert_eq!(p.clock.loop_duration(), None);
     for time in [2.0, 4.0, 4.0] {
-        p.seek_section_delta_json(false).unwrap();
+        p.seek_section_delta_json(false, p.time()).unwrap();
         assert_eq!(p.time(), time);
         assert!(!p.is_playing());
     }
@@ -304,13 +312,13 @@ fn scene_controls_reject_a_finite_plan_with_live_drag_ownership() {
     scene
         .on_click_playback(&button, PlaybackControl::Restart)
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    session
-        .set_translation_drag_targets([button.node_id()])
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
+    noon::integration::scene_execution::borrow_uninstalled(&scene, &mut session)
+        .set_translation_drag_targets([&button])
         .unwrap();
     assert!(session.finite_timeline_end_time().is_some());
     let error = SemanticExecutionPlayer::from_scene_execution(
-        scene.into_execution_with_session(session).unwrap(),
+        noon::integration::scene_execution::consume_with_session(scene, session).unwrap(),
         6.0,
         7,
     )

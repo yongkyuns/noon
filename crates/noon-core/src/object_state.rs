@@ -1,7 +1,13 @@
 //! Typed appearance values and numeric validation for object/track state.
 use crate::{Color, GeometryRef, ObjectId, Style, Transform2D, Vec2};
 
+mod backdrop_blur;
+mod bloom;
+mod emission;
+pub use emission::{Emission, EmissionError};
 mod blur;
+pub use backdrop_blur::BackdropBlur;
+pub use bloom::Bloom;
 mod shadow;
 pub use shadow::Shadow;
 pub(crate) mod effect_parameters;
@@ -9,6 +15,9 @@ mod glow;
 mod gradient;
 mod hatch_paint;
 mod linear_gradient;
+mod noise_dissolve;
+mod pixelate;
+pub use pixelate::Pixelate;
 mod noise_paint;
 mod paint_transition;
 mod radial_gradient;
@@ -16,12 +25,13 @@ pub use blur::Blur;
 pub(crate) use effect_parameters::sealed as effect_value_sealed;
 pub use effect_parameters::{
     EffectOffset, EffectParameter, EffectParameterError, EffectRadius, EffectUpdate, EffectValue,
-    Pixels, PreparedEffectUpdate,
+    Pixels, PreparedEffectUpdate, ShaderParameterWrite,
 };
 pub use glow::{Glow, GlowSource};
 pub use gradient::{GradientError, GradientStop};
 pub use hatch_paint::{HatchPaint, HatchPaintError, HatchPaintOptions};
 pub use linear_gradient::LinearGradient;
+pub use noise_dissolve::{DissolveDirection, DissolveStyle, NoiseDissolve, NoiseDissolveError};
 pub use noise_paint::{NoisePaint, NoisePaintError};
 
 /// Checked paint callers supply unit progress and unit colors. Keep stop and
@@ -61,6 +71,7 @@ pub enum ObjectStateField {
     Geometry,
     Transform,
     Style,
+    ViewColorProfile,
 }
 
 impl std::fmt::Display for ObjectStateField {
@@ -69,6 +80,7 @@ impl std::fmt::Display for ObjectStateField {
             Self::Geometry => "geometry",
             Self::Transform => "transform",
             Self::Style => "style",
+            Self::ViewColorProfile => "view color profile",
         })
     }
 }

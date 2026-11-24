@@ -1,0 +1,21 @@
+include Cargo.toml Cargo.lock rust-toolchain.toml pyproject.toml MANIFEST.in
+include README.md LICENSE
+graft licenses
+# The native extension has path dependencies on the shared Rust workspace.
+# Preserve its complete source/resource closure when building from an sdist.
+graft crates
+graft fixtures
+graft tests
+include web/python/*.py
+exclude web/python/test_*.py
+exclude web/python/_test_*.py
+exclude web/python/_typed_*_test_support.py
+exclude web/python/demo_scene.py
+include web/python/examples/first_lesson.py
+include scripts/check-python-package.py scripts/test_python_package.py
+include scripts/ci-python-wheel-linux.sh
+global-exclude __pycache__ *.py[cod] .DS_Store
+global-exclude *.so *.dylib *.dll *.pyd
+prune target
+prune build
+prune dist

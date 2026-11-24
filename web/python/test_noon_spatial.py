@@ -33,7 +33,7 @@ class SpatialFacadeTests(unittest.TestCase):
                 self.assertEqual(values, (2.0, 8, 4, 0.0, 2 * math.pi, 0.0, math.pi))
                 return candidate
         with patch.object(spatial, "_mesh_options", Factory), \
-             patch.object(spatial, "_live_constructor_context", return_value=None), \
+             patch.object(spatial, "_path_authoring_context", return_value=None), \
              patch.object(spatial, "_create_mesh", return_value=handle) as admit:
             mesh = spatial.Mesh3D.sphere(2, resolution=(8, 4), color=noon.RED, point_lit=True)
         self.assertIs(mesh._semantic_handle, handle)
@@ -84,7 +84,7 @@ class SpatialFacadeTests(unittest.TestCase):
             calls.append((u, v)); return (u, v, 0)
         with patch.object(spatial, "_surface_plan", return_value=plan) as prepare, \
              patch.object(spatial, "_bulk", side_effect=tuple), \
-             patch.object(spatial, "_live_constructor_context", return_value=None), \
+             patch.object(spatial, "_path_authoring_context", return_value=None), \
              patch.object(spatial, "_create_mesh", return_value=object()):
             spatial.Mesh3D.parametric(sample, u_range=(2, 3), v_range=(7, 9), resolution=(1, 1))
         prepare.assert_called_once_with(2, 3, 7, 9, 1, 1)
@@ -188,7 +188,7 @@ class SpatialFacadeTests(unittest.TestCase):
         factory.line3D.return_value = candidate
         with patch.object(spatial, "_mesh_options", factory), \
              patch.object(spatial, "_bulk", side_effect=tuple), \
-             patch.object(spatial, "_live_constructor_context", return_value=None), \
+             patch.object(spatial, "_path_authoring_context", return_value=None), \
              patch.object(spatial, "_create_mesh", return_value=object()):
             spatial.Mesh3D.line3d((1, 2, 3), (4, 5, 6), thickness=0.1, segments=8)
         factory.line3D.assert_called_once_with((1, 2, 3), (4, 5, 6), 0.1, 8)
@@ -209,7 +209,7 @@ class SpatialFacadeTests(unittest.TestCase):
                     admit.side_effect = create
                     with patch.object(spatial, "_mesh_options", factory), \
                          patch.object(spatial, "_bulk", side_effect=tuple), \
-                         patch.object(spatial, "_live_constructor_context", return_value=context), \
+                         patch.object(spatial, "_path_authoring_context", return_value=context), \
                          patch.object(spatial, "_create_mesh", admit if not live else Mock()):
                         mesh = getattr(spatial.Mesh3D, kind)(
                             height=2, direction=(-2, 3, -1), axial_offset=offset,
@@ -241,7 +241,7 @@ class SpatialFacadeTests(unittest.TestCase):
                 getattr(factory, kind).return_value = candidate
                 with self.subTest(kind=kind), \
                      patch.object(spatial, "_bulk", side_effect=tuple), \
-                     patch.object(spatial, "_live_constructor_context", return_value=None), \
+                     patch.object(spatial, "_path_authoring_context", return_value=None), \
                      patch.object(spatial, "_create_mesh", return_value=object()):
                     getattr(spatial.Mesh3D, kind)(**{option: False})
                 getattr(factory, kind).assert_called_once_with(
@@ -258,7 +258,7 @@ class SpatialFacadeTests(unittest.TestCase):
             candidate = Candidate()
             factory.cylinder.return_value = candidate
             with patch.object(spatial, "_bulk", side_effect=tuple), \
-                 patch.object(spatial, "_live_constructor_context", return_value=None), \
+                 patch.object(spatial, "_path_authoring_context", return_value=None), \
                  patch.object(spatial, "_create_mesh", return_value=object()):
                 spatial.Mesh3D.cylinder(v_range=(math.pi / 4, math.pi))
             factory.cylinder.assert_called_once_with(
@@ -267,7 +267,7 @@ class SpatialFacadeTests(unittest.TestCase):
             factory.reset_mock()
             factory.cone.return_value = Candidate()
             with patch.object(spatial, "_bulk", side_effect=tuple), \
-                 patch.object(spatial, "_live_constructor_context", return_value=None), \
+                 patch.object(spatial, "_path_authoring_context", return_value=None), \
                  patch.object(spatial, "_create_mesh", return_value=object()):
                 spatial.Mesh3D.cone(v_range=(math.pi / 2, math.pi))
             factory.cone.assert_called_once_with(
@@ -292,27 +292,28 @@ class SpatialFacadeTests(unittest.TestCase):
         with self.assertRaisesRegex(NotImplementedError, "WorldTransformTo"):
             mesh.animate
 
-    def test_world_center_uses_typed_authored_and_effective_center_queries(self):
+    def test_world_center_uses_scene_when_owned_and_handle_when_standalone(self):
         mesh = object.__new__(spatial.Mesh3D)
         handle = Mock()
         handle.worldCenter.return_value = [1.25, -2.5, 3.75]
         context = Mock()
         context.effectiveWorldCenter.return_value = [4.0, 5.0, 6.0]
         with patch.object(spatial, "_handle_for", return_value=handle), \
-             patch.object(spatial, "_live_mutation_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             self.assertEqual(mesh.get_center(), (1.25, -2.5, 3.75))
         handle.worldCenter.assert_called_once_with()
-        with patch.object(spatial, "_handle_for", return_value=handle), \
-             patch.object(spatial, "_live_mutation_context", return_value=context):
+        mesh._canonical_live_target_context = context
+        with patch.object(spatial, "_handle_for", return_value=handle):
             self.assertEqual(mesh.get_center(), (4.0, 5.0, 6.0))
         context.effectiveWorldCenter.assert_called_once_with(handle)
+        context.requiresLiveMutationRouting.assert_not_called()
 
     def test_world_move_to_offsets_from_geometry_center(self):
         mesh = object.__new__(spatial.Mesh3D)
         handle = Mock()
         handle.worldCenter.return_value = [10.0, -3.0, 2.0]
         with patch.object(spatial, "_handle_for", return_value=handle), \
-             patch.object(spatial, "_live_mutation_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             self.assertIs(mesh.move_to((1, 2, 3)), mesh)
         handle.shiftWorld.assert_called_once_with(-9.0, 5.0, 1.0)
 
@@ -323,7 +324,7 @@ class SpatialFacadeTests(unittest.TestCase):
         handle = Mock()
         handle.worldCenter.return_value = [0.0, 0.0, 0.0]
         with patch.object(spatial, "_handle_for", return_value=handle), \
-             patch.object(spatial, "_live_mutation_context", return_value=None):
+             patch.object(spatial, "_path_authoring_context", return_value=None):
             self.assertIs(light.move_to(3 * IN), light)
         handle.shiftWorld.assert_called_once_with(0.0, 0.0, -3.0)
 
@@ -351,7 +352,7 @@ class SpatialFacadeTests(unittest.TestCase):
         mesh = object.__new__(spatial.Mesh3D)
         handle = Mock()
         with patch.object(spatial, "_handle_for", return_value=handle), \
-             patch.object(spatial, "_live_mutation_context", return_value=None), \
+             patch.object(spatial, "_path_authoring_context", return_value=None), \
              patch.object(spatial, "_bulk", side_effect=tuple):
             self.assertIs(mesh.rotate(0.75, axis=(1, 0, 0)), mesh)
         handle.rotateWorld.assert_called_once_with(1.0, 0.0, 0.0, 0.75, ())

@@ -1,13 +1,11 @@
 //! Own-root path alignment shares preparation and publication with leaf edits.
 use crate::{
-    path_editing::{
-        publish_running_path_edits, require_running_path_resource_admission, world_path,
-        PreparedPathEdits,
-    },
+    path_editing::{world_path, PreparedPathEdits},
     AuthoringError, CompositeEntryHandle, ExecutionSession, LayoutAnchor, Mobject, MobjectTarget,
+    Scene,
 };
-use noon_core::{SemanticNodeId, SemanticObjectState, SemanticStore, VectorPath};
-use std::{cell::RefCell, rc::Rc};
+use noon_core::{SemanticObjectState, VectorPath};
+use std::rc::Rc;
 
 fn entry(anchor: &LayoutAnchor) -> Result<CompositeEntryHandle, AuthoringError> {
     CompositeEntryHandle::from_node(Rc::clone(anchor.integration_store()), anchor.resolve()?)
@@ -153,35 +151,35 @@ impl LayoutAnchor {
     }
 }
 
-/// Align root paths through one existing coherent execution/resource publication.
-pub fn publish_root_alignment(
-    store: &Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
-    execution: &mut ExecutionSession,
-    left: &LayoutAnchor,
-    right: &LayoutAnchor,
-) -> Result<(), AuthoringError> {
-    if !Rc::ptr_eq(store, left.integration_store()) || !Rc::ptr_eq(store, right.integration_store())
-    {
-        return Err(AuthoringError::ForeignStore);
+impl Scene {
+    /// Align the addressed roots atomically, preserving both identities and shapes.
+    pub fn align_path_points(
+        &mut self,
+        left: &LayoutAnchor,
+        right: &LayoutAnchor,
+    ) -> Result<(), AuthoringError> {
+        let store = self.integration_store();
+        if !Rc::ptr_eq(store, left.integration_store())
+            || !Rc::ptr_eq(store, right.integration_store())
+        {
+            return Err(AuthoringError::ForeignStore);
+        }
+        let execution = self.running_execution();
+        if let Some(execution) = execution {
+            execution.require_published_store(&store.borrow())?;
+        }
+        let prepared = prepare(left, right, execution, || self.require_resource_admission())?;
+        if prepared.has_changes() {
+            self.publish_path_edits(prepared)?;
+        }
+        Ok(())
     }
-    execution
-        .require_published_store(&store.borrow())
-        .map_err(AuthoringError::from)?;
-    let prepared = prepare(left, right, Some(execution), || {
-        require_running_path_resource_admission(store, root, execution)
-    })?;
-    if !prepared.has_changes() {
-        return Ok(());
-    }
-    publish_running_path_edits(store, root, execution, prepared)?;
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Color, Scene};
+    use crate::Color;
 
     #[test]
     fn empty_family_alignment_keeps_payload_members_resources_and_revision_untouched() {
@@ -251,27 +249,32 @@ mod tests {
         scene
             .add_many(&[(&family).into(), (&other).into()])
             .unwrap();
-        let mut execution = scene.execution_session().unwrap();
-        let revision = scene.revision();
-        scene
-            .live(&mut execution)
+        let empty = scene.family(&[]).unwrap();
+        let mut running = scene.into_execution().unwrap();
+        let revision = running.scene().revision();
+        running
+            .scene_mut()
             .align_path_points(&LayoutAnchor::from(&other), &LayoutAnchor::from(&family))
             .unwrap();
-        assert_eq!(scene.revision(), revision.checked_next().unwrap());
-        assert!(family
-            .effective_own_path_query(&execution)
+        assert_eq!(running.scene().revision(), revision.checked_next().unwrap());
+        assert!(running
+            .scene()
+            .effective_family_own_path_query(&family)
             .unwrap()
             .points()
             .unwrap()
             .iter()
             .all(|p| *p == (3.0, 2.0)));
-        let empty = scene.family(&[]).unwrap(); // Deliberately stale execution.
-        let context = execution.publication_context();
-        assert!(scene
-            .live(&mut execution)
+        // An authored handle edit deliberately invalidates the retained publication.
+        empty
+            .set_draw_enabled(!empty.draw_enabled().unwrap())
+            .unwrap();
+        let context = running.session().publication_context();
+        assert!(running
+            .scene_mut()
             .align_path_points(&LayoutAnchor::from(&empty), &LayoutAnchor::from(&empty),)
             .is_err());
-        assert_eq!(execution.publication_context(), context);
+        assert_eq!(running.session().publication_context(), context);
         assert!(empty.own_object().unwrap().is_none());
     }
 

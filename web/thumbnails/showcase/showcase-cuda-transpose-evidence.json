@@ -3,12 +3,12 @@
   "publication": "rendered-cuda-fidelity-frame",
   "id": "showcase-cuda-transpose",
   "sourcePath": "python/examples/cuda_transpose_banks.py",
-  "sourceSha256": "a23e6193d0609ce1c3f9528e8d8e6d8cf28d97fb443f7deba015c3d1cdd4d73a",
+  "sourceSha256": "5e6d349cd193bc158d335789e290ff5a2b0df16628b745467aa9d65623f80b5e",
   "thumbnail": "thumbnails/showcase/showcase-cuda-transpose.png",
   "image": {
     "width": 1280,
     "height": 720,
-    "pngSha256": "953fc09105f15568affb041ae3170203f6d02a4a1e88fda292cbcfceec34089e"
+    "pngSha256": "f89bee870e3caf80fc50ef5c57eab4e7c622069ac5fbbe265994168f2ae3ab7c"
   },
   "sample": {
     "requestedTime": 64.0499998399999,
@@ -19,9 +19,7 @@
   },
   "capture": {
     "repository": "yongkyuns/noon",
-    "workflowRunId": 39055762669,
-    "artifactId": 12110234543,
-    "testedPrHead": "70f6b0d84c0ac7926ebc1c04affe2d1616622d2d",
+    "script": "scripts/cuda-transpose-qualification.mjs",
     "reportStatus": "passed",
     "authoredDurationSeconds": 76.13999999999993,
     "positiveCases": 3,
@@ -31,8 +29,8 @@
     "rendererBackend": "WebGPU",
     "runtimeBuildIdentity": {
       "schema": 1,
-      "sourceRevision": "d33f97e353c3f36b8cdfaaa44423b7d82e16af25",
-      "buildId": "6de31be0b8a57702c1f20893ff113b4e8a2829ffd3b62045df9f44549686b91a"
+      "sourceRevision": "391fa2b9841ea0c1bd8d5c7985916446dd5a3086",
+      "buildId": "ee20eeca778a6b235ee23a5311e3c1812b1c5c2c79d3047baa1282981ff2cbd4"
     }
   }
 }

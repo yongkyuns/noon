@@ -20,37 +20,37 @@ import noon as _base
 import _manim_compat as _compat
 
 try:
-    from js import noonCreateAuthoringTextHandle as _create_authoring_text_handle
+    from _noon_host import noonCreateAuthoringTextHandle as _create_authoring_text_handle
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_authoring_text_handle = None
 
 try:
-    from js import noonTextColorBatch as _new_text_color_batch
+    from _noon_host import noonTextColorBatch as _new_text_color_batch
 except ImportError:
     _new_text_color_batch = None
 
 try:
-    from js import noonCreateAuthoringMarkupTextHandle as _create_authoring_markup_text_handle
+    from _noon_host import noonCreateAuthoringMarkupTextHandle as _create_authoring_markup_text_handle
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_authoring_markup_text_handle = None
 
 try:
-    from js import noonCreateAuthoringTypstHandle as _create_authoring_typst_handle
+    from _noon_host import noonCreateAuthoringTypstHandle as _create_authoring_typst_handle
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_authoring_typst_handle = None
 
 try:
-    from js import noonNativeFontFace as _create_native_font_face
+    from _noon_host import noonNativeFontFace as _create_native_font_face
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_native_font_face = None
 
 try:
-    from js import noonBundledNativeFontFace as _create_bundled_native_font_face
+    from _noon_host import noonBundledNativeFontFace as _create_bundled_native_font_face
 except ImportError:  # Import remains possible for source-only CPython tests.
     _create_bundled_native_font_face = None
 
 try:
-    from pyodide.ffi import to_js as _to_js
+    from _noon_host import byte_buffer as _to_js
 except ImportError:  # Import remains possible for source-only CPython tests.
     _to_js = None
 
@@ -188,6 +188,8 @@ class TextSourcePart:
 def _copy_text_parts(raw_parts: object) -> tuple[TextSourcePart, ...]:
     """Copy Rust-owned source-part observations before releasing WASM wrappers."""
 
+    if isinstance(raw_parts, list):
+        return tuple(TextSourcePart(*part) for part in raw_parts)
     try:
         parts: list[TextSourcePart] = []
         for index in range(int(raw_parts.length)):
@@ -225,12 +227,10 @@ def _validated_opacity(value: float) -> float:
     return opacity
 
 
-def _live_text_context():
-    # Lazy import keeps standalone Text construction independent of semantic
-    # handle installation while sharing its one authoring-scope ownership test.
-    import _manim_semantic_handles
+def _text_authoring_context():
+    from _manim_semantic_handles import _path_authoring_context
 
-    return _manim_semantic_handles._live_constructor_context("Text")
+    return _path_authoring_context()
 
 
 def _new_typst_handle(source: str, math_mode: bool, font_size: float):
@@ -423,36 +423,6 @@ class _RetainedTextMobject(_base.Mobject):
             )
         return _copy_text_parts(engine_call(handle.textParts))
 
-    def _set_text_source_colors(
-        self, colors: tuple[tuple[TextSourcePart, _base.Color], ...]
-    ) -> _RetainedTextMobject:
-        if _new_text_color_batch is None:
-            raise RuntimeError("Text source colors require Noon's shared Rust authoring runtime")
-        batch = _new_text_color_batch()
-        try:
-            for part, color in colors:
-                value = _as_color(color)
-                engine_call(
-                    batch.pushSource,
-                    part.source_start,
-                    part.source_end,
-                    value.red,
-                    value.green,
-                    value.blue,
-                    value.alpha,
-                )
-        except BaseException:
-            batch.free()
-            raise
-        import _manim_semantic_handles as semantic
-
-        context = semantic._live_mutation_context(self)
-        if context is None:
-            engine_call(self._semantic_handle.setTextSourceColors, batch)
-        else:
-            engine_call(context.liveSetTextSourceColors, self._semantic_handle, batch)
-        return self
-
     @property
     def id(self) -> int:
         if self._object is None:
@@ -548,12 +518,12 @@ class _RetainedTypstMobject(_RetainedTextMobject):
             raise ValueError("Typst source must be a non-empty string")
         font_size = _validated_font_size(font_size)
         color = _as_color(color)
-        live_context = _live_text_context()
-        if live_context is None:
+        context = _text_authoring_context()
+        if context is None:
             handle = _new_typst_handle(source, self._math_mode, font_size)
         else:
             handle = engine_call(
-                live_context.liveCreateManimTypst,
+                context.createManimTypst,
                 source,
                 bool(self._math_mode),
                 font_size,
@@ -563,14 +533,14 @@ class _RetainedTypstMobject(_RetainedTextMobject):
                 float(color.alpha),
                 opacity,
             )
-            self._canonical_live_target_context = live_context
+            self._canonical_live_target_context = context
         self._initialize_text(
             source,
             font_size,
             handle,
             color,
             opacity,
-            presentation_applied=live_context is not None,
+            presentation_applied=context is not None,
         )
 
 
@@ -610,8 +580,8 @@ class Text(_RetainedTextMobject):
             text, font_family, font_size, line_spacing
         )
         color = _as_color(color)
-        live_context = _live_text_context()
-        if live_context is None:
+        context = _text_authoring_context()
+        if context is None:
             handle = _new_native_text_handle(
                 text,
                 font_family,
@@ -623,13 +593,13 @@ class Text(_RetainedTextMobject):
                 font_face=font_face,
             )
         else:
-            live_constructor = (
-                live_context.liveCreateManimMarkupText
+            constructor = (
+                context.createManimMarkupText
                 if self._markup
-                else live_context.liveCreateManimText
+                else context.createManimText
             )
             handle = _invoke_native_text_constructor(
-                live_constructor,
+                constructor,
                 (
                     text,
                     font_family,
@@ -649,16 +619,18 @@ class Text(_RetainedTextMobject):
         self._font = font_family
         self._font_face = font_face
         self._line_spacing = float(line_spacing)
-        if live_context is not None:
-            self._canonical_live_target_context = live_context
+        if context is not None:
+            self._canonical_live_target_context = context
         self._initialize_text(
             str(text),
             float(font_size),
             handle,
             color,
             opacity,
-            presentation_applied=live_context is not None,
+            presentation_applied=context is not None,
         )
+        from _manim_semantic_handles import _record_python_source_site
+        _record_python_source_site(handle)
 
     @property
     def text(self) -> str:

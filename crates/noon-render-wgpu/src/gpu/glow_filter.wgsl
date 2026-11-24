@@ -8,6 +8,7 @@ struct GlowUniform {
     reserved: u32,
     tint: vec4<f32>,
     control: vec4<f32>, // intensity, final scope opacity, reserved, reserved
+    source_bounds: vec4<u32>, // conservative source min.xy / exclusive max.xy
     weights: array<vec4<f32>, 64>, // nonnegative offsets 0..192, vec4 UBO stride
 }
 @group(0) @binding(0) var<uniform> glow: GlowUniform;
@@ -47,8 +48,13 @@ fn kernel_weight(offset: i32) -> f32 {
 @fragment
 fn fs_horizontal(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let point = vec2<i32>(position.xy);
+    if point.y < i32(glow.source_bounds.y) || point.y >= i32(glow.source_bounds.w) {
+        return pack_mask(0.0);
+    }
     var value = 0.0;
-    for (var offset = -i32(glow.radius); offset <= i32(glow.radius); offset += 1) {
+    let first = max(-i32(glow.radius), i32(glow.source_bounds.x) - point.x);
+    let last = min(i32(glow.radius), i32(glow.source_bounds.z) - 1 - point.x);
+    for (var offset = first; offset <= last; offset += 1) {
         let sample_point = point + vec2<i32>(offset, 0);
         if in_capture(sample_point) {
             value += kernel_weight(offset) * textureLoad(input_image, sample_point, 0).a;
@@ -62,7 +68,9 @@ fn fs_horizontal(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
 fn fs_vertical(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let point = vec2<i32>(position.xy);
     var value = 0.0;
-    for (var offset = -i32(glow.radius); offset <= i32(glow.radius); offset += 1) {
+    let first = max(-i32(glow.radius), i32(glow.source_bounds.y) - point.y);
+    let last = min(i32(glow.radius), i32(glow.source_bounds.w) - 1 - point.y);
+    for (var offset = first; offset <= last; offset += 1) {
         let sample_point = point + vec2<i32>(0, offset);
         if in_capture(sample_point) {
             value += kernel_weight(offset) * unpack_mask(textureLoad(input_image, sample_point, 0));
@@ -71,9 +79,7 @@ fn fs_vertical(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32>
     return pack_mask(value);
 }
 
-@fragment
-fn fs_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    let point = vec2<i32>(position.xy);
+fn compose_glow(point: vec2<i32>) -> vec4<f32> {
     let mask = unpack_mask(textureLoad(blurred_mask, point, 0));
     var source = textureLoad(input_image, point, 0);
     // Source preparation owns premultiplication. Zero-alpha RGB cannot leak.
@@ -83,4 +89,33 @@ fn fs_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32
     let halo_alpha = clamp(glow.control.x * glow.tint.a * mask, 0.0, 1.0);
     let halo = vec4<f32>(glow.tint.rgb * halo_alpha, halo_alpha);
     return glow.control.y * (source + (1.0 - source.a) * halo);
+}
+
+@fragment
+fn fs_composite(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    return compose_glow(vec2<i32>(position.xy));
+}
+
+struct Placement {
+    origin: vec2<i32>, size: vec2<u32>, viewport: vec2<u32>, opacity: f32, padding: u32,
+}
+@group(1) @binding(0) var<uniform> placement: Placement;
+
+@vertex
+fn vs_placement(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    let corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0),
+    );
+    let pixel = vec2<f32>(placement.origin) + corners[index] * vec2<f32>(placement.size);
+    let normalized = pixel / vec2<f32>(placement.viewport);
+    return vec4<f32>(2.0 * normalized.x - 1.0, 1.0 - 2.0 * normalized.y, 0.0, 1.0);
+}
+
+@fragment
+fn fs_placement(@builtin(position) pixel: vec4<f32>) -> @location(0) vec4<f32> {
+    let color = compose_glow(vec2<i32>(pixel.xy) - placement.origin);
+    // Preserve the materialized RGBA8 stage's precision before placement opacity.
+    let encoded = round(clamp(color, vec4<f32>(0.0), vec4<f32>(1.0)) * 255.0) / 255.0;
+    return encoded * placement.opacity;
 }

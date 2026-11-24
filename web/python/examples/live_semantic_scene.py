@@ -16,11 +16,11 @@ class LiveSemanticScene(Scene):
         self.add(anchor)
         self.add(toggled)
 
-        live = self.live_execution()
-        live.remove(toggled)
-        live.add(toggled)
-        live.add(appended)
-        live.set_translation(appended, 2.0, -1.0)
+        self.live_execution()
+        self.remove(toggled)
+        self.add(toggled)
+        self.add(appended)
+        self.set_translation(appended, 2.0, -1.0)
 
-        assert live.effective_center(anchor) == (0.0, 0.0)
-        assert live.effective_center(appended) == (2.0, -1.0)
+        assert self.effective_translation(anchor) == (0.0, 0.0)
+        assert self.effective_translation(appended) == (2.0, -1.0)

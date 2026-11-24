@@ -12,9 +12,11 @@ use crate::{
 
 use super::{
     compiled_scene::{lower_semantic_geometry_value, SemanticGeometryValueError},
-    lower_semantic_animation_schedule, lower_semantic_text_glyph_animations,
+    lower_semantic_affine_animation_tracks, lower_semantic_animation_schedule,
+    lower_semantic_text_glyph_animations,
     projection::{lower_semantic_style, lower_semantic_transform, SemanticLoweringError},
-    reject_family_driver_conflicts, SemanticAnimationScheduleError,
+    reject_family_driver_conflicts, EffectiveAnimationProperties,
+    SemanticAffineAnimationTrackError, SemanticAnimationScheduleError,
     SemanticScheduledAnimationPayload, TextGlyphLoweringError,
 };
 
@@ -24,6 +26,7 @@ pub enum SemanticInitialAnimationError {
     Schedule(SemanticAnimationScheduleError),
     Family(TextGlyphLoweringError),
     Animation(SemanticAnimationError),
+    Affine(SemanticAffineAnimationTrackError),
     InvalidRoot {
         animation: SemanticNodeId,
     },
@@ -66,6 +69,7 @@ impl std::fmt::Display for SemanticInitialAnimationError {
             Self::Schedule(error) => error.fmt(formatter),
             Self::Family(error) => error.fmt(formatter),
             Self::Animation(error) => error.fmt(formatter),
+            Self::Affine(error) => error.fmt(formatter),
             Self::InvalidRoot { animation } => write!(
                 formatter,
                 "initial animation root {}:{} must be an option-free parallel composition",
@@ -74,7 +78,7 @@ impl std::fmt::Display for SemanticInitialAnimationError {
             ),
             Self::InvalidLeaf { animation } => write!(
                 formatter,
-                "initial animation child {}:{} must be an exact object track or neutral family composition",
+                "initial animation child {}:{} must be an exact object track, affine/effect target or neutral family composition",
                 animation.slot(),
                 animation.generation()
             ),
@@ -147,6 +151,7 @@ impl std::error::Error for SemanticInitialAnimationError {
             Self::Schedule(error) => Some(error),
             Self::Family(error) => Some(error),
             Self::Animation(error) => Some(error),
+            Self::Affine(error) => Some(error),
             Self::Endpoint { error, .. } => Some(error),
             Self::EndpointValue { error, .. } => Some(error),
             Self::EndpointGeometry { error, .. } => Some(error),
@@ -178,7 +183,8 @@ pub(super) fn install_initial_animation_root(
         return Err(SemanticInitialAnimationError::InvalidRoot { animation: root });
     }
 
-    let mut definitions = Vec::new();
+    let mut definitions: Vec<TrackDefinition> = Vec::new();
+    let mut initial_drivers = std::collections::BTreeMap::new();
     let mut resource_additions = crate::CompiledResources::default();
     let mut family_animations = Vec::new();
     let mut family_drivers = Vec::new();
@@ -202,6 +208,93 @@ pub(super) fn install_initial_animation_root(
                 AnimationOptions::new(),
             )
             .map_err(SemanticInitialAnimationError::Schedule)?;
+            // Targets declared before runtime construction own immutable
+            // ordinary tracks. Reuse activation lowering; live-edited sessions
+            // retain their separate playback admission gate.
+            if matches!(
+                state.intent(),
+                SemanticAnimationIntent::EffectTargetTo { .. }
+                    | SemanticAnimationIntent::TransformTo {
+                        interpolation: noon_core::SemanticTransformInterpolation::Affine,
+                        ..
+                    }
+            ) {
+                for leaf in schedule.leaves() {
+                    let interval =
+                        noon_core::continuous_time_map_interval(leaf.timing, &leaf.time_map)
+                            .map_err(|error| {
+                                SemanticInitialAnimationError::Family(
+                                    TextGlyphLoweringError::InvalidTimeMap(error),
+                                )
+                            })?;
+                    family_drivers.push((
+                        leaf.animation.into(),
+                        leaf.execution_object_id,
+                        interval,
+                        false,
+                    ));
+                }
+                let projection =
+                    lower_semantic_affine_animation_tracks(store, &schedule, |object| {
+                        let row = &compiled.objects()[compiled.object_index(object)? as usize];
+                        Some(EffectiveAnimationProperties {
+                            fill_paint: row.fill_paint.clone(),
+                            effects: row.effects.clone(),
+                            z_index: row.base_z_index,
+                            transform: row.base_transform,
+                            style: row.base_style,
+                            appearance: 1.0,
+                            reveal: 1.0,
+                            world_transform: None,
+                            camera_profile: None,
+                        })
+                    })
+                    .map_err(SemanticInitialAnimationError::Affine)?;
+                for track in projection.tracks() {
+                    // Initial content morphs require their own retained-resource
+                    // admission; do not silently omit that work here.
+                    if track.property == Property::Morph {
+                        return Err(SemanticInitialAnimationError::InvalidLeaf {
+                            animation: track.animation,
+                        });
+                    }
+                    resource_additions
+                        .capture_paint_track_from_arena(
+                            store.raster_image_resources(),
+                            &track.values,
+                        )
+                        .map_err(|error| {
+                            SemanticInitialAnimationError::Compiled(CompilePatchError::Resource(
+                                error,
+                            ))
+                        })?;
+                    let object_index = compiled
+                        .object_index(track.execution_object_id)
+                        .expect("effect activation validated its projected target");
+                    let key = crate::CompiledChannelKey::for_values(
+                        object_index,
+                        track.property,
+                        &track.values,
+                    );
+                    let id = TrackId::new(u64::try_from(definitions.len()).map_err(|_| {
+                        SemanticInitialAnimationError::TooManyTracks(definitions.len())
+                    })?);
+                    if let Some(other) = initial_drivers.insert(key, definitions.len()) {
+                        return Err(SemanticInitialAnimationError::Compiled(
+                            CompilePatchError::OverlappingTrackReconciliation {
+                                track: id,
+                                other: definitions[other].id,
+                            },
+                        ));
+                    }
+                    definitions.push(
+                        track
+                            .with_track_id(id)
+                            .map_err(SemanticInitialAnimationError::Affine)?,
+                    );
+                }
+                continue;
+            }
             if !schedule.scalar_leaves().is_empty() || schedule.leaves().is_empty() {
                 return Err(SemanticInitialAnimationError::InvalidLeaf { animation });
             }
@@ -269,6 +362,33 @@ pub(super) fn install_initial_animation_root(
             timing: *timing,
             time_map: time_map.clone(),
         });
+    }
+
+    // Exact authored tracks may share a root with the new target declarations.
+    // Check those cross-kind conflicts too, independent of child order.
+    for (index, track) in definitions.iter().enumerate() {
+        let object_index = compiled
+            .object_index(track.object)
+            .expect("projected track target");
+        let key =
+            crate::CompiledChannelKey::for_values(object_index, track.property, &track.values);
+        if let Some(&other) = initial_drivers.get(&key).filter(|&&other| other != index) {
+            let other = &definitions[other];
+            // Invalid exact maps retain the existing transaction validation below.
+            if let (Ok((start, end)), Ok((other_start, other_end))) = (
+                noon_core::continuous_time_map_interval(track.timing, &track.time_map),
+                noon_core::continuous_time_map_interval(other.timing, &other.time_map),
+            ) {
+                if start < other_end && other_start < end {
+                    return Err(SemanticInitialAnimationError::Compiled(
+                        CompilePatchError::OverlappingTrackReconciliation {
+                            track: track.id,
+                            other: other.id,
+                        },
+                    ));
+                }
+            }
+        }
     }
 
     reject_family_driver_conflicts(&family_drivers)

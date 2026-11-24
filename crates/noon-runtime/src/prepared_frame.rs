@@ -2,16 +2,16 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use noon_compile::{CompilePatchError, CompiledChannelKey, ExecutionMutationTransaction};
 use noon_core::PublicationContext;
-use noon_core::{ReactiveValue, SignalId};
+use noon_core::{Property, ReactiveValue, SignalId};
 
 use crate::numeric_text::PreparedNumericTextUpdate;
 use crate::{
     apply_effective_property_to_row, apply_group_to_row, apply_reactive_value_to_row,
-    effective_object_conservative_bounds_with_resources, evaluation_property_channels,
-    upper_bound_start, EffectiveBoundsBasis, EffectiveObjectProperties, EffectivePropertyWrite,
-    FrameRowState, FrameState, RuntimeIdentity, SceneInstance, TrackGroup, PROPERTY_ORDER,
+    effective_object_conservative_bounds_with_resources, upper_bound_start, EffectiveBoundsBasis,
+    EffectiveObjectProperties, EffectivePropertyWrite, FrameRowState, FrameState, RuntimeIdentity,
+    SceneInstance, TrackGroup,
 };
-use crate::{EvaluationError, EvaluationStats, TimelineSchedulerStats};
+use crate::{EvaluationError, EvaluationStats, TimelineSchedulerStats, PROPERTY_ORDER};
 
 #[derive(Clone, Debug)]
 struct PreparedFrameRow {
@@ -343,7 +343,7 @@ impl SceneInstance {
 
         let preview = self.timeline_scheduler.preview_advance(time);
         let mut rows = BTreeMap::<usize, FrameRowState>::new();
-        let mut cursor_updates = BTreeMap::<CompiledChannelKey, usize>::new();
+        let mut cursor_updates = Vec::new();
         let mut stats = EvaluationStats::default();
         let mut prior_driver_rows = 0;
 
@@ -354,13 +354,9 @@ impl SceneInstance {
             prior_driver_rows += 1;
             let mut row = FrameRowState::from_frame(&self.frame, object_index);
             let base_content = &self.frame.objects[object_index].content;
-            for channel in PROPERTY_ORDER.into_iter().flat_map(|property| {
-                evaluation_property_channels(&self.compiled, object_index as u32, property)
-            }) {
+            for group in evaluation_object_groups(&self.groups, object_index as u32) {
+                let channel = group.channel;
                 let tracks = self.compiled.channel_tracks(channel);
-                let Some(group) = self.groups.get(&channel) else {
-                    continue;
-                };
                 let cursor = upper_bound_start(tracks, time, &mut stats.binary_search_steps);
                 let prepared_group = TrackGroup {
                     channel,
@@ -378,7 +374,7 @@ impl SceneInstance {
                     object.base_style,
                     &self.path_motion_plans,
                 );
-                cursor_updates.insert(channel, cursor);
+                cursor_updates.push((channel, cursor));
                 stats.groups_evaluated += 1;
             }
             rows.insert(object_index, row);
@@ -389,10 +385,10 @@ impl SceneInstance {
             if self.effective_driver_rows.contains(&object_index) {
                 continue;
             }
-            let tracks = self.compiled.channel_tracks(channel);
             let Some(group) = self.groups.get(&channel) else {
                 continue;
             };
+            let tracks = self.compiled.channel_tracks(channel);
             let mut cursor = group.cursor;
             while cursor < tracks.len() && tracks[cursor].timing.start_time <= time {
                 cursor += 1;
@@ -417,22 +413,27 @@ impl SceneInstance {
                 object.base_style,
                 &self.path_motion_plans,
             );
-            cursor_updates.insert(channel, cursor);
+            cursor_updates.push((channel, cursor));
             stats.groups_evaluated += 1;
         }
 
+        // Reveal is a renderer channel without a host callback write. Stage it
+        // with the frame so an unrelated callback cannot discard the update.
+        let should_defer = |property| defer_reactive_bindings && property != Property::Reveal;
         let mut deferred = HashSet::new();
         for (&object_index, row) in &mut rows {
-            if defer_reactive_bindings {
-                for property in self.reactive_properties_for_object(object_index) {
-                    deferred.insert((object_index, property));
-                }
-            } else {
-                self.reapply_reactive_to_row(
-                    object_index,
-                    row.as_mut(&self.frame.objects[object_index].content),
-                );
-            }
+            self.reapply_reactive_to_row(
+                object_index,
+                row.as_mut(&self.frame.objects[object_index].content),
+                |property| {
+                    if should_defer(property) {
+                        deferred.insert((object_index, property));
+                        false
+                    } else {
+                        true
+                    }
+                },
+            );
         }
 
         let reactive = if reactive_inputs.is_empty() {
@@ -455,7 +456,7 @@ impl SceneInstance {
                 if !self.object_slot_is_live(*object_index) {
                     continue;
                 }
-                if defer_reactive_bindings {
+                if should_defer(*property) {
                     deferred.insert((*object_index, *property));
                     continue;
                 }
@@ -499,7 +500,7 @@ impl SceneInstance {
             time,
             requested_channels: preview.requested().to_vec(),
             requested_family_animations: preview.requested_family_animations().to_vec(),
-            cursor_updates: cursor_updates.into_iter().collect(),
+            cursor_updates,
             rows: rows
                 .into_iter()
                 .map(|(object_index, state)| PreparedFrameRow {
@@ -711,11 +712,6 @@ impl SceneInstance {
             .map(|row| (row.object_index, row.state))
             .collect::<BTreeMap<_, _>>();
         let mut next_drivers = BTreeSet::new();
-        next_drivers.extend(
-            self.numeric_text
-                .object_indices()
-                .filter(|&object_index| self.object_slot_is_live(object_index)),
-        );
         for (object_index, write) in effective.writes {
             let row = final_rows
                 .entry(object_index)
@@ -727,7 +723,8 @@ impl SceneInstance {
             next_drivers.insert(object_index);
         }
 
-        let time_changed = self.frame.time != prepared.time;
+        let previous_time = self.frame.time;
+        let time_changed = previous_time != prepared.time;
         self.frame.time = prepared.time;
         let mut changed = self.update_requested_family_animations(prepared.time);
         for (object_index, row) in final_rows {
@@ -743,8 +740,12 @@ impl SceneInstance {
         }
         self.flush_spatial_anchor_changes();
         self.effective_driver_rows = next_drivers;
-        self.commit_numeric_text_updates(prepared.numeric_text, true);
+        changed |= self.commit_numeric_text_updates(prepared.numeric_text, true);
         self.last_stats = prepared.stats;
+        if time_changed {
+            self.last_stats.time_effect_rows = self.invalidate_time_effects();
+            self.invalidate_video_frame(previous_time);
+        }
         let changed = time_changed || changed || reactive_changed;
         if publish && changed {
             self.publication = self.publication.with_frame_epoch(
@@ -753,6 +754,32 @@ impl SceneInstance {
         }
         Ok(changed)
     }
+}
+
+/// Visit only channels with groups for this row, while preserving the historical
+/// property order and the compiled attachment order used by frame evaluation.
+fn evaluation_object_groups<'a>(
+    groups: &'a BTreeMap<CompiledChannelKey, TrackGroup>,
+    object_index: u32,
+) -> impl Iterator<Item = &'a TrackGroup> + 'a {
+    let start = CompiledChannelKey::new(object_index, PROPERTY_ORDER[0]);
+    let row_groups = groups
+        .range(start..)
+        .take_while(move |(channel, _)| channel.object_index == object_index);
+    let effects = row_groups
+        .clone()
+        .filter(|(channel, _)| channel.property.is_effect())
+        .map(|(_, group)| group);
+    let mut ordinary = [None; PROPERTY_ORDER.len()];
+    for (channel, group) in row_groups {
+        if let Some(index) = PROPERTY_ORDER
+            .iter()
+            .position(|property| *property == channel.property)
+        {
+            ordinary[index] = Some(group);
+        }
+    }
+    ordinary.into_iter().flatten().chain(effects)
 }
 
 #[cfg(test)]
@@ -790,6 +817,51 @@ mod tests {
             time_map: CompositionTimeMap::default(),
         };
         CompiledScene::compile_objects(vec![compiled], &[track]).expect("scene must compile")
+    }
+
+    #[test]
+    fn evaluation_object_groups_skips_missing_channels_preserving_order_and_scope() {
+        let object_index = 5;
+        let expected = [
+            CompiledChannelKey::new(object_index, Property::ZIndex),
+            CompiledChannelKey::new(object_index, Property::CameraProfile),
+            CompiledChannelKey::new(object_index, Property::Position),
+            CompiledChannelKey::new(object_index, Property::Emission),
+            CompiledChannelKey::effect(
+                object_index,
+                Property::EffectRadius,
+                noon_core::SemanticNodeId::new(1, 0),
+            ),
+            CompiledChannelKey::effect(
+                object_index,
+                Property::EffectRadius,
+                noon_core::SemanticNodeId::new(2, 0),
+            ),
+        ];
+        let groups: BTreeMap<_, _> = expected
+            .iter()
+            .copied()
+            .rev()
+            .chain([
+                CompiledChannelKey::new(object_index - 1, Property::Position),
+                CompiledChannelKey::new(object_index + 1, Property::Position),
+            ])
+            .map(|channel| {
+                (
+                    channel,
+                    TrackGroup {
+                        channel,
+                        cursor: 0,
+                        mapped: false,
+                    },
+                )
+            })
+            .collect();
+
+        let actual: Vec<_> = evaluation_object_groups(&groups, object_index)
+            .map(|group| group.channel)
+            .collect();
+        assert_eq!(actual, expected);
     }
 
     #[test]

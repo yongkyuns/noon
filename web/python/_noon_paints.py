@@ -24,8 +24,8 @@ class LinearGradient:
             color = _as_color("gradient stop color", color)
             packed.extend((_number(position, "gradient stop position"),
                            color.red, color.green, color.blue, color.alpha))
-        from js import noonLinearGradient
-        from pyodide.ffi import to_js
+        from _noon_host import noonLinearGradient
+        from _noon_host import array_value as to_js
         self._definition = engine_call(noonLinearGradient, to_js(coordinates(start)),
                                        to_js(coordinates(end)), to_js(packed))
 
@@ -54,8 +54,8 @@ class HatchPaint:
     def __init__(self, color, background=None, *, spacing=0.25, width=0.04,
                  angle=pi / 4, phase=(0.0, 0.0), cross=False):
         from _manim_compat import _as_color
-        from js import noonHatchPaint
-        from pyodide.ffi import to_js
+        from _noon_host import noonHatchPaint
+        from _noon_host import array_value as to_js
         if not isinstance(cross, bool):
             raise TypeError("hatch cross must be a bool")
         colors = []
@@ -92,8 +92,8 @@ class NoisePaint:
 
     def __init__(self, low, high, *, seed=0, frequency=(8.0, 8.0), phase=(0.0, 0.0)):
         from _manim_compat import _as_color
-        from js import noonNoisePaint
-        from pyodide.ffi import to_js
+        from _noon_host import noonNoisePaint
+        from _noon_host import array_value as to_js
         colors = []
         for value in (low, high):
             c = _as_color("noise color", value)
@@ -126,8 +126,8 @@ class RadialGradient:
             color = _as_color("gradient stop color", color)
             packed.extend((_number(position, "gradient stop position"),
                            color.red, color.green, color.blue, color.alpha))
-        from js import noonRadialGradient
-        from pyodide.ffi import to_js
+        from _noon_host import noonRadialGradient
+        from _noon_host import array_value as to_js
         self._definition = engine_call(noonRadialGradient, to_js(coordinates(center)),
                                        to_js(coordinates(radii)), to_js(packed))
 
@@ -140,7 +140,7 @@ class RadialGradient:
 
 
 def set_fill(value, paint, opacity):
-    from _manim_semantic_handles import _handle_for, _is_shared_family, _live_mutation_context
+    from _manim_semantic_handles import _handle_for, _is_shared_family, _path_authoring_context
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("paint callback edits require shared staged paint publication")
@@ -150,31 +150,21 @@ def set_fill(value, paint, opacity):
     if handle is None:
         raise RuntimeError("paint fills require a shared Rust authoring handle")
     opacity = None if opacity is None else _number(opacity, "fill opacity")
-    context = _live_mutation_context(value)
     if isinstance(paint, ImagePaint):
-        if context is None:
-            engine_call(handle.setFillImage, paint._definition, opacity)
-        else:
-            engine_call(context.liveSetFillImage, handle, paint._definition, opacity)
+        method = "setFillImage"
     elif isinstance(paint, HatchPaint):
-        if context is None:
-            engine_call(handle.setFillHatch, paint._definition, opacity)
-        else:
-            engine_call(context.liveSetFillHatch, handle, paint._definition, opacity)
+        method = "setFillHatch"
     elif isinstance(paint, NoisePaint):
-        if context is None:
-            engine_call(handle.setFillNoise, paint._definition, opacity)
-        else:
-            engine_call(context.liveSetFillNoise, handle, paint._definition, opacity)
+        method = "setFillNoise"
     elif isinstance(paint, RadialGradient):
-        if context is None:
-            engine_call(handle.setFillRadialGradient, paint._definition, opacity)
-        else:
-            engine_call(context.liveSetFillRadialGradient, handle, paint._definition, opacity)
-    elif context is None:
-        engine_call(handle.setFillGradient, paint._definition, opacity)
+        method = "setFillRadialGradient"
     else:
-        engine_call(context.liveSetFillGradient, handle, paint._definition, opacity)
+        method = "setFillGradient"
+    context = _path_authoring_context(value)
+    if context is None:
+        engine_call(getattr(handle, method), paint._definition, opacity)
+    else:
+        engine_call(getattr(context, method), handle, paint._definition, opacity)
     return value
 
 
@@ -188,8 +178,8 @@ class ImageMapping:
 
     def __init__(self, *, fit="cover", alignment=(0.5, 0.5), address="clamp",
                  translation=(0.0, 0.0), scale=(1.0, 1.0), rotation=0.0):
-        from js import noonImageMapping
-        from pyodide.ffi import to_js
+        from _noon_host import noonImageMapping
+        from _noon_host import array_value as to_js
         pair = lambda value: to_js([_number(v, "image mapping coordinate") for v in value])
         self._definition = engine_call(noonImageMapping, str(fit), pair(alignment), str(address),
                                        pair(translation), pair(scale), _number(rotation, "image rotation"))
@@ -212,7 +202,7 @@ class ImagePaint:
     __slots__ = ("_definition",)
 
     def __init__(self, source, *, mapping=None, sampling=None):
-        from js import noonImagePaintOptions
+        from _noon_host import noonImagePaintOptions
         from _manim_image import ImageMobject, _sampling, _encoded_bytes, _rgba8_array, _js_bytes
         from _manim_semantic_handles import _handle_for
         from pathlib import Path
@@ -252,7 +242,7 @@ class ImagePaint:
 
 
 def set_image_mapping(value, mapping, opacity):
-    from _manim_semantic_handles import _handle_for, _is_shared_family, _live_mutation_context
+    from _manim_semantic_handles import _handle_for, _is_shared_family, _path_authoring_context
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if not isinstance(mapping, ImageMapping):
         raise TypeError("image mapping must be an ImageMapping")
@@ -262,9 +252,9 @@ def set_image_mapping(value, mapping, opacity):
     if handle is None:
         raise RuntimeError("image mapping edits require a shared Rust authoring handle")
     opacity = None if opacity is None else _number(opacity, "fill opacity")
-    context = _live_mutation_context(value)
+    context = _path_authoring_context(value)
     if context is None:
         engine_call(handle.setFillImageMapping, mapping._definition, opacity)
     else:
-        engine_call(context.liveSetFillImageMapping, handle, mapping._definition, opacity)
+        engine_call(context.setFillImageMapping, handle, mapping._definition, opacity)
     return value

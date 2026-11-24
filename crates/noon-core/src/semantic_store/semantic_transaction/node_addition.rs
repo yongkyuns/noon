@@ -74,8 +74,11 @@ impl SemanticPendingPathObject {
             SemanticObjectProperty::FillOpacity => self.style.fill_opacity.into(),
             SemanticObjectProperty::StrokeOpacity => self.style.stroke_opacity.into(),
             SemanticObjectProperty::StrokeWidth => self.style.stroke_width.into(),
+            SemanticObjectProperty::Emission => self.style.emission.strength().into(),
             SemanticObjectProperty::ObjectOpacity => self.style.object_opacity.into(),
-            SemanticObjectProperty::Presence => unreachable!("presence is not an object value"),
+            SemanticObjectProperty::Presence | SemanticObjectProperty::Reveal => {
+                unreachable!("binding-only properties have no authored value")
+            }
         }
     }
 
@@ -102,6 +105,10 @@ impl SemanticPendingPathObject {
             }
             (SemanticObjectProperty::StrokeWidth, SemanticSignalValue::Scalar(value)) => {
                 self.style.stroke_width = value;
+            }
+            (SemanticObjectProperty::Emission, SemanticSignalValue::Scalar(value)) => {
+                self.style.emission =
+                    crate::Emission::new(value).expect("preflighted material strength");
             }
             (SemanticObjectProperty::ObjectOpacity, SemanticSignalValue::Scalar(value)) => {
                 self.style.object_opacity = value;
@@ -143,7 +150,7 @@ pub enum SemanticNodeCreation {
     /// Non-renderable attachment; owner must precede it when both are pending.
     Effect {
         owner: super::SemanticTransactionNodeRef,
-        name: std::sync::Arc<str>,
+        name: crate::SemanticEffectName,
         definition: crate::EffectDefinition,
         copy_provenance: Option<crate::SemanticEffectCopyProvenance>,
     },

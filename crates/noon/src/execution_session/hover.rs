@@ -43,12 +43,13 @@ pub struct PointerHoverTransition {
 }
 
 impl ExecutionSession {
-    /// Last precisely observed hover target. Retired or detached identities are
-    /// never exposed even when no subsequent frame has been presented yet.
+    /// Last precisely observed hover target. Membership follows the selected
+    /// execution revision, including sealed history. An identity retired from
+    /// that revision is never exposed before another frame is presented.
     pub fn hovered_pointer_target(&self) -> Option<SemanticNodeId> {
         self.pointer_selection.hover.surface?;
         let target = self.pointer_selection.hover.target?;
-        (self.pointer_selection.enabled() && self.semantic_object_is_reachable(target))
+        (self.pointer_selection.enabled() && self.interaction_execution_object_id(target).is_some())
             .then_some(target)
     }
 

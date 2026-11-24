@@ -211,7 +211,7 @@ impl SemanticStore {
                     .expect("source attachment is live");
                 (
                     attachment,
-                    std::sync::Arc::<str>::from(effect.name()),
+                    effect.attachment_name().clone(),
                     effect.definition(),
                 )
             })
@@ -221,7 +221,7 @@ impl SemanticStore {
             self.insert_semantic_effect(
                 copy,
                 name,
-                definition,
+                definition.clone(),
                 Some(crate::SemanticEffectCopyProvenance::new(
                     attachment, definition,
                 )),

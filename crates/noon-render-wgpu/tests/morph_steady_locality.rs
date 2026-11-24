@@ -93,13 +93,17 @@ fn six_hundred_object_steady_morph_updates_instances_only() {
 
     instance.seek(0.10).unwrap();
     let activation_changes = instance.take_frame_changes();
-    let activation = preparer.prepare_incremental(instance.frame(), &activation_changes);
+    let activation = preparer
+        .prepare_incremental(instance.frame(), &activation_changes)
+        .unwrap();
     assert!(activation.stats.geometry_cache_misses > 0);
     assert!(activation.path_geometry_dirty);
 
     instance.advance_to(0.20).unwrap();
     let changes = instance.take_frame_changes();
-    let steady = preparer.prepare_incremental(instance.frame(), &changes);
+    let steady = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
 
     assert_eq!(steady.stats.full_rebuilds, 0);
     assert_eq!(steady.stats.geometry_cache_misses, 0);
@@ -116,7 +120,9 @@ fn six_hundred_object_steady_morph_updates_instances_only() {
 
     instance.advance_to(0.30).unwrap();
     let changes = instance.take_frame_changes();
-    let steady_again = preparer.prepare_incremental(instance.frame(), &changes);
+    let steady_again = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
 
     assert_eq!(steady_again.stats.full_rebuilds, 0);
     assert_eq!(steady_again.stats.geometry_cache_misses, 0);
@@ -192,19 +198,27 @@ fn six_hundred_object_second_morph_steady_state_remains_instance_only() {
 
     instance.seek(0.10).unwrap();
     let changes = instance.take_frame_changes();
-    let _first_activation = preparer.prepare_incremental(instance.frame(), &changes);
+    let _first_activation = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
 
     instance.advance_to(0.20).unwrap();
     let changes = instance.take_frame_changes();
-    let _first_steady = preparer.prepare_incremental(instance.frame(), &changes);
+    let _first_steady = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
 
     instance.advance_to(1.10).unwrap();
     let changes = instance.take_frame_changes();
-    let _second_activation = preparer.prepare_incremental(instance.frame(), &changes);
+    let _second_activation = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
 
     instance.advance_to(1.20).unwrap();
     let changes = instance.take_frame_changes();
-    let steady = preparer.prepare_incremental(instance.frame(), &changes);
+    let steady = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
 
     assert_eq!(steady.stats.full_rebuilds, 0);
     assert_eq!(steady.stats.geometry_cache_misses, 0);
@@ -221,7 +235,9 @@ fn six_hundred_object_second_morph_steady_state_remains_instance_only() {
 
     instance.advance_to(1.30).unwrap();
     let changes = instance.take_frame_changes();
-    let steady_again = preparer.prepare_incremental(instance.frame(), &changes);
+    let steady_again = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
 
     assert_eq!(steady_again.stats.full_rebuilds, 0);
     assert_eq!(steady_again.stats.geometry_cache_misses, 0);

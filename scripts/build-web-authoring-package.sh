@@ -26,7 +26,7 @@ if [[ "${NOON_WASM_SKIP_OPT:-0}" == "1" ]]; then
 fi
 # wasm-pack forwards Cargo feature flags and everything after them to cargo,
 # so keep wasm-pack-owned flags (such as --no-opt) before this tail.
-wasm_pack_args+=(--no-default-features)
+wasm_pack_args+=(--no-default-features --features wgsl-effects)
 
 wasm-pack "${wasm_pack_args[@]}"
 
@@ -41,7 +41,7 @@ js_file="${out_dir}/noon_web.js"
   exit 1
 }
 
-for symbol in WasmAuthoringStore; do
+for symbol in WasmAuthoringStore WasmShaderSchema WasmShaderProgram WasmShaderParameter WasmShaderParameterKey; do
   if ! grep -q "$symbol" "$js_file"; then
     echo "authoring-only package is missing required export: $symbol" >&2
     exit 1

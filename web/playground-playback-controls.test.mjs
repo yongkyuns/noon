@@ -5,7 +5,7 @@ const initial = dom();
 globalThis.HTMLElement = Element;
 globalThis.document = initial.document;
 const { PlaygroundPlaybackControls } = await import("./playground-playback-controls.js");
-function fixture(withDragUndo = false) {
+function fixture(withDragUndo = false, durationSeconds = 2) {
   const { document, preview } = dom();
   globalThis.document = document;
   const calls = [];
@@ -15,8 +15,15 @@ function fixture(withDragUndo = false) {
   }
   if (withDragUndo) player.undoTranslationDrag = async () => ({ time: 0, playing: false, canUndoTranslationDrag: false });
   const errors = [];
-  const controls = new PlaygroundPlaybackControls(player, preview, { durationSeconds: 2, onError: (error) => errors.push(error) });
+  const controls = new PlaygroundPlaybackControls(player, preview, { durationSeconds, onError: (error) => errors.push(error) });
   return { controls, player, preview, calls, errors, range: preview.querySelector(".playback-scrubber"), output: preview.querySelector(".playback-time") };
+}
+
+function key(controls, code, options = {}, target = controls.element, type = "keydown") {
+  const event = Object.assign(new Event(type, { cancelable: true }), { code, ...options });
+  Object.defineProperty(event, "target", { value: target });
+  controls.element.dispatchEvent(event);
+  return event;
 }
 
 test("source-owned progress moves despite busy/paused flags, without permitting playback commands", async () => {
@@ -25,7 +32,7 @@ test("source-owned progress moves despite busy/paused flags, without permitting 
   f.controls.setBusy(true);
   f.controls.observe({ time: 0.4, playing: false, durationSeconds: 2 });
   assert.equal(f.controls.element.dataset.elapsedSeconds, "0.4");
-  assert.equal(f.range.hidden, true);
+  assert.equal(f.range.hidden, false);
   assert.equal(f.output.value, "0.40 / — s");
   f.controls.observe({ time: 2.5, playing: true, durationSeconds: 4 });
   assert.equal(f.controls.element.dataset.elapsedSeconds, "2.5");
@@ -45,6 +52,31 @@ test("completed replay observes exact time and playing state without an interpol
   f.controls.observe({ time: 2, playing: false });
   assert.equal(f.output.value, "2.00 / 2.00 s");
   assert.equal(f.preview.querySelector(".playback-toggle").textContent, "Play");
+});
+
+test("an observed source can pause and resume without enabling replay or inventing a duration", async () => {
+  const f = fixture();
+  const state = { time: 0.5, playing: true, sourcePlaybackControllable: true };
+  f.player.pause = async () => { f.calls.push("pause"); return { ...state, playing: false }; };
+  f.player.resume = async () => { f.calls.push("resume"); return state; };
+  f.controls.setControllable(false);
+  f.controls.observe(state);
+  f.controls.setUnavailable("source execution is not retained for replay");
+  const button = f.preview.querySelector(".playback-toggle");
+  assert.equal(button.disabled, false);
+  assert.equal(f.range.hidden, false);
+  assert.equal(f.preview.querySelector(".playback-restart").disabled, true);
+  assert.equal(f.output.value, "0.50 / — s");
+  button.dispatchEvent(new Event("click")); await flush();
+  assert.deepEqual(f.calls, ["pause"]);
+  assert.equal(button.getAttribute("aria-label"), "Play animation");
+  button.dispatchEvent(new Event("click")); await flush();
+  assert.deepEqual(f.calls, ["pause", "resume"]);
+  f.controls.observe({ ...state, playing: false, sourcePlaybackControllable: false });
+  assert.equal(button.disabled, true);
+  button.dispatchEvent(new Event("click")); await flush();
+  assert.deepEqual(f.calls, ["pause", "resume"]);
+  assert.deepEqual(f.errors, []);
 });
 
 test("Undo drag is a separate visible command enabled only by the semantic receipt", async () => {
@@ -87,6 +119,23 @@ test("retired command completion cannot mutate a replacement's controls or error
   assert.equal(replacement.element.dataset.busy, "false");
   assert.equal(f.preview.querySelector(".playback-scrubber").value, "0.75");
   assert.deepEqual(f.errors, []);
+});
+
+test("the placeholder scrubber survives controls teardown and reinitialization", async () => {
+  const f = fixture();
+  const root = f.controls.element;
+  const scrubber = f.range;
+  assert.equal(f.preview.querySelector(".playback-live-status").textContent, "Loading playback state");
+  f.controls.destroy();
+  assert.equal(f.preview.querySelector(".playback-scrubber"), scrubber);
+  const replacement = new PlaygroundPlaybackControls(f.player, f.preview, { durationSeconds: 3 });
+  assert.equal(replacement.element, root);
+  assert.equal(f.preview.querySelector(".playback-scrubber"), scrubber);
+  scrubber.value = "1.25";
+  scrubber.dispatchEvent(new Event("input"));
+  await flush();
+  assert.equal(replacement.element.dataset.elapsedSeconds, "1.25");
+  assert.deepEqual(f.calls, ["seek"]);
 });
 
 test("source handoff suppresses an in-flight playback rejection and permits the next seek", async () => {
@@ -146,7 +195,7 @@ test("first-pass segment changes never expose a misleading percentage, and compl
     f.controls.observe({ ...state, playing: false });
     assert.equal(f.controls.element.dataset.elapsedSeconds, String(state.time));
     assert.equal(f.controls.durationSeconds, null);
-    assert.equal(f.range.hidden, true);
+    assert.equal(f.range.hidden, false);
     assert.equal(f.preview.querySelector(".playback-live-status").hidden, false);
   }
   f.controls.setDuration(5.7);
@@ -200,4 +249,265 @@ test("unavailable capability does not hide an outstanding seek", async () => {
   f.controls.setControllable(true);
   assert.equal(f.range.disabled, false);
   assert.equal(f.controls.element.title, "");
+});
+
+
+test("silent lessons expose annotated cues and delegate navigation without resolving targets in the UI", async () => {
+  const f = fixture();
+  const sections = [
+    { index: 0, name: "Start", time: 0 },
+    { index: 1, name: "Same name", time: 0.5 },
+    { index: 2, name: "Same name", time: 0.5000000001 },
+  ];
+  f.controls.sync({ time: 0, playing: false, sections, sectionState: { current: 0, previous: null, next: 1 } });
+  assert.equal(f.preview.querySelector(".playback-audio-controls").hidden, true);
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, false);
+  const menu = f.preview.querySelector(".playback-section-names");
+  assert.deepEqual(menu.children.slice(1).map(option => option.value), ["0", "1", "2"]);
+  assert.match(menu.children[2].textContent, /2\. Same name/);
+  const markerGroup = f.preview.querySelector(".playback-section-markers");
+  const markers = markerGroup.children;
+  assert.equal(markers.length, 3);
+  assert.notEqual(markers[1].style.left, markers[2].style.left);
+  assert.equal(f.preview.querySelector(".playback-previous-section").disabled, true);
+  assert.equal(menu.value, "0");
+  f.controls.sync({ time: 0.5, playing: false, sectionState: { current: 1, previous: 0, next: 2 } });
+  const directions = [];
+  f.player.seekSection = async previous => {
+    directions.push(previous);
+    return { time: 0.5, playing: false };
+  };
+  for (const direction of ["next", "previous"]) {
+    f.preview.querySelector(`.playback-${direction}-section`).dispatchEvent(new Event("click"));
+    await flush();
+  }
+  assert.deepEqual(directions, [false, true]);
+  let selected;
+  f.player.seek = async time => { selected = time; return { time, playing: true }; };
+  menu.value = "2";
+  menu.dispatchEvent(new Event("change"));
+  await flush();
+  assert.equal(selected, sections[2].time, "explicit cue jumps preserve the exact Rust timestamp");
+  assert.equal(markers[2].tagName, "BUTTON");
+  assert.match(markers[2].getAttribute("aria-label"), /Jump to 3\. Same name/);
+  markers[1].click();
+  await flush();
+  assert.equal(selected, sections[1].time, "marker jumps use the cue timestamp, not its visual percentage");
+  assert.equal(f.controls.element.dataset.playing, "true");
+  f.controls.setBusy(true);
+  assert.equal(markerGroup.disabled, true);
+  markers[2].click();
+  await flush();
+  assert.equal(selected, sections[1].time, "a busy marker cannot seek");
+  f.controls.setBusy(false);
+  assert.equal(markerGroup.disabled, false);
+  assert.equal(f.preview.querySelector(".playback-section-markers").children, markers,
+    "ordinary time observations do not rebuild cue annotations");
+  f.controls.setControllable(false);
+  assert.equal(menu.disabled, true);
+  assert.equal(markerGroup.disabled, true);
+  selected = null;
+  markers[2].click();
+  menu.value = "1";
+  menu.dispatchEvent(new Event("change"));
+  await flush();
+  assert.equal(selected, null);
+  f.controls.sync({ time: 0, playing: false, sections: [] });
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, true);
+  assert.equal(markerGroup.children.length, 0);
+  f.controls.setControllable(true);
+  f.controls.destroy();
+  markers[1].click();
+  await flush();
+  assert.equal(selected, null, "retired markers cannot issue commands");
+});
+
+test("prepared playback seeks with Rust cue state and clears it when a new profile omits metadata", async () => {
+  const f = fixture();
+  const sections = [
+    { index: 0, name: "Start", time: 0 },
+    { index: 1, name: "Interior", time: 0.5 },
+  ];
+  f.controls.sync({
+    preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false,
+    sections, sectionState: { current: 0, previous: null, next: 1 },
+  });
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, false);
+  assert.deepEqual(f.preview.querySelector(".playback-section-names").children
+    .slice(1).map(option => option.value), ["0", "1"]);
+
+  f.player.seek = async time => ({
+    preparedPlayback: true, replaySupported: true, time, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false,
+    sectionState: { current: 1, previous: 0, next: null },
+    presentationReceipt: { session: 1, sequence: 1, time },
+  });
+  f.range.value = "0.5";
+  f.range.dispatchEvent(new Event("input"));
+  await flush();
+  assert.equal(f.preview.querySelector(".playback-section-names").value, "1");
+  assert.equal(f.preview.querySelector(".playback-previous-section").disabled, false);
+  assert.equal(f.preview.querySelector(".playback-next-section").disabled, true);
+
+  f.controls.sync({
+    preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false,
+  });
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, true,
+    "a prepared observation with no Rust cue metadata clears previous cues");
+
+  f.controls.sync({ time: 0.25, playing: false, sourceExecution: "observed" });
+  assert.equal(f.preview.querySelector(".playback-section-controls").hidden, true,
+    "a profile switch cannot retain prepared cue metadata");
+  f.controls.destroy();
+});
+
+test("prepared playback retains Rust audio capability and device controls without a finite endpoint", () => {
+  const f = fixture();
+  const base = { preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false };
+  f.controls.sync({ ...base, hasAudio: true, audioReady: true,
+    audioMuted: true, audioVolume: 0.35 });
+  const audio = f.preview.querySelector(".playback-audio-controls");
+  assert.equal(audio.hidden, false);
+  assert.equal(f.preview.querySelector(".playback-mute").textContent, "Unmute");
+  assert.equal(audio.children[1].children[0].value, "0.35");
+  assert.equal(f.preview.querySelector(".playback-toggle").textContent, "Play",
+    "a Rust reader with an open end does not use finite-audio endpoint logic");
+
+  f.controls.sync({ ...base, hasAudio: true, audioReady: false,
+    audioMuted: false, audioVolume: 0.7 });
+  assert.equal(audio.hidden, false);
+  assert.equal(f.preview.querySelector(".playback-mute").textContent, "Mute");
+  assert.equal(audio.children[1].children[0].value, "0.7");
+  assert.equal(f.preview.querySelector(".playback-toggle").textContent, "Play with sound");
+
+  f.controls.sync({ ...base, hasAudio: false });
+  assert.equal(audio.hidden, true, "explicit absence clears prior audio capability");
+  f.controls.destroy();
+});
+
+test("prepared observation refreshes audio capability while a seek is pending", () => {
+  const f = fixture();
+  const base = { preparedPlayback: true, replaySupported: true, time: 0.25, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false };
+  f.controls.sync({ ...base, hasAudio: false });
+  const audio = f.preview.querySelector(".playback-audio-controls");
+  assert.equal(audio.hidden, true);
+  f.player.seek = () => new Promise(() => {});
+  f.range.value = "0.5";
+  f.range.dispatchEvent(new Event("input"));
+
+  f.controls.observe({ ...base, hasAudio: true, audioReady: false,
+    audioMuted: true, audioVolume: 0.4 });
+  assert.equal(audio.hidden, false, "a replacement prepared profile exposes its Rust audio capability");
+  assert.equal(f.preview.querySelector(".playback-mute").textContent, "Unmute");
+  assert.equal(audio.children[1].children[0].value, "0.4");
+  f.controls.destroy();
+});
+
+test("prepared playback controls can start with an unknown duration", () => {
+  const f = fixture(false, null);
+  f.controls.sync({
+    preparedPlayback: true, replaySupported: true, time: 0, playing: false,
+    durationSeconds: null, preparedFrontier: 1,
+    seekRange: { start: 0, end: 0.9999999999999999 }, buffering: false,
+    hasAudio: true, audioReady: true,
+  });
+  assert.equal(f.controls.durationSeconds, null);
+  assert.equal(f.range.max, "0.9999999999999999");
+  assert.equal(f.controls.element.dataset.durationKnown, "false");
+  f.controls.destroy();
+});
+
+test("focused panel shortcuts reuse admitted buttons and leave native controls alone", async () => {
+  const f = fixture();
+  const root = f.controls.element;
+  const sections = [{ index: 0, name: "Start", time: 0 }, { index: 1, name: "Detail", time: 0.5 }];
+  const state = (time, playing = false) => ({ time, playing, sections,
+    sectionState: { current: time ? 1 : 0, previous: time ? 0 : null, next: time ? null : 1 } });
+  f.controls.sync(state(0));
+  f.player.resume = async () => { f.calls.push("resume"); return state(0, true); };
+  f.player.seekSection = async previous => { f.calls.push(previous ? "previous" : "next"); return state(previous ? 0 : 0.5); };
+  const press = (...args) => key(f.controls, ...args);
+  assert.equal(root.getAttribute("tabindex"), "0");
+  assert.match(root.getAttribute("aria-keyshortcuts"), /ArrowRight/);
+  assert.equal(press("Space").defaultPrevented, true); await flush();
+  press("Space", { repeat: true }); press("Space", {}, root, "keyup"); await flush();
+  assert.deepEqual(f.calls, ["resume"]);
+  press("Space"); await flush();
+  press("PageDown"); await flush();
+  const atEnd = f.calls.length;
+  press("PageDown"); await flush();
+  assert.equal(f.calls.length, atEnd, "the disabled boundary button admits no shortcut");
+  press("PageUp"); await flush();
+  press("Home"); await flush();
+  assert.deepEqual(f.calls, ["resume", "pause", "next", "previous", "restartPlayback"]);
+  for (const options of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }, { isComposing: true }]) {
+    assert.equal(press("Space", options).defaultPrevented, false);
+  }
+  assert.equal(press("ArrowRight", {}, f.range).defaultPrevented, false);
+  assert.equal(press("KeyA").defaultPrevented, false);
+  f.controls.setBusy(true); press("Space"); await flush();
+  f.controls.setBusy(false); f.controls.setControllable(false); press("Home"); await flush();
+  assert.equal(f.calls.length, 5, "busy and source-owned playback retain their command gates");
+  f.controls.destroy();
+  assert.equal(press("Space").defaultPrevented, false);
+  assert.equal(root.getAttribute("tabindex"), null);
+  assert.equal(root.getAttribute("aria-keyshortcuts"), null);
+});
+
+test("panel arrows seek five seconds within the playback range without requiring sections", async () => {
+  const f = fixture(false, 12);
+  let playing = true;
+  f.player.seek = async time => { f.calls.push(time); return { time, playing }; };
+  f.controls.sync({ time: 3, playing });
+  key(f.controls, "ArrowRight"); await flush();
+  assert.equal(f.controls.element.dataset.playing, "true");
+  key(f.controls, "ArrowRight"); await flush();
+  playing = false;
+  f.controls.sync({ time: 12, playing });
+  key(f.controls, "ArrowLeft"); await flush();
+  key(f.controls, "ArrowLeft"); await flush();
+  key(f.controls, "ArrowLeft"); await flush();
+  assert.deepEqual(f.calls, [8, 12, 7, 2, 0]);
+  assert.equal(f.controls.element.dataset.playing, "false");
+  for (const code of ["ArrowRight", "PageDown", "ArrowUp", "KeyM"]) {
+    key(f.controls, code, { repeat: true });
+    key(f.controls, code, { ctrlKey: true });
+    key(f.controls, code, {}, f.controls.element, "keyup");
+  }
+  f.controls.setBusy(true); key(f.controls, "ArrowRight");
+  f.controls.setBusy(false); f.controls.setControllable(false); key(f.controls, "ArrowRight");
+  await flush();
+  assert.deepEqual(f.calls, [8, 12, 7, 2, 0]);
+  assert.deepEqual(f.errors, []);
+});
+
+test("panel audio keys clamp five-percent volume steps and preserve volume across mute", () => {
+  const f = fixture();
+  const volume = f.preview.querySelector(".playback-volume-label").children[0];
+  f.player.setAudioVolume = value => f.calls.push(["volume", value]);
+  f.player.setAudioMuted = value => f.calls.push(["muted", value]);
+  key(f.controls, "ArrowUp"); key(f.controls, "KeyM");
+  assert.deepEqual(f.calls, [], "silent scenes do not admit audio shortcuts");
+  f.controls.sync({ time: 0, playing: false, hasAudio: true, audioVolume: 0.98, audioMuted: false });
+  key(f.controls, "ArrowUp");
+  key(f.controls, "ArrowDown");
+  key(f.controls, "KeyM"); key(f.controls, "KeyM");
+  assert.equal(volume.value, "0.95");
+  f.controls.sync({ time: 0, playing: false, audioVolume: 0.02 });
+  key(f.controls, "ArrowDown");
+  assert.deepEqual(f.calls, [["volume", 1], ["volume", 0.95], ["muted", true], ["muted", false], ["volume", 0]]);
+  key(f.controls, "ArrowUp", {}, volume);
+  f.controls.setBusy(true);
+  key(f.controls, "ArrowUp"); key(f.controls, "KeyM");
+  assert.equal(f.calls.length, 5);
+  assert.deepEqual(f.errors, []);
 });

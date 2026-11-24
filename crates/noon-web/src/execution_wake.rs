@@ -1,4 +1,5 @@
-use noon::{ExecutionSegment, ExecutionSession};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::ExecutionSegment;
 use noon_runtime::{RuntimeWakeState, TimelineWakeState};
 
 /// Browser primitive requested by the target-neutral execution-session wake state.
@@ -170,6 +171,18 @@ pub struct BrowserExecutionWakeClock {
 }
 
 impl BrowserExecutionWakeClock {
+    /// Qualification observation of this clock's existing epoch, in milliseconds
+    /// and authored seconds. It never installs an anchor or advances the runtime.
+    #[cfg(all(
+        target_arch = "wasm32",
+        feature = "blocking-scene",
+        any(debug_assertions, feature = "renderer-smoke")
+    ))]
+    pub(crate) fn debug_anchor(self) -> Option<(f64, f64)> {
+        self.anchor
+            .map(|anchor| (anchor.wall_origin_ms, anchor.scene_origin))
+    }
+
     /// Start the next wall-time interval at an already-published authored time.
     ///
     /// Required host callback execution may take arbitrary wall time while the

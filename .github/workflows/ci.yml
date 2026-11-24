@@ -25,7 +25,20 @@ on:
       - "scripts/python-editor-*.mjs"
       - "scripts/composition-authoring-smoke.mjs"
       - "scripts/shared-authoring-smoke.mjs"
+      - "scripts/callback-continuation-proof*.mjs"
       - "scripts/paired-authoring-qualification.mjs"
+      - "scripts/blocking-scene-qualification.mjs"
+      - "web/blocking-scene-probe.js"
+      - "crates/noon-web/Cargo.toml"
+      - "crates/noon-web/src/lib.rs"
+      - "crates/noon-web/src/blocking_scene*"
+      - "crates/noon-web/src/blocking_scene/**"
+      - "crates/noon/src/lib.rs"
+      - "crates/noon/src/integration.rs"
+      - "crates/noon/src/scene_script*"
+      - "crates/noon/src/scene_script/**"
+      - "crates/noon/src/live_program*"
+      - "crates/noon/src/live_program/**"
       - "scripts/table-*"
       - "scripts/manim-table-*"
       - "fixtures/manim-v0.21/table-*"
@@ -63,6 +76,19 @@ on:
       - "scripts/gaussian-blur-*.mjs"
       - "scripts/blur-qualification.mjs"
       - "scripts/shadow-qualification.mjs"
+      - "scripts/ordered-effects-qualification.mjs"
+      - "scripts/composed-effects-qualification.mjs"
+      - "scripts/noise-dissolve-qualification.mjs"
+      - "scripts/dissolve-qualification.mjs"
+      - "scripts/dissolve-mask-*.mjs"
+      - "scripts/scope-opacity-qualification.mjs"
+      - "scripts/effect-restore-qualification.mjs"
+      - "scripts/pixelate-qualification.mjs"
+      - "scripts/glass-lens-qualification.mjs"
+      - "scripts/effect-resource-recovery-qualification.mjs"
+      - "crates/noon-export/tests/scope_opacity.rs"
+      - "crates/noon-export/tests/pixelate.rs"
+      - "crates/noon-export/tests/glass_lens.rs"
       - "crates/noon-render-wgpu/src/gpu/analytic_glow/**"
       - "crates/noon-render-wgpu/src/gpu/retained_text.rs"
       - "crates/noon-render-wgpu/src/gpu/source_capture.rs"
@@ -95,6 +121,14 @@ on:
       - "crates/noon-web/src/retained_execution_transport.rs"
       - "crates/noon-web/src/retained_execution_resources.rs"
       - "crates/noon/tests/glow_scene_raster.rs"
+      - "crates/noon/tests/authored_view_color_raster.rs"
+      - "crates/noon/tests/retained_color_assets/**"
+      - "crates/noon/tests/hdr_captures/**"
+      - "crates/noon/tests/view_bloom/**"
+      - "crates/noon-export/tests/view_bloom.rs"
+      - "crates/noon/tests/pixelate.rs"
+      - "crates/noon/tests/composed/**"
+      - "crates/noon/tests/composed_effects.rs"
       - "crates/noon/tests/linear_gradient_raster.rs"
       - "crates/noon/tests/radial_gradient_raster.rs"
       - "crates/noon/tests/noise_paint_raster.rs"
@@ -110,6 +144,7 @@ on:
       - "crates/noon/src/execution_session/**"
       - "crates/noon/src/example_scenes/**"
       - "crates/noon-runtime/src/replay.rs"
+      - "crates/noon-runtime/src/replay/**"
   workflow_dispatch:
 
 permissions:
@@ -184,6 +219,13 @@ jobs:
         if: github.event_name != 'pull_request'
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Reclaim unused Android SDK space
+        # Native workspace linking needs space occupied by this unused SDK.
+        run: |
+          df -h .
+          sudo rm -rf -- /usr/local/lib/android/sdk
+          df -h .
+
       - name: Test workspace
         run: cargo test --workspace --all-features
 
@@ -225,62 +267,164 @@ jobs:
           chmod 700 "$XDG_RUNTIME_DIR"
       - name: Test qualification admission
         run: python3 -m unittest discover -s tests/visual-effects -p test_gpu_qualification.py -v
+      # Run independent GPU tests serially; each test keeps its own concurrency.
       - name: Qualify shared polygon coverage against independent numerical oracles
         env:
           NOON_REQUIRE_GPU_TESTS: '1'
-        run: cargo test -p noon-render-wgpu --test polygon_fill_coverage --test polygon_perimeter_coverage --test path_shader_uniformity
+        run: cargo test -p noon-render-wgpu --test polygon_fill_coverage --test polygon_perimeter_coverage --test path_shader_uniformity -- --test-threads=1
       - name: Test glow resource and kernel contracts
         run: |
-          cargo test -p noon-render-wgpu --lib gpu::glow_filter::tests
-          cargo test -p noon-render-wgpu --lib gpu::analytic_glow::tests
-          cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests
+          cargo test -p noon-render-wgpu --lib gpu::glow_filter::tests -- --test-threads=1
+          cargo test -p noon-render-wgpu --lib gpu::analytic_glow::tests -- --test-threads=1
+          cargo test -p noon-render-wgpu --lib gpu::retained_text::glow_publication::tests -- --test-threads=1
       - name: Qualify RGBA Gaussian pixels and retained raster resources
-        run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::gaussian_blur::tests::rgba_gaussian_pixels_match_independent_reference_and_retained_revisions --nocapture
+        run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::gaussian_blur::tests::rgba_gaussian_pixels_match_independent_reference_and_retained_revisions --nocapture --test-threads=1
+      - name: Qualify float Gaussian radiance and retained resource contracts
+        env:
+          NOON_HDR_GAUSSIAN_ARTIFACTS: ${{ github.workspace }}/hdr-gaussian-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::gaussian_blur::tests::hdr -- --include-ignored --nocapture --test-threads=1
+      - name: Qualify linear HDR bloom against independent float and display references
+        env:
+          NOON_HDR_BLOOM_ARTIFACT_DIR: ${{ github.workspace }}/hdr-bloom-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::hdr_bloom::tests -- --include-ignored --nocapture --test-threads=1
+      - name: Qualify encoded HDR output presentation
+        env:
+          NOON_HDR_PRESENTATION_ARTIFACTS: ${{ github.workspace }}/hdr-presentation-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::encoded_display::tests -- --include-ignored --nocapture --test-threads=1
+      - name: Qualify raw and authored linear scene draws
+        env:
+          NOON_HDR_SCENE_ARTIFACT_DIR: ${{ github.workspace }}/hdr-scene-linear-raster-artifacts
+          NOON_AUTHORED_VIEW_ARTIFACT_DIR: ${{ github.workspace }}/authored-view-color-raster-artifacts
+          NOON_RETAINED_VIEW_ARTIFACT_DIR: ${{ github.workspace }}/retained-view-color-raster-artifacts
+          NOON_VISIBLE_VIEW_ARTIFACT_DIR: ${{ github.workspace }}/visible-view-color-raster-artifacts
+          NOON_RETAINED_ASSET_ARTIFACT_DIR: ${{ github.workspace }}/retained-asset-color-raster-artifacts
+          NOON_RETAINED_TEXT_ARTIFACT_DIR: ${{ github.workspace }}/retained-text-color-raster-artifacts
+          NOON_VIEW_BLOOM_ARTIFACTS: ${{ github.workspace }}/authored-camera-bloom-artifacts
+          NOON_EXPORT_VIEW_BLOOM_ARTIFACTS: ${{ github.workspace }}/native-camera-bloom-artifacts
+          NOON_HDR_COMPOSED_ARTIFACTS: ${{ github.workspace }}/hdr-composed-raster-artifacts
+          NOON_GLYPH_WORKING_COLOR_ARTIFACT_DIR: ${{ github.workspace }}/glyph-working-color-raster-artifacts
+        run: |
+          cargo test -p noon-render-wgpu --lib gpu::hdr_scene_raster_tests -- --ignored --nocapture --test-threads=1
+          cargo test -p noon --test authored_view_color_raster -- --ignored --nocapture --test-threads=1
+          cargo test -p noon-export --test view_bloom -- --ignored --nocapture --test-threads=1
+          cargo test -p noon-render-wgpu --lib glyph_working_color_matches -- --ignored --nocapture --test-threads=1
       - name: Qualify ordered effect composition against independent RGBA references
-        run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture
+        run: cargo test -p noon-render-wgpu --lib gpu::effect_stack::tests -- --ignored --nocapture --test-threads=1
+      - name: Qualify grouped glyph original coverage and paint alpha
+        env:
+          NOON_GLYPH_COVERAGE_ARTIFACT_DIR: ${{ github.workspace }}/glyph-coverage-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib -- --ignored --exact gpu::source_capture::tests::glyph_opacity::pixels::glyph_capture_pixels_preserve_child_opacity_and_ignore_paint_alpha --nocapture --test-threads=1
+      - name: Qualify public composed group pixels and lifecycle
+        run: 'cargo test -p noon --features wgsl-effects --test glow_scene_raster composed:: -- --ignored --nocapture --test-threads=1'
+      - name: Qualify native composed opacity and ancestor Visibility lifecycle
+        run: cargo test -p noon-export --test scope_opacity -- --ignored --nocapture --test-threads=1
+      - name: Qualify authored glass lens and native export
+        env:
+          NOON_GLASS_ARTIFACTS: ${{ github.workspace }}/glass-lens-native-artifacts
+        run: cargo test -p noon-export --test glass_lens -- --ignored --nocapture --test-threads=1
+      - name: Qualify authored cell sampling and export
+        run: cargo test -p noon-export --test pixelate -- --ignored --nocapture --test-threads=1
+      - name: Qualify sampled operators and typed custom shaders
+        run: |
+          cargo test -p noon-render-wgpu --features wgsl-effects --lib gpu::sample_filter::tests -- --include-ignored --nocapture --test-threads=1
+          cargo test -p noon-render-wgpu --features wgsl-effects --lib gpu::shader_effects::preparation::tests -- --include-ignored --nocapture --test-threads=1
+      - name: Qualify clipped backdrop replacement and real-shader negative controls
+        env:
+          NOON_BACKDROP_ARTIFACT_DIR: ${{ github.workspace }}/backdrop-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::backdrop_composite::tests -- --include-ignored --nocapture --test-threads=1
+      - name: Qualify retained backdrop camera, resize, Visibility and lifecycle
+        env:
+          NOON_BACKDROP_COORDINATOR_ARTIFACT_DIR: ${{ github.workspace }}/backdrop-coordinator-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::analytic_glow::backdrop::tests -- --include-ignored --nocapture --test-threads=1
+      - name: Qualify painter-prefix capture against independent layer references
+        env:
+          NOON_PREFIX_ARTIFACT_DIR: ${{ github.workspace }}/prefix-raster-artifacts
+        run: cargo test -p noon-render-wgpu --lib gpu::source_capture::prefix::tests -- --include-ignored --nocapture --test-threads=1
       - name: Qualify native glow pixels and real-shader negative control
         run: python3 tests/visual-effects/qualify_gpu_operator.py --report-dir glow-raster-artifacts
       - name: Qualify public Rust Scene glow playback pixels and lifecycle
         run: |
           cargo run -p noon --example glow_scene_playback
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_glow_pixels_and_lifecycle --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact authored_glow_pulse_pixels_restore_and_replay --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact click_glow_pulse_pixels_restore_and_retire --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_keeps_foreground_painter_order --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_image_glow_uses_global_pixel_crop --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_blur_rgba_pixels_seek_neutral_and_removal --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_shadow_pixels_offset_animation_hard_shadow_and_retirement --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_shadow_support_and_foreground_painter_order_match_extended_field --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact shadow_scene_and_output_units_reprepare_under_view_changes --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact gradient_glow_preserves_paint_alpha_seek_and_local_capture --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_glow_pixels_and_lifecycle --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact authored_glow_pulse_pixels_restore_and_replay --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact click_glow_pulse_pixels_restore_and_retire --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact generic_sources_follow_real_reveal_pixels_and_apply_scope_opacity_once --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_preserves_texture_alpha_sampling_replay_and_lifecycle --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact image_glow_keeps_foreground_painter_order --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_image_glow_uses_global_pixel_crop --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_scene_blur_rgba_pixels_seek_neutral_and_removal --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_shadow_pixels_offset_animation_hard_shadow_and_retirement --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact offscreen_shadow_support_and_foreground_painter_order_match_extended_field --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact shadow_scene_and_output_units_reprepare_under_view_changes --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact gradient_glow_preserves_paint_alpha_seek_and_local_capture --nocapture --test-threads=1
       - name: Qualify public Rust image paint on native GPU
         run: |
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_reuses_source_capture_for_blur_shadow_and_glow --nocapture
-          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes --nocapture
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_pixels_fit_uv_filter_alpha_and_texture_reuse --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_reuses_source_capture_for_blur_shadow_and_glow --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster -- --ignored --exact public_image_fill_preserves_ordinary_geometry_coverage_and_solid_strokes --nocapture --test-threads=1
       - name: Qualify public Rust animated linear paint on native GPU
         # The linear-paint oracle uses the same public Scene and retained GPU path.
         # Absence of the requested native adapter is a failure.
-        run: cargo test -p noon --test linear_gradient_raster -- --ignored --exact authored_gradient_animation_matches_independent_native_pixel_oracle --nocapture
+        run: cargo test -p noon --test linear_gradient_raster -- --ignored --exact authored_gradient_animation_matches_independent_native_pixel_oracle --nocapture --test-threads=1
       - name: Qualify public Rust radial paint on native GPU
-        run: cargo test -p noon --test radial_gradient_raster -- --ignored --exact radial_pixels_match_independent_field_alpha_pose_time_and_seek_reference --nocapture
+        run: cargo test -p noon --test radial_gradient_raster -- --ignored --exact radial_pixels_match_independent_field_alpha_pose_time_and_seek_reference --nocapture --test-threads=1
       - name: Qualify public Rust procedural noise paint on native GPU
         run: |
-          cargo test -p noon --test noise_paint_raster -- --ignored --nocapture
-          cargo test -p noon --test glow_scene_raster public_noise_fill -- --ignored --nocapture
+          cargo test -p noon --test noise_paint_raster -- --ignored --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster public_noise_fill -- --ignored --nocapture --test-threads=1
       - name: Qualify public Rust hatch paint on native GPU
         # A missing GPU fails the required raster test, rather than skipping it.
         run: |
-          cargo test -p noon --test hatch_paint_raster -- --ignored --nocapture
-          cargo test -p noon --test glow_scene_raster public_hatch_fill -- --ignored --nocapture
-      - name: Preserve native glow qualification evidence
+          cargo test -p noon --test hatch_paint_raster -- --ignored --nocapture --test-threads=1
+          cargo test -p noon --test glow_scene_raster public_hatch_fill -- --ignored --nocapture --test-threads=1
+      - name: Preserve native HDR bloom evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hdr-bloom-raster-correctness
+          path: |
+            hdr-bloom-raster-artifacts
+            hdr-presentation-raster-artifacts
+          if-no-files-found: error
+          retention-days: 3
+      - name: Preserve native linear scene color evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linear-scene-color-raster-correctness
+          path: |
+            hdr-scene-linear-raster-artifacts
+            authored-view-color-raster-artifacts
+            retained-view-color-raster-artifacts
+            visible-view-color-raster-artifacts
+            retained-asset-color-raster-artifacts
+            retained-text-color-raster-artifacts
+            glyph-working-color-raster-artifacts
+            hdr-gaussian-raster-artifacts
+            hdr-composed-raster-artifacts
+            authored-camera-bloom-artifacts
+            native-camera-bloom-artifacts
+          if-no-files-found: error
+          retention-days: 3
+      - name: Preserve native glyph coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: glyph-coverage-raster-correctness
+          path: glyph-coverage-raster-artifacts
+          if-no-files-found: error
+          retention-days: 3
+      - name: Preserve native raster qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: glow-raster-correctness
-          path: glow-raster-artifacts
+          path: |
+            glow-raster-artifacts
+            backdrop-raster-artifacts
+            prefix-raster-artifacts
+            glass-lens-native-artifacts
+            backdrop-coordinator-raster-artifacts
           if-no-files-found: warn
           retention-days: 3
 
@@ -325,6 +469,49 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Build separate synchronous authoring WASM package
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          mkdir -p browser-smoke-artifacts/blocking-scene
+          test ! -e browser-smoke-artifacts/blocking-scene/pkg
+          wasm-pack build crates/noon-web --target web \
+            --out-dir ../../browser-smoke-artifacts/blocking-scene/pkg \
+            --dev --no-opt --features renderer-smoke,blocking-scene --locked \
+            2>&1 | tee browser-smoke-artifacts/blocking-scene/build.log
+          node .github/ci/wasm-build.mjs verify
+
+      - name: Cache synchronous authoring Chromium
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+
+      - name: Install synchronous authoring browser dependencies
+        timeout-minutes: 10
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          bash scripts/ci-install-playwright-browser.sh chromium
+
+      - name: Qualify ordinary Rust helpers in the JSPI browser host
+        timeout-minutes: 5
+        env:
+          NOON_BLOCKING_SCENE_PACKAGE: ${{ github.workspace }}/browser-smoke-artifacts/blocking-scene/pkg
+          NOON_BLOCKING_SCENE_ARTIFACTS: ${{ github.workspace }}/browser-smoke-artifacts/blocking-scene
+          NOON_BROWSER_SMOKE_BACKEND: webgpu
+        run: node scripts/blocking-scene-qualification.mjs
+
+      - name: Preserve synchronous browser authoring evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: blocking-scene-browser-qualification
+          path: |
+            browser-smoke-artifacts/blocking-scene
+            !browser-smoke-artifacts/blocking-scene/pkg/**
+          if-no-files-found: warn
+          retention-days: 3
+
   browser-authoring:
     name: Browser authoring
     runs-on: ubuntu-latest
@@ -349,7 +536,16 @@ jobs:
           npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
           npx playwright install chromium
       - name: Test Rust/Python semantic parity
+        id: semantic_parity
         run: node scripts/cross-language-parity.mjs
+      - name: Preserve failed semantic parity evidence
+        if: ${{ failure() && steps.semantic_parity.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: semantic-parity-failure
+          path: browser-smoke-artifacts/cross-language
+          if-no-files-found: error
+          retention-days: 3
       - name: Test deterministic seek/playback/rewind in WASM
         run: node scripts/deterministic-replay-smoke.mjs
       - name: Test Manim-style Python compatibility
@@ -404,6 +600,8 @@ jobs:
         run: node scripts/playground-layout-smoke.mjs
       - name: Test native reactive Python authoring
         run: node scripts/reactive-authoring-smoke.mjs
+      - name: Test callback continuation qualification harness
+        run: node --test scripts/callback-continuation-proof.test.mjs
       - name: Test shared semantic authoring and runtime
         run: node scripts/shared-authoring-smoke.mjs
       - name: Test native browser input signals
@@ -421,7 +619,8 @@ jobs:
       - name: Test Python gallery background audio
         env:
           NOON_PYTHON_AUDIO_ARTIFACTS: ${{ runner.temp }}/python-background-audio
-        run: timeout --signal=TERM 240s node scripts/python-background-audio-smoke.mjs
+        # The two full Fourier sources each have a 360s completion deadline.
+        run: timeout --signal=TERM 900s node scripts/python-background-audio-smoke.mjs
       - name: Retain Python background audio evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -459,7 +658,10 @@ jobs:
           name: web-pkg
           path: web
       - name: Verify source and browser artifact provenance
-        run: node .github/ci/wasm-build.mjs verify
+        run: |
+          node .github/ci/wasm-build.mjs verify
+          # Only this verified consumer ignores its generated pixel evidence.
+          printf '\n/browser-smoke-artifacts\n' >> "$(git rev-parse --git-path info/exclude)"
       - name: Cache Playwright Chromium
         uses: actions/cache@v6
         with:
@@ -516,6 +718,24 @@ jobs:
         run: node scripts/blur-qualification.mjs
       - name: Qualify paired Rust and Python Shadow authoring on WebGPU and WebGL2
         run: node scripts/shadow-qualification.mjs
+      - name: Qualify paired ordered effect stacks on WebGPU and WebGL2
+        run: node scripts/ordered-effects-qualification.mjs
+      - name: Qualify paired composed family controls on WebGPU and WebGL2
+        run: node scripts/composed-effects-qualification.mjs
+      - name: Qualify animated nested opacity and ancestor Visibility
+        run: node scripts/scope-opacity-qualification.mjs
+      - name: Qualify ordered and composed appearance save/restore
+        run: node scripts/effect-restore-qualification.mjs
+      - name: Qualify glass lens through Rust and Python on WebGPU and WebGL2
+        run: node scripts/glass-lens-qualification.mjs
+      - name: Qualify glass, shader and Bloom resources through replay and GPU recovery
+        run: node scripts/effect-resource-recovery-qualification.mjs
+      - name: Qualify bounded cell sampling through Rust and Python
+        run: node scripts/pixelate-qualification.mjs
+      - name: Qualify private visibility lifecycle through Rust and Python
+        run: node scripts/dissolve-qualification.mjs
+      - name: Qualify composed seeded masks through Rust and Python
+        run: node scripts/noise-dissolve-qualification.mjs
       - name: Qualify paired Rust and Python image paints on WebGPU and WebGL2
         run: node scripts/image-fill-qualification.mjs
       - name: Qualify retained worker glow images and recovery
@@ -532,6 +752,8 @@ jobs:
         run: node scripts/noise-paint-qualification.mjs
       - name: Qualify paired hatch paint authoring
         run: node scripts/hatch-paint-qualification.mjs
+      - name: Qualify G4 authoring and rendered cold-pass admission
+        run: node scripts/glow-profile-qualification.mjs
       - name: Test mixed painter order in WebGPU
         run: node scripts/painter-order-browser-smoke.mjs
       - name: Compare WebGPU and WebGL foreground coverage
@@ -563,4 +785,22 @@ jobs:
           name: browser-backend-visual-parity
           path: browser-backend-parity-report
           if-no-files-found: error
+          retention-days: 3
+      - name: Preserve finite effect pixel evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: finite-effect-authoring-pixels
+          path: |
+            browser-smoke-artifacts/glow-profile
+            browser-smoke-artifacts/ordered-effects
+            browser-smoke-artifacts/composed-effects
+            browser-smoke-artifacts/scope-opacity
+            browser-smoke-artifacts/effect-restore
+            browser-smoke-artifacts/pixelate
+            browser-smoke-artifacts/glass-lens
+            browser-smoke-artifacts/effect-resource-recovery
+            browser-smoke-artifacts/dissolve
+            browser-smoke-artifacts/noise-dissolve
+          if-no-files-found: warn
           retention-days: 3

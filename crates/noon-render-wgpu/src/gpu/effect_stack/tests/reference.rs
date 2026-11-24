@@ -79,13 +79,20 @@ fn alpha_sample(image: &[[f64; 4]], size: [u32; 2], point: [f64; 2]) -> f64 {
     }
     value
 }
-fn neutral(effect: EffectDefinition, height: u32, world: f64) -> bool {
+fn neutral(effect: &EffectDefinition, height: u32, world: f64) -> bool {
     match effect {
+        EffectDefinition::Bloom(_) => {
+            panic!("view Bloom is outside the compatibility capture oracle")
+        }
         EffectDefinition::Blur(v) => scalar(v.radius(), height, world) == 0.0,
+        EffectDefinition::BackdropBlur(v) => scalar(v.radius(), height, world) == 0.0,
         EffectDefinition::Glow(v) => {
             v.radius().value() == 0.0 || v.intensity() == 0.0 || v.color().alpha == 0.0
         }
         EffectDefinition::Shadow(v) => v.color().alpha == 0.0,
+        EffectDefinition::NoiseDissolve(v) => v.is_neutral(),
+        EffectDefinition::Pixelate(v) => scalar(v.size(), height, world) <= 1.0,
+        EffectDefinition::Shader(_) => false,
     }
 }
 
@@ -100,13 +107,43 @@ pub(super) fn evaluate(
 ) -> Vec<u8> {
     let last = effects
         .iter()
-        .rposition(|&effect| !neutral(effect, height, world));
+        .rposition(|effect| !neutral(effect, height, world));
     let mut input = source.to_vec();
-    for (index, &effect) in effects.iter().enumerate() {
+    for (index, effect) in effects.iter().enumerate() {
         if neutral(effect, height, world) {
             continue;
         }
-        let sigma = scalar(effect.radius(), height, world);
+        let stage_opacity = if Some(index) == last { opacity } else { 1.0 };
+        if let EffectDefinition::Pixelate(definition) = effect {
+            input = crate::gpu::sample_filter::tests::cell_reference(
+                &input,
+                scalar(definition.size(), height, world),
+                [0.0; 2],
+                stage_opacity,
+                size,
+            );
+            continue;
+        }
+        if let EffectDefinition::NoiseDissolve(definition) = effect {
+            input = crate::gpu::sample_filter::tests::reference(
+                &input,
+                crate::SampleParameters {
+                    shader: None,
+                    definition: (*definition).into(),
+                    output_height: height,
+                    world_view_height: world,
+                    source_bounds: crate::EffectPixelBounds {
+                        min: [0.0; 2],
+                        max: size.map(f64::from),
+                    },
+                    scope_opacity: stage_opacity as f32,
+                    scratch_budget_bytes: u64::MAX,
+                },
+                size,
+            );
+            continue;
+        }
+        let sigma = scalar(effect.radius().unwrap(), height, world);
         let blurred = convolve(
             match effect {
                 EffectDefinition::Glow(v) if v.source() == GlowSource::Silhouette => mask,
@@ -115,7 +152,6 @@ pub(super) fn evaluate(
             size,
             sigma,
         );
-        let stage_opacity = if Some(index) == last { opacity } else { 1.0 };
         input = input
             .as_chunks::<4>()
             .0
@@ -124,7 +160,16 @@ pub(super) fn evaluate(
             .flat_map(|(at, pixel)| {
                 let source: [f64; 4] = std::array::from_fn(|c| f64::from(pixel[c]) / 255.0);
                 let value: [f64; 4] = match effect {
-                    EffectDefinition::Blur(_) => blurred[at],
+                    EffectDefinition::Shader(_) => {
+                        panic!("custom programs require a separate independent reference")
+                    }
+                    EffectDefinition::Bloom(_) => {
+                        unreachable!("view Bloom rejected before compatibility evaluation")
+                    }
+                    EffectDefinition::Blur(_) | EffectDefinition::BackdropBlur(_) => blurred[at],
+                    EffectDefinition::NoiseDissolve(_) | EffectDefinition::Pixelate(_) => {
+                        unreachable!("mask stage was evaluated above")
+                    }
                     EffectDefinition::Glow(v) => {
                         let color = v.color();
                         let h = (v.intensity() * f64::from(color.alpha) * blurred[at][3]).min(1.0);

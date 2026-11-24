@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { PNG } from "pngjs";
 import { disableAuthoringJspi } from "./playground-browser-support.mjs";
-import { isSquareToCircleTransformFrame } from "./playground-mobile-frame-contract.mjs";
+import { isSquareToCircleNaturalWrap, isSquareToCircleTransformFrame,
+  SQUARE_TO_CIRCLE_TRANSFORM_START } from "./playground-mobile-frame-contract.mjs";
 import { seekPausedGallery, waitForPublishedGalleryFrame } from "./showcase-playback.mjs";
 
 const { webkit, devices } = playwright;
@@ -96,6 +97,7 @@ function changedPixels(bytes, backgroundBytes) {
 }
 
 let browser = null;
+let activeContext = null;
 let activePage = null;
 let activeErrors = [];
 let releasePendingStartup = null;
@@ -108,6 +110,7 @@ try {
     { name: "automatic-no-jspi", host: null, disableJspi: true },
   ]) {
     const context = await browser.newContext({ ...devices["iPhone 13"] });
+    activeContext = context;
     // Hold authoring startup while recording the empty canvas. Normal variants
     // delay the production worker response directly. The no-JSPI variant delays
     // a test-only bootstrap module, which disables JSPI before dynamically
@@ -157,8 +160,11 @@ try {
     releasePendingStartup = null;
     let metrics;
     const samples = [];
-    let liveIntermediate = null;
-    let reachedEndpoint = false;
+    let firstPresentedFrame = null;
+    let naturalFirstWrap = null;
+    let previousTime = null;
+    let madeForwardProgress = false;
+    let sourceRunIdentity = null;
     const sampleDeadline = Date.now() + 60_000;
     while (Date.now() < sampleDeadline) {
       // Retain wall-time samples for diagnostics. A busy browser is allowed to
@@ -170,25 +176,53 @@ try {
             patch?.dataset.exampleId !== "parity-square-to-circle") return null;
         if (patch.dataset.state === "error") return { error: patch.value };
         const result = await gallery.executionMetrics();
+        const sourceRun = gallery.runPhaseMetrics;
         return result?.metrics ? {
           time: result.metrics.time,
           backend: result.metrics.backend,
           objectCount: result.metrics.objectCount,
+          presentedFrames: result.metrics.presentedFrames,
+          sourceRunExampleId: sourceRun?.exampleId ?? null,
+          sourceRunGeneration: sourceRun?.runGeneration ?? null,
+          sourceRunCompletedAtMs: sourceRun?.sourceRunCompletedAtMs ?? null,
         } : null;
       });
       if (samples.length < 1000) samples.push(sample);
       assert.ok(!sample?.error, sample?.error);
-      if (isSquareToCircleTransformFrame(sample)) {
-        liveIntermediate ??= sample;
+      if (sample && sample.sourceRunGeneration !== null) {
+        sourceRunIdentity ??= { exampleId: sample.sourceRunExampleId, runGeneration: sample.sourceRunGeneration };
+        assert.deepEqual({ exampleId: sample.sourceRunExampleId, runGeneration: sample.sourceRunGeneration },
+          sourceRunIdentity, "first natural traversal changed Python run identity");
       }
-      if (sample?.time >= 3 - 1e-6 && sample.objectCount === 0) {
-        reachedEndpoint = true;
+      if (sample?.presentedFrames > 0) firstPresentedFrame ??= sample;
+      if (sample && previousTime !== null && sample.time > previousTime) madeForwardProgress = true;
+      if (sample && previousTime !== null && sample.time < previousTime) {
+        assert.ok(isSquareToCircleNaturalWrap(previousTime, sample.time, madeForwardProgress),
+          `first observed Rust time decrease was not the authored endpoint wrap: ${previousTime} -> ${sample.time}`);
+        naturalFirstWrap = { beforeTime: previousTime, afterTime: sample.time,
+          presentedFrames: sample.presentedFrames,
+          sourceRunExampleId: sample.sourceRunExampleId, sourceRunGeneration: sample.sourceRunGeneration,
+          sourceRunCompletedAtMs: sample.sourceRunCompletedAtMs, backend: sample.backend };
         break;
       }
+      if (sample) previousTime = sample.time;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     await writeFile(path.join(artifactDir, `${variant.name}-samples.json`), JSON.stringify(samples, null, 2));
-    assert.ok(reachedEndpoint, "mobile live source did not complete FadeOut at its authored endpoint");
+    assert.ok(naturalFirstWrap, "mobile source did not naturally cross its first authored loop endpoint");
+    assert.ok(naturalFirstWrap.sourceRunCompletedAtMs !== null,
+      "natural loop wrap was not joined to a completed first source run");
+    assert.equal(naturalFirstWrap.sourceRunExampleId, "parity-square-to-circle");
+    assert.ok(Number.isSafeInteger(naturalFirstWrap.sourceRunGeneration),
+      "natural wrap is missing its Python source run generation");
+    assert.deepEqual({ exampleId: naturalFirstWrap.sourceRunExampleId,
+      runGeneration: naturalFirstWrap.sourceRunGeneration }, sourceRunIdentity,
+    "natural wrap does not belong to the first selected source run");
+    assert.ok(firstPresentedFrame?.time <= SQUARE_TO_CIRCLE_TRANSFORM_START &&
+      firstPresentedFrame.objectCount === 1,
+      "mobile source did not present during Create on its first traversal");
+    assert.ok(naturalFirstWrap.presentedFrames > firstPresentedFrame.presentedFrames,
+      "mobile source did not present new frames during its first traversal");
     if (variant.disableJspi) {
       assert.equal(
         await page.evaluate(() => window.__noonNoJspiWorkerWrapped),
@@ -198,6 +232,16 @@ try {
     }
     await waitForIdle(page);
     await assertApplied(page, "parity-square-to-circle");
+    // The live source loops, so its terminal picture is transient. Inspect the
+    // exact FadeOut endpoint through the normal paused control path after the
+    // natural first wrap; this is a paused replay checkpoint, not the natural
+    // first-pass terminal image.
+    await seekPausedGallery(page, 3, 3);
+    const terminalCheckpoint = await waitForPublishedGalleryFrame(page, 3, 3);
+    assert.equal(terminalCheckpoint?.metrics?.objectCount, 0,
+      "paused exact FadeOut endpoint must remove the object");
+    assert.ok(Math.abs(terminalCheckpoint.metrics.time - 3) < 1e-6,
+      "paused endpoint checkpoint missed the authored time");
     const final = await page.locator("#scene").screenshot();
     await writeFile(path.join(artifactDir, `${variant.name}-final.png`), final);
     metrics = await page.evaluate(() => window.__noonExampleGallery.executionMetrics());
@@ -205,14 +249,11 @@ try {
     assert.ok(Math.abs(metrics.metrics.time - 3) < 1e-6, "source did not complete at its authored time");
     assert.equal(changedPixels(final, background), 0, "mobile final FadeOut frame retained visible geometry");
 
-    // A real-time source must catch up after slow frames. On a busy mobile
-    // runner, polling can observe t=1 and then t=2 without catching t=1.5.
-    // Verify the actual intermediate transformation at exact authored times
-    // through the production playback controls, rather than weakening the
-    // shape/pixel assertion or depending on host scheduling luck.
+    // Real-time playback can catch up across the whole Transform interval.
+    // Check the actual intermediate pixels at an exact authored time.
     const frames = new Map();
     let observation = null;
-    for (const [time, label] of [[1, "square"], [1.5, "intermediate"], [2, "circle"]]) {
+    for (const [time, label] of [[1, "square"], [1.5, "intermediate"], [2, "circle"], [2.5, "fadeout"]]) {
       await seekPausedGallery(page, 3, time);
       const replay = await waitForPublishedGalleryFrame(page, time, 3);
       assert.equal(replay?.metrics?.objectCount, 1, `${label} frame must retain the transforming object`);
@@ -294,8 +335,11 @@ try {
     const diagnostics = {
       variant,
       intermediate: observation,
-      liveIntermediate,
-      reachedEndpoint,
+      liveIntermediate: samples.find(isSquareToCircleTransformFrame) ?? null,
+      firstPresentedFrame,
+      naturalFirstWrap,
+      terminalCheckpoint: { kind: "paused-seek", time: terminalCheckpoint.metrics.time,
+        objectCount: terminalCheckpoint.metrics.objectCount },
       renderHost: metrics.renderHost,
       rendererBackend: metrics.metrics?.backend ?? null,
       presentedFrames: metrics.metrics?.presentedFrames ?? null,
@@ -316,7 +360,10 @@ try {
     console.log(
       `✓ mobile WebKit ${variant.name}: ${diagnostics.rendererBackend}, ${diagnostics.presentedFrames} frames`,
     );
+    // Worker requests can still be in flight after the last scene is ready.
+    await context.unrouteAll({ behavior: "wait" });
     await context.close();
+    activeContext = null;
   }
 } catch (error) {
   const state = await activePage?.evaluate(() => ({
@@ -330,6 +377,13 @@ try {
   throw error;
 } finally {
   releasePendingStartup?.();
-  await browser?.close();
-  server.kill("SIGTERM");
+  try {
+    await activeContext?.unrouteAll({ behavior: "wait" });
+  } finally {
+    try {
+      await browser?.close();
+    } finally {
+      server.kill("SIGTERM");
+    }
+  }
 }

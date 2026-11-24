@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isSquareToCircleTransformFrame,
-  SQUARE_TO_CIRCLE_TRANSFORM_START, SQUARE_TO_CIRCLE_TRANSFORM_END,
+  isSquareToCircleNaturalWrap, SQUARE_TO_CIRCLE_TRANSFORM_START, SQUARE_TO_CIRCLE_TRANSFORM_END,
 } from "./playground-mobile-frame-contract.mjs";
 
 test("original 3-second SquareToCircle has an authored Transform interval strictly between 1 and 2", () => {
@@ -14,6 +14,23 @@ test("original 3-second SquareToCircle has an authored Transform interval strict
   assert.equal(isSquareToCircleTransformFrame(recordedFrame), true);
   assert.equal(isSquareToCircleTransformFrame({ time: 1.15, objectCount: 1 }), true);
   assert.equal(isSquareToCircleTransformFrame({ time: 1.98, objectCount: 1 }), true);
+});
+
+test("the first Rust time decrease must itself be the authored loop wrap", () => {
+  const samples = [0, 1.1, 2.4, 0.1, 2.9, 0.02];
+  let previous = null, madeForwardProgress = false, accepted = null;
+  for (const time of samples) {
+    if (previous !== null && time < previous) {
+      accepted = isSquareToCircleNaturalWrap(previous, time, madeForwardProgress);
+      break;
+    }
+    if (previous !== null && time > previous) madeForwardProgress = true;
+    previous = time;
+  }
+  assert.equal(accepted, false, "an early missed wrap cannot be replaced by a later cycle");
+  assert.equal(isSquareToCircleNaturalWrap(2.971, 0.005, true), true);
+  assert.equal(isSquareToCircleNaturalWrap(2.4, 0.1, true), false);
+  assert.equal(isSquareToCircleNaturalWrap(2.971, 0.005, false), false);
 });
 
 test("rejects creation/transform endpoints, fade-out, invalid times or missing geometry", () => {

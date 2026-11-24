@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import playwright from "playwright";
+import { serveRepository } from "./browser-test-server.mjs";
 
 const { chromium } = playwright;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -19,33 +19,7 @@ const artifactDir = path.resolve(
 
 await mkdir(artifactDir, { recursive: true });
 
-let serverOutput = "";
-const server = spawn(
-  "python3",
-  ["-m", "http.server", String(port), "--bind", "127.0.0.1", "--directory", repoRoot],
-  { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
-);
-server.stdout.on("data", (chunk) => {
-  serverOutput += chunk;
-});
-server.stderr.on("data", (chunk) => {
-  serverOutput += chunk;
-});
-
-async function waitForServer() {
-  let lastError = null;
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/web/index.html`);
-      if (response.ok) return;
-      lastError = new Error(`HTTP ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Playground playback server did not start: ${lastError}\n${serverOutput}`);
-}
+let server;
 
 function parseSeconds(text) {
   const match = String(text).match(/([0-9]+(?:\.[0-9]+)?)\s*s/);
@@ -61,7 +35,10 @@ async function waitForMetricNear(page, target, tolerance = 0.08, timeout = 10_00
         document.querySelector("#metric-time")?.textContent ??
         "";
       const observed = Number(String(raw).match(/([0-9]+(?:\.[0-9]+)?)\s*s/)?.[1]);
-      return Number.isFinite(observed) && Math.abs(observed - expected) <= allowed;
+      const controls = document.querySelector(".playback-controls");
+      return controls?.dataset.busy === "false" &&
+        Math.abs(Number(controls.dataset.elapsedSeconds) - expected) <= allowed &&
+        Number.isFinite(observed) && Math.abs(observed - expected) <= allowed;
     },
     { target, tolerance },
     { timeout },
@@ -133,6 +110,7 @@ async function playbackSnapshot(page) {
       runText: document.querySelector("#replace-scene")?.textContent?.trim() ?? "",
       runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
       patchState: document.querySelector("#patch-status")?.dataset.state ?? "",
+      draftState: document.querySelector("#draft-status")?.dataset.state ?? "",
       patchSequence: document.querySelector("#patch-status")?.dataset.sequence ?? "",
       patchRunGeneration: document.querySelector("#patch-status")?.dataset.runGeneration ?? "",
       runGeneration: window.__noonExampleGallery?.generationDiagnostics?.runGeneration ?? null,
@@ -151,7 +129,7 @@ const consoleErrors = [];
 const diagnostics = {};
 
 try {
-  await waitForServer();
+  server = await serveRepository(repoRoot, port);
   browser = await chromium.launch({
     channel: "chromium",
     headless: true,
@@ -172,6 +150,29 @@ try {
   });
 
   await page.addInitScript(() => {
+    window.__playbackScrubberLifecycle = {
+      initial: null, replaced: false, detached: false, placeholderVisibleHiddenControls: null,
+    };
+    const captureScrubber = (records = []) => {
+      const lifecycle = window.__playbackScrubberLifecycle;
+      if (lifecycle.initial !== null && records.some(record =>
+        [...record.removedNodes].some(node => node === lifecycle.initial || node.contains?.(lifecycle.initial)))) {
+        lifecycle.detached = true;
+      }
+      const scrubber = document.querySelector(".playback-scrubber");
+      if (!scrubber) return;
+      const placeholder = document.querySelector(".playback-slot");
+      if (placeholder && lifecycle.placeholderVisibleHiddenControls === null) {
+        lifecycle.placeholderVisibleHiddenControls = [...placeholder.querySelectorAll("[hidden]")]
+          .filter(element => element.getClientRects().length > 0).map(element => element.className);
+      }
+      if (lifecycle.initial === null) lifecycle.initial = scrubber;
+      else if (lifecycle.initial !== scrubber) lifecycle.replaced = true;
+    };
+    const scrubberObserver = new MutationObserver(captureScrubber);
+    scrubberObserver.observe(document, { childList: true, subtree: true });
+    captureScrubber();
+
     window.addEventListener("DOMContentLoaded", () => {
       const status = document.querySelector("#status");
       if (!status) return;
@@ -224,29 +225,134 @@ try {
     waitUntil: "load",
   });
   await startDeferredRuntime(page, "parity-square-and-circle");
+
+  // A no-op playback render must not replace the button's text node during a
+  // pointer gesture. WebKit can then drop the click after mouseup.
+  await page.evaluate(async () => {
+    const { PlaygroundPlaybackControls } = await import("/web/playground-playback-controls.js");
+    const preview = document.createElement("div");
+    preview.style.cssText = "position:fixed;left:20px;top:20px;z-index:10000";
+    document.body.append(preview);
+    const player = {
+      pause: async () => { window.__controlsGesturePauseCalls++; return { time: 0, playing: false }; },
+      resume: async () => ({ time: 0, playing: true }),
+      seek: async (time) => ({ time, playing: true }),
+      restartPlayback: async () => ({ time: 0, playing: true }),
+      setAudioVolume: value => window.__controlsAudioCalls.push(["volume", value]),
+      setAudioMuted: value => window.__controlsAudioCalls.push(["muted", value]),
+    };
+    window.__controlsGesturePauseCalls = 0;
+    window.__controlsAudioCalls = [];
+    const controls = new PlaygroundPlaybackControls(player, preview, { durationSeconds: 4 });
+    window.__controlsGestureRegression = { controls, preview, state: { time: 0, playing: true, durationSeconds: 4 } };
+    controls.sync(window.__controlsGestureRegression.state);
+    window.__controlsGestureRegression.labelNode = preview.querySelector(".playback-toggle").firstChild;
+  });
+  const gestureToggle = page.locator(".playback-controls .playback-toggle").last();
+  const gestureBounds = await gestureToggle.boundingBox();
+  assert.ok(gestureBounds, "gesture regression toggle must be visible");
+  const gestureX = gestureBounds.x + gestureBounds.width / 2;
+  const gestureY = gestureBounds.y + gestureBounds.height / 2;
+  await page.mouse.move(gestureX, gestureY);
+  await page.mouse.down();
+  await page.waitForTimeout(40);
+  await page.evaluate(() => {
+    const { controls, state, preview, labelNode } = window.__controlsGestureRegression;
+    controls.sync(state);
+    if (preview.querySelector(".playback-toggle").firstChild !== labelNode) {
+      throw new Error("unchanged playback render replaced the toggle label text node");
+    }
+  });
+  await page.mouse.up();
+  await page.waitForFunction(() => window.__controlsGesturePauseCalls === 1);
+  assert.equal(await page.evaluate(() => window.__controlsGesturePauseCalls), 1,
+    "unchanged control state during a pointer gesture must preserve the pause click");
+  await page.evaluate(() => {
+    window.__controlsGestureRegression.controls.sync({ time: 0, playing: false,
+      hasAudio: true, audioVolume: 0.98, audioMuted: false });
+  });
+  const audioPanel = page.locator(".playback-controls").last();
+  await audioPanel.press("ArrowUp");
+  await audioPanel.press("ArrowDown");
+  await audioPanel.press("KeyM");
+  await audioPanel.press("KeyM");
+  assert.deepEqual(await page.evaluate(() => window.__controlsAudioCalls),
+    [["volume", 1], ["volume", 0.95], ["muted", true], ["muted", false]]);
+  assert.equal(await audioPanel.getByRole("slider", { name: "Music volume" }).inputValue(), "0.95");
+  const buffered = await audioPanel.evaluate(panel => {
+    const { controls } = window.__controlsGestureRegression;
+    const rail = panel.querySelector(".playback-rail");
+    const input = panel.querySelector(".playback-scrubber");
+    const snapshot = () => ({
+      striped: getComputedStyle(rail, "::after").backgroundImage.includes("repeating-linear-gradient"),
+      played: Math.round(100 * parseFloat(input.style.getPropertyValue("--played"))) / 100,
+      time: panel.querySelector(".playback-time").value,
+      statusClipped: getComputedStyle(panel.querySelector(".playback-live-status")).clipPath !== "none",
+    });
+    const state = { time: 1, playing: false, preparedPlayback: true, replaySupported: true,
+      preparedFrontier: 4, seekRange: { start: 0, end: 3.9999999999999996 },
+      durationSeconds: null, buffering: true };
+    controls.sync(state);
+    const open = snapshot();
+    controls.sync({ ...state, preparedFrontier: 8, seekRange: { start: 0, end: 8 },
+      durationSeconds: 8, buffering: false });
+    return { open, complete: snapshot() };
+  });
+  assert.deepEqual(buffered, {
+    open: { striped: true, played: 25, time: "1.00 / 4.00+ s", statusClipped: true },
+    complete: { striped: false, played: 12.5, time: "1.00 / 8.00 s", statusClipped: false },
+  });
+  await page.emulateMedia({ forcedColors: "active" });
+  const forcedTrack = await audioPanel.locator(".playback-scrubber").evaluate(input =>
+    getComputedStyle(input).backgroundImage);
+  assert.match(forcedTrack, /^linear-gradient/, "forced colors must keep the scrubber track visible");
+  await page.emulateMedia({ forcedColors: "none" });
+  await page.evaluate(() => {
+    const { controls, preview } = window.__controlsGestureRegression;
+    controls.destroy();
+    preview.remove();
+  });
+
   await page.evaluate(() => {
     document.querySelector("#scene").dataset.playbackSmokeIdentity = "original";
   });
 
   const initial = await playbackSnapshot(page);
+  const scrubberLifecycle = await page.evaluate(() => ({
+    initialFound: window.__playbackScrubberLifecycle.initial !== null,
+    replaced: window.__playbackScrubberLifecycle.replaced,
+    detached: window.__playbackScrubberLifecycle.detached,
+    placeholderVisibleHiddenControls: window.__playbackScrubberLifecycle.placeholderVisibleHiddenControls,
+    currentIsInitial: window.__playbackScrubberLifecycle.initial === document.querySelector(".playback-scrubber"),
+  }));
+  diagnostics.scrubberLifecycle = scrubberLifecycle;
+  assert.deepEqual(scrubberLifecycle, {
+    initialFound: true, replaced: false, detached: false, currentIsInitial: true,
+    placeholderVisibleHiddenControls: [],
+  },
+    "runtime initialization must keep the original loading scrubber node attached");
   diagnostics.initial = initial;
   diagnostics.lifecycle = await page.evaluate(() => window.__noonPlaybackLifecycle);
-  assert.equal(
-    diagnostics.lifecycle.sawSourceOwnedPass,
-    true,
-    "the first source-owned pass must keep host playback controls unavailable",
-  );
+  const preparedSamples = diagnostics.lifecycle.samples.filter(sample =>
+    sample.runInFlight && sample.controls === "available" && sample.controllable === "true");
+  assert.ok(diagnostics.lifecycle.sawSourceOwnedPass || preparedSamples.length > 0,
+    "the first pass must expose admitted prepared controls or source-owned progress");
   assert.ok(
     diagnostics.lifecycle.samples
       .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
-      .every((sample) => sample.hasControls && sample.controllable === "false" && sample.scrubberDisabled && sample.scrubberHidden),
-    "source-owned playback must expose live progress but reject host commands",
+      .every((sample) => sample.hasControls && sample.controllable === "false" && sample.scrubberDisabled && !sample.scrubberHidden),
+    "source-owned playback must keep the shared timeline visible while rejecting host commands",
   );
   const liveTimes = diagnostics.lifecycle.samples
     .filter((sample) => sample.controls === "unavailable" && sample.phase === "playing")
     .map((sample) => sample.time);
-  assert.ok(liveTimes.length >= 2 && Math.max(...liveTimes) > Math.min(...liveTimes),
-    "live elapsed time must advance without a misleading percentage during the first Python-owned pass");
+  if (diagnostics.lifecycle.sawSourceOwnedPass) {
+    assert.ok(liveTimes.length >= 2 && Math.max(...liveTimes) > Math.min(...liveTimes),
+      "live elapsed time must advance without a misleading percentage during the first Python-owned pass");
+  } else {
+    assert.ok(preparedSamples.every(sample => sample.hasControls),
+      "admitted prepared playback must have real controls before source completion");
+  }
   assert.equal(initial.hasControls, true, "completed source playback must expose its replay lease");
   assert.equal(initial.playbackAvailability, "available");
   assert.equal(initial.runText, "Run");
@@ -304,18 +410,33 @@ try {
   const initialGeneration = initial.runGeneration;
   await page.evaluate(() => {
     const source = document.querySelector("#python-scene-source");
-    source.value = `${source.value.trimEnd()}\n        self.wait(0.25)\n`;
+    const halfDuration = Number(document.querySelector(".playback-scrubber").max) / 2;
+    source.value = `from noon import *
+class Lesson(Scene):
+    def construct(self):
+        self.add(Circle())
+        self.next_section("Opening")
+        self.wait(${halfDuration})
+        self.next_section("Middle")
+        self.wait(${halfDuration + 1})
+        self.next_section("Review")
+        self.wait(1)
+`;
     source.dispatchEvent(new Event("input", { bubbles: true }));
   });
   const edited = await playbackSnapshot(page);
   diagnostics.edited = edited;
-  assert.equal(edited.patchState, "ready", "editing must stop before its debounced restart");
-  assert.ok(edited.runGeneration > initialGeneration, "editing must immediately invalidate the old run");
-  assert.equal(edited.canvasHidden, true, "editing must hide the old source preview");
-  assert.equal(edited.playing, "false", "editing must pause the retained execution");
-  assert.ok(edited.playDisabled && edited.restartDisabled && edited.scrubberDisabled,
-    "editing must disable every control for the old replay lease");
-  await page.waitForFunction(() => window.__noonExampleGallery?.runInFlight === true);
+  assert.equal(edited.draftState, "unapplied");
+  assert.equal(edited.patchState, "applied");
+  assert.equal(edited.runGeneration, initialGeneration, "editing must retain the active source");
+  assert.equal(edited.canvasHidden, false, "editing must keep the active preview visible");
+  assert.equal(edited.playing, "false");
+  assert.ok(!edited.playDisabled && !edited.restartDisabled && !edited.scrubberDisabled,
+    "draft edits must preserve the active playback controls");
+  await page.waitForTimeout(600);
+  assert.equal((await playbackSnapshot(page)).runGeneration, initialGeneration,
+    "draft edits must not schedule a delayed source restart");
+  await page.locator("#replace-scene").click();
   await page.waitForFunction(
     () =>
       window.__noonExampleGallery?.runInFlight === false &&
@@ -326,22 +447,117 @@ try {
   );
   const rerun = await playbackSnapshot(page);
   diagnostics.rerun = rerun;
-  assert.equal(rerun.hasControls, true, "automatic source restart must restore a completed replay lease");
+  assert.equal(rerun.hasControls, true, "Run must expose controls for the replacement source");
   assert.equal(rerun.playbackAvailability, "available");
   assert.equal(rerun.runDisabled, false);
   assert.equal(rerun.patchRunGeneration, String(rerun.runGeneration));
-  assert.ok(rerun.runGeneration > initialGeneration, "automatic restart must apply the newest source generation");
+  assert.ok(rerun.runGeneration > initialGeneration, "Run must apply the newest source generation");
   assert.equal(
     Number(rerun.scrubberMax),
-    Number(initial.scrubberMax) + 0.25,
-    "Run must execute the edited source's added wait",
+    Number(initial.scrubberMax) + 2,
+    "Run must execute the replacement lesson's waits",
   );
   assert.equal(rerun.canvasCount, 1, "source replacement must leave exactly one canvas");
   assert.equal(rerun.rendererBackend, initial.rendererBackend, "source rerun changed renderer backend");
   assert.equal(rerun.canvasCount, 1);
 
+  // Source completion can precede presentation. Inspect lesson controls at the
+  // selected terminal frame instead of depending on a loop's sampling instant.
+  if (rerun.playing === "true") await page.locator(".playback-toggle").click();
+  await page.locator(".playback-scrubber").evaluate(input => {
+    input.value = input.max;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await waitForMetricNear(page, Number(rerun.scrubberMax));
+
+  // The existing edit/rerun also proves silent lesson annotations reach the
+  // viewer through shared Rust, without an additional scene or browser job.
+  const keyPoints = page.getByRole("combobox", { name: "Jump to lesson key point" });
+  assert.equal(await keyPoints.isVisible(), true);
+  assert.equal(await page.locator(".playback-audio-controls").isVisible(), false);
+  assert.equal(await keyPoints.locator("option").count(), 4);
+  assert.equal(await keyPoints.inputValue(), "2");
+  const previous = page.getByRole("button", { name: "Previous lesson section", exact: true });
+  const next = page.getByRole("button", { name: "Next lesson section", exact: true });
+  assert.equal(await next.isDisabled(), true);
+  const panel = page.locator(".playback-controls");
+  await page.evaluate(() => {
+    window.__noonShortcutEdges = [];
+    for (const type of ["keydown", "keyup"]) {
+      window.addEventListener(type, event => {
+        if (["Space", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "ArrowUp", "ArrowDown", "KeyM"].includes(event.code)) {
+          window.__noonShortcutEdges.push(`${type}:${event.code}`);
+        }
+      });
+    }
+  });
+  const cueMarkers = page.getByRole("group", { name: "Lesson key points", exact: true }).getByRole("button");
+  assert.equal(await cueMarkers.count(), 3);
+  await cueMarkers.nth(1).click();
+  await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
+  assert.equal(await keyPoints.inputValue(), "1");
+  assert.equal(await panel.getAttribute("data-playing"), "false");
+  await cueMarkers.nth(0).press("Enter");
+  await waitForMetricNear(page, 0);
+  assert.equal(await previous.isDisabled(), true);
+  await panel.press("PageDown");
+  await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
+  assert.equal(await keyPoints.inputValue(), "1");
+  await next.click();
+  await waitForMetricNear(page, Number(initial.scrubberMax) + 1);
+  assert.equal(await keyPoints.inputValue(), "2");
+  await panel.press("PageUp");
+  await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
+  await keyPoints.selectOption("0");
+  await waitForMetricNear(page, 0);
+  // Pure static waits advance Rust's observed clock without publishing frames.
+  // Next must cross the Middle cue instead of jumping back to stale frame time.
+  await panel.press("Space");
+  await page.waitForFunction(duration => {
+    const controls = document.querySelector(".playback-controls");
+    return controls.dataset.playing === "true" && controls.dataset.busy === "false"
+      && Number(controls.dataset.elapsedSeconds) > duration * 0.65;
+  }, Number(initial.scrubberMax));
+  await cueMarkers.nth(2).click();
+  await waitForMetricNear(page, Number(initial.scrubberMax) + 1);
+  assert.equal(await keyPoints.inputValue(), "2");
+  assert.equal(await page.locator(".playback-controls").getAttribute("data-playing"), "true");
+  await panel.press("Space");
+  await keyPoints.selectOption("0");
+  await waitForMetricNear(page, 0);
+  diagnostics.keyPoints = { count: 3, clickableMarkers: true, nextTime: Number(initial.scrubberMax) + 1, silent: true, staticWaitClock: true };
+  await panel.press("ArrowRight");
+  const forwardTime = Math.min(5, Number(rerun.scrubberMax));
+  await waitForMetricNear(page, forwardTime);
+  assert.equal(await panel.getAttribute("data-playing"), "false");
+  await panel.press("ArrowLeft");
+  await waitForMetricNear(page, 0);
+  await panel.press("ArrowUp");
+  await panel.press("ArrowDown");
+  await panel.press("KeyM");
+  await panel.press("PageDown");
+  await waitForMetricNear(page, Number(initial.scrubberMax) / 2);
+  await panel.press("Home");
+  await waitForMetricNear(page, 0);
+  assert.deepEqual(await page.evaluate(() => window.__noonShortcutEdges), [],
+    "viewer shortcut key-down and key-up must not reach scene input");
+  const scrubber = page.getByRole("slider", { name: "Animation playhead", exact: true });
+  await scrubber.press("ArrowRight");
+  await page.waitForFunction(() => {
+    const c = document.querySelector(".playback-controls");
+    return c.dataset.busy === "false" && Number(c.dataset.elapsedSeconds) > 0;
+  });
+  const nativeRangeTime = Number(await panel.getAttribute("data-elapsed-seconds"));
+  assert.ok(nativeRangeTime < Number(initial.scrubberMax) / 2,
+    "a focused slider keeps native fine seeking instead of seeking five seconds");
+  await panel.press("Home");
+  await waitForMetricNear(page, 0);
+  diagnostics.keyboard = { keys: ["Space", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "ArrowUp", "ArrowDown", "KeyM"], sceneEdges: [], nativeRangeTime, forwardTime };
+
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await cueMarkers.nth(2).click();
+  await waitForMetricNear(page, Number(initial.scrubberMax) + 1);
   const mobile = await playbackSnapshot(page);
   diagnostics.mobile = mobile;
   assert.ok(
@@ -356,7 +572,7 @@ try {
   diagnostics.pageErrors = pageErrors;
   diagnostics.consoleErrors = consoleErrors;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
-  console.log("✓ live progress, completed replay controls, fullscreen, and automatic source restart");
+  console.log("✓ playback controls, fullscreen, retained draft editing, and explicit Run");
 } catch (error) {
   if (page !== null) {
     try {
@@ -370,10 +586,9 @@ try {
   diagnostics.consoleErrors = consoleErrors;
   diagnostics.error =
     error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error);
-  diagnostics.serverOutput = serverOutput;
   await writeFile(path.join(artifactDir, "diagnostics.json"), `${JSON.stringify(diagnostics, null, 2)}\n`);
   throw error;
 } finally {
   if (browser !== null) await browser.close();
-  server.kill("SIGTERM");
+  await server?.close();
 }

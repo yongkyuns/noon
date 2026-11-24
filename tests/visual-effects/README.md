@@ -1,5 +1,68 @@
 # Visual-effects contract fixtures
 
+## Candidate typed WGSL profile
+
+`WgslEffectProgram` prepares immutable trusted source and a versioned
+`PaintedPointwiseV1` schema. `ShaderEffect` uses the ordinary named attachment,
+parameter animation, removal and seek paths. The shader receives straight encoded
+RGB and returns RGB plus a coverage multiplier; the renderer associates coverage
+and applies object/group opacity once. This finite profile uses compatibility
+color output, not HDR or arbitrary render/compute passes.
+
+Declare local normalized, scene or output-pixel coordinates and any authored-time
+or seed dependency. Typed parameter keys bind to their defining schema; edits
+reuse immutable programs. Source point morphs are unsupported, and composed groups
+require scene or output-pixel coordinates because they have no intrinsic local
+box. Invalid source/schema/coordinate declarations reject before mutation.
+
+See [the animated material lesson](../../web/python/examples/showcase_shader_material.py),
+[the authored-time example](../../web/python/examples/shader_time.py), and their
+[shared Rust builders](../../crates/noon/src/example_scenes/shader_sweep.rs).
+`node scripts/shader-time-qualification.mjs` checks ordinary Rust/Pyodide pixels,
+an independent coverage reference, different presentation cadences and seek/replay
+on WebGPU and WebGL2. It requires a clean renderer-smoke browser package.
+
+Late Rust attachments use `live.prepare_effect_attachments(...)`; shader-bearing
+scene/family edits use `prepare_membership`/`prepare_family_membership`; an ordinary
+shader-bearing introducer uses `prepare_composition`. These yield
+`ContinuationStep::Publish`: native, direct-WASM and offscreen hosts prepare owned
+immutable modules before the normal publisher revalidates and commits the batch.
+The existing retention barrier then admits the frame before source resumption.
+Parameter edits and detached animation targets need no new module preparation;
+headless prepared prefixes explicitly reject this resource-dependent operation.
+The shader-time qualification also checks real GPU compilation failure and retry.
+Composition preparation retains the original request and captures activation
+state only when fresh admission succeeds; cancellation publishes nothing.
+Run it with `NOON_SHADER_SOURCE_MODE=jspi` for synchronous source admission or
+`NOON_SHADER_SOURCE_MODE=async` for explicitly awaited constructs;
+the default forces portable suspension. All reject incompatible HDR attachments
+and view edits before publication. Pending resource work revalidates the view.
+Working-target changes retain weak references to immutable same-device programs;
+row bindings are prepared again for the new target. A different device requires
+fresh program preparation. Publication also rechecks that any newly executable
+program still matches the modules prepared before the await.
+
+Live Python shader attachments, shader-bearing scene/family insertion and ordinary
+introducing `Scene.play(FadeIn(...))` use that
+same staged transaction. Portable direct calls suspend automatically, including
+assigned/chained results; explicit async constructs await the resource-dependent call,
+and JSPI sources retain blocking syntax. First-use source/schema is preflighted
+before stream registration; reuse sends the existing immutable resource handle.
+GPU readiness precedes fresh CPU admission; frame retention precedes source
+resumption. Cold construction and built-in effect calls stay fluent.
+Prepared plays use the existing continuation and callback channel. Callback
+sparse reads still require JSPI; portable plays retain statement-call syntax.
+
+Native windowless export opts into source validation with `noon-export/wgsl-effects`.
+The existing export host prepares staged modules before publication; its GPU test
+compares 20 exact-time frames after late insertion or FadeIn with cold authoring,
+including an HDR-to-compatibility transition and later retirement. Independent
+invisible/halfway alpha references also cover the introducing animation.
+
+Remaining view/capability combinations, broader recovery and the physical-device
+performance matrix remain unqualified; #1897 owns promotion. Native-Python
+integration depends on the current SDK work in [#2015](https://github.com/yongkyuns/noon/issues/2015).
+
 ## Current authored GlowPulse extension
 
 `GlowPulse(obj, intensity=2.0)` is an ordinary authored animation for one supported
@@ -176,7 +239,7 @@ these correctness checks do not establish physical-device frame pacing.
 
 `NoisePaint(low, high, seed=0, frequency=(8, 8), phase=(0, 0))` supplies a smooth
 two-color local field through ordinary `set_fill` and `.animate.set_fill`.
-Rust uses checked `NoisePaint::new` and `Mobject`/`LiveSession::set_fill_noise`.
+Rust uses checked `NoisePaint::new` and `Scene::set_fill_noise`.
 Complete paired scripts are `noon::example_scenes::noise_paint` and
 `web/python/examples/noise_paint.py`, with the native `noise_paint` example and
 direct Rust/WASM host. They animate frequency, phase, transparent colors and
@@ -250,7 +313,7 @@ class UncertaintyRegion(Scene):
 The default background is transparent. Defaults are `spacing=0.25`,
 `width=0.04`, `angle=pi/4`, `phase=(0,0)`, and `cross=False`. Rust uses
 `HatchPaint::new(foreground, background, HatchPaintOptions { ... })`, followed by
-`Mobject::set_fill_hatch` or `LiveSession::set_fill_hatch`. The full paired
+`Scene::set_fill_hatch`. The full paired
 playback scripts are `noon::example_scenes::hatch_paint` and
 `web/python/examples/hatch_paint.py`; the native executable is `hatch_paint`.
 
@@ -311,8 +374,8 @@ frame pacing.
 
 `RadialGradient(stops, center=(0.5, 0.5), radii=(0.5, 0.5))` uses the same
 ordinary `set_fill`, `.animate.set_fill` and independent opacity grammar as linear
-paint. Rust uses `RadialGradient::new` and `set_fill_radial_gradient` on `Mobject`
-or `LiveSession`. Complete paired scripts are
+paint. Rust uses `RadialGradient::new` and `Scene::set_fill_radial_gradient`.
+Complete paired scripts are
 `noon::example_scenes::radial_gradient` and
 `web/python/examples/radial_gradient.py`; native `radial_gradient` and the direct
 Rust/WASM host run that same Rust program. The scripts animate an elliptical
@@ -376,27 +439,16 @@ and exact removal. Existing CI owns both native and browser qualification.
 
 ## Historical M0 contract and evidence
 
-M0 work for [#1897](https://github.com/yongkyuns/noon/issues/1897).
-`docs/architecture.md` is the sole architecture/roadmap authority; this is an
-acceptance specification and reference-fixture description, not another roadmap.
-Inspection base: `9028672c1691d3a318c87da50e8b08e0802245f0`. The subsequent API
-review checked the unchanged public authoring hooks at `6f7b7f008c45288bf3b92a417078b907d5e4ef5c`.
-
-**M0 design review:** the named leaf-glow contract below is the implementation
-baseline. This is a design decision, not enabled effects or a merge qualification.
-The authored Rust subset is implemented and tested through the actual shared
-owners. The complete paired source review is in `authoring_review.py` and
-`authoring_review.rs`; it includes proposed M1–M4 operations and is **syntax-checked,
-not executed as a supported cross-language product**. Do not add mock operations
-to make those sources appear to run. The existing native declaration example
-remains the executable proof of the supported M0 subset.
-
-M0's four design/reference deliverables are separate from the later runtime and
-GPU implementation gates in #1897. Required PR checks and human acceptance remain
-separate from this recorded review. No rendered-glow, direct-seek, pulse-lifecycle,
-cross-host binding execution or physical-performance result follows from declaration tests.
-The separate leaf-adapter section records implemented binding source and its
-validation boundary without reclassifying the future-feature review programs.
+The M0 review for [#1897](https://github.com/yongkyuns/noon/issues/1897) froze
+the named leaf-glow contract below. `docs/architecture.md` remains the sole
+architecture/roadmap authority. `authoring_review.py` and `authoring_review.rs`
+contain proposed M1–M4 operations and are syntax-checked design fixtures;
+they are not executable cross-host qualification. Do not add mocks to make them
+appear supported. The implemented surfaces and their actual execution/oracle
+boundaries are documented separately below; declaration tests alone do not
+establish rendering, seek, lifecycle or performance acceptance.
+`qualification.json` retains the frozen baseline; the API review checked
+`6f7b7f008c45288bf3b92a417078b907d5e4ef5c`.
 
 ## Linear-gradient values and reference boundary
 
@@ -458,8 +510,7 @@ transparent color, and double-applied opacity. The existing `test_reference.py`
 entrypoint includes these tests. These component tests do not establish geometry
 rasterization, GPU pixels, temporal behavior, cross-host parity or performance.
 
-The next authoring slice exposes `Mobject::set_fill_gradient` and
-`LiveSession::set_fill_gradient` with an immutable checked `LinearGradient`.
+Rust uses `Scene::set_fill_gradient` with an immutable checked `LinearGradient`.
 Python uses the ordinary `obj.set_fill(LinearGradient(stops, start=..., end=...))`
 and `obj.animate.set_fill(...)` operations. Omitted opacity preserves its multiplier.
 The paired executable examples are `noon::example_scenes::linear_gradient`,
@@ -581,7 +632,7 @@ fn authored_contract() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     assert_eq!(movement.options()?.run_time, Some(1.5));
     assert_ne!(dot.get_effect("glow")?.node_id(), target.get_effect("glow")?.node_id());
-    assert!(scene.execution_session().is_err()); // explicitly unavailable before M1
+    assert!(scene.into_execution().is_err()); // explicitly unavailable before M1
     Ok(())
 }
 ```
@@ -595,21 +646,12 @@ linear in that owner's effect count, not total scene size. Nodes without effects
 allocate no attachment collection. The store maintains an allocator-derived count
 for constant-time capability rejection, not a second collection/identity authority.
 
-**Current unsupported boundary:** the M0 compiler rejects execution of an
-**effect-bearing store**, even for neutral attachments or detached target copies.
-This deliberately conservative O(1) guard prevents appearance from being silently
-discarded; M1 must replace it with real effect lowering rather than remove it
-without implementation. Live setters use the ordinary publication path and reject
-new effect requests before changing either semantic or runtime publication.
-State-only `become`/replacement is also rejected while effect declarations exist;
-its capture currently has no attachment correspondence. Those conservative gates
-are explicit limitations, not claims of supported live animation or restoration.
-
-The actual attachment slice is leaf-only and named. Family propagation, composed
-filters, unnamed attachments, effective effect queries, GlowPulse, ordinary effect
-animation/channel ownership, and effective Python queries remain future integration work.
-The leaf declaration adapter is implemented below; effect execution remains gated.
-No native or browser setter silently skips unavailable rendering.
+**Historical M0 boundary:** the initial declaration-only checkpoint rejected
+execution of an effect-bearing store rather than silently discarding appearance.
+The execution, live mutation, animation and composed-scope integration described
+in the subsequent qualification sections replaces that early gate. Unsupported
+profiles still fail before publication; state replacement now carries its checked
+attachment values through the ordinary semantic transaction.
 
 ### Parameter-addressed authored transactions
 
@@ -699,8 +741,7 @@ kind of animated scene object or introduce `play_effect`, `GlowTo` or `AnimateGl
 
 This supersedes the earlier handle-returning `add_effect`, `obj.effect(...)`, and
 handle-centric `.animate.set(...)` examples. Python setters return their receiver.
-Rust follows existing checked Scene/LiveSession and target-editor conventions;
-copying Python's fluent syntax is not a reason to bypass live publication.
+Rust uses the Scene's checked authoring and target-editor methods.
 Python imports use **`from noon import Glow, GlowPulse, Pixels`**, alongside
 ordinary animation names. The current frontend is the module `noon.py`, not a
 `noon` package; do not require a new package hierarchy or inject a synthetic
@@ -1094,7 +1135,7 @@ removing the exact `WasmEffectDefinition` class export must make `check-web-pack
 without confusing `WasmEffectUpdate` for that missing class. Preserve red/green logs
 and source/package hashes; these are correctness controls, not performance runs.
 
-## Qualification baseline and implementation handoff
+## Qualification baseline
 
 `qualification.json` retains the exact G0-G6 corpus, reference quality, views,
 targets, budgets and repeated-pair protocol. Every device flag is false; the base
@@ -1129,25 +1170,76 @@ passes, upload ranges/bytes, CPU time and resident/peak/in-flight memory. Radius
 view or topology changes may resize affected local targets. Absent effects add no
 passes, targets, global scan or unconditional time updates.
 
-| Existing owner | Reuse / missing prerequisite |
+The existing `automatic_retained_host_glow_pixels` native GPU test checks G4's
+1/100 active glows among 600 static objects at all three frozen output sizes,
+including exact dirty/upload/pass/allocation counters. Its 1,000 attach/remove
+cycles use the small 80×60 fixture and drain submissions through real readback.
+These are renderer locality and capture-image residency checks; they do not
+measure total driver/in-flight memory, input latency or physical frame pacing.
+The existing `public_scene_glow_pixels_and_lifecycle` test also runs 1,000 public
+`set_glow`/`remove_glow` cycles among 600 authored dots at 80×60. Each attachment
+reproduces the first attached image; every removal restores ordinary pixels and
+retires all capture textures. It requires one examined row, no geometry upload,
+stable attached residency and no filter recompilation after the first cycle.
+These paused live edits do not qualify a timed source or the physical cohorts.
+
+`noon::example_scenes::glow_churn` and `web/python/examples/glow_churn.py`
+add ordinary forward source execution: 100 dots attach/remove Glow ten times
+among the same 600-dot grid, using normal wait segments and no frame callback.
+The native `glow_churn` example runs that source; the existing public Scene
+raster test renders every mutation boundary at 1152×648, checking restoration,
+locality and bounded capture residency. The existing G4 browser qualifier checks
+initial/attached/removed/completed pixels through Rust/WASM and Pyodide.
+This qualifies forward source and lifecycle behavior. Live continuations retain
+their existing arbitrary-seek rejection; the static profiler's rewind protocol,
+physical timing and total driver/in-flight memory remain separate gates.
+
+The paired [Rust G4 builder](../../crates/noon/src/example_scenes/glow_profile.rs)
+and [Python source](../../web/python/examples/glow_profile.py) author the same
+600-dot grid, with 1 or 100 named glows. Ordinary linear target animation changes
+only intensity (0.4→1) or radius (3→6 backing pixels), for at least ten seconds.
+The native entry point is `cargo run -p noon-native --example glow_profile -- 100 intensity`.
+The existing direct frame profiler selects this workload without changing its
+ordinary analytic defaults:
+
+```sh
+NOON_RENDERER_SMOKE=1 NOON_WASM_PROFILE=release bash scripts/build-web-demo.sh
+NOON_PERF_GLOWS=100 NOON_PERF_GLOW_PROPERTY=intensity \
+NOON_PERF_WARMUP=30 NOON_PERF_FRAMES=540 NOON_PERF_TARGET_HZ=60 \
+NOON_PERF_WIDTH=1152 NOON_PERF_HEIGHT=648 node scripts/perf-profile.mjs
+```
+
+Use `NOON_PERF_GLOWS=1`, property `radius`, the other frozen views and the
+selected backend for the other trials. Reports retain every measured rAF/CPU
+sample, available GPU-pass samples and actual renderer-device identity.
+`node scripts/glow-profile-qualification.mjs` compares twelve exact-time
+Rust/Pyodide cases on both raster backends using the existing paired harness.
+The Rust builder declares the complete animation before constructing its
+immutable runtime; exact seeks reuse that plan.
+For G4, the profiler then renders every target-Hz sample through the full authored
+horizon, including its endpoint, before rewind, warmup and measurement. Reports
+keep cold-frame samples/timing separate from measured samples; the CLI requires
+the completed pass and preserves partial data on failure. This is a rendered
+static-Rust trajectory, not Pyodide/native-Python source-completion evidence.
+A single run still does not satisfy the frozen repeated-pair protocol.
+Like the existing analytic profiler, its entry points require the declared
+`renderer-smoke` build; record and freeze that profile for comparisons.
+It does not measure input-to-present, total driver/in-flight memory or authored
+attach/remove cycles. Those remain qualification gates.
+
+| Existing owner | Responsibility |
 | --- | --- |
-| `noon-core::object_state::glow` | Implemented typed values, validation and partial interpolation; not an attachment registry |
-| SemanticStore and canonical transactions | Implemented named leaf attachment identity/order, atomic creation/removal/copy and partial updates in the existing arena; generic scope/program resources remain later |
-| `animation/timeline.rs`, composition and time maps | Reuse shared timing. Existing scalar `Property::Appearance` is NOT an effect map; add finite parameter-channel addressing |
-| Scene/live/target and effective capture | Implemented authored setters, handles, independent object/target/family copies; live execution rejects unsupported effects, and effect channels/capture/cleanup remain later |
-| Runtime/session | Still need actual activation, write leases, ownership-safe pulse cleanup, seek and wake/sleep |
-| Python authoring adapters | Only coercion/signatures/return values/exception mapping; no Python effects state or interpolation |
-| Retained renderer, presentation/inset and Cairo colour | Minimal primitive mask/filter work, safe source bounds and local parameter updates; no new renderer |
-| Existing native/web/offscreen hosts | Same semantic/runtime path, capability queries and resource-generation recovery |
-
-The M0 source review, first-glow decisions, independent references and reuse
-inventory are recorded here. Actual execution tests of those decisions belong to
-the named implementation promotions, not to a mock scene added to satisfy a test.
-M0 merge still requires applicable repository CI; neither this review nor old-head
-performance evidence establishes a current-head merge pass.
+| Core effect values | Typed definitions, checked parameters and partial interpolation |
+| SemanticStore and canonical transactions | Named attachment identity/order, atomic creation/removal/copy and updates |
+| Compiler tracks, composition and time maps | Parameter addressing and ordinary animation timing; Appearance remains its separate channel |
+| Scene/live/target and effective capture | Authoring, activation-time values, independent copies and atomic resource-dependent publication |
+| Runtime/session | Driver leases, pulse cleanup, effective values, seek and wake/sleep |
+| Python adapters | Coercion, signatures, return values, exceptions and host callbacks; shared Rust owns effects semantics |
+| Retained renderer | Source/filter resources, bounds, format admission and local preparation/uploads |
+| Native/web/offscreen hosts | Platform capabilities, resource readiness, presentation and GPU lifecycle |
 
 
-### M1 ordinary parameter-channel integration (still guarded at Scene orchestration)
+### Ordinary parameter-channel integration
 
 `CompiledEffect::parameter_channels` derives only requested color, radius and
 intensity endpoints from a coherent activation-time runtime value. These become
@@ -1173,13 +1265,10 @@ allocation. Zero intensity must produce bit-exact ordinary rendering. Raster
 capture origins preserve the output 2x2 derivative-quad grid; integer pixel
 alignment alone can change SDF antialiasing as capture bounds move.
 
-These are actual ordinary runtime-track and GPU-publication tests, not yet a
-complete public `Scene.play`/Python-worker test. Normal Scene execution remains
-guarded pending semantic target activation/completion, live attachment setters,
-automatic host preparation and worker serialization. The source-alpha oracle still
-uses production primitive rasterization; GPU timing and physical-hardware
-performance are separate acceptance requirements. Pixel tolerances remain 2
-RGBA8 bytes and mask error remains 1e-5.
+These targeted runtime/GPU tests complement the ordinary Rust/Python execution
+qualification. Their source-alpha oracle uses production primitive rasterization;
+GPU timing and physical performance remain separate acceptance requirements.
+Pixel tolerances are 2 RGBA8 bytes and mask error is 1e-5.
 
 ## Retained ordered raster operators
 
@@ -1208,6 +1297,26 @@ truncation/clear retires them. Every later-pass profile/capability/budget reject
 precedes prefix mutation or queue writes. Clean calls upload/encode/allocate
 nothing. No physical-device performance guarantee follows from these counters.
 
+The ordinary renderer can compose a single encoded-LDR Glow in its existing
+painter-placement draw, preserving RGBA8 quantization before final opacity. It
+keeps the two Gaussian-mask images (8 bytes/pixel); intensity edits upload 32
+bytes and encode no separate filter pass. Parents, backdrop prefixes, isolation
+and private Visibility use materialized outputs. A newly active consumer prepares
+that output before reading it; its target stays warm for later reuse. Aggregate
+capture admission retains the conservative 12-byte Glow reservation, while
+`GlowScope::scratch_bytes` reports allocated filter images. Neither counter
+measures driver or in-flight memory.
+
+Independent placement-only Glow masks of equal size can share four-target
+horizontal/vertical passes. Each mask keeps its own images and kernel; no
+resolution or precision changes. Only prepared dirty owners enter the batch.
+Remainders and devices below the four-target/binding limits use scalar passes;
+materialized consumers retain their existing ordering. Two shared pipelines are
+created lazily, with no added textures. `blur_passes` counts physical passes
+(50 for 100 masks), not individual masks. Existing native Gaussian and retained
+host tests compare independent kernels and scalar output, including radius edits,
+one-owner invalidation, clean reuse and the scalar remainder.
+
 `gpu::effect_stack::tests` includes literal CPU witnesses, sparse invalidation,
 aggregate budget, neutral, retirement and late-failure tests. Its ignored native
 pixel test uses a separate direct 2-D convolution/compositor and checks every
@@ -1217,6 +1326,68 @@ mixed quantized operators and four bytes for the eight-Gaussian boundary witness
 transparent input, fractional signed shadows, scene/pixel units, sigma 64, final
 opacity, clean exact repeat and invalidation recovery. These tests qualify the
 operator contract; they do not assert public group or animation-stack support.
+
+### Nested original coverage and private Visibility
+
+Nested capture keeps painted output and original coverage separate. An ancestor
+silhouette consumes the child's original coverage before authored Blur/Glow,
+with child scope opacity applied once after that child is composed. Dissolve's
+private Visibility binding clips both streams using the same normalized source
+domain and seeded mask. An ordinary named NoiseDissolve remains a painted filter;
+it does not acquire the private lifecycle role or clip original coverage.
+
+The immutable compiled attachment column preserves the exact trailing private
+binding generation through initial, prepared and target lowering. Parameter
+updates cannot change that role. The genuine worker boundary carries it in
+protocol 27; direct native and Rust/WASM execution remain typed in process.
+
+The nested native raster corpus checks partial masks, empty/full endpoints,
+reverse progress, cleanup, ordinary named-filter witnesses and clean reuse
+against scalar noise and full two-dimensional convolution references. The normal
+Rust Scene capture regression separately checks leaf and family
+Dissolve under an ancestor silhouette, including exact empty output and rewind.
+These native checks do not establish browser or physical-device pacing support.
+
+The paired `scope_opacity` creator programme additionally animates child and
+ancestor opacity, including a returning rate, then dissolves and restores the
+child beneath an ancestor silhouette. `scope-opacity-qualification.mjs` samples
+50 authored times through the normal direct Rust/WASM and Python-worker paths
+on WebGPU and WebGL2. Literal rectangles, independently evaluated seeded fields
+and full two-dimensional Gaussian composition define its whole-frame reference,
+with a predeclared two-byte bound. Empty endpoints are exact; returning samples
+and completed restoration compare byte-for-byte with their earlier same-backend
+frames. The same Rust programme runs through native fixed-time export. The
+composed, scope-opacity, Dissolve and named NoiseDissolve browser scripts retain
+raw images and reports in CI. These are correctness and reuse checks; the
+physical-device frame-pacing gate remains separate.
+
+### Appearance replacement and saved state
+
+Ordinary object/family `become` replaces ordered attachment values while retaining
+receiver object identity. A saved copy is an independent semantic snapshot;
+restoration creates fresh receiver-owned effect generations, retires the old
+bindings and leaves the saved copy unchanged. An exact self replacement retains
+its bindings. Nested and unequal families reuse the existing topology/alias
+reconciliation; target object IDs never transfer to the receiver.
+
+Live replacement captures coherent effective effect parameters and composed
+opacity, including after completion and rewind when authored endpoint values
+differ. Private Visibility remains a distinct trailing role beside named mask
+filters. Driver/callback/segment publication barriers still apply; copying a value
+does not copy animation ownership. A stale attachment-column capture produces the
+typed `effect.capture_mismatch` diagnostic. Deferred geometry/property writes and
+terminal attachment retirements publish as one transaction, so late isolation
+failure retains the original scene, resources, handles and runtime frame. Stack
+admission checks the final eight-binding profile after retirement.
+
+The paired `effect_restore` programme saves an ordered leaf stack and a composed
+family, changes parameters, removes attachments, restores, edits the saved copies
+without changing displayed output, restores those edited values, and cleans up.
+Native fixed-time export and `effect-restore-qualification.mjs` compare complete
+restored frames exactly with the earlier same-backend frame and check independent
+interior alpha witnesses. Existing operator references separately qualify the
+filters. Capture raster viewports follow the current logical footprint; retained
+texture capacity may grow without changing that projection or restored pixels.
 
 ## RGBA Gaussian raster prerequisite
 
@@ -1363,3 +1534,646 @@ requires identical direct Rust/WASM and Python images on actual WebGPU/WebGL2,
 visible outside-source shadow, animated radius/color/offset, exact neutral/removal
 and idle source completion. These are qualification commands, not a claim of
 physical-device pacing or completion of the remaining M0–M5 scope.
+
+
+### Bounded square-cell sampling
+
+`Pixelate(size=Pixels(12))` attaches to an ordinary object or isolated composed
+family with `add_effect(..., name="detail")`. Animate the same checked size using
+`obj.animate.set_effect("detail", size=Pixels(1))`. The executable Rust and Python
+`pixelate` lessons reduce detail, reach exact identity, change units immediately,
+and remove the treatment through ordinary scene/live operations.
+
+Cells follow screen axes and are anchored at the original source's top-left
+projected bounds, excluding capture padding and retained texture capacity. The finite raster profile rounds cell lengths and the source anchor to
+1/256 output pixel (nearest, ties away from zero) and computes cells with signed integer arithmetic, so
+decimal lengths and negative padding have stable ties on every backend. Each
+cell selects the nearest input texel at its mathematical centre; texels beyond
+the preceding image are transparent. All encoded-premultiplied channels sample
+together. Final scope opacity applies once. A resolved size at most one output
+pixel bypasses the filter exactly. The finite backend profile accepts sizes up
+to 128 output pixels and conservatively expands each input's contribution bounds
+by the cell size. Ordered filters consume the preceding output; they retain the
+original source anchor. Geometry, layout and picking remain authoritative.
+
+A plain size uses scene units resolved through the uniform planar view; `Pixels`
+means final output pixels. Object rotation/scale affects source geometry, while
+cell axes and resolved scene/pixel length follow the view. Unit changes are
+immediate value edits and cannot interpolate; nonfinite/negative sizes reject.
+The same `Size` channel, generational bindings, copy/restore and driver arbitration
+serve native Rust, direct Rust/WASM and the Python wrapper. Only the genuine
+worker boundary advances to protocol 28; older envelopes reject atomically.
+
+The retained sampled-image owner is shared by seeded masks and cells. Programs
+and per-scope images survive parameter edits; clean preparation uploads and
+encodes nothing. There is no extra scene, clock or renderer. Native independent
+cell-rectangle references cover RGBA/BGRA sources, fractional/negative origins,
+transparent borders, exact identity and warmed reuse. Ordered convolution/mask
+references exercise both operator orders. The authored native export and paired
+browser corpus use literal colored rectangles and alpha composition, excluding
+only a declared one-pixel source-AA band from the source oracle; every texel of
+the sampling operator is independently checked separately. The browser helper
+retains complete paired images and reports. This is a distortion filter over its
+explicit object/group input; backdrop dependencies, HDR/bloom and custom WGSL
+remain separate #1897 gates. Source/build-qualified results live in its issue/PR.
+
+
+### Clipped backdrop replacement operator prerequisite
+
+The renderer's `BackdropCompositeFilter` consumes three explicit, aligned
+encoded-premultiplied RGBA inputs: processed painter prefix, target paint before
+final owner opacity, and the target's original coverage. It clips paint to that
+coverage and partitions the panel into painted and glass-only areas. It first
+attenuates the existing destination by covered panel opacity, then adds the
+prepared contribution. This replaces the backdrop through transparent content;
+ordinary source-over would duplicate background alpha. Panel opacity applies
+once to the entire result. This finite profile uses RGBA8/BGRA8 unorm,
+single-sample 2D inputs and a single-sample output attachment. It applies no
+additional color transfer and does not qualify HDR or sRGB attachments.
+
+Two retained RGBA8 images cost eight bytes per capture pixel. Three lazy shared
+pipelines prepare both images in one MRT pass and place them with erase/add
+draws. Warm input/opacity edits reuse the images, buffer and pipelines; placement
+changes upload only the uniform. Clean preparation uploads and encodes nothing.
+Cold zero opacity allocates nothing; warmed zero opacity retains and charges its
+resources but emits no draw. Retiring a scope releases them. All checked input,
+budget, placement and revision failures precede mutation; abandoning preparation
+requires invalidation before retry, as for the other retained raster operators.
+
+`cargo test -p noon-render-wgpu --lib gpu::backdrop_composite::tests --
+--include-ignored --nocapture` checks retained lifecycle/locality and actual GPU
+pixels against an independent f64 scalar layer-area mixture. RGBA/BGRA input and
+output profiles cover transparent/nonblack fields, soft coverage, paint outside
+the clip, opacity endpoints, negative placement and viewport clipping. The byte
+bound is two per channel; zero-opacity and fully offscreen images are exact.
+Actual corrupted shaders prove the same oracle rejects ordinary source-over
+and double scope opacity. Set `NOON_BACKDROP_ARTIFACT_DIR` to retain every
+input, actual/reference RGBA buffer and exact profile, including seeded defects.
+CI runs these tests on its raster adapter and retains these raw artifacts.
+
+This operator alone does not select or validate painter-prefix dependencies or
+expose a creator-facing attachment. The finite integrated profile below supplies
+shared admission, local invalidation, capture ordering and creator-facing
+execution. Ordinary object/group filters keep their existing input roles.
+
+
+### Painter-prefix capture prerequisite
+
+`PainterPrefixCaptureFilter` records a bounded, explicitly selected painter
+prefix into an input texture. It uses the same retained geometry, text, images,
+original draw order and source-capture encoder as ordinary isolated effects. Its
+request names an existing target painter anchor, an immutable candidate list,
+physical capture origin/size, source-content revision and the consuming view's
+encoded-premultiplied clear color. Prefix output is a separate input; preparing
+it does not replace or repaint the target.
+
+Candidates must be unique, strictly increasing in current painter order, and
+strictly before the anchor. Spatial gaps and an empty prefix are valid here;
+ordinary isolated groups still require their complete contiguous intervals.
+Previously prepared leaf filters and outermost earlier isolated groups contribute
+their actual retained results, including each group's final opacity once. A
+selected group replacement must contain every member of its interval in order;
+a missing member cannot consume a different following candidate. Stale child
+outputs reject before committing a new prefix image.
+
+The execution/publication caller owns dependency discovery and must supply the
+complete expanded-window closure, including needed offscreen content and whole
+isolated intervals. It advances the source revision for selected content, order,
+mesh or text changes. The operator validates the supplied selection; it does not
+prove that an incomplete spatial query selected every required dependency. It
+owns no scene membership, identity allocator, semantic values or clock.
+
+This RGBA8/BGRA8 unorm profile captures an exact physical window using a
+four-sample source attachment and a resolved image: twenty retained texture bytes
+per pixel. Prefixes keep the same view clear color through transparent gaps and
+outside the viewport. Warm fixed-window work reuses textures, buffers and image
+bindings; clean preparation with the same immutable selection/revision performs
+no uploads, allocations or passes and checks only its retained key. Parameter
+changes remain local to this selected capture. Retiring or recreating a scope
+releases its derived resources. Hosts own submission and in-flight budgets;
+abandoned preparation requires invalidation before retry. An existing GPU resource
+identity binds each scope to its renderer; replacement requires a fresh/cleared
+scope, and a new device also requires a new filter. Old renderer image bindings
+cannot silently follow a new context.
+
+`cargo test -p noon-render-wgpu --lib gpu::source_capture::prefix::tests --
+--include-ignored --nocapture` checks order/admission, atomic failures, reuse,
+resize, revision exhaustion, earlier filtered inputs and stale-input rejection.
+Actual RGBA/BGRA captures compare against literal independent image/rectangle
+layers on transparent, opaque and translucent nonblack backgrounds, including
+negative origins and windows outside the viewport. The accepted byte bound is
+two per channel; empty or fully offscreen captures are exact. A real wrong-clear
+capture proves the same reference rejects a transparent-clear substitution and
+recovers through normal invalidation. `NOON_PREFIX_ARTIFACT_DIR` retains complete
+actual/reference RGBA buffers and exact fixture profiles; CI runs and retains the
+corpus. These are capture/filter composition proofs over an independently defined
+fixture, not proof of arbitrary source rasterization or physical frame pacing.
+
+This capture prerequisite is used by the integrated finite `BackdropBlur` profile
+below. Its resource identities remain derived GPU identities, never semantic
+membership or an alternative clock.
+
+### Finite painter-prefix glass profile
+
+`BackdropBlur(radius=Pixels(12))` processes the earlier painter content beneath
+an object or one isolated composed family. Attach it with
+`card.add_effect(..., name="glass")` and animate it with
+`card.animate.set_effect("glass", radius=Pixels(18))`. Rust uses the same checked
+`BackdropBlur` value, generic named attachment and family method-target operation.
+A plain radius uses scene units; `Pixels` uses final output pixels. Radius is the
+Gaussian standard deviation under the existing finite Blur kernel profile.
+
+The target's original coverage masks the background treatment, independently
+of target paint alpha. Preserve child object opacity in that coverage; apply the
+owning scope's final opacity once. Its own path, image and text paint stays sharp.
+A trailing private Visibility mask treats both the paint and original coverage,
+so a complete dissolve removes the background treatment too. Radius zero bypasses
+exactly to ordinary output; removing a neutral attachment is also exact.
+The mathematical replacement/color profile above remains authoritative: this is
+encoded-premultiplied RGBA8/BGRA8 unorm composition, not the later linear HDR/bloom
+profile.
+
+Admission uses the shared semantic/compiled dependencies and Runtime spatial
+index. Prefixes use physical painter anchors, include required offscreen inputs
+and earlier qualified filtered contributions, and prepare in dependency order.
+Unsupported spatial/external prefix inputs, noncontiguous/aliased isolation,
+nested backdrops, earlier backdrop prefix inputs and mixed ordinary-filter/backdrop stacks fail the finite
+profile's checks. The checked authored stack is one backdrop plus optional
+private Visibility. Effective animated prefix-capability failures reject GPU
+preparation without replacing the retained output/resources; the Runtime frame
+can already have advanced. This is not a Runtime rollback guarantee.
+
+The paired `glass_lens` Rust/Python examples move a mixed path/image/text card
+over a prepared checker image, animate radius, neutralize/remove/reattach, and
+dissolve out/in through ordinary authored segments. Native `noon-export` captures
+that same Rust live program. `scripts/glass-lens-qualification.mjs` compares all
+pixels at 22 authored times on each of WebGPU and WebGL2; exact neutral/removal
+and dissolve restoration supplement a literal full-out background oracle.
+These are frontend/composition checks, not independent source-raster proofs.
+The native coordinator corpus separately checks padded direct 2D Gaussian
+references, opacity/masks, offscreen inputs, camera/physical resize, resource
+plateaus and real wrong-input/bounds/sampling controls at a two-byte bound.
+
+`scripts/effect-resource-recovery-qualification.mjs` uses actual browser device
+or context destruction. Direct Rust/WASM survives repeated viewport churn,
+a zero-sized surface and GPU replacement at the same authored state. Completed
+Python glass, shader-material, HDR/Bloom and 100-Glow G4 source replay agrees with
+forward Rust output, including resized views. The dense G4 radius workload also
+exercises direct Rust/WASM device/context recovery. Shader and Glow rows remain
+present across recovery.
+WebGL workers recover in place; WebGPU workers use an explicit host `restart()`
+after confirmed device loss. Idle WebGPU worker loss does not currently emit a
+callback diagnostic in this profile: automatic idle-loss notification/recovery
+is not qualified. Recreation must retain the current shared scene/time without
+a repair seek, retire old workers and reproduce the previous pixels exactly.
+A paused effect is observed for 150 ms with no extra presentations
+or pending updates; that bounded observation is not a physical latency or
+performance claim. Direct live-program hosts retain their existing monotonic
+source progression contract; this test does not add backward live-source seek.
+
+These finite correctness/recovery profiles do not close #1897. Remaining host,
+physical-device performance and failure/capability qualification, native Python
+and creator support documentation remain required.
+
+### Linear HDR Bloom operator and color contract
+
+`gpu::HdrBloomFilter` processes an actual linear alpha-associated
+`Rgba16Float` image. Its caller must provide finite nonnegative radiance,
+alpha in [0,1], RGB <= 64*alpha and transparent black when alpha is zero.
+It cannot reconstruct emission from an already clamped compatibility frame.
+Scene emission and camera Bloom use the authored/host integrations described
+below. The ordinary encoded-premultiplied LDR path does not call this operator
+and retains its existing color contract.
+
+The finite operator is deliberately specified independently of its WGSL:
+
+1. For premultiplied linear source `S`, use Rec.709 luminance
+   `L=.2126*S.r+.7152*S.g+.0722*S.b`. Bright extraction is zero for
+   `L<=threshold`; otherwise `E=S*(L-threshold)/L`. Threshold is [0,64]
+   in alpha-associated linear luminance, rather than unassociated brightness.
+2. Blur all four extracted channels with a normalized Gaussian of standard
+   deviation `sigma` [0,64] in final physical pixels and support
+   `ceil(3*sigma)` in each direction. Outside the supplied image is transparent
+   black. The full kernel remains normalized at edges. At sigma zero the kernel
+   is an exact point sample. The caller owns the padded view extent.
+3. With intensity `i` [0,8] and blurred extraction `G`, retain linear HDR
+   `C.rgb=S.rgb+i*G.rgb` and
+   `C.a=S.a+(1-S.a)*clamp(i*G.a,0,1)`. RGB is not clamped to one or alpha.
+   Intensity zero keeps the actual HDR base and skips extraction/blur work.
+4. Resolve once: transparent output is exact zero; otherwise unassociate by
+   `C.a`, apply componentwise Reinhard `x/(1+x)`, then the piecewise sRGB
+   transfer (12.92*x below/equal .0031308, otherwise 1.055*x^(1/2.4)-.055),
+   and associate once by `C.a`. The final `Rgba8Unorm` bytes are explicitly
+   encoded-premultiplied SDR. They require a presentation path without an
+   additional sRGB transfer. The separate float output remains linear HDR.
+
+A fresh disabled-Bloom scope prepares only combination and display resolution:
+one float image and one unorm image, **12 retained image bytes per pixel**.
+First enabling Bloom adds one float image and the extraction/blur programs,
+bringing the image total to **20 bytes per pixel**. Extraction/vertical output
+share one float image; horizontal/combined output share the other. These remain warm
+until resize or clear, avoiding allocation churn during animated intensity edits.
+Source images, the 1056-byte uniform, program/binding objects and in-flight host
+frames are excluded. Adapter/device support and parameters/extent/budget are
+validated before changing coherent state; rejection preserves the last output.
+Each scope belongs to its creating filter/device until cleared.
+A clean scope uploads/allocates/encodes nothing. Intensity edits upload 16 bytes
+and encode only combination/resolution. Radius edits re-extract because vertical
+output overwrites extraction; source
+or threshold changes invalidate their real dependency closure. Disabled Bloom
+defers extraction/blur work. Source replacement rebinds only its consumers;
+resize prepares two images when disabled or three when enabled, reusing programs.
+Clearing retires all scope images/bindings; an abandoned encoder requires explicit
+invalidation before retry. Submission and device recovery remain host responsibilities.
+
+The native GPU qualification uses independent f64 full two-dimensional
+convolution, not the production separable kernel or GPU intermediate readback
+as expected data. It covers 84 profiles: impulse, asymmetric varying alpha,
+edge energy, nonblack constant, black/translucent, near-black and transparent;
+sigma 0/.65/2.25/64 and intensity 0/1.5/8. All source values are exactly
+representable as float16. Per-channel linear acceptance is
+`abs(actual-reference) <= .006 + .004*abs(reference)`; final display acceptance
+is two bytes. This combined absolute/relative bound accounts for float16 pass
+rounding and is not an absolute .006 bound. Readback must actually retain RGB
+above one and exactly preserve an empty input. Real GPU source replacement,
+encoder abandonment/retry, resize, retirement/recreation and cross-device
+rejection supplement structural resource/locality tests. Actual mutated WGSL
+programs that clamp HDR early, apply output transfer twice, or premultiply twice
+must fail the same display oracle. CI retains actual float16 bytes, independent
+f64 expectations, actual/reference display bytes, profile metadata, adapter
+capabilities and negative-control captures. Native evidence does not establish
+WebGPU/WebGL2 support or physical-device performance.
+
+Retained capture retirement must precede painter-dependency sorting when a
+publication shrinks after replay restoration or explicit runtime row reclamation.
+Retired execution slots have no rank in the current publication. The structural
+regression test grows five tail glow sources, publishes them, removes/reclaims
+those rows before renderer publication, and repeats the cycle. Old capture
+mappings/resources must retire, the surviving capture must remain coherent, and
+a clean follow-up must do no work. Browser showcase replay separately exercises
+the actual source-completion/restart path; successful first-pass playback is not
+accepted as evidence that arbitrary-order replay succeeds.
+
+The planar `Rgba16Float` draw path now specializes the existing source-color
+helper to linear radiance: associate by effective alpha exactly once, preserve
+RGB above one, and skip compatibility UNORM/Cairo source quantization. Analytic,
+path and continuous-paint pipelines choose the same specialization. Other target
+formats retain the original helper. An offscreen float scene target must never
+inherit the WebGL drawing buffer's presentation decode; display transfer still
+belongs after HDR resolution. This target contract expects **already-linear
+packed source values**. Authored color decoding and retained asset preparation
+are separate consumers of the selected view profile, described below.
+
+The native float-draw oracle uses the ordinary frame preparer, uploads and painter
+submission, with two pixel-aligned rectangle/path layers. Sixteen profiles vary
+path/analytic routing, solid/continuous-paint programs, painter order and
+transparent/nonblack clears. Independent
+f64 source-over arithmetic accounts for color alpha, object opacity and appearance
+before comparing every float channel. The produced float image then feeds the
+real bloom operator; display expectations come from the independent 2D bloom
+reference applied to the mathematical scene expectation. The actual previous
+clamping shader is compiled into an otherwise identical float render pipeline
+and must fail the linear oracle. A clean same-frame upload must remain zero.
+This numerical raster-input proof does not substitute for the required paired
+public Rust/Python authoring, authored-time/seek/export or browser HDR gates.
+
+The authored view contract uses `ViewColorProfile` on the existing
+semantic 2D camera. Compatibility is the default; LinearHdr declares the shared
+linear-radiance/display contract. The ordinary semantic transaction validates the
+camera role and supports transaction-local creation, staged reads and atomic
+rollback. Profile selection lowers to the camera's existing compiled execution
+slot. A static live edit uses the ordinary execution transaction, changes only
+that slot's metadata/publication and leaves effective object rows untouched.
+The Runtime publication borrows this metadata from its current compiled revision;
+it introduces no second state map, scene, identity allocator or clock. Retained
+replay exchanges the same compiled revisions, so profile queries follow authored
+time without a renderer-owned history. Repeating an identical edit is a no-op.
+Ordinary object creation allocates no view-profile shadow entries. Visual become
+preserves the receiver's camera/view meaning; explicitly removing its camera role
+clears the profile to compatibility.
+
+Native Rust tests exercise initial/live lowering, pending camera creation,
+compiled transaction staging, mixed valid/invalid rollback, receiver ownership,
+clean no-op publications, unchanged unrelated frame rows and repeated replay.
+The same publication now carries the compiler-derived primary camera identity.
+`FramePreparer::prepare_publication` reads that view's current profile and decodes
+authored sRGB RGB channels before linear association/blending. Alpha, appearance
+and object opacity retain their existing meanings. Solid fill/stroke, path
+background stroke and reveal-head packing use the same conversion; continuous
+paint stops are decoded before premultiplied interpolation. Compatibility and raw
+already-linear raster entry points preserve their existing packing contract.
+A global profile change repacks derived colors once; subsequent clean frames
+repack/upload nothing and an ordinary local color edit changes only its row.
+
+`cargo test -p noon --test authored_view_color_raster -- --ignored --nocapture`
+qualifies the typed native Rust Scene -> compiler -> Runtime publication -> planar
+float draw -> real Bloom -> SDR path. Sixteen cases vary analytic/path sources,
+solid/varying-gradient paint, painter order and transparent/nonblack linear
+clears. Independently computed f64 sRGB decoding, premultiplied interpolation and
+source-over provide the scene expectation; the separate full-2D Bloom reference
+consumes that mathematical expectation rather than GPU readback. Every linear
+channel must differ by at most 0.002; every display channel by at most 2 bytes.
+An actual draw omitting the profile consumer must fail the linear oracle by more
+than 0.05. A clean same-publication repeat must upload zero bytes. Raw pixels,
+mathematical expectations and a manifest can be retained with
+`NOON_AUTHORED_VIEW_ARTIFACT_DIR` and are collected by native CI.
+
+The canonical `RetainedFramePreparer` now propagates that same publication profile
+through ordinary geometry, mixed scratch geometry, outlines and the candidate
+visibility projection. Prepared geometry/retained views expose the derived color
+profile. Raw/transport entry points explicitly retain compatibility packing; a
+prior direct publication does not turn them into another profile authority.
+
+For a float working target, straight sRGB bitmap texels are decoded before each
+reconstruction tap is associated. Nearest, bilinear and Keys cubic (`a=-1`) sample
+the resulting linear premultiplied values with their existing addressing rules.
+Intrinsic reconstruction/clamping precedes final object opacity, applied once.
+This matters for cubic overshoot: scaling taps before the intrinsic clamp changes
+output and made bitmap objects disagree with image fills. Compatibility keeps its
+existing reconstruction and opacity order. The HDR repair has an actual failing
+old-order pixel witness; the 0.002 bound was unchanged.
+
+Mask glyph coverage remains linear alpha; authored tint RGB is decoded at the
+vertex. Color atlas pages retain encoded `Rgba8Unorm` bytes; the glyph shader
+decodes each tap explicitly, avoiding fixed-function sRGB approximation under
+amplified radiance. HDR associates taps before interpolation; Compatibility keeps
+its existing unassociated filtering and encoded-tint rules. No additional atlas
+mode, retained texture or per-frame pixel upload is needed.
+
+The authored-view integration test now runs the same 16-case independent planar
+source/Bloom oracle through direct, canonical retained, and retained-visible
+preparation. Its `retained_color_assets` module adds 24 real Rust Scene bitmap/
+image-fill cases: three reconstruction modes, painter reversal, transparent/
+nonblack clears, 24 exact opacity restorations, immutable texture reuse and clean
+zero uploads. Every float channel uses the frozen 0.002 bound; display uses 2
+bytes. A real omitted-asset-decoder shader must fail; the old opacity-order
+shader also fails the independent reconstruction contract.
+
+`glyph_working_color_matches_independent_tint_atlas_alpha_and_rejects_real_negatives`
+runs eight float mask/color-atlas cases against independent f64 tap reconstruction
+and tint/source-over arithmetic, including transparent colored texels and nonblack
+clears. Actual compiled shaders for encoded tint/unassociated filtering and double
+atlas decoding must fail. Empty dirty ranges upload zero glyph instance bytes.
+The real Rust-authored `HDR` text scene adds three live tint/restoration phases
+composited over ordinary geometry, with clean zero uploads and no geometry upload
+for the text-color edits. The ordinary white-text compatibility render supplies
+qualified glyph **coverage only**; the independent color/composition reference does
+not claim to replace the font rasterization oracle. Native CI preserves the raw
+float images, expectations, coverage source and manifests alongside the existing
+linear-scene proof.
+
+These input oracles qualify color preparation. Composed Blur, host presentation,
+authored emission and camera Bloom have separate proofs below. Backdrop/inset/
+spatial HDR and the remaining physical/performance gates are not promoted.
+
+
+### Linear composed Blur capture prerequisite (#1897 M4)
+
+The same retained Gaussian filter now specializes its derived storage by working
+format. Compatibility retains the six packed RGBA8 reconstruction images and one
+RGBA8 output (28 bytes/pixel). Linear Blur uses one RGBA16Float image per axis and
+one RGBA16Float output (24 bytes/pixel), with one attachment per pass and no unit
+clamp, packing, input decoding or output transfer. Its source is already linear
+and alpha-associated. Radius/transparent-border normalization and the final
+once-only scope opacity retain their existing semantics. Programs are shared per
+renderer/format; each capture owns only disposable resources and revisions.
+
+Composed and mixed source captures allocate their existing working format. Tile,
+source, optional original-coverage and multisample budgets use that format's
+actual texel size, and the ordered stack checks every pass before mutating its
+prefix. Unsupported HDR Glow, Shadow, Pixelate, Dissolve, Visibility and backdrop
+routes return an explicit preparation error; they do not run RGBA8 operators on
+float radiance. Spatial and inset capture support remains a separate gate.
+
+`gpu::gaussian_blur::tests::hdr` qualifies 36 already-linear float inputs against
+an independent full two-dimensional f64 Gaussian and then the real Bloom/output
+operator. It checks all float/display channels against the frozen bounds
+`0.006 + 0.004 * abs(expected)` and 2 bytes, respectively. Four source patterns,
+three radii and three opacities cover bright radiance, alpha, edges and low
+values. A real compiled early-clamping shader must fail the same oracle. Resource
+checks cover exact 24-byte storage, clean reuse, opacity-only final work, source
+binding/revision changes, resize, invalidation, clear, format switches and atomic
+budget rejection. A later neutral unsupported operator must reject before an
+ordered prefix allocates or changes its coherent output.
+
+`hdr_captures::authored_composed_and_mixed_blur_preserve_linear_color_and_local_revisions`
+runs ordinary Rust Scene authoring through source visibility and retained capture
+-> one/two ordered Blur passes -> painter placement -> real Bloom/SDR route.
+Its 36 authored phases cover geometry groups and geometry/image groups, overlapping
+alpha, a nonblack clear, radius/opacity/child edits, zero radius/opacity, unrelated
+edits, exact restoration, fresh/incremental equality and zero clean work. The
+reference independently decodes authored colors/asset texels, composes literal
+pixel-aligned bounds, applies full two-dimensional convolutions and scope opacity
+once. Native CI preserves raw float/display output and mathematical expectations.
+These authored inputs are unit-valued: their above-one witness occurs after
+Bloom. The separate raw-input proof establishes above-one radiance before Blur.
+
+This composed-Blur proof does not qualify HDR text captures, unsupported operator
+routes or broader view capabilities. Host and emission integration follows below;
+the remaining M5 gates stay open in #1897.
+
+
+### Authored camera Bloom and native capture integration (#1897 M4)
+
+`Bloom` is a checked view-input definition on the existing Camera2D controller,
+with radius in scene/final-pixel units, associated-linear Rec.709 threshold
+[0,64], and intensity [0,8]. `EffectUpdate::threshold` has its own ordinary typed
+track property; it shares capture, target intent, activation, reconciliation,
+Runtime sampling and attachment generation with other effect parameters.
+Explicit zero remains a write. Radius units cannot change during interpolation.
+
+The initial view stack admits one Bloom attachment on a LinearHdr Camera2D.
+Ordinary objects, families, mixed view/object stacks and duplicate view effects
+reject before publication. Removing Bloom and leaving HDR in one transaction is
+valid; changing to Compatibility with Bloom still attached rejects atomically.
+A camera controller is non-drawable by semantic role. Its paint and opacity never
+scale or become the view input. Renderer publications borrow effective view
+attachments directly from that camera's ordinary Runtime row.
+
+The same `HdrBloomFilter::prepare_view` resolves the selected camera's effective
+values. A LinearHdr view without an attachment still resolves its linear base
+with zero added Bloom. The ordinary native `SessionCapture`/`capture_frames` host
+selects the working format from that publication, decodes the authored clear,
+renders through the same retained renderer, and uses the same Bloom/SDR output.
+Its metadata distinguishes `LinearHdrSdrRgba8Opaque` from compatibility UNORM
+bytes. It checks float usages, blending, four-sample support, image budget and
+its finite primary-2D/no-inset/no-spatial profile before allocating the HDR view.
+Profile changes rebuild only disposable renderer state; they add no authored
+scene, view-parameter map or playback clock.
+
+The camera proof animates radius, threshold and intensity, samples forward and
+backward authored times, checks exact seek restoration/removal and clean reuse,
+and verifies nonzero camera-frame opacity cannot affect output. An actual wrong
+opacity-uniform consumer must fail its independent full-2D f64 reference. The
+normal capture-host proof covers persistent edits, zero energy, removal and
+Compatibility/HDR/Compatibility transitions over a nonblack authored clear,
+with independent display expectations and exact restored output.
+
+Hosts whose working format disagrees with the authored profile reject explicitly.
+Native interactive and browser/Python integration is described below. HDR-derived
+SDR video/file admission remains a separate output qualification.
+
+### Encoded SDR surface presentation prerequisite (#1897 M4/M5)
+
+`EncodedDisplayPresenter` consumes the same resolved encoded, alpha-associated
+SDR texture produced by `HdrBloomScope::display_output()`. It point-loads one
+full-size pixel per destination pixel, with no scaling, blending, second tone
+map or intermediate texture. RGBA8/BGRA8 UNORM targets receive those encoded
+values directly. For the corresponding sRGB attachments, one decode immediately
+before the hardware store cancels that store's encoding. Alpha remains unchanged;
+the associated RGB bytes are decoded as stored, without unassociation or another
+premultiplication. The existing browser GL bridge uses this same implementation
+for its drawing-buffer transfer.
+
+The finite public path admits only single-layer, single-mip, single-sample 2D
+encoded RGBA8/BGRA8 UNORM inputs and equally sized RGBA8/BGRA8 UNORM/sRGB render
+targets. Unsupported formats/usages, feedback aliasing, mismatched extents,
+and unprepared output reject before encoding. Sources and destinations belong
+to the constructing device; device replacement creates a new presenter.
+A source replacement creates one binding; unchanged source identity, changed
+pixels, and repeated presentation compile or upload nothing. Clearing retires
+the source/binding while retaining the single format program. A presentation
+still requires one full-view pass for each newly acquired destination.
+
+The native proof uses eight associated-byte roundtrips across both input channel
+orders and all four output formats. RGB tolerance is zero for UNORM and one byte
+for sRGB; alpha tolerance is zero. Sixteen further cases carry actual >1 float
+radiance through the real Bloom operator into those formats and the independent
+full-2D reference, retaining the existing two-byte display bound. Real GPU
+consumers with omitted or extra final decode must violate the same frozen
+one-byte roundtrip bound. Raw RGBA-normalized pixels, literal expectations,
+adapter identity and failure counts are retained for independent checking.
+
+Native and browser hosts reuse this presenter. Its numerical proof does not
+establish physical presentation or performance acceptance.
+
+Compatibility rendering also uses the existing presentation bridge for native
+sRGB attachments, preserving the encoded-byte composition used by frame capture.
+The bridge retains one UNORM scene target (four bytes/pixel) and one final transfer
+pass; unchanged extents reuse that target. Native UNORM attachments bypass it,
+and float radiance targets keep their separate HDR output transfer.
+
+### Native window HDR and viewer-overlay integration (#1897 M4/M5)
+
+The normal native frame loop selects its working format from the current
+borrowed Runtime publication. A LinearHdr primary 2D camera renders into a
+retained RGBA16Float target, uses the same `HdrBloomFilter::prepare_view` as frame
+capture, and presents the encoded SDR output with `EncodedDisplayPresenter`.
+Compatibility publications keep the ordinary native surface renderer. Profile
+changes replace disposable renderer/text/preparer resources, preserving the
+semantic scene, Runtime, identities and authored time.
+
+Native admission checks RGBA16Float attachment/texturing/copy usages, blending,
+four-sample support, attachment-byte limits, one of the four qualified SDR
+surface formats, primary 2D view ownership, absence of insets/spatial rows,
+device extents and an explicit **256 MiB primary-view target budget**. At current
+fixed quality, source (8), four-sample scene attachment (32), and Bloom/output
+scratch (20) total **60 bytes/pixel**. 1920x1080 fits; 3840x2160 rejects. Assets,
+object-effect scopes, the surface and in-flight resource leases have separate
+owners. Object-effect capture budgets remain unchanged. There is no silent
+resolution/quality reduction. Initial/global view admission inspects spatial rows
+once; later publications inspect changed rows. Extent preflight precedes native
+resize allocations. A clean settled window retains the existing sleep behavior.
+
+Viewer selection is composed onto encoded SDR **after** Bloom/output resolution
+and before the final surface transfer. It reuses the same renderer's camera,
+quad and fixed-size overlay instance, with two lazy display pipelines. It never
+enters authored Bloom input or normal capture/export. Removing it recomputes the
+clean output instead of accumulating a tint.
+
+The real native GPU proof has thirteen phases: live parameter edits, viewer
+overlay/clear, neutral and absent Bloom, Compatibility/HDR transitions, resize,
+target recreation and a newly requested device. Every phase without an
+overlay matches normal `SessionCapture` exactly at the same view/state, including
+the Compatibility transition. Float values use the predeclared
+0.006 + 0.004*abs(expected) bound; displayed values use
+the existing two-byte bound. Expected values come from literal .5 radiance over
+opaque black, an independent full-2D finite Gaussian and explicit SDR transfer.
+An actual consumer that sends the viewer tint through Bloom must fail those
+display bounds; restoring the correct consumer must recover exactly. Parameter
+and viewer edits upload no source geometry. Separate native-window CI advances
+an ordinary authored Bloom animation to its exact endpoint and presents it.
+
+`cargo run -p noon-native --example camera_bloom` is an ordinary Rust creator
+example. Browser/Python HDR and checked emission use the shared output owner
+described below. Broader view/capture profiles and physical/performance gates
+remain open. New-device recreation does not qualify automatic OS/device-loss
+recovery.
+
+
+### Candidate checked material emission (#1897 M4)
+
+The shared candidate stores checked f64 strength `e` in `[0, 63]`; zero is neutral.
+Radiance is `decode_srgb(base_rgb) * (1 + e)` before coverage, opacity, blending
+and filtering. Emission changes neither alpha nor coverage and adds no separate
+halo. Bloom remains a view treatment.
+
+The first profile requires unit base paints/opacity, primary planar linear-HDR
+output and supported capture/view capabilities. Compatibility/spatial emission
+rejects before retained view changes. Copy, target and effective style capture
+retain the material value; GPU state remains a disposable projection.
+
+All present authored HDR styles require finite unit paint/opacity, including at
+zero emission. Geometry, retained/family preparation and view targets share this
+admission check before changing caches; local publications inspect only dirty
+rows. Low-level `FramePreparer` raw inputs retain their explicitly already-linear
+packing contract, reject authored emission through `Result`, and preserve prior
+geometry on rejection. Active family scratch preparation keeps the publication's
+color profile, including first use and cached seek.
+
+Native shape/image proofs use the existing HDR RGB bound
+`.006 + .004 * abs(reference)` and two-byte display bound. Glyph inputs use
+`.002 + .001 * abs(reference)` for amplified RGB; ordinary float inputs and all
+alpha retain `.002`. Color glyphs decode exact stored bytes once before
+reconstruction. Eight ordinary RGBA8 cases independently check Compatibility's
+unassociated filtering and encoded tint with a two-byte bound.
+
+Ordinary Rust target animation and live semantic property writes retain checked
+f64 material values independently of opacity. Completion combines material and
+other style endpoints in one transaction; seeks recover captured source values
+before the first track and authored values after reconciliation.
+
+Leaf callback writes use
+checked f64 values through the existing effective-write vocabulary and ownership
+receipt; completion preserves continuing callback domains independently of opacity.
+Native scalar-graph bindings and family/provisional callback emission remain
+unsupported. Family material edits reuse the atomic style transaction and ordinary
+method targets; non-rendered roots retain metadata without multiplying leaf radiance.
+Python ordinary and leaf callback setters forward through shared Rust/WASM operations.
+Native and direct Rust/WASM hosts share `AuthoredViewOutput`, a disposable GPU
+cache over the existing float renderer, Bloom and encoded display presenter. The
+browser selects float drawing resources from the Runtime publication, restores
+them after device/context replacement, and applies viewer overlays after Bloom.
+The finite profile requires a primary planar view, float blending/MSAA4 support,
+no insets, and the existing retained target budget; unsupported requests reject
+before replacing those targets.
+
+`node scripts/direct-view-output-qualification.mjs` checks actual WebGPU/WebGL2
+pixels against an independent f64 uniform-interior reference, live/finite source
+modes, exact seek/restoration and resize admission. The native full-field oracle
+remains `cargo test -p noon-native --features wgsl-effects --lib view_output::native_hdr -- --include-ignored`.
+The same CI step also compares 17 ordinary Rust appearance programs through the
+native source adapter and offscreen exporter at four authored samples per second,
+including source completion, two view sizes and the authored camera. It requires
+changing pixels and a maximum two-byte channel difference. The same step compares
+native viewer seeks, including rewind and repeated times, against forward
+`SessionCapture` output: 1/100 glows with predeclared intensity/radius animation, through both view sizes. Initial affine/effect targets reuse the ordinary
+scheduler and animation lowerer before runtime construction, preserving immutable
+viewer admission. Parallel duplicate channels reject before publication; existing
+content-morph and live-edited playback restrictions remain explicit.
+These checks complement the operator references; they do not qualify native Python,
+arbitrary live-source seek, physical scanout, input latency or total driver memory.
+Held frames may sleep rather than republish time; active animation and explicit
+seek still sample canonical authored time. These software-GPU checks do not
+qualify physical-device performance.
+
+The Python `camera_bloom.py` example pairs the same ordinary camera profile,
+material emission and Bloom tracks with Rust. The genuine worker channel carries
+the selected camera's profile; effects retain their ordinary row and attachment
+identity. `node scripts/worker-view-output-qualification.mjs` compares both hosts
+byte-for-byte on WebGPU/WebGL2 and checks an independent f64 interior reference.
+The gallery's `showcase_bloom_emission.py` demonstrates radiance first, camera
+spread second, and restoration. Neither path adds a shader clock or host engine.
+The shared recovery matrix covers completed shader and HDR/Bloom worker replay.
+Broader composed/input/capability, native Python, physical/performance and required
+CI gates remain necessary before promotion.

@@ -1,17 +1,33 @@
+use super::encoded_display::EncodedDisplayPresenter;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OutputTransfer {
     #[default]
     Direct,
-    /// The browser WebGL drawing buffer applies an sRGB store transfer even
-    /// though wgpu exposes the surface as `Rgba8Unorm`. Keep scene rendering in
-    /// encoded UNORM space, then decode exactly once before presentation.
-    BrowserWebGlSrgb,
+    /// Keep scene rendering in encoded UNORM space, then decode exactly once
+    /// before an sRGB store. Browser WebGL also needs this for its implicit
+    /// drawing-buffer transfer, even with an exposed `Rgba8Unorm` surface.
+    SrgbStore,
 }
 
 impl OutputTransfer {
+    fn for_target(backend: wgpu::Backend, format: wgpu::TextureFormat) -> Self {
+        // A float radiance image is an offscreen scene input, never the browser
+        // drawing buffer. Its output transfer belongs after HDR resolution.
+        if matches!(format, wgpu::TextureFormat::Rgba16Float) {
+            Self::Direct
+        } else if format.is_srgb() {
+            Self::SrgbStore
+        } else if cfg!(target_arch = "wasm32") {
+            Self::for_browser_backend(backend)
+        } else {
+            Self::Direct
+        }
+    }
+
     pub const fn for_browser_backend(backend: wgpu::Backend) -> Self {
         match backend {
-            wgpu::Backend::Gl => Self::BrowserWebGlSrgb,
+            wgpu::Backend::Gl => Self::SrgbStore,
             _ => Self::Direct,
         }
     }
@@ -24,9 +40,7 @@ pub(crate) struct PresentationBridge {
     viewport_size: [u32; 2],
     texture: Option<wgpu::Texture>,
     view: Option<wgpu::TextureView>,
-    bind_group_layout: Option<wgpu::BindGroupLayout>,
-    bind_group: Option<wgpu::BindGroup>,
-    pipeline: Option<wgpu::RenderPipeline>,
+    presenter: Option<EncodedDisplayPresenter>,
 }
 
 impl PresentationBridge {
@@ -36,20 +50,17 @@ impl PresentationBridge {
         transfer: OutputTransfer,
         viewport_size: [u32; 2],
     ) -> Self {
-        // Browser WebGL exposes an ordinary `Rgba8Unorm` wgpu surface, but its
-        // drawing buffer still applies the browser's sRGB presentation transfer.
-        // Resolve that backend fact here so every canvas host gets the same color
-        // contract without duplicating adapter plumbing in noon-web.
-        #[cfg(target_arch = "wasm32")]
+        // Native sRGB attachments and the browser GL drawing buffer both apply
+        // a store transfer. Resolve it once for every retained rendering host.
         let transfer = if transfer == OutputTransfer::Direct {
-            OutputTransfer::for_browser_backend(device.adapter_info().backend)
+            OutputTransfer::for_target(device.adapter_info().backend, surface_format)
         } else {
             transfer
         };
 
         let scene_format = match transfer {
             OutputTransfer::Direct => surface_format,
-            OutputTransfer::BrowserWebGlSrgb => surface_format.remove_srgb_suffix(),
+            OutputTransfer::SrgbStore => surface_format.remove_srgb_suffix(),
         };
         let mut result = Self {
             transfer,
@@ -57,12 +68,13 @@ impl PresentationBridge {
             viewport_size: [viewport_size[0].max(1), viewport_size[1].max(1)],
             texture: None,
             view: None,
-            bind_group_layout: None,
-            bind_group: None,
-            pipeline: None,
+            presenter: None,
         };
-        if transfer == OutputTransfer::BrowserWebGlSrgb {
-            result.initialize_present_pipeline(device, surface_format);
+        if transfer == OutputTransfer::SrgbStore {
+            result.presenter = Some(
+                EncodedDisplayPresenter::new(device, surface_format, transfer)
+                    .expect("encoded presentation uses RGBA8/BGRA8 output"),
+            );
             result.recreate_scene_target(device);
         }
         result
@@ -78,7 +90,7 @@ impl PresentationBridge {
             return;
         }
         self.viewport_size = viewport_size;
-        if self.transfer == OutputTransfer::BrowserWebGlSrgb {
+        if self.transfer == OutputTransfer::SrgbStore {
             self.recreate_scene_target(device);
         }
     }
@@ -100,87 +112,9 @@ impl PresentationBridge {
         encoder: &mut wgpu::CommandEncoder,
         surface_view: &wgpu::TextureView,
     ) {
-        let (Some(pipeline), Some(bind_group)) = (&self.pipeline, &self.bind_group) else {
-            return;
-        };
-        let color_attachments = [Some(wgpu::RenderPassColorAttachment {
-            view: surface_view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color {
-                    r: 0.0,
-                    g: 0.0,
-                    b: 0.0,
-                    a: 0.0,
-                }),
-                store: wgpu::StoreOp::Store,
-            },
-        })];
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Noon browser presentation transfer pass"),
-            color_attachments: &color_attachments,
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, bind_group, &[]);
-        pass.draw(0..3, 0..1);
-    }
-
-    fn initialize_present_pipeline(
-        &mut self,
-        device: &wgpu::Device,
-        surface_format: wgpu::TextureFormat,
-    ) {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Noon presentation bind group layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Noon presentation pipeline layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-        let shader = device.create_shader_module(wgpu::include_wgsl!("../presentation.wgsl"));
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Noon presentation pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_present"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_present"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        self.bind_group_layout = Some(bind_group_layout);
-        self.pipeline = Some(pipeline);
+        if let Some(presenter) = &self.presenter {
+            presenter.encode_view(encoder, surface_view);
+        }
     }
 
     fn recreate_scene_target(&mut self, device: &wgpu::Device) {
@@ -199,20 +133,13 @@ impl PresentationBridge {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Noon presentation bind group"),
-            layout: self
-                .bind_group_layout
-                .as_ref()
-                .expect("presentation requires a bind group layout"),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
-            }],
-        });
+        self.presenter
+            .as_mut()
+            .expect("presentation requires a presenter")
+            .prepare(&texture)
+            .expect("presentation scene target is encoded RGBA8");
         self.texture = Some(texture);
         self.view = Some(view);
-        self.bind_group = Some(bind_group);
     }
 }
 
@@ -221,10 +148,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_browser_gl_needs_the_presentation_decode() {
+    fn browser_backend_defaults_select_only_the_implicit_gl_store() {
         assert_eq!(
             OutputTransfer::for_browser_backend(wgpu::Backend::Gl),
-            OutputTransfer::BrowserWebGlSrgb
+            OutputTransfer::SrgbStore
         );
         assert_eq!(
             OutputTransfer::for_browser_backend(wgpu::Backend::BrowserWebGpu),
@@ -234,6 +161,47 @@ mod tests {
             OutputTransfer::for_browser_backend(wgpu::Backend::Vulkan),
             OutputTransfer::Direct
         );
+    }
+
+    #[test]
+    fn target_formats_preserve_encoded_bytes_without_touching_float_radiance() {
+        for backend in [
+            wgpu::Backend::Gl,
+            wgpu::Backend::BrowserWebGpu,
+            wgpu::Backend::Metal,
+        ] {
+            assert_eq!(
+                OutputTransfer::for_target(backend, wgpu::TextureFormat::Rgba16Float),
+                OutputTransfer::Direct
+            );
+        }
+        assert_eq!(
+            OutputTransfer::for_target(wgpu::Backend::Gl, wgpu::TextureFormat::Rgba8Unorm),
+            if cfg!(target_arch = "wasm32") {
+                OutputTransfer::SrgbStore
+            } else {
+                OutputTransfer::Direct
+            }
+        );
+        for backend in [
+            wgpu::Backend::Metal,
+            wgpu::Backend::Vulkan,
+            wgpu::Backend::BrowserWebGpu,
+        ] {
+            for format in [
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+            ] {
+                assert_eq!(
+                    OutputTransfer::for_target(backend, format),
+                    OutputTransfer::SrgbStore
+                );
+                assert_eq!(
+                    OutputTransfer::for_target(backend, format.remove_srgb_suffix()),
+                    OutputTransfer::Direct
+                );
+            }
+        }
     }
 
     #[test]

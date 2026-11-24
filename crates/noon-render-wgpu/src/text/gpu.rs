@@ -6,7 +6,7 @@ use noon_core::Vec2;
 
 use super::{GlyphQuadInstance, PreparedRetainedTextFrame, PreparedTextItem};
 
-const GLYPH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 6] = [
+const GLYPH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 7] = [
     wgpu::VertexAttribute {
         format: wgpu::VertexFormat::Float32x2,
         offset: 0,
@@ -36,6 +36,11 @@ const GLYPH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 6] = [
         format: wgpu::VertexFormat::Float32x4,
         offset: 40,
         shader_location: 5,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32,
+        offset: 56,
+        shader_location: 6,
     },
 ];
 
@@ -263,7 +268,17 @@ impl TextGlyphGpuRenderer {
             }],
         });
 
-        let shader = device.create_shader_module(wgpu::include_wgsl!("glyph.wgsl"));
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Noon working-color glyph shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "{}\n{}",
+                    crate::color_profile::working_color_shader(target_format),
+                    include_str!("glyph.wgsl")
+                )
+                .into(),
+            ),
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Noon text glyph pipeline layout"),
             bind_group_layouts: &[Some(&camera_layout), Some(&atlas_layout)],
@@ -925,6 +940,7 @@ mod tests {
 
     fn test_quad() -> GlyphQuadInstance {
         GlyphQuadInstance {
+            emission: 0.0,
             origin: [0.0, 0.0],
             axis_x: [1.0, 0.0],
             axis_y: [0.0, 1.0],
@@ -983,6 +999,7 @@ mod tests {
             panic!("visible mask glyph must allocate an atlas image");
         };
         let quads = [GlyphQuadInstance {
+            emission: 0.0,
             origin: [-0.5, -0.5],
             axis_x: [1.0, 0.0],
             axis_y: [0.0, 1.0],
@@ -997,6 +1014,7 @@ mod tests {
             plane: GlyphAtlasPlane::Mask,
             page: image.page,
             instance_range: 0..1,
+            object_opacity: 1.0,
         }];
         let prepared = prepared_mask_frame(&quads, &items);
         let mut renderer = TextGlyphGpuRenderer::new(
@@ -1066,6 +1084,7 @@ mod tests {
         assert_eq!(atlas.page_count(GlyphAtlasPlane::Mask), 2);
 
         let quads = [GlyphQuadInstance {
+            emission: 0.0,
             origin: [-0.5, -0.5],
             axis_x: [1.0, 0.0],
             axis_y: [0.0, 1.0],
@@ -1080,6 +1099,7 @@ mod tests {
             plane: GlyphAtlasPlane::Mask,
             page: page_one.page,
             instance_range: 0..1,
+            object_opacity: 1.0,
         }];
         let prepared = prepared_mask_frame(&quads, &items);
         let mut renderer = TextGlyphGpuRenderer::new(
@@ -1139,6 +1159,7 @@ mod tests {
             panic!("visible glyph must allocate an atlas image");
         };
         let quads = [GlyphQuadInstance {
+            emission: 0.0,
             origin: [0.0, 0.0],
             axis_x: [1.0, 0.0],
             axis_y: [0.0, 1.0],
@@ -1153,6 +1174,7 @@ mod tests {
             plane: GlyphAtlasPlane::Mask,
             page: image.page,
             instance_range: 0..1,
+            object_opacity: 1.0,
         }];
         let prepared = prepared_mask_frame(&quads, &items);
         let mut renderer = TextGlyphGpuRenderer::new(
@@ -1330,3 +1352,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod working_color_tests;

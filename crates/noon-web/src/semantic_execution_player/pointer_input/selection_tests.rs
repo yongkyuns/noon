@@ -45,8 +45,8 @@ fn drain(player: &mut SemanticExecutionPlayer) -> RetainedFamilyExecutionDeltaEn
 #[test]
 fn paused_click_and_clear_use_transport_sequence_without_authored_dirtiness() {
     let mut p = player();
-    let frame = p.session.frame().clone();
-    let context = p.session.publication_context();
+    let frame = p.source.session().frame().clone();
+    let context = p.source.session().publication_context();
     let bundle = p.resource_bundle_bytes();
     input(&mut p, "press", 400.0);
     assert!(p.drain_delta_json().unwrap().is_none());
@@ -59,10 +59,15 @@ fn paused_click_and_clear_use_transport_sequence_without_authored_dirtiness() {
     assert!(selected.resource_additions.is_none());
     assert!(selected.transient_presentations.is_empty());
     assert!(selected.selection_overlay.is_some());
-    assert_eq!(p.session.frame(), &frame);
-    assert_eq!(p.session.publication_context(), context);
+    assert_eq!(p.source.session().frame(), &frame);
+    assert_eq!(p.source.session().publication_context(), context);
     assert_eq!(p.resource_bundle_bytes(), bundle);
-    assert!(p.session.take_renderer_publication().changes().is_empty());
+    assert!(p
+        .source
+        .session_mut()
+        .take_renderer_publication()
+        .changes()
+        .is_empty());
     assert!(p.drain_delta_json().unwrap().is_none());
     click(&mut p, 5.0);
     let clear = drain(&mut p);
@@ -74,9 +79,71 @@ fn paused_click_and_clear_use_transport_sequence_without_authored_dirtiness() {
         .as_object()
         .unwrap()
         .contains_key("selection_overlay"));
-    assert_eq!(p.session.frame(), &frame);
-    assert_eq!(p.session.publication_context(), context);
+    assert_eq!(p.source.session().frame(), &frame);
+    assert_eq!(p.source.session().publication_context(), context);
     assert_eq!(p.execution_wake(50_000.0).unwrap().cadence(), "idle");
+}
+
+#[test]
+fn quiet_source_completion_keeps_its_displayed_frame_until_the_viewer_pauses() {
+    let mut player = player();
+    player.enable_default_viewer_selection();
+    player
+        .set_browser_pointer_view_json(r#"{"revision":1,"width":800,"height":400}"#)
+        .unwrap();
+    assert_eq!(drain(&mut player).retained.time, 0.0);
+
+    player.live_wait(0.25).unwrap();
+    player.live_advance_segment_to(0.25).unwrap();
+    player.live_complete_segment().unwrap();
+    assert!(player.drain_delta_json().unwrap().is_none());
+    player.finish_source_playback().unwrap();
+    assert!(player.drain_delta_json().unwrap().is_none());
+
+    player.pause();
+    let refreshed = drain(&mut player).retained;
+    assert_eq!(refreshed.time, 0.25);
+    assert!(refreshed.objects.is_empty());
+}
+
+#[test]
+fn viewer_indicate_wakes_a_quiet_continuation_during_play_and_pause() {
+    let mut player = player();
+    player.enable_default_viewer_selection();
+    player.live_wait(2.0).unwrap();
+    player.resume();
+    assert_eq!(
+        player.live_segment_wake(1_000.0).unwrap().cadence(),
+        "timer"
+    );
+
+    click(&mut player, 400.0);
+    assert_eq!(
+        player.live_segment_wake(1_000.0).unwrap().cadence(),
+        "animation_frame"
+    );
+    player.live_drive_segment_from_wall_time(1_000.0).unwrap();
+    player.live_drive_segment_from_wall_time(1_500.0).unwrap();
+    let pulse = drain(&mut player).retained;
+    assert_eq!(pulse.time, 0.5);
+    assert_eq!(pulse.objects[0].style.fill, Some(noon_core::YELLOW));
+
+    player.pause();
+    assert_eq!(
+        player.live_segment_wake(1_750.0).unwrap().cadence(),
+        "animation_frame"
+    );
+    let restored = player
+        .advance_interactions_delta_json(2_000.0)
+        .unwrap()
+        .unwrap();
+    let delta: RetainedFamilyExecutionDeltaEnvelope = serde_json::from_str(&restored).unwrap();
+    assert_eq!(delta.retained.time, 0.5);
+    assert_eq!(
+        delta.retained.objects[0].style.fill,
+        Some(noon_core::Color::rgb(0.0, 0.0, 1.0))
+    );
+    assert_eq!(player.live_segment_wake(2_000.0).unwrap().cadence(), "idle");
 }
 
 #[test]
@@ -123,7 +190,7 @@ fn rebind_snapshot_projects_current_session_but_seek_clears_selection() {
     let clear: RetainedFamilyExecutionDeltaEnvelope =
         serde_json::from_str(&p.seek_delta_json(0.0).unwrap().unwrap()).unwrap();
     assert!(clear.selection_overlay.is_none());
-    assert!(p.session.selected_pointer_target().is_none());
+    assert!(p.source.session().selected_pointer_target().is_none());
 }
 
 #[test]

@@ -1,0 +1,52 @@
+/* Code covers the preview without hiding its worker-owned canvas from painting. */
+:root{--embed-paper:#f5f3ed;--embed-ink:#20262b;--embed-muted:#566068;--embed-line:#cdd2d1;--embed-panel:#eaece8;--embed-accent:#a83f27;color-scheme:light}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--embed-paper:#111821;--embed-ink:#edf0f2;--embed-muted:#b4bec5;--embed-line:#394750;--embed-panel:#19232e;--embed-accent:#f0a088;color-scheme:dark}}
+:root[data-theme=dark]{--embed-paper:#111821;--embed-ink:#edf0f2;--embed-muted:#b4bec5;--embed-line:#394750;--embed-panel:#19232e;--embed-accent:#f0a088;color-scheme:dark}
+html[data-noon-embed]{--border:var(--embed-line);--muted:var(--embed-muted);--danger:var(--embed-accent);--embed-editor-header:3.25rem;height:100%;background:var(--embed-paper);color:var(--embed-ink)}
+html[data-noon-embed] body{height:100%;min-height:0;margin:0;background:var(--embed-paper);overflow:hidden}
+html[data-noon-embed] .shell{width:100%;max-width:none;height:100%;padding:0}
+html[data-noon-embed] .workspace{position:relative;display:block;height:100%;min-height:0;border:0;border-radius:0;margin:0;background:var(--embed-paper);box-shadow:none}
+html[data-noon-embed] .topbar,html[data-noon-embed] .example-gallery,html[data-noon-embed] .selected-example,
+html[data-noon-embed] .pane-toolbar .actions,html[data-noon-embed] .preview-head,html[data-noon-embed] .playback-slot,
+html[data-noon-embed] .playback-controls,html[data-noon-embed] .metrics,html[data-noon-embed] .python-editor-tools{display:none!important}
+html[data-noon-embed] .preview-pane,html[data-noon-embed] .editor-pane{position:absolute;inset:0;width:100%;height:100%;min-height:0;border:0;background:var(--embed-paper);overflow:hidden}
+/* Reserve the same toolbar row in View and Code so it cannot cover a scene title. */
+html[data-noon-embed] .preview-pane{z-index:0;top:var(--embed-editor-header);height:auto}
+html[data-noon-embed] .editor-pane{z-index:1;display:flex;visibility:hidden;pointer-events:none}
+html[data-noon-embed] .pane-toolbar{flex:none;min-height:var(--embed-editor-header);padding-inline:1rem;background:var(--embed-panel);color:var(--embed-ink)}
+html[data-noon-embed] .file-label{color:var(--embed-muted)}
+html[data-noon-embed] .editor-panel textarea{padding:.65rem .8rem;background:#111821;overscroll-behavior:contain}
+html[data-noon-embed] .python-code-editor .cm-editor{background:#111821;font-size:.85rem}
+html[data-noon-embed] .python-code-editor .cm-scroller{overscroll-behavior:contain}
+html[data-noon-embed] .python-code-editor .cm-content{padding:.55rem 0}
+html[data-noon-embed] .python-code-editor[data-wrap="true"] .cm-content{min-width:0}
+html[data-noon-embed] .python-code-editor .cm-line{padding-inline:.7rem}
+html[data-noon-embed] .python-code-editor .cm-gutters{background:#151f2a;color:#93a2b7;border-color:#283646}
+html[data-noon-embed][data-embed-view=code] .editor-pane{visibility:visible;pointer-events:auto}
+html[data-noon-embed][data-embed-view=code] .preview-pane{pointer-events:none}
+html[data-noon-embed] .canvas-wrap{height:100%;min-height:0;padding:0}
+html[data-noon-embed] .canvas-frame{max-width:none;border:0;border-radius:0;box-shadow:none}
+html[data-noon-embed] #scene{width:100%;height:100%;border-radius:0}
+html[data-noon-embed] .embed-tabs{position:absolute;z-index:5;right:.5rem;top:.4rem;display:flex;padding:2px;gap:2px;background:var(--embed-paper);border:1px solid var(--embed-line);border-radius:.35rem;opacity:.9}
+html[data-noon-embed] .embed-tabs:focus-within,html[data-noon-embed] .embed-tabs:hover{opacity:1}
+html[data-noon-embed] .embed-tabs button,html[data-noon-embed] .embed-message button{font:500 .75rem/1.2 ui-sans-serif,system-ui,sans-serif;min-height:36px;padding:.4rem .7rem;border:0;border-radius:.2rem;cursor:pointer;color:var(--embed-muted);background:transparent}
+html[data-noon-embed] .embed-tabs [aria-selected=true]{background:var(--embed-panel);color:var(--embed-ink)}
+html[data-noon-embed] :focus-visible{outline:3px solid var(--embed-accent);outline-offset:2px}
+html[data-noon-embed] .embed-message{position:absolute;z-index:4;left:.5rem;bottom:.5rem;max-width:calc(100% - 1rem);display:flex;align-items:center;gap:.5rem;padding:.4rem .7rem;border:1px solid var(--embed-line);border-radius:.35rem;background:var(--embed-paper);color:var(--embed-ink);font: .75rem/1.5 ui-sans-serif,system-ui,sans-serif;overflow-wrap:anywhere}
+html[data-noon-embed] .embed-message[hidden],html[data-noon-embed] .embed-message button[hidden]{display:none}
+html[data-noon-embed] .editor-footer{display:none}
+html[data-noon-embed][data-embed-state=error] .editor-footer{display:block;min-height:0;max-height:40%;overflow:auto;background:var(--embed-paper);color:var(--embed-ink);padding:.6rem}
+html[data-noon-embed][data-embed-view=code][data-embed-state=error] .embed-message{display:none}
+html[data-noon-embed] #python-traceback{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--embed-ink)}
+html[data-noon-embed] #draft-status{display:none}
+/* Retain the gallery editor's tested syntax theme, including its textarea
+   fallback; the View/Code controls follow the website theme. */
+@media(pointer:coarse){
+  html[data-noon-embed]{--embed-editor-header:3.6rem}
+  html[data-noon-embed] .pane-toolbar{padding-inline-start:5.25rem}
+  html[data-noon-embed] .embed-tabs button{min-height:44px}
+  html[data-noon-embed] .python-code-editor .cm-editor,html[data-noon-embed] .editor-panel textarea{font-size:1rem}
+}
+/* The gallery appends its showcase stylesheet at runtime. Its scoped important
+   rule must not resurrect the summary strip inside an embedded canvas. */
+html[data-noon-embed="true"][data-noon-catalog] .selected-example{display:none!important}

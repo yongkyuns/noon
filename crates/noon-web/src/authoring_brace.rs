@@ -4,14 +4,11 @@
 use wasm_bindgen::prelude::*;
 
 use crate::authoring_error::js_error;
-use crate::{
-    CanonicalAuthoringSceneContext, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle,
-    WasmLayoutAnchor, WasmManimGeometryOptions,
-};
+use crate::{WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmManimGeometryOptions};
 
 #[wasm_bindgen]
 pub struct WasmBraceLabelHandle {
-    inner: noon::BraceLabel,
+    pub(crate) inner: noon::BraceLabel,
 }
 
 #[wasm_bindgen]
@@ -24,89 +21,6 @@ impl WasmBraceLabelHandle {
     #[wasm_bindgen(js_name = brace)]
     pub fn brace(&self) -> WasmAuthoringMobjectHandle {
         WasmAuthoringMobjectHandle::from_semantic_mobject(self.inner.brace().object().clone())
-    }
-}
-
-#[wasm_bindgen]
-impl CanonicalAuthoringSceneContext {
-    #[wasm_bindgen(js_name = liveBraceGeometryOptions)]
-    pub fn live_brace_geometry_options(
-        &mut self,
-        target: &WasmLayoutAnchor,
-        direction_x: f64,
-        direction_y: f64,
-        buff: f64,
-        sharpness: f64,
-    ) -> Result<WasmManimGeometryOptions, JsValue> {
-        self.inner
-            .live_brace_geometry_options(
-                &target.anchor,
-                noon::BraceOptions {
-                    direction: (direction_x, direction_y),
-                    buff,
-                    sharpness,
-                    ..Default::default()
-                },
-            )
-            .map(WasmManimGeometryOptions::from_options)
-            .map_err(js_error)
-    }
-
-    /// Create the retained Brace/label relationship through the active live owner.
-    #[wasm_bindgen(js_name = liveCreateBraceLabel)]
-    pub fn live_create_brace_label(
-        &mut self,
-        target: &WasmLayoutAnchor,
-        label: &WasmLayoutAnchor,
-        direction_x: f64,
-        direction_y: f64,
-        buff: f64,
-        sharpness: f64,
-        label_buff: f64,
-    ) -> Result<WasmBraceLabelHandle, JsValue> {
-        self.create_live_brace_label(
-            &target.anchor,
-            label.anchor.clone(),
-            noon::BraceOptions {
-                direction: (direction_x, direction_y),
-                buff,
-                sharpness,
-                label_buff,
-            },
-        )
-        .map(|inner| WasmBraceLabelHandle { inner })
-        .map_err(js_error)
-    }
-
-    #[wasm_bindgen(js_name = liveShiftBraceLabel)]
-    pub fn live_shift_brace_label(
-        &mut self,
-        brace: &mut WasmBraceLabelHandle,
-        target: &WasmLayoutAnchor,
-    ) -> Result<(), JsValue> {
-        self.shift_live_brace_label(&mut brace.inner, &target.anchor)
-            .map_err(js_error)
-    }
-
-    #[wasm_bindgen(js_name = liveReplaceBraceLabel)]
-    pub fn live_replace_brace_label(
-        &mut self,
-        brace: &mut WasmBraceLabelHandle,
-        label: &WasmLayoutAnchor,
-    ) -> Result<(), JsValue> {
-        self.replace_live_brace_label(&mut brace.inner, label.anchor.clone())
-            .map_err(js_error)
-    }
-
-    #[wasm_bindgen(js_name = liveChangeBraceLabel)]
-    pub fn live_change_brace_label(
-        &mut self,
-        brace: &mut WasmBraceLabelHandle,
-        target: &WasmLayoutAnchor,
-        label: &WasmLayoutAnchor,
-    ) -> Result<(), JsValue> {
-        self.change_live_brace_label(&mut brace.inner, &target.anchor, label.anchor.clone())
-            .map_err(js_error)
     }
 }
 

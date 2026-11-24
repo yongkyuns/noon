@@ -12,7 +12,9 @@ use noon_core::{PathCommand, Rect, StrokeCap, StrokeJoin, Vec2, VectorPath};
 use std::collections::HashSet;
 
 const PATH_TESSELLATION_TOLERANCE: f32 = 0.002;
-const MORPH_MITER_LIMIT: f32 = 4.0;
+/// Maximum miter length in half-stroke widths, shared by raster geometry and
+/// conservative execution bounds. Applies to static and morph strokes.
+pub const STROKE_MITER_LIMIT: f32 = 4.0;
 const ROUND_JOIN_SEGMENTS: usize = 8;
 const ROUND_CAP_SEGMENTS: usize = 8;
 
@@ -286,7 +288,7 @@ pub fn tessellate_screen_stroke(
     let options = StrokeOptions::default()
         .with_tolerance(PATH_TESSELLATION_TOLERANCE)
         .with_line_width(1.0)
-        .with_miter_limit(MORPH_MITER_LIMIT)
+        .with_miter_limit(STROKE_MITER_LIMIT)
         .with_line_cap(lyon_line_cap(stroke_cap))
         .with_line_join(lyon_line_join(stroke_join));
     let smooth_anchors = if stroke_join == StrokeJoin::Miter {
@@ -818,7 +820,7 @@ fn tessellate_styled_with_fill_impl(
         let options = StrokeOptions::default()
             .with_tolerance(PATH_TESSELLATION_TOLERANCE)
             .with_line_width(stroke_width)
-            .with_miter_limit(MORPH_MITER_LIMIT)
+            .with_miter_limit(STROKE_MITER_LIMIT)
             .with_line_cap(lyon_line_cap(stroke_cap))
             .with_line_join(lyon_line_join(stroke_join));
         tessellate_stroke(&stroke_path, &options, &mut buffers)?;
@@ -1725,7 +1727,8 @@ fn miter_point(
     let difference = Vec2::new(b.x - a.x, b.y - a.y);
     let distance = cross(difference, outgoing) / denominator;
     let intersection = Vec2::new(a.x + incoming.x * distance, a.y + incoming.y * distance);
-    if (intersection.x - point.x).hypot(intersection.y - point.y) > half_width * MORPH_MITER_LIMIT {
+    if (intersection.x - point.x).hypot(intersection.y - point.y) > half_width * STROKE_MITER_LIMIT
+    {
         None
     } else {
         Some(intersection)
@@ -1888,7 +1891,7 @@ fn test_miter_offset(previous: Vec2, point: Vec2, next: Vec2, half_width: f32) -
             outgoing_normal.y * half_width,
         );
     }
-    let length = (half_width / alignment).min(half_width * MORPH_MITER_LIMIT);
+    let length = (half_width / alignment).min(half_width * STROKE_MITER_LIMIT);
     Vec2::new(miter.x * length, miter.y * length)
 }
 

@@ -229,9 +229,9 @@ fn cairo_surface_and_cairo_cap_publish_as_one_family_and_checkerboard_only_cells
             crate::MobjectTarget::Family(family.family()),
         ]))
         .unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let before_frame = execution.frame().clone();
-    let before_context = execution.publication_context();
+    let mut execution = scene.into_execution().unwrap();
+    let before_frame = execution.session().frame().clone();
+    let before_context = execution.session().publication_context();
     let before_states = leaves
         .iter()
         .map(|node| {
@@ -244,10 +244,10 @@ fn cairo_surface_and_cairo_cap_publish_as_one_family_and_checkerboard_only_cells
         .collect::<Vec<_>>();
     let before_resources = store.borrow().geometry_resources().stats();
     {
-        let mut live = crate::LiveSession::new(&store, scene.root(), &mut execution);
         // The body accepts partial alpha, but its World cap does not. The
         // complete family publication must fail without changing either leaf.
-        assert!(live
+        assert!(execution
+            .scene_mut()
             .set_family_fill(family.family(), Some(Color::BLUE), Some(0.5))
             .is_err());
     }
@@ -261,10 +261,11 @@ fn cairo_surface_and_cairo_cap_publish_as_one_family_and_checkerboard_only_cells
         store.borrow().geometry_resources().stats(),
         before_resources
     );
-    assert_eq!(execution.frame(), &before_frame);
-    assert_eq!(execution.publication_context(), before_context);
-    let mut live = crate::LiveSession::new(&store, scene.root(), &mut execution);
-    live.set_family_fill(family.family(), Some(Color::BLUE), Some(1.0))
+    assert_eq!(execution.session().frame(), &before_frame);
+    assert_eq!(execution.session().publication_context(), before_context);
+    execution
+        .scene_mut()
+        .set_family_fill(family.family(), Some(Color::BLUE), Some(1.0))
         .unwrap();
 }
 
@@ -328,11 +329,11 @@ fn malformed_surface_cell_rolls_back_mixed_family_resources_and_nodes() {
 fn mixed_live_family_rolls_back_valid_body_when_cap_path_preparation_fails() {
     let scene = Scene::new();
     let store = std::rc::Rc::clone(scene.integration_store());
-    let mut execution = scene.execution_session().unwrap();
+    let mut execution = scene.into_execution().unwrap();
     let before_resources = store.borrow().geometry_resources().len();
     let before_nodes = store.borrow().len();
-    let before_frame = execution.frame().clone();
-    let before_context = execution.publication_context();
+    let before_frame = execution.session().frame().clone();
+    let before_context = execution.session().publication_context();
     let invalid_cap = SpatialPathOptions {
         path: noon_core::VectorPath::new().move_to(noon_core::Vec2::new(f32::NAN, 0.0)),
         transform: SemanticWorldTransform3D::IDENTITY,
@@ -341,14 +342,14 @@ fn mixed_live_family_rolls_back_valid_body_when_cap_path_preparation_fails() {
         cairo_appearance: None,
     };
 
-    let mut live = crate::LiveSession::new(&store, scene.root(), &mut execution);
-    assert!(live
-        .create_mesh_family_with_paths(vec![cube()], vec![invalid_cap])
+    assert!(execution
+        .scene_mut()
+        .mesh_family_with_paths(vec![cube()], vec![invalid_cap])
         .is_err());
     assert_eq!(store.borrow().geometry_resources().len(), before_resources);
     assert_eq!(store.borrow().len(), before_nodes);
-    assert_eq!(execution.frame(), &before_frame);
-    assert_eq!(execution.publication_context(), before_context);
+    assert_eq!(execution.session().frame(), &before_frame);
+    assert_eq!(execution.session().publication_context(), before_context);
 }
 
 #[test]
@@ -844,6 +845,7 @@ fn world_center_uses_transformed_local_bounds_for_offset_meshes() {
     )
     .unwrap();
     scene.set_world_transform(&object, world).unwrap();
+    assert_eq!(scene.world_transform(&object).unwrap(), world);
     scene.add(&object).unwrap();
     assert_vec3_near(
         object.world_center().unwrap(),
@@ -884,6 +886,10 @@ fn world_center_uses_transformed_local_bounds_for_offset_meshes() {
     session.advance_to(1.0).unwrap();
     scene.install_execution(session);
     assert_vec3_near(
+        scene.world_transform(&object).unwrap().translation,
+        SemanticVec3::new(-1.0, 3.5, 5.0),
+    );
+    assert_vec3_near(
         scene.effective_world_center(&object).unwrap(),
         SemanticVec3::new(-2.0, 25.5, 6.0),
     );
@@ -918,6 +924,11 @@ fn world_center_handles_native_cylinder_camera_light_and_detached_live_mesh() {
 
     scene.install_execution(scene.execution_session().unwrap());
     let detached = scene.mesh(offset_mesh()).unwrap();
+    assert_eq!(
+        scene.world_transform(&detached).unwrap().translation,
+        SemanticVec3::ZERO
+    );
+    assert!(scene.effective_world_transform(&detached).is_err());
     assert_eq!(
         scene.effective_world_center(&detached).unwrap(),
         SemanticVec3::new(11.0, 1.0, 1.0)
@@ -954,6 +965,10 @@ fn world_center_rejects_foreign_and_stale_handles() {
     let second = Scene::new();
     let object = first.mesh(offset_mesh()).unwrap();
     assert!(matches!(
+        second.world_transform(&object),
+        Err(AuthoringError::ForeignStore)
+    ));
+    assert!(matches!(
         second.effective_world_center(&object),
         Err(AuthoringError::ForeignStore)
     ));
@@ -964,6 +979,7 @@ fn world_center_rejects_foreign_and_stale_handles() {
         .apply(&mut first.integration_store().borrow_mut())
         .unwrap();
     assert!(stale.world_center().is_err());
+    assert!(first.world_transform(&stale).is_err());
 
     let mut running = Scene::new();
     let detached = running.mesh(offset_mesh()).unwrap();
@@ -975,6 +991,7 @@ fn world_center_rejects_foreign_and_stale_handles() {
     external
         .apply(&mut running.integration_store().borrow_mut())
         .unwrap();
+    assert!(running.world_transform(&detached).is_err());
     assert!(running.effective_world_center(&detached).is_err());
 }
 

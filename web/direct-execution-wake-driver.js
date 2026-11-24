@@ -91,12 +91,15 @@ export function createDirectExecutionWakeDriver(renderer, options = {}) {
     }
   }
 
-  function onAnimationFrame(timestamp) {
+  function onAnimationFrame() {
     animationFrameHandle = null;
     if (!running) {
       return;
     }
-    renderer.advanceDirectRealtime(timestamp);
+    // A RAF frame stamp can predate a timer already delivered this frame.
+    // Supply the same monotonic callback-delivery clock used by timer wakes.
+    renderer.advanceDirectRealtime(now());
+    options.onDemand?.();
     presentPending();
     schedule();
   }
@@ -108,6 +111,7 @@ export function createDirectExecutionWakeDriver(renderer, options = {}) {
     }
     const wallTimeMs = now();
     renderer.advanceDirectRealtime(wallTimeMs);
+    options.onDemand?.();
     presentPending();
     schedule();
   }
@@ -116,6 +120,8 @@ export function createDirectExecutionWakeDriver(renderer, options = {}) {
 
   return {
     wake() {
+      if (!running) return;
+      options.onDemand?.();
       schedule();
     },
     stop() {

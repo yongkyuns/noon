@@ -203,7 +203,7 @@ fn same_time_seek_requires_fresh_presentation_even_with_unchanged_publication() 
     f.execution.seek(0.0).unwrap();
     assert_eq!(f.execution.session().publication_context(), publication);
     assert!(f.execution.session().selected_pointer_target().is_none());
-    assert!(f.host.needs_refresh(f.execution.session()));
+    assert!(f.host.needs_refresh(&f.execution));
     assert!(!f.send(input(BrowserPointerKind::Press)).unwrap());
     assert!(f.host.refresh_pending);
     f.present();
@@ -446,9 +446,11 @@ fn signal_only_binding_reset_preserves_the_collected_context_and_delivers_once()
         root,
         NativeEventSource::PointerDown { button: 0 },
     );
-    let scene =
-        noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
-            .unwrap();
+    let scene = noon::integration::scene_execution::adopt_root(
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        root,
+    )
+    .unwrap();
     let mut execution = scene.into_execution().unwrap();
     execution
         .session_mut()
@@ -507,7 +509,7 @@ fn binding_reset_that_removes_the_displayed_target_rejects_the_press() {
             noon_core::SemanticObjectProperty::Presence,
         )
         .unwrap();
-    let scene = noon::Scene::with_integration_root(
+    let scene = noon::integration::scene_execution::adopt_root(
         std::rc::Rc::new(std::cell::RefCell::new(fixture.store)),
         fixture.root,
     )
@@ -707,9 +709,11 @@ fn signal_only_publication_stays_quiet_without_pointer_subscribers() {
         source.clone(),
         SemanticSignalValue::Scalar(0.0),
     );
-    let scene =
-        noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
-            .unwrap();
+    let scene = noon::integration::scene_execution::adopt_root(
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        root,
+    )
+    .unwrap();
     let mut execution = scene.into_execution().unwrap();
     let mut host = DirectPointerPresentation::default();
     host.set_view(1, SIZE).unwrap();
@@ -718,7 +722,7 @@ fn signal_only_publication_stays_quiet_without_pointer_subscribers() {
     execution.session_mut().take_renderer_publication();
     host.did_present(frame);
     let displayed = execution.session().publication_context();
-    assert!(!host.needs_refresh(execution.session()));
+    assert!(!host.needs_refresh(&execution));
     execution
         .session_mut()
         .set_native_state_input(source, NativeInputValue::Scalar(1.0))
@@ -731,7 +735,7 @@ fn signal_only_publication_stays_quiet_without_pointer_subscribers() {
         .is_empty());
     assert!(!execution.session().wake_state().frame_pending());
     for _ in 0..128 {
-        assert!(!host.needs_refresh(execution.session()));
+        assert!(!host.needs_refresh(&execution));
         assert!(
             !execution.session().wake_state().frame_pending(),
             "a dormant pointer view must not request receipt-only refreshes"
@@ -763,9 +767,11 @@ fn signal_only_publication_preserves_collected_context_and_ordered_edges() {
         NativeEventSource::PointerDown { button: 0 },
     );
     let up = event_signal(&mut store, root, NativeEventSource::PointerUp { button: 0 });
-    let scene =
-        noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
-            .unwrap();
+    let scene = noon::integration::scene_execution::adopt_root(
+        std::rc::Rc::new(std::cell::RefCell::new(store)),
+        root,
+    )
+    .unwrap();
     let mut execution = scene.into_execution().unwrap();
     execution
         .session_mut()
@@ -793,7 +799,7 @@ fn signal_only_publication_preserves_collected_context_and_ordered_edges() {
         .take_renderer_publication()
         .changes()
         .is_empty());
-    assert!(host.needs_refresh(execution.session()));
+    assert!(host.needs_refresh(&execution));
 
     let mut binding = None;
     let mut sequence = 0;
@@ -832,7 +838,7 @@ fn callback_barrier_does_not_create_a_receipt_only_redraw_loop() {
         .session_mut()
         .begin_required_callback_phase(0.0, [f.target])
         .unwrap();
-    assert!(!f.host.needs_refresh(f.execution.session()));
+    assert!(!f.host.needs_refresh(&f.execution));
     f.execution
         .session_mut()
         .commit_required_callback_phase(phase.finish())
@@ -856,6 +862,6 @@ fn direct_static_pointer_motion_observes_hover_without_a_redraw() {
     assert!(f.send(outside).unwrap());
     assert_eq!(f.execution.session().hovered_pointer_target(), None);
     assert_eq!(f.execution.session().publication_context(), publication);
-    assert!(!f.host.needs_refresh(f.execution.session()));
+    assert!(!f.host.needs_refresh(&f.execution));
     assert_eq!(f.execution.session().frame().time, 0.0);
 }

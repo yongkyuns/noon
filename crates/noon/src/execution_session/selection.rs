@@ -68,6 +68,7 @@ pub struct PointerSelectionPresentation {
 struct PendingClick {
     press: NativePointerInput,
     outcome: PointerFillOutcome,
+    viewer_target: Option<SemanticNodeId>,
     last_sequence: u64,
     eligible: bool,
 }
@@ -75,6 +76,7 @@ struct PendingClick {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct PointerSelectionState {
     max_movement: Option<f32>,
+    viewer_default: bool,
     pending: Option<PendingClick>,
     selected: Option<SemanticNodeId>,
     buttons: [u64; 4],
@@ -91,6 +93,7 @@ impl PointerSelectionState {
     pub(super) fn fresh(&self) -> Self {
         Self {
             max_movement: self.max_movement,
+            viewer_default: self.viewer_default,
             ..Self::default()
         }
     }
@@ -110,6 +113,7 @@ pub(super) struct PreparedPointerSelection {
     pub state: PointerSelectionState,
     pub query: Option<PointerFillQuery>,
     pub click: Option<PointerSelectionClick>,
+    pub viewer_target: Option<SemanticNodeId>,
     pub changed: bool,
 }
 
@@ -119,6 +123,15 @@ fn compatible_revisions(left: PublicationContext, right: PublicationContext) -> 
 }
 
 impl ExecutionSession {
+    /// A retained pointer contact/gesture, including a press on empty space.
+    /// This is a constant-size query of existing input state; selection, hover
+    /// and animated effects are separate observations.
+    pub fn pointer_gesture_active(&self) -> bool {
+        self.pointer_selection.pending.is_some()
+            || self.pointer_selection.buttons.iter().any(|word| *word != 0)
+            || self.translation_drag_active()
+    }
+
     /// Enable transient selection of all supported visible analytic fills with
     /// primary button 0. The maximum radial excursion is measured in logical
     /// surface pixels, inclusively, independently of camera scale.
@@ -148,6 +161,18 @@ impl ExecutionSession {
         Ok(())
     }
 
+    /// Default browser viewer selection. This needs only press/release queries
+    /// and does not create a subscription to stationary hover or authored ticks.
+    pub fn enable_default_viewer_selection(&mut self) {
+        self.pointer_selection.max_movement.get_or_insert(4.0);
+        self.pointer_selection.viewer_default = true;
+        self.pointer_selection.selected = None;
+    }
+
+    pub fn default_viewer_selection(&self) -> bool {
+        self.pointer_selection.viewer_default
+    }
+
     pub fn disable_pointer_fill_selection(&mut self) -> Result<(), ExecutionSessionInputError> {
         self.ensure_direct_input_ingress_available()?;
         self.pointer_selection = PointerSelectionState::default();
@@ -158,24 +183,35 @@ impl ExecutionSession {
     /// Current generation-safe selection. Unrelated edits, compatible property
     /// changes and reordering preserve the selected semantic identity. Detachment
     /// or deletion clears it at publication, so reattachment cannot revive it.
-    /// Successful seek/backward evaluation clears transient session state.
+    /// Sealed replay observes membership in the selected historical revision,
+    /// without reviving the object in the authored store. Successful seek/backward
+    /// evaluation clears transient session state.
     pub fn selected_pointer_target(&self) -> Option<SemanticNodeId> {
         if !self.pointer_selection.enabled() {
             return None;
         }
         let selected = self.pointer_selection.selected?;
-        self.semantic_object_is_reachable(selected)
-            .then_some(selected)
+        self.interaction_execution_object_id(selected)
+            .map(|_| selected)
     }
 
     pub(super) fn reconcile_pointer_selection(&mut self) {
         if self
             .pointer_selection
             .selected
-            .is_some_and(|node| !self.semantic_object_is_reachable(node))
+            .is_some_and(|node| self.interaction_execution_object_id(node).is_none())
         {
             self.pointer_selection.selected = None;
         }
+    }
+
+    /// A changed source publishes a new declaration set. Retain surviving
+    /// presentation identities and the physical button ledger, but discard
+    /// click candidates collected before this successful publication.
+    pub(crate) fn retire_source_click_candidates(&mut self) {
+        self.pointer_selection.pending = None;
+        self.cancel_planar_viewer_pointer();
+        self.cancel_spatial_pointer_gestures();
     }
 
     /// Project only the selected row, without querying the spatial index,
@@ -183,27 +219,26 @@ impl ExecutionSession {
     /// Invisible or no-longer-supported effective geometry has no highlight.
     pub fn pointer_selection_highlight(&self) -> Option<PointerSelectionHighlight> {
         let target = self.selected_pointer_target()?;
-        let object = self.execution_object_id(target)?;
+        let object = self.interaction_execution_object_id(target)?;
         let index = self.runtime.frame_index_for_object(object)?;
         let frame = self.frame();
         let state = &frame.objects[index];
-        if !frame.is_present(index)
-            || state.appearance <= 0.0
-            || state.style.opacity <= 0.0
-            || !state.style.fill.is_some_and(|color| color.alpha > 0.0)
-        {
+        if !frame.is_drawable(index) || state.appearance <= 0.0 || state.style.opacity <= 0.0 {
             return None;
         }
         let transform = frame.render_transform(index);
-        // At the analytic center, the same support/degeneracy policy as picking
-        // decides whether a complete circle/rectangle outline is meaningful.
-        if super::picking::analytic_fill_contains(frame, index, transform.translation) != Ok(true) {
-            return None;
-        }
+        let geometry = frame.render_geometry(index).filter(|geometry| {
+            matches!(
+                geometry,
+                GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. }
+            ) && state.style.fill.is_some_and(|color| color.alpha > 0.0)
+                && super::picking::analytic_fill_contains(frame, index, transform.translation)
+                    == Ok(true)
+        })?;
         Some(PointerSelectionHighlight {
             target,
             publication: self.publication_context(),
-            geometry: frame.render_geometry(index)?.clone(),
+            geometry: geometry.clone(),
             transform,
         })
     }
@@ -221,6 +256,13 @@ impl ExecutionSession {
             })
     }
 
+    fn viewer_target(&mut self, input: NativePointerInput) -> Option<SemanticNodeId> {
+        if !self.default_viewer_selection() {
+            return None;
+        }
+        self.pick_viewer_target(input.position()?.scene())
+    }
+
     /// Prepare on a small copied gesture record. Input evaluation remains the
     /// only fallible publication step; callers install this state only after it
     /// succeeds. Queries may synchronize the existing derived spatial index.
@@ -233,13 +275,13 @@ impl ExecutionSession {
             state: self.pointer_selection,
             query: None,
             click: None,
+            viewer_target: None,
             changed: false,
         };
-        let Some(max_movement) = prepared
-            .state
-            .max_movement
-            .or_else(|| (!self.interaction_bindings.is_empty()).then_some(4.0))
-        else {
+        let Some(max_movement) = prepared.state.max_movement.or_else(|| {
+            (self.runtime.has_click_indicate_bindings() || !self.interaction_bindings.is_empty())
+                .then_some(4.0)
+        }) else {
             return Ok(prepared);
         };
         let previous_selection = self.selected_pointer_target();
@@ -287,12 +329,14 @@ impl ExecutionSession {
                     prepared.state.pending = Some(PendingClick {
                         press: input,
                         outcome,
+                        viewer_target: self.viewer_target(input),
                         last_sequence: input.sequence(),
                         eligible: prepared.state.buttons == [1, 0, 0, 0]
-                            && matches!(
-                                outcome,
-                                PointerFillOutcome::Hit(_) | PointerFillOutcome::Miss
-                            ),
+                            && (self.default_viewer_selection()
+                                || matches!(
+                                    outcome,
+                                    PointerFillOutcome::Hit(_) | PointerFillOutcome::Miss
+                                )),
                     });
                     prepared.query = Some(query);
                 }
@@ -300,19 +344,30 @@ impl ExecutionSession {
             NativePointerInputKind::Release { button: 0, .. } => {
                 if let Some(pending) = prepared.state.pending.take().filter(|p| p.eligible) {
                     let query = self.pick_native_pointer_fill(token, input, |_| true)?;
-                    if query.outcome() == pending.outcome {
-                        let target = match query.outcome() {
-                            PointerFillOutcome::Hit(target) => Some(target),
-                            PointerFillOutcome::Miss => None,
-                            _ => unreachable!("eligible press is a decided hit or miss"),
+                    let outcome = query.outcome();
+                    if self.default_viewer_selection() {
+                        let target = self.viewer_target(input);
+                        if target == pending.viewer_target {
+                            prepared.viewer_target = target;
+                        }
+                    }
+                    if outcome == pending.outcome {
+                        let selected = match outcome {
+                            PointerFillOutcome::Hit(target) => Some(Some(target)),
+                            PointerFillOutcome::Miss => Some(None),
+                            _ => None,
                         };
-                        prepared.state.selected = target;
-                        prepared.click = Some(PointerSelectionClick {
-                            target,
-                            press: pending.press,
-                            release: input,
-                        });
-                        prepared.changed = target != previous_selection;
+                        if let Some(target) = selected {
+                            if !self.default_viewer_selection() {
+                                prepared.state.selected = target;
+                                prepared.changed = target != previous_selection;
+                            }
+                            prepared.click = Some(PointerSelectionClick {
+                                target,
+                                press: pending.press,
+                                release: input,
+                            });
+                        }
                     }
                     prepared.query = Some(query);
                 }

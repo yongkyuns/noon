@@ -51,7 +51,7 @@ impl ManimGeometryOptions {
     /// The callback is called once per planned parameter. Validation and path
     /// preparation finish before this request can allocate semantic identity.
     /// Apply color/stroke/transform setters to the returned inert request before
-    /// passing it to `Scene::geometry` or `LiveSession::create_manim_geometry`.
+    /// passing it to [`Scene::geometry`].
     pub fn parametric_plot(
         sampling: &PlotSamplingOptions,
         function: impl FnMut(f64) -> [f64; 2],
@@ -126,9 +126,7 @@ impl Mobject {
 
 impl Scene {
     /// Construct detached static geometry through the Scene-owned publication
-    /// path. This works before and after execution bootstrap; live continuations
-    /// can continue to use `LiveSession::create_manim_geometry` when they do not
-    /// own the Scene control surface.
+    /// path before and after execution starts.
     pub fn parametric_plot(
         &mut self,
         sampling: &PlotSamplingOptions,

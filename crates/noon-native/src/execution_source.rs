@@ -1,13 +1,13 @@
-use noon::integration::{
-    ExecutionViewportQuery, ForwardSample, ForwardSampleStatus, RendererPublication,
-    TimelineWakeState,
-};
+use noon::integration::scene_execution::ExecutionSession;
+use noon::integration::BlockingContinuation;
+use noon::integration::{ExecutionViewportQuery, RendererPublication, TimelineWakeState};
 use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameSnapshot, PointerFrameView,
 };
 use noon::{
-    ExecutionSession, LiveContinuation, LiveProgram, LiveProgramError, LiveProgramStatus,
-    RustHostCallbackTable, SceneExecution,
+    LiveContinuation, LiveProgram, LiveProgramError, PlanarPickFrame, PlanarViewerPointer,
+    PlaybackProgram, PlaybackProgramError, RustHostCallbackTable, SceneExecution, ScriptError,
+    TranslationDragError, ViewerIndication,
 };
 use noon_core::{
     Camera2DState, Inset2DViewState, NativeEventOccurrence, NativeInputValue, NativePointerId,
@@ -23,11 +23,48 @@ mod viewport_tests;
 
 /// The narrow execution surface consumed by the native platform loop.
 ///
-/// Both implementations retain their canonical runtime owner. This trait only
+/// Shared Rust owners retain execution and playback admission. This trait only
 /// lets the common event loop drive time, deliver normalized input, query
 /// visibility, and acknowledge a publication after the renderer has retained it.
 /// Physical presentation is a separate, potentially coalesced operation.
 pub(crate) trait NativeExecutionSource {
+    /// Access the original externally authored program for one short operation.
+    /// This borrow never spans a platform event pump.
+    fn with_authoring_program(
+        &mut self,
+        _operation: &mut dyn FnMut(
+            &mut LiveProgram<BlockingContinuation>,
+        ) -> Result<(), ScriptError>,
+    ) -> Result<(), ScriptError> {
+        Err(ScriptError::Host(
+            "this native source does not accept synchronous authoring".into(),
+        ))
+    }
+
+    fn prepare_until(&mut self, _target: f64) -> Result<bool, NativeHostError> {
+        self.resume_ready()
+    }
+    fn presentation_ready(&self) -> bool {
+        true
+    }
+    fn buffering(&self) -> bool {
+        false
+    }
+    fn take_clock_reanchor(&mut self) -> bool {
+        false
+    }
+    fn playback_controls_available(&self) -> bool {
+        self.finite_transport_end().is_some()
+    }
+    fn playback_finished(&self) -> bool {
+        self.finite_transport_end()
+            .is_some_and(|end| self.frame_time() >= end)
+    }
+    fn can_seek_to(&self, time: f64) -> bool {
+        time.is_finite()
+            && time >= 0.0
+            && self.finite_transport_end().is_some_and(|end| time <= end)
+    }
     fn frame_time(&self) -> f64;
     fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError>;
     fn retire_execution_source(&mut self) -> Result<(), NativeHostError>;
@@ -69,6 +106,14 @@ pub(crate) trait NativeExecutionSource {
     fn pending_endpoint(&self) -> Option<PublicationContext> {
         None
     }
+    fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+        None
+    }
+    fn publish_prepared_effects(&mut self) -> Result<(), NativeHostError> {
+        Err(NativeHostError::Program(
+            "source has no staged publication".into(),
+        ))
+    }
     /// Advance through the existing shared runtime/source protocol. Work is
     /// bounded per call; the caller retains its absolute wall-time target when
     /// more source work or a renderer publication is required.
@@ -85,8 +130,8 @@ pub(crate) trait NativeExecutionSource {
     fn seek_to(&mut self, _time: f64) -> Result<(), NativeHostError> {
         Err(NativeHostError::PlaybackControlsUnavailable)
     }
-    /// Resume one authoring continuation when its shared program is ready.
-    /// Source execution latency does not start a new playback epoch.
+    /// Continue one cooperative preparation/source step. Ordinary observed
+    /// source latency stays in its epoch; data buffering has a separate signal.
     fn resume_ready(&mut self) -> Result<bool, NativeHostError>;
     fn capture_pointer_frame(
         &mut self,
@@ -121,6 +166,34 @@ pub(crate) trait NativeExecutionSource {
         value: NativeInputValue,
     ) -> Result<(), NativeHostError>;
     fn emit_native_event(&mut self, event: NativeEventOccurrence) -> Result<(), NativeHostError>;
+    fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        input: PlanarViewerPointer,
+        displayed: Option<&PlanarPickFrame>,
+    );
+
+    fn submit_spatial_pointer(
+        &mut self,
+        input: noon::SpatialPointerInput,
+        displayed: Option<&noon::SpatialPickFrame>,
+        aspect: f64,
+    ) -> Result<bool, NativeHostError>;
+    fn move_spatial_inspection(
+        &mut self,
+        motion: noon::SpatialInspectionMotion,
+    ) -> Result<bool, NativeHostError>;
+
+    fn with_viewer_renderer_publication(
+        &mut self,
+        samples: &[ViewerIndication],
+        spatial_camera: Option<(usize, noon_core::SemanticCamera3D)>,
+        previous: &noon::integration::ViewerPresentation,
+        draw: &mut dyn FnMut(
+            RendererPublication<'_>,
+        ) -> Result<PublicationContext, NativeHostError>,
+    ) -> Result<PublicationContext, NativeHostError>;
+    #[cfg(test)]
     fn take_renderer_publication(&mut self) -> RendererPublication<'_>;
     fn admit_retained_publication(
         &mut self,
@@ -151,11 +224,15 @@ impl StaticExecutionSource {
         // This source consumes its complete authored plan. Admitted interaction
         // attachment maintenance preserves its endpoint, so retaining that bound
         // avoids rescanning timeline events at each pause, seek, or pointer occurrence.
-        let finite_transport_end = session.session().finite_playback_end_time().filter(|&end| {
-            session.session().frame().time.is_finite()
-                && session.session().frame().time >= 0.0
-                && session.session().frame().time <= end
-        });
+        let finite_transport_end = session
+            .session()
+            .replay_end_time()
+            .or_else(|| session.session().finite_playback_end_time())
+            .filter(|&end| {
+                session.session().frame().time.is_finite()
+                    && session.session().frame().time >= 0.0
+                    && session.session().frame().time <= end
+            });
         Self {
             session,
             callbacks,
@@ -172,6 +249,9 @@ impl NativeExecutionSource for StaticExecutionSource {
     }
 
     fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError> {
+        self.session
+            .session_mut()
+            .advance_viewer_inspection(wall_time_seconds)?;
         self.session
             .advance_interactions(wall_time_seconds)
             .map(|_| ())
@@ -226,9 +306,8 @@ impl NativeExecutionSource for StaticExecutionSource {
     }
 
     fn finite_transport_end(&self) -> Option<f64> {
-        self.session
-            .session()
-            .supports_immutable_playback()
+        let session = self.session.session();
+        (session.replay_is_sealed() || session.supports_immutable_playback())
             .then_some(self.finite_transport_end)
             .flatten()
     }
@@ -309,8 +388,12 @@ impl NativeExecutionSource for StaticExecutionSource {
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, NativeHostError> {
         self.session
-            .submit_native_pointer_input(token, input)
-            .map_err(Into::into)
+            .submit_translation_drag_input(token, input)
+            .map(|receipt| receipt.input)
+            .map_err(|error| match error {
+                TranslationDragError::Input(error) => NativeHostError::Input(error),
+                error => NativeHostError::TranslationDrag(error),
+            })
     }
 
     fn set_native_state_input(
@@ -333,6 +416,57 @@ impl NativeExecutionSource for StaticExecutionSource {
             .map_err(Into::into)
     }
 
+    fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        input: PlanarViewerPointer,
+        displayed: Option<&PlanarPickFrame>,
+    ) {
+        self.session
+            .session_mut()
+            .submit_planar_viewer_pointer(pointer, input, displayed);
+    }
+
+    fn submit_spatial_pointer(
+        &mut self,
+        input: noon::SpatialPointerInput,
+        displayed: Option<&noon::SpatialPickFrame>,
+        aspect: f64,
+    ) -> Result<bool, NativeHostError> {
+        self.session
+            .session_mut()
+            .submit_spatial_pointer(input, displayed, aspect)
+            .map_err(Into::into)
+    }
+
+    fn move_spatial_inspection(
+        &mut self,
+        motion: noon::SpatialInspectionMotion,
+    ) -> Result<bool, NativeHostError> {
+        self.session
+            .session_mut()
+            .move_spatial_inspection(motion)
+            .map_err(Into::into)
+    }
+
+    fn with_viewer_renderer_publication(
+        &mut self,
+        samples: &[ViewerIndication],
+        spatial_camera: Option<(usize, noon_core::SemanticCamera3D)>,
+        previous: &noon::integration::ViewerPresentation,
+        draw: &mut dyn FnMut(
+            RendererPublication<'_>,
+        ) -> Result<PublicationContext, NativeHostError>,
+    ) -> Result<PublicationContext, NativeHostError> {
+        self.session.session_mut().with_viewer_renderer_publication(
+            samples,
+            spatial_camera,
+            previous,
+            draw,
+        )
+    }
+
+    #[cfg(test)]
     fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
         self.session.session_mut().take_renderer_publication()
     }
@@ -370,32 +504,81 @@ impl NativeExecutionSource for StaticExecutionSource {
     }
 }
 
-pub(crate) struct LiveProgramExecutionSource<C: LiveContinuation> {
-    program: LiveProgram<C>,
-    callbacks: RustHostCallbackTable,
+pub(crate) trait NativeAuthoringAccess<C: LiveContinuation> {
+    fn with_program(
+        _program: &mut PlaybackProgram<C>,
+        _operation: &mut dyn FnMut(
+            &mut LiveProgram<BlockingContinuation>,
+        ) -> Result<(), ScriptError>,
+    ) -> Result<(), ScriptError> {
+        Err(ScriptError::Host(
+            "this native source does not accept synchronous authoring".into(),
+        ))
+    }
 }
 
-impl<C> LiveProgramExecutionSource<C>
+pub(crate) struct NoExternalAuthoring;
+
+impl<C: LiveContinuation> NativeAuthoringAccess<C> for NoExternalAuthoring {}
+
+pub(crate) struct PlaybackExecutionSource<C: LiveContinuation, A = NoExternalAuthoring> {
+    program: PlaybackProgram<C>,
+    callbacks: RustHostCallbackTable,
+    authoring: std::marker::PhantomData<A>,
+}
+
+impl<C> PlaybackExecutionSource<C>
 where
     C: LiveContinuation,
     C::Error: std::fmt::Display,
 {
     pub(crate) fn new(
-        mut program: LiveProgram<C>,
+        program: LiveProgram<C>,
         callbacks: RustHostCallbackTable,
     ) -> Result<Self, NativeHostError> {
-        program
-            .resume()
-            .map_err(|error| NativeHostError::Program(error.to_string()))?;
-        Ok(Self { program, callbacks })
+        Self::with_authoring_access(program, callbacks)
     }
 }
 
-impl<C> NativeExecutionSource for LiveProgramExecutionSource<C>
+impl<C, A> PlaybackExecutionSource<C, A>
+where
+    C: LiveContinuation,
+    C::Error: std::fmt::Display,
+    A: NativeAuthoringAccess<C>,
+{
+    pub(crate) fn with_authoring_access(
+        program: LiveProgram<C>,
+        mut callbacks: RustHostCallbackTable,
+    ) -> Result<Self, NativeHostError> {
+        let mut program = program
+            .into_playback()
+            .map_err(|e| NativeHostError::Program(e.to_string()))?;
+        program
+            .prepare_ready(&mut callbacks)
+            .map_err(|e| NativeHostError::Program(e.to_string()))?;
+        Ok(Self {
+            program,
+            callbacks,
+            authoring: std::marker::PhantomData,
+        })
+    }
+}
+
+impl<C, A> NativeExecutionSource for PlaybackExecutionSource<C, A>
 where
     C: LiveContinuation + 'static,
     C::Error: std::fmt::Display,
+    A: NativeAuthoringAccess<C>,
 {
+    fn with_authoring_program(
+        &mut self,
+        operation: &mut dyn FnMut(
+            &mut LiveProgram<BlockingContinuation>,
+        ) -> Result<(), ScriptError>,
+    ) -> Result<(), ScriptError> {
+        A::with_program(&mut self.program, operation)
+    }
+
     fn retire_execution_source(&mut self) -> Result<(), NativeHostError> {
         self.program
             .retire_execution_source()
@@ -403,6 +586,7 @@ where
     }
 
     fn advance_interactions(&mut self, wall_time_seconds: f64) -> Result<(), NativeHostError> {
+        self.program.advance_viewer_inspection(wall_time_seconds)?;
         self.program
             .advance_interactions(wall_time_seconds)
             .map(|_| ())
@@ -410,7 +594,7 @@ where
     }
 
     fn frame_time(&self) -> f64 {
-        self.program.session().frame().time
+        self.session().frame().time
     }
 
     fn scroll_inspection_view(
@@ -426,90 +610,94 @@ where
     }
 
     fn query_viewports(&mut self, bounds: &[Rect]) -> ExecutionViewportQuery {
-        let queries = bounds
-            .iter()
-            .copied()
-            .map(|bounds| self.program.query_viewport(bounds))
-            .collect::<Vec<_>>();
         self.program
-            .session()
-            .renderer_viewport_query_union(queries)
-            .expect("fresh viewport queries share this publication")
+            .query_viewports(bounds)
+            .expect("native rendering requires a ready presentation")
     }
 
     fn inset_2d_views(&self) -> Result<Vec<Inset2DViewState>, NativeHostError> {
-        self.program
-            .session()
+        self.session()
             .inset_2d_views()
             .map_err(|error| NativeHostError::Gpu(error.to_string()))
     }
 
     fn timeline(&self) -> TimelineWakeState {
-        self.program.wake_state().timeline()
+        self.program
+            .wake_state()
+            .map_or(TimelineWakeState::Quiescent, |state| state.timeline())
     }
-
     fn frame_pending(&self) -> bool {
-        self.program.session().wake_state().frame_pending()
+        self.program.presentation_ready()
+            && self
+                .program
+                .wake_state()
+                .is_some_and(|state| state.frame_pending())
     }
-
+    fn presentation_ready(&self) -> bool {
+        self.program.presentation_ready()
+    }
+    fn buffering(&self) -> bool {
+        self.program.buffering()
+    }
+    fn take_clock_reanchor(&mut self) -> bool {
+        self.program.take_clock_reanchor()
+    }
+    fn playback_controls_available(&self) -> bool {
+        true
+    }
+    fn playback_finished(&self) -> bool {
+        self.program.finished()
+    }
+    fn can_seek_to(&self, time: f64) -> bool {
+        self.program.can_seek_to(time)
+    }
+    fn finite_transport_end(&self) -> Option<f64> {
+        self.program.end_time()
+    }
+    fn seek_to(&mut self, time: f64) -> Result<(), NativeHostError> {
+        self.program
+            .seek(time)
+            .map_err(|e| NativeHostError::Program(e.to_string()))
+    }
     fn source_active(&self) -> bool {
-        !matches!(
-            self.program.status(),
-            LiveProgramStatus::Finished | LiveProgramStatus::Terminal
-        )
+        self.program.source_active()
     }
-
     fn pending_endpoint(&self) -> Option<PublicationContext> {
-        match self.program.status() {
-            LiveProgramStatus::PublicationPending(context) => Some(context),
-            _ => None,
-        }
+        self.program.pending_endpoint()
     }
-
     fn advance_to(&mut self, requested_time: f64) -> Result<(), NativeHostError> {
-        // Reuse the same shared forward-sampling protocol as offline Rust
-        // output. It alone orders callbacks, clipped endpoints, continuations,
-        // and same-time edits. No host-side segment schedule is introduced.
-        const MAX_STEPS: u32 = 64;
-        let mut sample = ForwardSample::new(
-            &mut self.program,
-            &mut self.callbacks,
-            requested_time,
-            MAX_STEPS,
-        )
-        .map_err(|error| NativeHostError::Program(error.to_string()))?;
-        for _ in 0..MAX_STEPS {
-            match sample
-                .advance()
-                .map_err(|error| NativeHostError::Program(error.to_string()))?
-            {
-                ForwardSampleStatus::Progress => {}
-                ForwardSampleStatus::PublicationPending(_)
-                | ForwardSampleStatus::Ready(_)
-                | ForwardSampleStatus::SourceFinished(_) => return Ok(()),
-            }
-        }
-        // Yield before ForwardSample's transition limit would be exceeded.
-        // The canonical program keeps its phase; the next host wake continues
-        // toward the SAME epoch's elapsed time rather than discarding lateness.
-        Ok(())
+        self.program
+            .advance_to(&mut self.callbacks, requested_time)
+            .map_err(|e| NativeHostError::Program(e.to_string()))
     }
 
+    fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+        self.program.pending_effect_programs()
+    }
+    fn publish_prepared_effects(&mut self) -> Result<(), NativeHostError> {
+        self.program
+            .publish_prepared_effects()
+            .map(|_| ())
+            .map_err(|e| NativeHostError::Program(e.to_string()))
+    }
+    fn prepare_until(&mut self, target: f64) -> Result<bool, NativeHostError> {
+        self.program
+            .prepare_until(&mut self.callbacks, target)
+            .map_err(|e| NativeHostError::Program(e.to_string()))
+    }
     fn resume_ready(&mut self) -> Result<bool, NativeHostError> {
-        if self.program.status() == LiveProgramStatus::ReadyToResume {
-            self.program
-                .resume()
-                .map_err(|error| NativeHostError::Program(error.to_string()))?;
-            return Ok(true);
-        }
-        Ok(false)
+        self.program
+            .prepare_ready(&mut self.callbacks)
+            .map_err(|e| NativeHostError::Program(e.to_string()))
     }
 
     fn capture_pointer_frame(
         &mut self,
         view: PointerFrameView,
     ) -> Result<PointerFrameSnapshot, NativeHostError> {
-        self.program.capture_pointer_frame(view).map_err(Into::into)
+        self.program
+            .capture_pointer_frame(view)
+            .map_err(pointer_frame_program_error)
     }
 
     fn validate_pointer_frame_position(
@@ -576,25 +764,64 @@ where
             .map_err(|error| NativeHostError::Program(error.to_string()))
     }
 
+    fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        input: PlanarViewerPointer,
+        displayed: Option<&PlanarPickFrame>,
+    ) {
+        self.program
+            .submit_planar_viewer_pointer(pointer, input, displayed);
+    }
+
+    fn submit_spatial_pointer(
+        &mut self,
+        input: noon::SpatialPointerInput,
+        displayed: Option<&noon::SpatialPickFrame>,
+        aspect: f64,
+    ) -> Result<bool, NativeHostError> {
+        self.program
+            .submit_spatial_pointer(input, displayed, aspect)
+            .map_err(Into::into)
+    }
+
+    fn move_spatial_inspection(
+        &mut self,
+        motion: noon::SpatialInspectionMotion,
+    ) -> Result<bool, NativeHostError> {
+        self.program
+            .move_spatial_inspection(motion)
+            .map_err(Into::into)
+    }
+
+    fn with_viewer_renderer_publication(
+        &mut self,
+        samples: &[ViewerIndication],
+        spatial_camera: Option<(usize, noon_core::SemanticCamera3D)>,
+        previous: &noon::integration::ViewerPresentation,
+        draw: &mut dyn FnMut(
+            RendererPublication<'_>,
+        ) -> Result<PublicationContext, NativeHostError>,
+    ) -> Result<PublicationContext, NativeHostError> {
+        self.program
+            .with_viewer_renderer_publication(samples, spatial_camera, previous, draw)
+            .expect("native rendering requires a ready presentation")
+    }
+
+    #[cfg(test)]
     fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
-        self.program.take_renderer_publication()
+        self.program
+            .take_renderer_publication()
+            .expect("native rendering requires a ready presentation")
     }
 
     fn admit_retained_publication(
         &mut self,
         publication: PublicationContext,
     ) -> Result<(), NativeHostError> {
-        if let LiveProgramStatus::PublicationPending(expected) = self.program.status() {
-            if publication != expected {
-                return Err(NativeHostError::Program(format!(
-                    "retained publication {publication:?} does not match live endpoint {expected:?}"
-                )));
-            }
-            self.program
-                .admit_publication(publication)
-                .map_err(|error| NativeHostError::Program(error.to_string()))?;
-        }
-        Ok(())
+        self.program
+            .admit_publication(publication)
+            .map_err(|e| NativeHostError::Program(e.to_string()))
     }
 
     fn refresh_pointer_hover(
@@ -608,15 +835,17 @@ where
     }
 
     fn session(&self) -> &ExecutionSession {
-        self.program.session()
+        self.program
+            .session()
+            .expect("native source errors terminate the host before further session use")
     }
 }
 
 fn pointer_frame_program_error<E: std::fmt::Display>(
-    error: LiveProgramError<E>,
+    error: PlaybackProgramError<E>,
 ) -> NativeHostError {
     match error {
-        LiveProgramError::PointerFrame(error) => error.into(),
+        PlaybackProgramError::Program(LiveProgramError::PointerFrame(error)) => error.into(),
         error => NativeHostError::Program(error.to_string()),
     }
 }

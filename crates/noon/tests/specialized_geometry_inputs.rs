@@ -10,9 +10,9 @@ fn path(options: Options) -> (Mobject, VectorPath) {
     let object =
         Mobject::from_manim_geometry(Rc::clone(scene.integration_store()), options).unwrap();
     scene.add(&object).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = noon::integration::scene_execution::lower(&scene).unwrap();
     let geometry = match session.frame().render_geometry(0).unwrap() {
-        GeometryRef::VectorPath(path) => path.clone(),
+        GeometryRef::VectorPath(path) => path.as_ref().clone(),
         GeometryRef::External(id) => {
             let resources = session.geometry_resources();
             let GeometryResource::VectorPath(path) = resources
@@ -21,7 +21,7 @@ fn path(options: Options) -> (Mobject, VectorPath) {
             else {
                 panic!("expected retained vector path resource")
             };
-            (**path).clone()
+            path.as_ref().clone()
         }
         other => panic!("expected lowered path geometry, got {other:?}"),
     };

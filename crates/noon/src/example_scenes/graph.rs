@@ -1,8 +1,36 @@
 //! Explicit-layout Graph/DiGraph proof over ordinary retained semantics.
 
-use crate::{GraphOptions, MobjectTarget, Scene, BLUE, GREEN, RED};
+use crate::{
+    AnimationOptions, ContinuationScene, ContinuationStep, GraphOptions, LiveContinuation,
+    LiveProgram, MobjectFamily, RateFunction, Scene, ScriptError, Vec2, BLUE, GREEN, RED,
+};
 
-pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
+pub struct GraphMotion {
+    diagrams: MobjectFamily,
+    shifted: bool,
+}
+
+impl LiveContinuation for GraphMotion {
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
+    type Error = ScriptError;
+
+    fn resume(&mut self, scene: &mut ContinuationScene) -> Result<ContinuationStep, ScriptError> {
+        if self.shifted {
+            return Ok(ContinuationStep::Finished);
+        }
+        let segment = crate::animation_request::activate(
+            &mut scene.live(),
+            self.diagrams.animate().shift(Vec2::new(0.0, 0.75)).into(),
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )?;
+        self.shifted = true;
+        Ok(ContinuationStep::Await(segment))
+    }
+}
+
+fn scene() -> Result<(Scene, MobjectFamily), Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
 
     let options = GraphOptions {
@@ -43,17 +71,19 @@ pub fn scene() -> Result<Scene, Box<dyn std::error::Error>> {
     digraph.add_vertices(&mut scene, [("x", (5.0, -2.3))])?;
     digraph.add_edges(&mut scene, [("w", "x")])?;
 
-    scene.add_many(&[
-        MobjectTarget::Family(graph.family()),
-        MobjectTarget::Family(digraph.family()),
-    ])?;
-    scene.wait(0.21)?;
-    Ok(scene)
+    let diagrams = scene.family(&[graph.family().into(), digraph.family().into()])?;
+    scene.add_many(&[(&diagrams).into()])?;
+    Ok((scene, diagrams))
 }
 
-pub fn session() -> Result<crate::SceneExecution, String> {
-    let scene = scene().map_err(|error| error.to_string())?;
-    scene.into_execution().map_err(|error| error.to_string())
+pub fn program() -> Result<LiveProgram<GraphMotion>, String> {
+    let (scene, diagrams) = scene().map_err(|error| error.to_string())?;
+    scene
+        .into_live_program(GraphMotion {
+            diagrams,
+            shifted: false,
+        })
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -62,7 +92,7 @@ mod tests {
 
     #[test]
     fn explicit_graph_gallery_uses_only_ordinary_retained_leaves() {
-        let scene = scene().unwrap();
+        let (scene, _) = scene().unwrap();
         let store = scene.integration_store().borrow();
         let leaves = store.ordered_leaf_nodes(scene.root()).unwrap();
         // Persistent additions keep the same ordinary retained leaves.
@@ -77,5 +107,42 @@ mod tests {
                 .geometry()
                 .is_some());
         }
+    }
+
+    #[cfg(feature = "prepared-prefix")]
+    #[test]
+    fn graph_shift_moves_edges_and_vertices_together_and_rewinds() {
+        let mut player = program().unwrap().into_playback().unwrap();
+        let mut callbacks = crate::RustHostCallbackTable::new();
+        let snapshot = |player: &crate::PlaybackProgram<GraphMotion>| {
+            let session = player.session().unwrap();
+            let frame = session.frame();
+            session
+                .painter_order()
+                .iter()
+                .map(|&index| {
+                    let index = index as usize;
+                    (
+                        frame.objects[index].id,
+                        frame.render_transform(index).translation,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        player.prepare_ready(&mut callbacks).unwrap();
+        player.advance_to(&mut callbacks, 0.25).unwrap();
+        let first = snapshot(&player);
+        player.prepare_ready(&mut callbacks).unwrap();
+        player.advance_to(&mut callbacks, 0.75).unwrap();
+        let second = snapshot(&player);
+        assert_eq!(first.len(), 20);
+        assert_eq!(second.len(), 20);
+        for ((a, first), (b, second)) in first.iter().zip(&second) {
+            assert_eq!(a, b);
+            let delta = *second - *first - Vec2::new(0.0, 0.375);
+            assert!(delta.x.abs() < 1e-5 && delta.y.abs() < 1e-5);
+        }
+        player.seek(0.25).unwrap();
+        assert_eq!(snapshot(&player), first);
     }
 }

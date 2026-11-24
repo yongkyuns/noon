@@ -1,9 +1,9 @@
 //! Shared direct and native/WASM qualification scene for public spatial primitives.
 
 use crate::{
-    AnimationOptions, Color, ExecutionSession, MeshOptions, MobjectTarget, RateFunction, Scene,
-    SemanticCamera3D, SemanticProjection3D, SemanticSpatialCompositionDomain, SemanticVec3,
-    SemanticWorldTransform3D, SurfaceOptions, WorldAffineEdit,
+    AnimationOptions, Color, MeshOptions, MobjectTarget, RateFunction, Scene, SemanticCamera3D,
+    SemanticProjection3D, SemanticSpatialCompositionDomain, SemanticVec3, SemanticWorldTransform3D,
+    SurfaceOptions, WorldAffineEdit,
 };
 use noon_core::{
     CompositionTimeMap, ManimCamera3DProfile, SemanticAnimationCompositionKind,
@@ -182,19 +182,11 @@ pub fn session() -> Result<crate::SceneExecution, String> {
     let animation_root = committed
         .resolve(animation_root)
         .ok_or("missing spatial-primitives composition")?;
-    let result = {
-        let store = scene.integration_store();
-        let store = store.borrow();
-        ExecutionSession::from_semantic_root_with_animation_root(
-            &store,
-            scene.root(),
-            animation_root,
-        )
-    };
-    let session = result.map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    let animation = crate::DeclaredAnimation::new(
+        std::rc::Rc::clone(scene.integration_store()),
+        animation_root,
+    );
+    scene.into_execution_with_animation_root(&animation)
 }
 
 /// Default shaded, translucent Cube and Prism faces under finite camera motion.
@@ -258,19 +250,12 @@ pub fn cairo_cube_prism_session() -> Result<crate::SceneExecution, String> {
                 .rate_func(RateFunction::Linear),
         )
         .map_err(|error| error.to_string())?;
-    let mut session = scene
-        .execution_session()
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
+        .play_animation(&movement)
         .map_err(|error| error.to_string())?;
-    session
-        .activate_animation_segment(
-            &mut scene.integration_store().borrow_mut(),
-            movement.node_id(),
-            AnimationOptions::new(),
-        )
-        .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 /// Pinned default Cylinder caps and optional Cone base with retained Cairo surfaces.
@@ -348,19 +333,12 @@ pub fn cairo_cylinder_cone_caps_session() -> Result<crate::SceneExecution, Strin
                 .rate_func(RateFunction::Linear),
         )
         .map_err(|error| error.to_string())?;
-    let mut session = scene
-        .execution_session()
+    let mut execution = scene.into_execution().map_err(|error| error.to_string())?;
+    execution
+        .live()
+        .play_animation(&movement)
         .map_err(|error| error.to_string())?;
-    session
-        .activate_animation_segment(
-            &mut scene.integration_store().borrow_mut(),
-            movement.node_id(),
-            AnimationOptions::new(),
-        )
-        .map_err(|error| error.to_string())?;
-    scene
-        .into_execution_with_session(session)
-        .map_err(|error| error.to_string())
+    Ok(execution)
 }
 
 fn cairo_cylinder_family(
@@ -530,7 +508,7 @@ mod tests {
             session.session().wake_state().timeline(),
             noon_runtime::TimelineWakeState::Continuous
         );
-        let rows = |session: &ExecutionSession| {
+        let rows = |session: &crate::ExecutionSession| {
             let line = session
                 .frame()
                 .objects

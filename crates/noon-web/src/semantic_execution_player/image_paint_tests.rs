@@ -125,9 +125,7 @@ fn worker_bitmap_and_fill_share_pixels_and_retire_only_after_both_roots_leave() 
     assert!(mirror.apply_family(premature).is_err());
     assert_eq!(mirror.frame().unwrap(), &before);
 
-    player
-        .with_live_session(|live| live.remove(&bitmap))
-        .unwrap();
+    player.scene_mut().remove(&bitmap).unwrap();
     let delta = player.delta(false).unwrap().unwrap();
     assert!(delta.resource_retirements.images.is_empty());
     mirror.apply_family(delta).unwrap();
@@ -140,7 +138,8 @@ fn worker_bitmap_and_fill_share_pixels_and_retire_only_after_both_roots_leave() 
     )
     .unwrap();
     player
-        .with_live_session(|live| live.set_fill_image_mapping(&source, mapping, Some(0.5)))
+        .scene_mut()
+        .set_fill_image_mapping(&source, mapping, Some(0.5))
         .unwrap();
     let delta = player.delta(false).unwrap().unwrap();
     assert!(delta.resource_additions.is_none());
@@ -165,7 +164,8 @@ fn worker_bitmap_and_fill_share_pixels_and_retire_only_after_both_roots_leave() 
         mapping
     );
     player
-        .with_live_session(|live| live.set_fill(&source, 0.2, 0.4, 0.8, 1.0))
+        .scene_mut()
+        .set_fill_rgb(&source, 0.2, 0.4, 0.8, 1.0)
         .unwrap();
     let delta = player.delta(false).unwrap().unwrap();
     assert_eq!(delta.resource_retirements.images, [transport.into()]);

@@ -1,9 +1,9 @@
 //! Native, windowless frame capture over Noon's shared execution and renderer.
 //!
 //! This crate is the native GPU/output dependency boundary: it does not depend
-//! on the window host, Python, WASM, or browser infrastructure. Scheduling and
-//! continuation semantics remain in `noon::integration::ExportFrames`; retained
-//! preparation and composition remain in `noon-render-wgpu`.
+//! on the window host, Python, WASM, or browser infrastructure. Execution and
+//! continuation semantics remain in `noon`; output uses its shared frame policy.
+//! Retained rendering preparation and composition remain in `noon-render-wgpu`.
 //!
 //! The first implementation is deliberately serial. One GPU target, one staging
 //! buffer and one reusable CPU pixel buffer belong to a run. The consumer borrows
@@ -110,11 +110,13 @@ impl CaptureOptions {
 }
 
 /// Output has tightly packed, top-down RGBA8 rows and opaque alpha. These are
-/// direct Rgba8Unorm renderer bytes, not a claim of an HDR/linear/sRGB conversion.
-/// A video sink must explicitly choose and validate its color conversion.
+/// compatibility renderer bytes or an explicitly identified HDR-to-SDR resolve.
+/// A video sink must separately qualify its color conversion for each profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CapturePixelFormat {
     RendererRgba8UnormOpaque,
+    /// Linear HDR composed output resolved once with Reinhard and sRGB transfer.
+    LinearHdrSdrRgba8Opaque,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -170,6 +172,7 @@ where
     F: FnMut(CapturedFrame<'_>) -> Result<(), E>,
 {
     let layout = options.layout().map_err(CaptureRunError::Capture)?;
+    program.require_effect_resource_preparation();
     let mut export =
         ExportFrames::new(program, callbacks, frame_options).map_err(CaptureRunError::Sampling)?;
     let result = (|| {
@@ -184,6 +187,17 @@ where
             }
             match export.advance().map_err(CaptureRunError::Sampling)? {
                 ExportFramesStatus::Progress => {}
+                ExportFramesStatus::ResourcePreparationPending => {
+                    gpu.prepare_effect_modules(
+                        export
+                            .pending_effect_programs()
+                            .expect("pending resource request"),
+                    )
+                    .map_err(CaptureRunError::Capture)?;
+                    export
+                        .publish_prepared_effects()
+                        .map_err(CaptureRunError::Sampling)?;
+                }
                 ExportFramesStatus::PublicationPending(context) => {
                     capture_publication(&mut gpu, &mut export, &options, context, false)?;
                     export
@@ -207,7 +221,7 @@ where
                             observation: sample.observation,
                             width: options.width,
                             height: options.height,
-                            format: CapturePixelFormat::RendererRgba8UnormOpaque,
+                            format: gpu.pixel_format(),
                             rgba: gpu.pixels(),
                             work,
                         })

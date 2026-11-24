@@ -55,13 +55,21 @@ pub struct ReplayStats {
 struct Revision {
     time: f64,
     inverse: Option<CompiledReplayRevision>,
+    #[cfg(feature = "prepared-prefix")]
+    scalar_timeline_entries: usize,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct ReplayHistory {
     start: f64,
+    #[cfg(feature = "prepared-prefix")]
+    scope: std::sync::Arc<()>,
     end: Option<f64>,
     limits: ReplayLimits,
     failure: Option<ReplayError>,
+    #[cfg(feature = "prepared-prefix")]
+    inset_view_history: bool,
+    #[cfg(feature = "prepared-prefix")]
+    last_non_prefix_revision: Option<usize>,
     revisions: Vec<Revision>,
     applied: usize,
     stats: ReplayStats,
@@ -85,11 +93,23 @@ impl SceneInstance {
         self.publication.execution_revision() == self.immutable_playback_revision
             && self.replay_history.is_none()
             && self.effective_driver_rows.is_empty()
+            && self.numeric_text.is_empty()
             && self.effective_content_drivers.is_empty()
             && self.translation_drag_rows.is_empty()
     }
 
     pub fn begin_replay_retention(&mut self, limits: ReplayLimits) -> Result<(), ReplayError> {
+        self.begin_replay_retention_with_initial_payloads(limits, 0)
+    }
+
+    /// Begin retention with source-owned immutable payloads already present in
+    /// the initial projection, such as its scalar timeline schedule.
+    #[doc(hidden)]
+    pub fn begin_replay_retention_with_initial_payloads(
+        &mut self,
+        limits: ReplayLimits,
+        initial_payloads: usize,
+    ) -> Result<(), ReplayError> {
         if self.replay_history.is_some() {
             return Err(ReplayError::AlreadyStarted);
         }
@@ -99,35 +119,58 @@ impl SceneInstance {
         if self.has_temporary_glow_interactions() {
             return Err(ReplayError::UnrecordedInput);
         }
-        // Initial audio pins its immutable resource closure but does not yet
-        // participate in bounded historical publication/retention (#2263).
-        if self.has_audio() {
-            return Err(ReplayError::UnsupportedDomain);
+        // Authored audio clips are immutable initial projection entries, so
+        // retain their schedule cost alongside any source-owned timeline data.
+        let initial_payloads = initial_payloads
+            .checked_add(self.compiled.audio_clips().len())
+            .ok_or(ReplayError::RetentionLimit)?;
+        if initial_payloads > limits.payloads {
+            return Err(ReplayError::RetentionLimit);
         }
-        let unsupported = self
-            .reactive
-            .as_ref()
-            .is_some_and(|reactive| reactive.has_property_bindings());
         // Existing immutable family channels are already part of this scope's
         // initial projection and use the ordinary scheduler during replay.
         self.replay_history = Some(ReplayHistory {
             start: self.frame.time,
+            #[cfg(feature = "prepared-prefix")]
+            scope: std::sync::Arc::new(()),
             end: None,
             limits,
-            failure: unsupported.then_some(ReplayError::UnsupportedDomain),
+            failure: None,
+            #[cfg(feature = "prepared-prefix")]
+            inset_view_history: false,
+            #[cfg(feature = "prepared-prefix")]
+            last_non_prefix_revision: None,
             revisions: Vec::new(),
             applied: 0,
-            stats: ReplayStats::default(),
+            stats: ReplayStats {
+                payloads_retained: initial_payloads,
+                ..Default::default()
+            },
         });
         Ok(())
     }
     pub fn replay_scope_active(&self) -> bool {
         self.replay_history.is_some()
     }
-    pub fn replay_retention_valid(&self) -> bool {
+    pub(crate) fn replay_starts_at_current_frame(&self) -> bool {
         self.replay_history
             .as_ref()
-            .is_some_and(|history| history.failure.is_none())
+            .is_some_and(|history| history.start == self.frame.time)
+    }
+    pub fn replay_retention_valid(&self) -> bool {
+        self.replay_retention_status().is_ok()
+    }
+    /// Inspect the existing scope without sealing, advancing or changing it.
+    /// The first retention failure remains authoritative after its payloads are released.
+    pub fn replay_retention_status(&self) -> Result<(), ReplayError> {
+        let history = self
+            .replay_history
+            .as_ref()
+            .ok_or(ReplayError::NotRecording)?;
+        match history.failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
     pub fn invalidate_replay_domain(&mut self) {
         self.invalidate_replay(ReplayError::UnsupportedDomain);
@@ -176,7 +219,35 @@ impl SceneInstance {
             self.invalidate_replay_domain();
             return;
         }
-        self.retain_supported_replay_change(None, timeline.entries.len());
+        let cost = timeline.entries.len();
+        if cost == 0 {
+            return;
+        }
+        let Some(history) = self.replay_history.as_mut() else {
+            return;
+        };
+        if history.failure.is_some() || history.end.is_some() {
+            return;
+        }
+        if history.revisions.len() >= history.limits.revisions
+            || cost
+                > history
+                    .limits
+                    .payloads
+                    .saturating_sub(history.stats.payloads_retained)
+        {
+            self.invalidate_replay(ReplayError::RetentionLimit);
+            return;
+        }
+        history.stats.payloads_retained += cost;
+        history.revisions.push(Revision {
+            time: self.frame.time,
+            inverse: None,
+            #[cfg(feature = "prepared-prefix")]
+            scalar_timeline_entries: cost,
+        });
+        history.applied = history.revisions.len();
+        history.stats.revisions_retained = history.revisions.len();
     }
 
     pub fn replay_stats(&self) -> ReplayStats {
@@ -191,13 +262,6 @@ impl SceneInstance {
             .ok_or(ReplayError::NotRecording)?;
         if let Some(error) = history.failure {
             return Err(error);
-        }
-        if self
-            .reactive
-            .as_ref()
-            .is_some_and(|reactive| reactive.has_property_bindings())
-        {
-            return Err(ReplayError::UnsupportedDomain);
         }
         if history.end.is_some() {
             return Ok(());
@@ -257,6 +321,19 @@ impl SceneInstance {
     pub(crate) fn retain_replay_change(&mut self, change: Option<CompiledReplayRevision>) {
         match change {
             Some(change) => {
+                #[cfg(feature = "prepared-prefix")]
+                let change = {
+                    let mut change = change;
+                    if self
+                        .compiled
+                        .charge_prefix_revision_geometry(&mut change)
+                        .is_none()
+                    {
+                        self.invalidate_replay(ReplayError::RetentionLimit);
+                        return;
+                    }
+                    change
+                };
                 let cost = change.retention_cost();
                 self.retain_supported_replay_change(Some(change), cost);
             }
@@ -296,10 +373,27 @@ impl SceneInstance {
             self.invalidate_replay(error);
             return;
         }
+        #[cfg(feature = "prepared-prefix")]
+        {
+            // Index unsupported payloads once at their publication. Repeated
+            // preflight across zero-duration yields must not rescan an expanding
+            // unpublished suffix; bootstrap can still admit ordinary replay.
+            if !inverse
+                .as_ref()
+                .is_some_and(|revision| self.compiled.supports_prefix_revision(revision))
+            {
+                history.last_non_prefix_revision = Some(history.revisions.len());
+            }
+            history.inset_view_history |= inverse
+                .as_ref()
+                .is_some_and(|revision| revision.changes_inset_2d_view());
+        }
         history.stats.payloads_retained += cost;
         history.revisions.push(Revision {
             time: self.frame.time,
             inverse,
+            #[cfg(feature = "prepared-prefix")]
+            scalar_timeline_entries: 0,
         });
         history.applied = history.revisions.len();
         history.stats.revisions_retained = history.revisions.len();
@@ -348,6 +442,7 @@ impl SceneInstance {
         }
         let mut rows = BTreeSet::new();
         let mut channels = BTreeSet::new();
+        let mut tracks = BTreeSet::new();
         while history.applied != target {
             let backward = history.applied > target;
             let index = if backward {
@@ -358,6 +453,7 @@ impl SceneInstance {
             if let Some(revision) = &mut history.revisions[index].inverse {
                 rows.extend(revision.object_indices());
                 channels.extend(revision.channels());
+                tracks.extend(revision.track_ids());
                 self.compiled.exchange_replay_revision(revision);
             }
             if backward {
@@ -366,7 +462,9 @@ impl SceneInstance {
                 history.applied += 1;
             }
         }
-        self.path_motion_plans = crate::prepare_path_motion_plans(&self.compiled);
+        for track in tracks {
+            self.refresh_path_motion_plan(track);
+        }
         history.stats.objects_restored = rows.len();
         history.stats.channels_restored = channels.len();
         for channel in channels {
@@ -427,3 +525,8 @@ mod input_tests;
 
 #[cfg(test)]
 mod family_tests;
+
+#[cfg(feature = "prepared-prefix")]
+mod prefix;
+#[cfg(feature = "prepared-prefix")]
+pub use prefix::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixPublisher, PrefixReceiver};

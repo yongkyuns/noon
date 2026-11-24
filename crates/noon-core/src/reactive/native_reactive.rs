@@ -5,6 +5,8 @@ use crate::{ObjectId, Property, SignalId, ValueKind, Vec2};
 
 mod compute_ir;
 pub use compute_ir::*;
+mod samples;
+pub use samples::SignalSamples;
 
 /// A value that can participate in the native reactive graph.
 ///
@@ -71,6 +73,7 @@ pub enum ReactiveExpr {
     Neg(Box<Self>),
     Sin(Box<Self>),
     Cos(Box<Self>),
+    Sample(Box<Self>, SignalSamples),
 }
 
 impl ReactiveExpr {
@@ -96,7 +99,9 @@ impl ReactiveExpr {
                 lhs.dependencies(output);
                 rhs.dependencies(output);
             }
-            Self::Neg(value) | Self::Sin(value) | Self::Cos(value) => value.dependencies(output),
+            Self::Neg(value) | Self::Sin(value) | Self::Cos(value) | Self::Sample(value, _) => {
+                value.dependencies(output)
+            }
         }
     }
 }
@@ -773,6 +778,16 @@ fn evaluate_expression(
                 _ => Err(ReactiveError::InvalidExpression {
                     signal: owner,
                     operation: "cos",
+                }),
+            }
+        }
+        ReactiveExpr::Sample(input, samples) => {
+            let input = evaluate_expression(input, values, indices, owner)?;
+            match input {
+                ReactiveValue::Scalar(input) if input.is_finite() => Ok(samples.sample(input)),
+                _ => Err(ReactiveError::InvalidExpression {
+                    signal: owner,
+                    operation: "sample",
                 }),
             }
         }

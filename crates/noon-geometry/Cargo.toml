@@ -1,12 +1,15 @@
 [package]
 name = "noon-geometry"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
 description = "Vector geometry compilation and tessellation for Noon"
 
 [dependencies]
 i_overlay = { version = "9.0", default-features = false }
 lyon_path = "1"
 lyon_tessellation = "1"
-noon-core = { path = "../noon-core" }
+noon-core = { version = "0.1.0", path = "../noon-core" }

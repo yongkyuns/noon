@@ -5,10 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { waitForBrowserObservation } from "../scripts/playground-browser-support.mjs";
-import { assertNonreplayableShowcase, readLiveState } from "../scripts/showcase-live-review.mjs";
+import { assertFirstPass, assertReplayAvailable, readLiveState } from "../scripts/showcase-live-review.mjs";
 import { normalizeShowcaseManifest } from "./showcase-gallery.js";
 import test from "node:test";
-import { createBrowserFailureTrace } from "../scripts/playground-browser-failure-evidence.mjs";
+import { captureAttemptedPage, createBrowserFailureTrace } from "../scripts/playground-browser-failure-evidence.mjs";
 
 const sourceUrl = new URL("../scripts/playground-gallery-selection-smoke.mjs", import.meta.url).href;
 const showcaseManifest = JSON.parse(await readFile(new URL("./python/examples/noon_showcase_manifest.json", import.meta.url), "utf8"));
@@ -18,7 +18,7 @@ const source = (await readFile(new URL(sourceUrl), "utf8"))
   .replace(/^import .*;\n/gm, "")
   .replaceAll("import.meta.url", "sourceUrl");
 
-async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, bootstrapFailure = false, writeFailure = false, deferWrites = false, deferWheelEvent = false, wheelReplies = [], deferNativeRelease = false, nativeReleaseAccepted = true, nativeHoverPixels = 650, env = {} } = {}) {
+async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels = 501, captureFailure, bootstrapFailure = false, writeFailure = false, deferWrites = false, deferWheelEvent = false, wheelReplies = [], deferNativeRelease = false, nativeReleaseAccepted = true, nativeHoverPixels = 650, replayable = false, staleEndpointReads = 0, env = {} } = {}) {
   const names = [
     "baseline", "selected", "cleared",
     "authoredBaseline", "indicated", "restored", "repeated", "repeatedRestored", "background",
@@ -42,27 +42,34 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
   let frame = 0;
   let capture = 0;
   let showcase = false;
+  let endpointRequested = false;
   const gallery = {
     selectedExampleId: "noon-pointer-selection", run: async () => {}, runInFlight: false,
-    executionMetrics: async () => ({ metrics: { presentedFrames: frame, objectCount: 3 } }),
+    executionMetrics: async () => {
+      const stale = endpointRequested && staleEndpointReads-- > 0;
+      if (endpointRequested) events.push(stale ? "render:stale" : "render:endpoint");
+      return { metrics: { presentedFrames: frame, objectCount: 3, time: stale ? 1.88 : 2.6,
+        ready: true, needsPresent: false, bufferedDeltas: 0 } };
+    },
   };
   const wheelListeners = [];
   const browserWindow = {
     __noonNoJspiWorkerWrapped: true,
     __noonExampleGallery: gallery,
+    getComputedStyle: () => ({ touchAction: "pinch-zoom" }),
     addEventListener: (type, listener) => { if (type === "wheel") wheelListeners.push(listener); },
   };
   const browserDocument = { querySelector: (selector) => {
     if (selector === ".playback-controls") return {
-      dataset: { busy: "false", elapsedSeconds: "2.6", controllable: "false", playing: "false" },
-      title: "Replay unavailable: UnsupportedDomain",
+      dataset: { busy: "false", elapsedSeconds: "2.6", controllable: String(replayable || gallery.selectedExampleId === "showcase-translation-drag"), playing: "false" },
+      title: gallery.selectedExampleId === "showcase-translation-drag" ? "" : "Replay unavailable: UnsupportedDomain",
       querySelector: () => ({ getAttribute: () => "Play animation", disabled: true }),
     };
     if ([".playback-toggle", ".playback-restart", ".playback-scrubber"].includes(selector)) return { disabled: true };
     if (selector === "#patch-status") return { dataset: { state: "applied" }, value: "" };
     if (selector === "#status-text") return { textContent: "" };
     return { dataset: {
-      state: "applied", interaction: showcase ? "none" : "pointer-fill-selection", rendererBackend: "WebGL2",
+      state: "applied", interaction: "viewer", rendererBackend: "WebGL2",
     } };
   } };
   const inspection = { pending: [], samples: [], wheelEvents: [] };
@@ -115,7 +122,11 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       if (!name) throw new Error(`unexpected screenshot read after ${capture} planned captures`);
       events.push(`capture:${name}`);
       if (name === captureFailure) throw new Error(`capture failed: ${name}`);
-      return captures[capture++];
+      const bytes = captures[capture];
+      if (!(name === "selected" && selectedPixels <= 500) && !(name === "cleared" && clearPixels !== 0)) {
+        capture += 1;
+      }
+      return bytes;
     },
   };
   const browserContext = new EventEmitter();
@@ -166,7 +177,10 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       if (selector === "#replace-scene") return { click: async () => events.push("public:run") };
       if (selector === ".playback-scrubber") return {
         getAttribute: async () => "2.6",
-        evaluate: async (fn, value) => fn({ value: "", dispatchEvent() {} }, value),
+        evaluate: async (fn, value) => {
+          endpointRequested = true;
+          return fn({ value: "", dispatchEvent() {} }, value);
+        },
       };
       return canvas;
     },
@@ -187,11 +201,17 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
   try {
     await vm.runInNewContext(`(async () => {${source}\n})()`, {
       assert, path, fileURLToPath, sourceUrl, URL,
-      assertNonreplayableShowcase, readLiveState, normalizeShowcaseManifest,
+      assertFirstPass, assertReplayAvailable, readLiveState, normalizeShowcaseManifest,
+      seekPausedGallery: async (_page, duration) => {
+        assert.equal(duration, 2.6);
+        endpointRequested = true;
+        events.push("seek:paused-endpoint");
+        return duration;
+      },
       process: { env },
       setTimeout: (callback) => { callback(); return 0; },
       clearTimeout: () => {},
-      spawn: () => ({ kill: () => events.push("server:kill") }),
+      serveRepository: async () => ({ close: async () => events.push("server:close") }),
       mkdir: async () => {},
       writeFile: async (filename, bytes) => {
         const name = path.basename(filename);
@@ -220,6 +240,7 @@ async function runSmoke({ selectedPixels = 501, clearPixels = 0, authoredPixels 
       playgroundLaunchOptions: (name) => ({ browser: name, headless: true }),
       createPyodideResourceCache: () => ({ install: async () => {}, stats: () => ({ upstreamFailures: Number(bootstrapFailure) }) }),
       createBrowserFailureTrace,
+      captureAttemptedPage,
       layoutReplayViewport: async (_canvas, size) => { layoutSizes.push(size); },
       replayViewport: async (_canvas, size, { deviceScaleFactor }) => ({
         bitmap: { width: size.width * deviceScaleFactor, height: size.height * deviceScaleFactor },
@@ -241,14 +262,14 @@ function assertRetained(result, names) {
     assert.equal(result.writes.get(`${name}.png`), result.captures[index]);
   }
   assert.equal(result.events.filter((event) => event === "browser:close").length, 1);
-  assert.equal(result.events.filter((event) => event === "server:kill").length, 1);
+  assert.equal(result.events.filter((event) => event === "server:close").length, 1);
   // Artifact I/O must not insert a wait before any original screenshot.
   assert.ok(result.events.findIndex((event) => event.startsWith("write:")) >
     result.events.findLastIndex((event) => event.startsWith("capture:")));
   return JSON.parse(result.writes.get("result.json"));
 }
 
-test("successful legacy clear and source-declared indication retain their captures and measurements", async () => {
+test("successful default and source-declared indication retain their captures and measurements", async () => {
   const result = await runSmoke();
   assert.equal(result.error, undefined);
   const report = assertRetained(result, ["baseline", "selected", "cleared", "authoredBaseline", "indicated", "restored", "repeated",
@@ -261,6 +282,16 @@ test("successful legacy clear and source-declared indication retain their captur
   assert.equal(report.wheelInput, "browser mouse wheel");
   assert.equal(report.error, null);
   assert.equal(result.events.at(-1), "passed");
+});
+
+test("an acknowledged seek cannot baseline an earlier renderer publication", async () => {
+  const result = await runSmoke({ replayable: true, staleEndpointReads: 2 });
+  assert.equal(result.error, undefined);
+  assert.equal(result.events.filter(event => event === "render:stale").length, 2);
+  assert.ok(result.events.indexOf("seek:paused-endpoint") < result.events.indexOf("render:endpoint"));
+  assert.ok(result.events.indexOf("render:endpoint") < result.events.indexOf("capture:authoredBaseline"));
+  const report = assertRetained(result, ["authoredBaseline", "indicated", "restored"]);
+  assert.equal(report.authoredPlayback.publishedTime, 2.6);
 });
 
 test("bootstrap failure retains request and cache evidence without replacing the original error", async () => {
@@ -287,32 +318,34 @@ test("default routing preserves desktop Chromium mouse input and 960 by 540 canv
   assert.equal(report.captureViewport.deviceScaleFactor, 1);
 });
 
-test("mobile profile uses DPR2 portrait geometry, touch input, and a viewport-fitting canvas", async () => {
-  const result = await runSmoke({ env: { NOON_PLAYGROUND_BROWSER: "webkit", NOON_PLAYGROUND_PROFILE: "mobile-dpr2" } });
+for (const browser of ["chromium", "webkit"]) test(`${browser} mobile profile uses DPR2 touch input and a viewport-fitting canvas`, async () => {
+  const result = await runSmoke({ env: { NOON_PLAYGROUND_BROWSER: browser, NOON_PLAYGROUND_PROFILE: "mobile-dpr2" } });
   assert.equal(result.error, undefined);
-  assert.deepEqual(result.launchOptions, { browser: "webkit", headless: true });
+  assert.deepEqual(result.launchOptions, { browser, headless: true });
   assert.deepEqual(JSON.parse(JSON.stringify(result.contextOptions)), {
     viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
   });
   assert.ok(result.events.some((event) => event.startsWith("touch:")));
   assert.ok(!result.events.some((event) => event.startsWith("mouse:")));
   const report = JSON.parse(result.writes.get("result.json"));
-  assert.equal(report.wheelInput, "DOM wheel (mobile WebKit automation limitation)");
+  assert.equal(report.wheelInput, "DOM wheel (touch profile)");
   assert.equal(result.events.filter(event => event === "DOM:wheel").length, 2);
   assert.deepEqual(report.captureViewport.bitmap, { width: 716, height: 402 });
   assert.equal(report.captureViewport.deviceScaleFactor, 2);
-  assert.equal(result.layoutSizes.length, 3, "legacy, authored, and native-drag canvases must use the mobile capture layout");
+  assert.equal(result.layoutSizes.length, browser === "webkit" ? 3 : 2);
   assert.deepEqual(report.browserErrors, []);
-  assert.equal(report.nativeInputDrag.capability, "nonreplayable-native-input");
-  assert.equal(report.nativeInputDrag.backend, "WebGL2");
-  assert.equal(report.nativeInputDrag.deviceScaleFactor, 2);
-  assert.ok(report.nativeInputDrag.pointerSamples.some(sample => sample.type === "pointercancel" && sample.pointerType === "touch"));
-  assert.ok(report.nativeInputDrag.releasedDragChangedPixels > 500);
-  assert.ok(report.nativeInputDrag.cancelledDragTransientPixels > 500);
-  assert.equal(report.nativeInputDrag.cancelledDragRestoresReleasedPixels, true);
-  assert.equal(report.nativeInputDrag.runRestoresExactBaseline, true);
-  assert.ok(result.events.includes("public:run"));
-  assertRetained(result, ["nativeDragBaseline", "nativeDragReleased", "nativeDragCancelTransient", "nativeDragCancelled", "nativeDragRunReset"]);
+  if (browser === "webkit") {
+    assert.equal(report.nativeInputDrag.replayAvailable, true);
+    assert.equal(report.nativeInputDrag.backend, "WebGL2");
+    assert.equal(report.nativeInputDrag.deviceScaleFactor, 2);
+    assert.ok(report.nativeInputDrag.pointerSamples.some(sample => sample.type === "pointercancel" && sample.pointerType === "touch"));
+    assert.ok(report.nativeInputDrag.releasedDragChangedPixels > 500);
+    assert.ok(report.nativeInputDrag.cancelledDragTransientPixels > 500);
+    assert.equal(report.nativeInputDrag.cancelledDragRestoresReleasedPixels, true);
+    assert.equal(report.nativeInputDrag.runRestoresExactBaseline, true);
+    assert.ok(result.events.includes("public:run"));
+    assertRetained(result, ["nativeDragBaseline", "nativeDragReleased", "nativeDragCancelTransient", "nativeDragCancelled", "nativeDragRunReset"]);
+  }
   for (const size of result.layoutSizes) {
     assert.ok(size.width <= 390 && size.height <= 844, "mobile capture canvas must fit the portrait viewport");
   }
@@ -371,13 +404,13 @@ test("21 differing pixels still fail but retain all original evidence", async ()
   assert.equal(result.error.expected, 0);
   const report = assertRetained(result, ["baseline", "selected", "cleared"]);
   assert.equal(report.clearDifference, 21);
-  assert.match(report.error, /background clear must restore/);
+  assert.match(report.error, /default viewer Indicate did not restore/);
   assert.ok(!result.events.includes("passed"));
 });
 
 test("insufficient selection preserves only the captures actually taken", async () => {
   const result = await runSmoke({ selectedPixels: 500 });
-  assert.match(result.error?.message, /selection changed only 500 pixels/);
+  assert.match(result.error?.message, /default viewer Indicate changed only 500 pixels/);
   const report = assertRetained(result, ["baseline", "selected"]);
   assert.equal(report.selectedChanged, 500);
   assert.equal(report.clearDifference, undefined);
@@ -399,7 +432,7 @@ test("artifact write failure never replaces the original strict assertion", asyn
   assert.equal(result.error.actual, 21);
   assert.ok(result.events.includes("diagnostic:error"));
   assert.ok(result.events.includes("browser:close"));
-  assert.ok(result.events.includes("server:kill"));
+  assert.ok(result.events.includes("server:close"));
   assert.ok(!result.events.includes("passed"));
 });
 
@@ -407,7 +440,7 @@ test("artifact write failure after passing pixels still fails the smoke", async 
   const result = await runSmoke({ writeFailure: true });
   assert.match(result.error?.message, /artifact write failed/);
   assert.ok(result.events.includes("browser:close"));
-  assert.ok(result.events.includes("server:kill"));
+  assert.ok(result.events.includes("server:close"));
   assert.ok(!result.events.includes("passed"));
 });
 

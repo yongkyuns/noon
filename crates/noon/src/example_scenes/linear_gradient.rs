@@ -2,7 +2,7 @@
 //! Paired with `web/python/examples/linear_gradient.py`.
 use crate::{
     AnimationOptions, Color, ContinuationStep, GradientStop, LinearGradient, LiveContinuation,
-    LiveProgram, LiveSession, Mobject, RateFunction, Scene,
+    LiveProgram, Mobject, RateFunction, Scene,
 };
 use std::sync::Arc;
 
@@ -32,39 +32,43 @@ fn paint(vertical: bool) -> Result<Arc<LinearGradient>, String> {
 
 impl LiveContinuation for PaintedSurface {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         let segment = match self.stage {
-            0 => live.wait_segment(0.5),
+            0 => scene.live().wait_segment(0.5),
             1 | 3 | 5 => {
-                let target = live.target_editor(&self.panel).map_err(message)?;
+                let target = scene.target_editor(&self.panel).map_err(message)?;
                 match self.stage {
                     1 => {
-                        live.set_fill_gradient(
-                            &target,
-                            paint(true)?,
-                            Some(if self.glow { 1.0 } else { 0.5 }),
-                        )
-                        .map_err(message)?;
-                        if self.glow {
-                            live.set_glow(
+                        scene
+                            .set_fill_gradient(
                                 &target,
-                                crate::effects::EffectUpdate::default()
-                                    .radius(crate::effects::Pixels(10.0))
-                                    .intensity(1.4),
+                                paint(true)?,
+                                Some(if self.glow { 1.0 } else { 0.5 }),
                             )
                             .map_err(message)?;
+                        if self.glow {
+                            scene
+                                .set_glow(
+                                    &target,
+                                    crate::effects::EffectUpdate::default()
+                                        .radius(crate::effects::Pixels(10.0))
+                                        .intensity(1.4),
+                                )
+                                .map_err(message)?;
                         }
                     }
                     3 => {
-                        live.set_fill(&target, 1.0, 0.0, 0.0, 1.0)
+                        scene
+                            .set_fill_rgb(&target, 1.0, 0.0, 0.0, 1.0)
                             .map_err(message)?;
                     }
                     _ => {
-                        live.set_fill_gradient(&target, paint(false)?, None)
+                        scene
+                            .set_fill_gradient(&target, paint(false)?, None)
                             .map_err(message)?;
                     }
                 }
-                live.declare_and_activate_transform_to(
+                scene.live().declare_and_activate_transform_to(
                     &self.panel,
                     &target,
                     AnimationOptions::new()
@@ -72,10 +76,10 @@ impl LiveContinuation for PaintedSurface {
                         .rate_func(RateFunction::Linear),
                 )
             }
-            2 | 4 | 6 => live.wait_segment(0.25),
+            2 | 4 | 6 => scene.live().wait_segment(0.25),
             7 if self.glow => {
-                live.remove_glow(&self.panel).map_err(message)?;
-                live.wait_segment(0.25)
+                scene.remove_glow(&self.panel).map_err(message)?;
+                scene.live().wait_segment(0.25)
             }
             7 | 8 => return Ok(ContinuationStep::Finished),
             _ => return Err("painted surface resumed after completion".into()),

@@ -24,9 +24,9 @@ impl GlyphAtlasPlane {
     pub const fn texture_format(self) -> wgpu::TextureFormat {
         match self {
             Self::Mask => wgpu::TextureFormat::R8Unorm,
-            // Swash color glyphs are conventional 8-bit RGBA color data. Keep the
-            // texture sRGB-aware so sampling later produces linear scene color.
-            Self::Color => wgpu::TextureFormat::Rgba8UnormSrgb,
+            // Keep encoded bytes exact; the glyph shader decodes each tap before
+            // filtering. Hardware sRGB approximation grows with material radiance.
+            Self::Color => wgpu::TextureFormat::Rgba8Unorm,
         }
     }
 
@@ -457,6 +457,15 @@ impl GpuGlyphAtlas {
             self.generation += 1;
         }
         self.generation
+    }
+
+    pub(super) fn recycle_all_pages(&mut self) -> Result<(), GlyphAtlasError> {
+        for plane in [GlyphAtlasPlane::Mask, GlyphAtlasPlane::Color] {
+            for page in 0..self.page_count(plane) {
+                self.recycle_page(plane, page)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn len(&self) -> usize {

@@ -4,7 +4,7 @@ mod controls;
 
 use super::*;
 use crate::execution_source::{
-    LiveProgramExecutionSource, NativeExecutionSource, StaticExecutionSource,
+    NativeExecutionSource, PlaybackExecutionSource, StaticExecutionSource,
 };
 #[cfg(target_os = "linux")]
 use crate::NativeApp;
@@ -661,12 +661,13 @@ fn required_callbacks_and_unfinished_sources_reject_before_device_access() {
         type Error = noon::LiveSessionError;
         fn resume(
             &mut self,
-            live: &mut noon::LiveSession<'_>,
+            scene: &mut noon::ContinuationScene,
         ) -> Result<noon::ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             live.wait_segment(1.0).map(noon::ContinuationStep::Await)
         }
     }
-    let source = LiveProgramExecutionSource::new(
+    let source = PlaybackExecutionSource::new(
         Scene::new().into_live_program(Waiting).unwrap(),
         RustHostCallbackTable::new(),
     )

@@ -24,7 +24,7 @@ pub async fn create_direct_pointer_selection_renderer(
             type Error = std::convert::Infallible;
             fn resume(
                 &mut self,
-                _: &mut noon::LiveSession<'_>,
+                _scene: &mut noon::ContinuationScene,
             ) -> Result<noon::ContinuationStep, Self::Error> {
                 Ok(noon::ContinuationStep::Finished)
             }
@@ -65,7 +65,7 @@ pub async fn create_direct_pointer_input_trace_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let fixture = noon::example_scenes::pointer_input_trace::Fixture::new();
-    let scene = noon::Scene::with_integration_root(
+    let scene = noon::integration::scene_execution::adopt_root(
         std::rc::Rc::new(std::cell::RefCell::new(fixture.store)),
         fixture.root,
     )
@@ -92,8 +92,9 @@ pub async fn create_direct_inspection_indicate_renderer(
         type Error = String;
         fn resume(
             &mut self,
-            live: &mut noon::LiveSession<'_>,
+            scene: &mut noon::ContinuationScene,
         ) -> Result<noon::ContinuationStep, String> {
+            let live = &mut scene.live();
             if self.started {
                 return Ok(noon::ContinuationStep::Finished);
             }

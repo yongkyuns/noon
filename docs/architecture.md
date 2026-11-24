@@ -86,6 +86,17 @@ The shared path is `Rust API -> Semantic Scene -> Execution Plan -> Runtime -> R
 
 A native Rust application can author, lower, execute, and render without Python, JavaScript, WASM, a browser runtime, JSON, serialization/deserialization, or a host-language bridge between engine layers. `noon-native` owns window/event-loop, surface, input, acquire/submit/present, and recovery mechanics at the platform edge.
 
+An explicit finite ordinary Rust source may instead use `noon-export`'s blocking
+host. It runs the source once through the existing `BlockingContinuation` relay,
+starting bounded retention before the first source edit. Engine-owned segment
+endpoints and completion admit retained publications; no display receipt or host
+clock is invented. Required callbacks/input and unsupported replay domains are
+checked before headless advancement. Only the finished original Scene/runtime
+owner may transfer to sealed-history frame sampling and the native file sink.
+Source-operation/boundary budgets and cooperative cancellation bound host calls;
+arbitrary Rust computation between calls is not preemptible. Retiring the source
+capability precedes handoff, failure or unwind; playback never reexecutes source.
+
 #### Browser/WASM host
 
 A Rust application compiled to WASM uses the same semantic, compiler, runtime, and renderer responsibilities in one WASM context. JavaScript may bootstrap the module, supply the canvas, and provide browser lifecycle glue, but it does not receive and re-send scene/runtime state between Rust layers. A browser target by itself is not a transport boundary.
@@ -93,6 +104,20 @@ A Rust application compiled to WASM uses the same semantic, compiler, runtime, a
 Serialized transport is justified only at a real external or cross-context boundary, for example the current Python authoring context sending derived resources/deltas to a separate render owner; see section 11.
 
 Python and JavaScript/TypeScript are optional language adapters over the same Rust semantic operations. They are not required components of the Rust engine, runtime, or renderer.
+
+The optional `noon-python` CPython extension shares the Python facade with Pyodide
+through a thin host selector. Native calls and callback values remain typed in
+process. Deterministic source preparation may retain the existing bounded Rust
+history and transfer its exact scene/session pair to the native viewer or GPU
+capture host; playback never reruns Python source. Required Python callbacks use
+the existing transactional sampled driver and cannot be promoted to prepared
+viewer playback without recorded admission. Finite native CPython MP4 export
+consumes that same sealed owner through the shared `ExportFramePolicy`, native
+capture and FFmpeg destination transaction; retained-history audio and unrecorded
+callbacks/input remain rejected. Finite 3D inputs, camera profiles,
+world motion and spatial domains use the same Rust operations as WASM. This native
+profile does not qualify the complete gallery, audio bindings, or physical performance;
+remaining frontend breadth stays with #2015 and #1874's conformance contract.
 
 Manim Community v0.21.x is the compatibility oracle for supported common 2D Python behavior. Compatibility is a semantic/API goal, not an implementation constraint. Noon does not copy Manim's renderer, Python scene engine, internal point representation, or per-frame execution model.
 
@@ -226,13 +251,34 @@ Genuine source release retires input-owned state through that same paired sessio
 
 Scene playback controls use that same optional object-owned click action, semantic identity, picking and input transaction. A successful input publication may carry one typed viewer command; it does not seek or start audio inside the transaction. The host applies the request afterward through its existing admitted play/pause, section-seek and viewer-audio operations. These controls do not create authored replay tracks or change authored gains. Finite immutable direct Rust/WASM, native Rust and browser Python-worker execution support this dispatch; live publication, retained source history and hosts without control dispatch reject it explicitly. The shared execution owner admits immutable playback separately from its finite-duration observation, excluding external native input routes and effective-driver owners. A browser device unlock may retain one pending request qualified by its existing input sequence and publication; superseding controls and lifecycle cancellation invalidate it. This is platform completion bookkeeping, not another input queue or playback clock. The temporary profile gates are owned by #2263.
 
-Finite Python audio uses the existing complete `result = Scene()` authoring handoff. Predeclared scalar animation, section metadata and audio lower into the same Rust scene and execution session. The authoring worker remains the sole runtime and playback-clock owner. At the worker/Window boundary, a bounded immutable PCM/clip resource bundle prepares a disposable Rust Web Audio output mirror; it contains no mutable scene or playhead. Accepted controls wait for their retained picture publication, then carry one worker clock sample and host timestamp. The output uses the shared Rust clip-phase/envelope query, including transport age, without driving execution from device time. Preparation is silent, explicit browser activation enables sound, and superseded commands or platform interruption retire output. Scene-authored controls dispatch through those same host transport operations after the shared input transaction. Only paused Play with audio can wait for device unlock; other accepted commands complete on the worker before normal playback ticks resume. Control-only scenes also use a finite endpoint, without acquiring an audio output. Source continuations, retained history, required callbacks and live input drivers retain their explicit gates.
+Python authored audio is supported for complete immutable `result = Scene()` handoffs and for deterministic sources admitted by the prepared-prefix proof and history contract. Both profiles keep the authoring worker as the sole runtime and playback-clock owner. The prefix reader retains the original immutable audio schedule and PCM resources; the Window receives only a bounded resource bundle and Rust-authored clock/buffering/authorization observations. The disposable Web Audio output may schedule only through the currently admitted prefix boundary and extends or resumes from later Rust observations. It contains no mutable scene or playhead. Accepted controls wait for their matching retained picture publication, then carry one worker clock sample and host timestamp. The output uses the shared Rust clip-phase/envelope query, including transport age, without driving execution from device time. Preparation is silent, explicit browser activation enables sound, and superseded commands or platform interruption retire output. The retained schedule is fixed for the execution session: later audio additions, replacements or removals remain rejected. Host playback controls and viewer mute/volume are available in both profiles. Scene-authored playback buttons require a completed immutable scene. Paused Play with audio can wait for an explicit browser unlock. The other accepted scene controls complete on the authoring worker before playback ticks resume. A control-only scene has a finite endpoint and needs no audio output. This playback support does not expand finite file export beyond the existing completed immutable worker session or add completed-history export; those remain under #1896/#2263.
 
 Finite native Rust audio retains the compiled immutable clip/resource closure through a typed shared mixer preparation. This derived output object owns bounded scratch and shared PCM references, never a Runtime, scene identity, or playback clock. Device callbacks reuse the same mixing math as export without allocating, decoding, locking, or evaluating the scene. Native device dependencies remain optional in `noon-native`. The first completed retained picture admits output; the device's first predicted playback observation supplies the wall anchor used by the existing native `RealtimeClock`. A contiguous integer PCM offset is output-buffer bookkeeping. Timestamp observations detect discontinuities but do not advance authored execution. Viewer pause observes elapsed time even during a sleeping authored wait; seek uses the existing session evaluator and preserves play/pause intent. A replacement output stays silent until its target picture and the preceding bounded release complete. At most one current and one releasing stream exist; repeated seeks cannot extend the original release or accumulate tails. Transport and viewer gain ramps are disposable device state, separate from authored gains and export. Suspension holds authored time and retires both streams; resume prepares a new stream behind the same picture barrier. Device loss, underrun, or excessive timing disagreement stops the run explicitly. Completion retains output through predicted playback of the final samples. Physical display/DAC timing remains a platform estimate, not a sample-accurate hardware guarantee. Source continuations, retained history, native CPython, and broader input/effective-driver profiles remain gated by #2263.
 
 Finite Python file export borrows that same paused immutable worker session. Shared `ExportFramePolicy` owns prefix, output, completion and frozen-hold samples; the browser host waits for matching renderer presentation and copies only selected RGBA output. The shared mixer supplies bounded PCM blocks on the exact rational output grid. Across the genuine browser/process boundary, a prepared media capture carries pixels, PCM and publication receipts, never a serialized scene or a reconstructed execution owner. The native importer validates complete policy receipts, lengths, revisions, PCM and endpoint before the existing MP4 sink publishes output. It uses the same encoder, timing finalization and destination owner as native Rust export. This does not establish an in-process native CPython binding or native device playback.
 
-Inspection navigation is a constant-size session adjustment composed with the current effective camera in shared Rust. Rendering, visibility and picking consume that same composed view, qualified by a monotonic inspection revision and the existing displayed-frame receipt. A wheel action changes neither the authored camera nor authored time; it can coexist with an independent object animation. Hosts opt in and normalize platform wheel units, while stale receipts and excess outstanding input are rejected explicitly. New sessions reset inspection; same-session seeks preserve it. This viewer adjustment is excluded from ordinary authored export and replay.
+Inspection navigation is a constant-size session adjustment composed with the current effective camera in shared Rust. Rendering, visibility and picking consume that same composed view, qualified by a monotonic inspection revision and the existing displayed-frame receipt. A wheel action changes neither the authored camera nor authored time; it can coexist with an independent object animation. Platform hosts normalize wheel units. The browser gallery enables inspection for every scene. Authored pointer subscriptions govern idle motion delivery and retain current-frame admission. For a scene with only default viewer input, planar picking uses the receipt captured at press and a release within the existing motion tolerance. The worker retains a bounded window of presented pick roots. Unchanged bounds branches and immutable geometry are shared across frames, while sparse changes replace only affected paths. Open paths test their revealed stroke so a plotted curve’s empty bounds leave axis ticks clickable. The selected object can move during the click. A default click runs a restoring Indicate on the existing viewer clock, including while paused. The compiler retains each drawable’s unambiguous outer mounted family in the same reversible row metadata as its bindings. A family uses one pulse and a shared pivot from the current drawn bounds, so authored motion and family animation can continue during the pulse. An individually mounted object or a member shared by multiple mounted families pulses on its own. Explicit click actions retain their own runtime admission rules. Stale receipts and excess outstanding input are rejected explicitly. New sessions reset inspection; same-session seeks preserve it. This viewer adjustment is excluded from ordinary authored export and replay.
+
+Native planar viewports use the same default click, mounted-family lookup and
+independent pulse clock. The native host pairs one shared pick snapshot with
+the last successfully presented picture. Scenes with explicit pointer
+subscriptions still use the authored input lane. In the typed renderer visit,
+only the indicated rows receive the shared pose and tint. Their canonical
+values are restored when that visit ends, and the last submitted rows are
+invalidated when the pulse retires. Export and input queries use the canonical
+publication.
+
+3D native and browser inspection composes relative orbit, pan and zoom with the effective
+spatial camera. The adjusted pose and projection use the existing retained
+camera row, so world rendering and fixed-orientation objects use the same view.
+The planar HUD uses its own camera. The host collects ordered pointer input.
+Shared Rust distinguishes click, drag and double-click. Camera return uses
+monotonic interaction time and follows the authored camera at each sample,
+including while playback is paused. The press ray uses the camera and immutable
+mesh bounds from its displayed-frame receipt. Release validates the retained
+semantic target and group. Sparse mesh changes update only
+affected bounds paths. The frontmost mesh uses the same restoring Indicate
+by composing scale and tint with its current world pose and material.
 
 Pointer capture has split ownership: the platform shell owns OS/DOM capture mechanics, while `InteractiveSession` owns the semantic captured target and gesture lifecycle. Release, cancellation, lost platform capture, target retirement/replacement, seek/reload policy and stale generations must terminate or reconcile the gesture deterministically.
 
@@ -317,6 +363,8 @@ The frontend contract is semantic, not an assertion that all languages execute s
 Rust authoring is first-class, not a wrapper around Python, JavaScript, WASM, JSON, or a transport model.
 
 The idiomatic Rust API calls shared semantic operations directly and must support normal `Scene`, `Mobject`, animation, signal/reactive, query, mutation, lowering, execution, and rendering workflows entirely inside the Rust environment.
+
+`Scene` owns ordinary construction, persistent edits, and current queries before and after execution starts. For example, a Rust continuation edits the current `Scene` directly and borrows `LiveSession` to schedule or drive a segment. `SceneExecution` retains the same owner for native and browser hosts. Path snapshots, point arrays, counts, and boundary reductions use the same Scene operations during setup and playback. The execution boundary handles scheduling, callback phases, input, and renderer publication receipts. For edits that require external shader preparation, `Scene` stages the authored transaction and execution publishes it after host acknowledgment. Native input routes, derived signal expressions, and property bindings are declared before bootstrap. The running Scene can still update values on enrolled trackers.
 
 A native Rust application must be able to build and render a Noon scene without initializing any language host or serialization subsystem.
 
@@ -608,7 +656,7 @@ Noon distinguishes clocks/sequences that must not be conflated:
 
 Compatibility updater `dt` is defined from authored/simulation-time advancement. A paused scene may process pointer/keyboard/editor input while authored `dt == 0`. Behavior that explicitly reads wall time, network time or another external clock is externally timed/non-deterministic unless the source is recorded and replayed by an explicit policy.
 
-Native translation dragging is session policy over the same typed pointer ingress. Configure semantic targets once, then deliver typed pointer records without choosing a runtime object per move. `LiveSession` and `LiveProgram` accept ordinary `Mobject` handles, retain the existing store gate, and route each occurrence to the same session policy:
+Native translation dragging is session policy over the same typed pointer ingress. Configure semantic targets once, then deliver typed pointer records without choosing a runtime object per move. `LiveSession` and `LiveProgram` accept ordinary `Mobject` handles for target configuration. `SceneExecution` and `LiveProgram` publish input through the same session policy:
 
 ```rust
 program.set_translation_drag_targets([&circle])?;
@@ -617,11 +665,20 @@ let press = NativePointerInput::new(1, token.pointer(), token.context(), modifie
 program.submit_native_pointer_input(&token, press)?;
 ```
 
-Press and move publish scoped effective Position. Release prepares its native occurrence and one authored translation reconciliation together; cancellation restores the authored position without changing `SceneRevision`. Obtain a fresh token after each publication. Position/Transform timelines, reactive Position bindings, and target-local transient Position effects reject acquisition. Acquisition also checks the shared persistent-publication barriers before taking a lease. An unrelated nonstructural segment may continue and complete while a target is held; release reconciles only that target and advances the pending segment’s semantic revision proof after publication succeeds. Segments that touch the target or change structure still reject acquisition. Starting a new segment while a target is held remains explicitly gated. Stale or failed releases retain the lease without acknowledging the occurrence. The receipt-returning `submit_translation_drag_input` entry exposes the single release undo action to editor hosts.
+Press and move publish scoped effective Position. Release prepares its native occurrence and one authored translation reconciliation together; cancellation restores the authored position without changing `SceneRevision`. Obtain a fresh token after each publication. Position/Transform timelines, reactive Position bindings, and target-local transient Position effects reject acquisition. Acquisition also checks the shared persistent-publication barriers before taking a lease. An unrelated nonstructural segment may continue and complete while a target is held; release reconciles only that target and advances the pending segment’s semantic revision proof after publication succeeds. Segments that touch the target or change structure still reject acquisition. Starting a new segment while a target is held remains explicitly gated. Stale or failed releases retain the lease without acknowledging the occurrence. Editor hosts use the receipt returned by `submit_translation_drag_input` to undo the release on the same running Scene.
 
 The drag entry remains the ordinary pointer publication lane: misses and non-captured occurrences keep normal native-signal, hover, and click behavior. See `crates/noon-native/examples/native_translation_drag.rs` for an executable scene using the ordinary native host.
 
 Python authoring declares the same source policy with `scene.set_drag_targets(circle)`. It passes the original typed Mobject handles through the inert canonical membership batch; the browser never picks a drag target or calculates a translation. Rebinding or invalidating a browser view cancels an active capture through that same Rust ingress before its receipt is retired. A successfully admitted displayed press pins one constant-size mapping for its acquired drag. Captured moves and primary release keep their collection-time receipt and use that mapping even when newer motion acknowledgements overtake delivery on the independent worker channel. Receipts must remain within the acquired-to-latest acknowledged session/view interval; runtime, source, view and camera must still match. This captured-gesture mapping performs no new pick and never relabels a receipt. A fresh press and ordinary picking use the shared displayed-point compatibility proof described above; they cannot use acquired-drag admission. Configured unrecorded drag input rejects replay explicitly; Run recreates the authored scene.
+
+A retained viewer can also translate a paused shape declared with `Scene.set_viewer_draggable`.
+The declaration belongs to the object and follows its retained revisions. The
+shared pointer lane acquires the Position lease on the displayed frame. Release
+keeps the effective translation in the reader and enables one undo. Cancellation
+restores the position at press. Seek, restart, or forward advancement discard
+viewer translations without revising the authored source. Targets with other
+Position drivers and gestures during active family animations defer to authored
+motion. Inspection navigation waits until the gesture releases its view mapping.
 
 Replay classification applies to all externally supplied behavior that can affect results, including pointer/keyboard input, editor manipulation, host callbacks, async/network results and other external data. Recorded native input/event streams may be replayable even though their original occurrence was nondeterministic.
 
@@ -701,6 +758,298 @@ state leaking backward. #1658 qualified a narrower morph/hold sequence, not the
 full lifecycle contract. #1661 separately addresses wait-time observation. These
 issues carry dated evidence and repair status; their existence is not a claim
 that every history domain has been implemented or qualified.
+
+### Completed-prefix delivery
+
+The `prepared-prefix` feature keeps the producer's sole Semantic Scene
+and uses the existing runtime evaluator in an independent derived history reader.
+After one explicit execution bootstrap, completed extensions transfer only new
+compiler-owned row/track revisions. Appending future history does not advance the
+reader or replace its displayed frame. Source-owner segment/callback admission
+precedes extraction; a tokenless wait needs its actual continuation boundary too.
+The advertised interval is half-open `[start, prepared_frontier)`, since further
+source statements may still mutate the frontier's exact timestamp. Only one
+ordered, scope-bound stream may extend a reader; budgets and failures preserve
+already-published history. New suffix conversion uses a sparse reverse overlay,
+not a copy of the source scene or a rewind of either execution cursor.
+
+The 2D suffix profile admits sparse creation, removal/re-entry, order/content
+changes and ordinary property tracks. New physical rows are installed as inactive
+slots; they become visible only through historical revision selection. Source
+resource closures carry only not-yet-delivered immutable handles and dependencies.
+A new-slot capacity reservation is an explicit bounded maintenance barrier, never
+an implicit whole-scene relocation during append. It may be O(existing storage);
+ordinary suffix extraction/installation remains proportional to newly touched
+payloads and ordering neighbours. Entry limits coexist with byte admission for
+immutable resource closures, the reserved history index, saved revision vectors,
+compiled/runtime object vectors and both-side logical inline path payloads. Other
+shared allocations, path spare capacity, allocator overhead, source work and GPU
+residency remain outside these charges; they are not total memory bounds.
+An empty reactive runtime installed by semantic lowering is admissible; actual
+signals or reactive bindings, including later enrollment, require their own history
+policy. Validated 2D geometry transforms/morphs and one resource-free Glow attachment
+share the sparse revision path, including generation-scoped Glow color, radius
+and intensity tracks. Append-only glyph/reveal plans transfer only new immutable
+member descriptors and composition timing, preserving existing plan/channel
+indices and the shared scheduler. Their logical headers, member data and time
+maps join resource-byte admission before cloning; spare capacity and scheduler
+metadata remain outside that charge. An explicit storage reservation precedes
+adoption, which neither evaluates future glyphs nor changes the displayed frame.
+Planar path motion retains immutable path snapshots and charges both sides of
+each revision by command count. History exchange refreshes only affected path
+plans. Planar fixed-in-frame content uses normal 2D track admission when its
+spatial role stays unchanged. Inset views, spatial anchors that require derived
+state, reactive/causal native input, and host callbacks remain outside suffix
+admission. The opt-in cooperative `PreparedSource` may consume an
+ordinary Rust `LiveContinuation` through its existing `LiveProgram`. Each preparation
+call invokes at most one continuation and completes its actual admitted segment
+headlessly using the shared evaluator/completion path. One pending reader/batch
+applies backpressure; no further source invocation occurs until it is taken.
+Retention admits the producer publication, not a displayed-frame receipt.
+Callback, effective-display, unretained signal/input, unsupported suffix and
+invalid retained-history requirements instead yield `ExecutionRequired` before
+headless advancement. Publication-time profile indices make preflight constant
+time, including repeated zero-duration yields; this does not clone history or
+guarantee later byte/capacity admission. The inset-history flag also catches
+same-call add/remove. Staged external resources retain their original program
+and rendering-host publication handshake. A one-use typed transfer retains
+the original program, runtime and actual pending segment, releasing only its open
+source-history scope; already-delivered readers stay valid. It invokes no source
+or callback and acknowledges no display. This does not admit callback replay in
+the reader. Other preparation failure is terminal and never retries user code; cancellation releases only source-owned
+state while already-delivered history remains usable. An unwinding panic leaves
+that source owner terminally failed before propagating its original payload;
+source-owned unpublished output is released even if final cleanup panics. This
+is not rollback of external side effects or in-process recovery from abort/trap
+configurations, which require host-context teardown. Zero-duration waits yield;
+this is a work-count bound, not preemption of a long user call or resource operation.
+An open reader still requires a positive readable interval. After explicit
+source completion, a sealed static scene may bootstrap the same historical reader
+at the exact closed range `[0, 0]`, without an artificial segment or source retry.
+Its history index reserves only occupied entries because no future suffix exists.
+Explicitly sealed
+source completion can publish a terminal batch; only reader adoption changes the
+ready interval to the inclusive final endpoint, without seeking the display.
+Viewer selection does not broaden this admission profile or establish physical-device
+performance. Further qualification remains in #2211; this is not another scene or rendering authority.
+
+The native continuation entry point uses the typed `PlaybackProgram` owner through
+the existing prefix feature. One cooperative call prepares and adopts at most one
+source suffix; host demand comes from its existing clock, including sleeping waits.
+The reader remains selected until an actual request reaches a required execution
+frontier. Handoff preserves inspection, releases cached history, retires the old
+physical input receipt/contact and rebuilds previously retained renderer residency,
+including text and capture state. This explicit maintenance can reupload the scene;
+it preserves the device and immutable program cache, not old projection bindings.
+The original program then uses the shared forward-sample callback/resource fences;
+seeking becomes unavailable rather than replaying effectful work. Missing-prefix
+buffering retains the last sample, preserves pause intent and reanchors only the
+existing host clock after delivery. Closed-range adoption is separate from source
+completion. This does not classify arbitrary host I/O or wall-time reads as pure,
+preempt long calls, or establish browser/default-cutover or total-memory qualification.
+The Python viewer requests bounded incremental playback by default. Shared Rust
+admission separates scene-history compatibility from source effects: continuations
+are opaque unless admitted as scene-only, with Python supplying a conservative
+proof over its trusted API. Arbitrary host I/O, wall-time reads and opaque callbacks
+must not run ahead merely because their scene is replayable. Unsupported source
+profiles keep their original forward execution and report replay as unavailable;
+they are never rerun or reconstructed to obtain playback.
+
+The opt-in direct Rust/WASM canvas can own this reader instead of a live source,
+using the same retained renderer, presentation receipts, pointer normalization and
+wake driver. Incremental delivery is typed and in-process; the producer remains
+outside the canvas. User pause and missing-prefix buffering suppress only authored
+time wakes, not independent effects. At an unavailable frontier the host retains
+its last valid sample and sleeps until explicit delivery, without an epsilon seek
+or a busy timer. Resume reanchors the existing host wake clock so buffered wall
+time is not charged to playback. This does not install the reader in the Python
+playground, admit arbitrary source continuations or change the default viewer.
+A browser task driver may schedule one cooperative Rust preparation call per
+macrotask and wake the existing presentation driver after typed delivery. It owns
+only task handles/cancellation, never authored time, source semantics or batches.
+The native path calls the same producer directly without browser infrastructure.
+The producer's `prepare_until` demand gate admits another continuation only below
+an absolute requested frontier, while preserving pending-output backpressure. An
+unknown segment may overshoot that target once; this does not bound resource bytes
+or discard history required for rewind. The canvas derives a positive look-ahead
+from its reader, not from a JavaScript timeline clock. Satisfied demand sleeps with
+no preparation timer until the existing playback/control driver reports progress.
+A missing open frontier admits one refill even when the last rendered sample still
+predates a long static wait, preventing a demand/buffering deadlock. Rejected
+nonfinite demand performs no user work. Terminal delivery and explicit cancellation
+remain distinct from temporary demand satisfaction.
+The optional canonical interpreter context can complete its actual pending segment
+headlessly through the same player-owned receipt, admission and semantic completion
+path. A thin Python `LiveExecution.prepare()` request does not supply a guessed
+endpoint or authorize presentation. The existing context retains the sole source
+runtime; typed Rust prefix extraction supplies a separate historical reader without
+leasing the source player to it. Source callbacks/causal state are rejected before
+headless advancement, and pending or transferred source ownership cannot publish a
+prefix. Explicit source sealing remains distinct from finishing an individual
+segment. Host orchestration must retain/deliver each extracted batch, yield interpreter
+work and stop on errors; this bridge provides no retry, source scheduler or new wire
+format. A frame/debug observation is never fed back as engine authority.
+An opt-in interpreter suspension driver may hold the existing canonical Python
+continuation after its segment has been completed and adopted. A typed Rust canvas
+query decides whether to resume source under the same look-ahead/open-frontier
+policy; JavaScript receives a boolean, not an authored cursor or history payload.
+One macrotask yields between continuation releases. Satisfied demand keeps no
+scheduled preparation task. The driver is single-use, rejects overlapping barriers
+and latches failure/cancellation even when source catches the rejected await. It
+reuses the existing complete control event and never automatically retries user
+statements. Asynchronous host bootstrap/cleanup must observe its abort signal
+before publishing after a wait; neither arbitrary Python execution nor such host
+work is preempted. The admitted ordinary construct path uses the existing portable
+source compiler, with no second rewrite or source-language engine. This same-context
+host integration remains opt-in and does not change the default viewer.
+Hard byte budgets, preemption of heavy source work and restart/recovery policy
+remain separate qualifications.
+
+The canonical interpreter context can construct that prepared worker host after
+its actual first segment completes, without leasing away its source runtime.
+The host may retain one source-bound publisher cursor and one undelivered suffix;
+these are delivery metadata, not another semantic scene or source evaluator.
+Source identity/scope and pending-output admission are checked before completing
+or sealing the source. Completion extracts at most one suffix; adoption is a
+separate typed Rust operation. Capacity rejection keeps the same suffix for
+explicit reservation and retry, never repeating Python or completion. Zero-duration
+completion invents no readable range. Before reader bootstrap, the interpreter
+may continue one zero-duration barrier per worker turn until Rust reports a
+readable interval or source cleanup finishes. Early registration keeps that
+loading phase cancellable. A zero-only source seals its final same-time edits
+into the same completed reader; only explicit completion exposes its endpoint.
+Cancellation drops unpublished delivery state without
+revoking earlier history; the caller still cancels/releases the interpreter.
+A failure after source completion begins closes that delivery binding rather than
+automatically retrying partially completed work. None of these operations is a
+presentation acknowledgment.
+
+An explicitly prepared Python run uses the same production authoring worker,
+canonical context and source generation. Its single-use interpreter driver wraps
+the whole source invocation and yields at ordinary play/wait barriers. The existing
+execution endpoint owns the independent prepared reader in that WASM context;
+the source runtime remains with the interpreter. Rust look-ahead demand resumes
+the suspended stack, and one retained suffix must be adopted before another
+segment completes. Prefix delivery neither waits for nor fabricates presentation.
+Only selected frame output uses the existing bounded render transport. The first
+actual presentation receipt admits the Rust playback clock; pure typed status
+observations do not start it. Pausing commits elapsed interior static-wait time
+through the same clock and reader, without selecting an unavailable open frontier.
+When the gallery holds the clock while preparing the full source, explicit seeking
+can still select an adopted frame within the reader's open range.
+Source failure retires preparation and preserves already-adopted history; explicit
+cancellation retires the endpoint and releases its reader. Late attachment results
+cannot revive a cancelled invocation. Terminal adoption keeps that same reader,
+rather than reconciling it into the source's latest-state player. This bounded
+profile rejects causal input, host callbacks and looping. An unfinished source
+requires an initial readable interval; completed static sources use that same
+reader with the exact zero endpoint after interpreter cleanup succeeds.
+A source that finishes without suspension is classified after cleanup by Rust.
+Static profiles keep their exact-zero history/input path; declared future work,
+media and playback controls retain the original canonical runtime and ordinary
+finite-source admission, without another source invocation. A receiver
+restart retains the same reader, original source and delivery cursor in a newer
+receiver namespace. The replacement must actually present before its clock or
+source handoff is admitted. Failed renderer setup preserves the reader for retry;
+explicit source retirement releases it. This recovery does not restart user code.
+Receiver failure commits elapsed static-wait time through Rust before freezing
+the clock, preserving playback intent without publishing to the failed renderer.
+After acknowledged retirement, a new source Run can reuse the render worker and
+canvas with a newer transport session and fresh controls. An active historical
+reader still cannot be replaced by reconciliation.
+
+Before a reader exists, Rust can instead admit the original pending interpreter
+segment to observed execution. This retires prefix publishers while preserving
+the original bounded journal, its failure marker and valid identity pins, and
+leases the same canonical player to the existing continuation endpoint. Required
+callback events return to the original suspended Python stack; neither admission
+nor source completion reruns its body. The endpoint reports observed execution
+and unavailable replay while source owns execution. New suffixes
+also use the shared source preflight before headless advancement. Observed source
+samples and returned leases preserve play/pause intent in the same Rust player
+clock. Manual authored-time samples remain paused. Pause commits elapsed interior
+wait time; resume reanchors the existing source wall conversion without charging
+paused time or restarting the interpreter. Source controls expose pause/resume
+without a seek range or invented duration. Paused transient input keeps its
+independent interaction timing within existing input/callback admission gates.
+After interpreter cleanup, a checked transfer returns that same completed player
+to the endpoint for input. Its encoder, runtime, semantic store and contacts stay
+intact; no source invocation or initial snapshot is repeated. Final authored output
+still waits for actual presentation. Receipts delivered while the context holds
+the player are retained until it returns, after any required pointer cancellation.
+After cleanup, Rust may seal that original journal for ordinary replay. Successful
+admission clears the completed live receipt and exposes its actual authored range;
+failure preserves explicit replay denial and native input. Completed lesson cues
+refresh on the same player. Prepared playback publishes section cues with the matching
+prefix, so a cue can be selected only once its time is available. Fixed numeric text
+drivers evaluate the same retained scalar schedule as other bindings. Changes to
+those driver declarations after history starts invalidate that retention scope.
+Existing resource preparation on an observed source keeps its original GPU handshake
+and suspended callback.
+Authored publication during an active translation drag
+and native input with required callbacks retain their existing explicit gates.
+These transitions neither rerun source nor create another history or clock.
+
+At the genuine execution-to-render-worker boundary, an opt-in prepared player
+may own the independent reader in the producing execution context. It encodes
+only that reader's selected RendererPublication with the existing retained
+codec, resource residency and input presentation receipts. The rendering worker
+remains a derived GPU/presentation consumer; prefix batches and the source
+runtime do not become a second cross-context history protocol. Initial resource
+bootstrap is empty and selected immutable closures accompany the initial delta.
+Future append alone sends no render publication. A drained delta is owned by the
+host for ordered, backpressured delivery; neither consumption nor extraction
+acknowledges display. Rebootstrapping that stream with an incomplete inventory is
+rejected. Full worker restart/rehydration still requires its own lifecycle
+qualification. Single-context/native
+hosts continue to borrow publications directly without this transport.
+
+The reader distinguishes monotonic forward playback from an explicit seek.
+Direct, typed presentation effects use the existing Runtime's bounded Indicate
+admission against the displayed historical target, not the producer's current
+membership. Effects advance on session time while authored time may stay paused;
+they do not modify retained history or source semantics. Appending future history
+preserves the displayed effect. Forward playback within one execution revision
+preserves disjoint effects, while authored channel conflicts, a crossed execution
+revision, or an explicit seek supersede them under the existing runtime policy.
+
+Authored click-Indicate declarations are lowered into their existing compiled
+object rows and retained by ordinary reversible execution history. Preparing a
+bound action reads the declaration in the displayed revision, including its
+absence, replacement or removal. Binding-only publications retain one touched
+row without dirtying renderer-facing values. Shared session dispatch reads that
+same execution projection, with a maintained live-binding count for constant-time
+input interest; it keeps no producer-current binding map. Future appended rows
+remain inactive until their creation revision is displayed.
+
+Live GlowPulse and playback-control declarations remain with their canonical
+semantic owner and are rejected by prepared-source admission. The historical
+reader admits only compiled Indicate presentation effects: it reuses shared
+pointer preparation and metadata commit, rejecting causal writes or a semantic
+lifecycle action before acknowledging input. It never invents or borrows a
+mutable SemanticStore. Ordinary live sources continue to retire temporary glow
+attachments through their original SceneExecution/LiveProgram store-session pair.
+
+The public prefix reader owns an ordinary `ExecutionSession`, not a second input
+engine. Its runtime-layer `PrefixReceiver` owns only stream/readiness metadata,
+bound to that runtime incarnation and sealed history scope. Bootstrap moves the
+one derived runtime into the session; it does not clone the producer session or
+retain its mutable semantic identity/reachability maps. Initial and newly delivered
+physical identities are pinned in the existing derived slot table. Those pins
+are not live membership: picking still observes the selected historical revision.
+New-slot map/storage reservation is explicit, and append registers only new rows.
+
+Pointer admission, picking, click synthesis, hover/selection, inspection and bound
+Indicate dispatch delegate to the existing session APIs. The public reader exposes
+neither mutable session/runtime access nor authoring/causal input operations.
+Readiness and monotonic advance are checked before ordinary session evaluation;
+explicit seeking cancels transient interaction through the same session policy.
+Future or terminal delivery preserves the displayed publication and pending
+pointer gesture. Frame snapshots retain the existing runtime/view/inspection
+qualification and do not assert that a host actually presented a frame. Hosts
+must keep that association themselves. General injected animations and causal
+edits require separate admission; browser/native shell adoption and end-to-end
+latency qualification are still outstanding in #2211.
 
 ### Identity generations, revisions, versions and sequences
 
@@ -798,7 +1147,7 @@ Ordered runtime evaluation may produce two different classes of staged output an
 
 [D2 source](diagrams/live-publication.d2).
 
-This is the publication contract for supported operations, not a claim that every mutation kind in the roadmap is implemented. Today `noon::ExecutionSession` coordinates preparation and commit; `noon-compile` owns local lowering and root-relative membership/painter-order preparation, and `noon-runtime` owns effective execution. A failed preparation leaves the previous coherent publication live.
+`ExecutionSession` coordinates preparation and commit. `noon-compile` owns local lowering and root-relative membership and painter-order preparation, and `noon-runtime` owns effective execution. A failed preparation leaves the previous coherent publication live. Rust hosts that need the raw session import it from `noon::integration::scene_execution`.
 
 Both classes participate in the same semantic updater order, transactional overlay and coherent `FrameEpoch` publication barrier, but they have different ownership and invalidation costs.
 
@@ -1020,9 +1369,32 @@ Arbitrary Python should stay away from the render frame loop. The **current sema
 
 The current implementation keeps the semantic context and its existing compiler/runtime session together in the authoring worker. [`semantic-engine-endpoint.js`](../web/semantic-engine-endpoint.js) leases the context's existing player through `createExecutionPlayer` / `returnExecutionPlayer`; it does not transfer a Rust player between WASM instances or create a second runtime. [`python-worker.source.js`](../web/python-worker.source.js) supplies Python continuation and required callback invocation.
 
-[`authoring-render-controller.js`](../web/authoring-render-controller.js) owns render attachment, resource installation, delta consumption and presentation using `RetainedExecutionCanvasRenderer`. It runs in [`authoring-render-worker.js`](../web/authoring-render-worker.js), with [`MainThreadRenderWorker`](../web/main-thread-render-worker.js) as the platform fallback. The legacy `execution-render-worker.js` URL forwards to that render-owner implementation; its name does not establish another authoritative runtime. Resources and execution deltas cross a MessagePort/transferable-buffer or shared-mailbox boundary; ticks and readiness/presentation acknowledgements are host coordination, not timeline truth.
+[`authoring-render-controller.js`](../web/authoring-render-controller.js) owns render attachment, resource installation, delta consumption and presentation using `RetainedExecutionCanvasRenderer`. It runs in [`authoring-render-worker.js`](../web/authoring-render-worker.js), with [`MainThreadRenderWorker`](../web/main-thread-render-worker.js) as the platform fallback. The legacy `execution-render-worker.js` URL forwards to that render-owner implementation; its name does not establish another authoritative runtime. Resources and execution deltas cross a MessagePort/transferable-buffer or shared-mailbox boundary; ticks and readiness/presentation acknowledgements are host coordination, not timeline truth. The shared mailbox retains two fixed physical slots. A larger encoded delta may occupy successive chunks under the existing transport credits, with at most one retained oversized packet per producer/receiver and a 64 MiB encoded-packet cap. The renderer validates and applies only the complete original delta; partial chunks grant neither semantic admission nor presentation receipts. This bounds retained transport packets, not source JSON, encoder temporaries, total process memory or GPU storage.
 
 Required Python callbacks can hold authored progress at the shared barrier while the last coherent frame remains presentable. Playback with no host callbacks does not require per-frame interpreter execution. Source reruns currently replace a session; this diagram does not claim incremental hot-reload identity preservation.
+
+The finite deterministic viewer completes source preparation before advancing
+playback. Completed prefixes still use the existing bounded Rust history reader,
+but its initial sample and clock remain held until actual terminal adoption.
+The first playback therefore has the full validated timeline and uses the same
+completed-history path as subsequent replay, with no Python preparation competing
+for frame or control delivery. Preparation yields only keep loading cancellable;
+they do not pace animation. Pause intent survives preparation, and loading time
+never becomes elapsed animation time.
+
+The authoring host's explicit positive `preparationLookaheadSeconds` retains its
+cooperative prefix-delivery contract for bounded streaming/reference hosts.
+The viewer default is `null`, meaning complete preparation before playback.
+This choice neither changes source admission nor promises independent execution
+of a Python producer and reader sharing one worker.
+
+An actual callback/native-input requirement releases this preparation hold and
+uses the original source at its existing frontier-bound handoff. Recoverable
+source failure retains only the accepted prefix. A source that never completes remains visibly
+preparing and cancellable; neither a duration hint nor a timeout manufactures a
+terminal timeline or silently starts source-paced playback. Concurrent streaming
+across independent WASM contexts would require a separately qualified execution
+history transport; the renderer delta channel is not such a transport.
 
 A `WebAssembly.RuntimeError` crossing the Python authoring adapter retires that
 worker through its existing fatal-error channel. Rust borrows and publication
@@ -1036,7 +1408,32 @@ A browser worker/process boundary may require a typed transport representation b
 
 The retained execution channel may send changed style, transform, and morph fields for an existing row in a dense incremental publication. The receiver validates the session sequence, slot generation, object identity, and the whole patch set before applying it to the same retained frame mirror used by full rows. Snapshots and changes to content, resources, structure, or family plans retain their complete transport form. This is a wire-size optimization at the worker boundary; it does not add semantic state or a second execution model.
 
-Effect-bearing rows use the **same** full-row worker transport when their effective parameters change. Retained protocol v17 combines render-geometry retirement with one optional validated `glow` field with the original semantic attachment generation, color, radius unit/value, intensity and source mode. No-effect rows omit it entirely; snapshot and incremental receivers validate the complete definition and supported planar source profile before installing anything or consuming a sequence number. Older protocol versions fail closed, so a worker cannot silently drop a new halo. This is derived wire data at the existing genuine Python/render worker boundary, **not** a new in-process scene representation. V17 also retains the current explicit render-geometry retirement contract; the independently changed V15/V16 schemas are not treated as interchangeable. The validated worker mirror now reborrows that same effective runtime frame and installed immutable resources for the retained renderer. Its own coherent glow preparation and painter capture execute on the existing encoder after the ordinary retained GPU upload; they do not round-trip through a new host effect store. The public finite-profile Scene path uses the same lowering and publications; supported Python worker playback must still be qualified through the actual authoring/worker channel, not inferred from transport fixtures.
+Effect-bearing rows use the **same** full-row worker transport when their effective parameters change. Retained protocol v30 carries an ordered `effects` list with each original semantic attachment generation and its checked effect definition. No-effect rows omit the list. Snapshot and incremental receivers validate the complete bounded stack, identities, numeric values and supported planar source profile before installing anything or consuming a sequence number. Older protocol versions and the former singular effect field fail closed, so a worker cannot silently discard bindings or change their order. This is derived wire data at the existing genuine Python/render worker boundary, **not** an in-process scene representation. The validated worker mirror reborrows that same effective runtime frame and installed immutable resources for the retained renderer. Coherent capture and filtering execute on the existing encoder after ordinary retained GPU upload; they do not round-trip through a host effect store. Supported Python playback is qualified through the actual authoring/worker channel separately from transport fixtures.
+
+Custom pointwise effects use that same boundary: an immutable WGSL source and
+checked schema transfer once as a resource; changed rows carry only its derived
+handle, typed values and seed. Copied attachments share the installed program.
+The receiver validates source and values through the shared Rust API before
+committing resources, frame or sequence. Final references retire the program;
+a later attachment needs a fresh resource key. Native and direct Rust/WASM
+execution keep their opaque in-process program values and use no such codec.
+
+Composed worker rows reference immutable source plans in resource protocol v16.
+Their derived key is the existing session, full owner identity and originating
+envelope sequence. Parameter rows reuse that key without copying member lists.
+New plans must bind a row in that publication; retired keys cannot be rebound by
+a later resource addition. The receiver borrows installed rows and sparse final
+row/order overlays into the compiler's shared source graph validator before
+committing frame, resources or sequence. Contiguous unaliased planar inputs,
+nearest nested parents and complete final references are checked together, even
+when parents or members arrive later in the same delta. The initial qualified
+owner profile has identity transform, full presence and opacity one; attached
+scopes require drawable inputs. Existing resource residency accounts for plan
+replacement and exact retirement. Removed frame rows preserve their identities
+but release the source allocation. These are derived worker resources and
+dependency indices; native and direct single-context WASM retain their typed
+in-process plans. Python group authoring and browser pixel qualification require
+their own integration evidence.
 
 JSON may exist for debugging/export/tests or an explicitly justified external boundary. It is not the normal typed Rust authoring API, not an internal Rust layer boundary, and not a per-frame mutation protocol.
 
@@ -1097,15 +1494,25 @@ published FrameEpoch N+1                    renderer/GPU FrameEpoch N
 
 Each renderer-facing publication is attached to one `FrameEpoch`, and that frame epoch references its `SceneRevision`/`ExecutionRevision`. Renderer caches may therefore invalidate on the narrow revision/version actually relevant to them rather than treating every frame as a new semantic/execution generation.
 
-For the supported planar glow profile, native, direct-WASM and native-capture hosts use the same renderer-owned visibility expansion and retained preparation. The sparse index records only existing runtime source slots, object identities and their current geometry-scratch correspondence; parameter values are always borrowed from the coherent runtime publication. Initialization or an explicit full rebuild examines the frame, while sparse updates inspect the published dirty rows. No-effect visibility retains the original input slice. When every glow source is already a candidate, inverse painter ranks and binary searches also preserve that input slice without a complete candidate scan. Only expansion for additional sources constructs and orders a union; its work depends on the candidate set plus the glow sources, not just the dirty rows. Effect source candidates are added in the runtime's painter order so a source outside ordinary semantic bounds can still contribute a visible halo; the padded tile planner performs the final contribution clipping. Semantic bounds, layout and picking are unchanged.
+For the supported planar glow profile, native, direct-WASM and native-capture hosts use the same renderer-owned visibility expansion and retained preparation. The sparse index records only existing runtime source slots, object identities and their current geometry-scratch correspondence; parameter values are always borrowed from the coherent runtime publication. Initialization or an explicit full rebuild examines the frame, while sparse updates inspect the published dirty rows. No-effect visibility retains the original input slice. When every glow source is already a candidate, inverse painter ranks and binary searches also preserve that input slice without a complete candidate scan. Only expansion for additional sources constructs and orders a union; its work depends on the candidate set plus the glow sources, not just the dirty rows. Effect source candidates are added in the runtime's painter order so a source outside ordinary semantic bounds can still contribute a visible halo. Independent finite-effect captures bound oversized sources by the viewport plus their cumulative input padding. Captures consumed by an ancestor can extend beyond that region.
 
-Automatic preparation proves membership in the actual retained geometry/text frame before capturing a source. Mixed text/geometry uses the existing source-to-scratch and painter-rank mappings rather than assuming that source and packed indices match. Clean publications issue no glow GPU work, and view changes reconsider only glow sources. A host that abandons encoded work invalidates the disposable capture/filter caches before retrying. The current renderer-owned texture budget includes source capture and filter textures, not driver metadata or resources retained by frames already in flight; queue submission, fences and device recreation remain host responsibilities. The retained render-worker host now uses this same preparation and painter path, with an explicit validated transport-frame borrowing boundary and a no-glow fast path. A new worker session retires the old GPU publication epoch; removal retires old scopes.
+Automatic preparation proves membership in the actual retained geometry/text frame before capturing a source. Mixed text/geometry uses the existing source-to-scratch and painter-rank mappings rather than assuming that source and packed indices match. Clean publications issue no glow GPU work. Dirty viewer rows refresh their affected captures even when the authored epoch stays the same. View changes reconsider only glow sources. A host that abandons encoded work invalidates the disposable capture/filter caches before retrying. The current renderer-owned texture budget includes source capture and filter textures, not driver metadata or resources retained by frames already in flight; queue submission, fences and device recreation remain host responsibilities. The retained render-worker host now uses this same preparation and painter path, with an explicit validated transport-frame borrowing boundary and a no-glow fast path. A new worker session retires the old GPU publication epoch; removal retires old scopes.
 
 Planar geometry (including stroke-only paths), Text/MathTypst and immutable raster images use their canonical per-object draw ranges for isolated capture. Create/Write captures the currently revealed coverage through the ordinary geometry and glyph pipelines at the same publication epoch. Fully revealed filled circles/rectangles retain their existing single-sample analytic capture; general sources resolve four-sample capture into RGBA8. The texture budget charges that retained multisample target as well as source, optional silhouette, and filter images. Final scope opacity is removed from isolated instances and applied once after filtering. Painter placement replaces the entire source range once, and bounded path compaction stops at that anchor. Source capture contains no glow parameters and can serve future filters without another semantic store or renderer scene graph. Parallel Create/text reveal/Write and effect-only target edits share one admission; glyph-driver conflict checks permit only animations whose actually lowered channels are effect parameters. Competing introductions and geometry/pose edits retain atomic rejection. Insets, 3D, composed-group effects, and content-changing morphs remain outside this profile. Native/direct host correctness tests do not themselves qualify end-to-end Python worker playback, browser rendering, or physical-device performance, and public finite-profile Scene admission does not itself establish those results.
 
 Ordinary planar sources admit an ordered stack of at most eight effect bindings. One immutable compiled column holds the ordered generational identities and definitions; unchanged topology publishes that complete column, while topology edits validate the previous identity sequence and retire only removed channels. Native and direct Rust/WASM borrow this column in process. Only the genuine worker boundary encodes its ordered values, with complete validation before publication. Runtime drivers address the exact binding generation and parameter lane, so two effects of the same kind can animate independently. The renderer borrows the coherent column and retains disposable per-pass caches: each painted-coverage pass consumes the preceding output, silhouette Glow retains the original geometric coverage, and cumulative capture padding preserves every intermediate footprint. Object opacity applies once at the final placement. Neutral stacks restore ordinary drawing, and clean publications perform no filtering work. This leaf-source profile does not admit composed-group isolation.
 
-Raster-image capture borrows the existing image texture and sampling pipeline with a disposable normalized instance binding. Intrinsic sampled texel alpha is image coverage in both source modes; painted coverage also includes fill modulation, while silhouette coverage ignores that modulation. Final object opacity and appearance apply once after filtering. Immutable pixel resources, source painter anchors and ordinary no-effect instances remain shared and unchanged. Image source preparation remains separate from glow parameters and does not introduce image fills inside vector geometry or a general custom-shader API.
+Compiler/runtime admission for composed scopes uses one non-drawable execution row for an effect-bearing unrendered family. Its immutable source plan names existing drawable execution identities in actual painter order and the nearest containing effect scope. The family retains its semantic identity; Rust's ordinary object-or-family target accepts the same named effect controls. Parameters use the ordinary exact-attachment channels and publication barrier. Initial admission rejects empty, aliased and externally interleaved sources before changing the execution index. Ordinary unrendered families allocate no execution row. Renderer publications borrow the publisher's existing object index to resolve source inputs locally.
+
+Shared execution reachability includes these controller rows. First attachment admits a prepared row, last removal retires it, and family detach/re-add preserves semantic identity while retiring/restoring the complete execution subtree. The held semantic transaction exposes checked final parent adjacency alongside final member order. Local membership, order and attachment-boundary edits relower affected scope inputs and nearest parents; compatible parameter edits do not traverse members. Conservative Runtime preflight includes actual candidate entries, source-plan edits and painter changes before semantic commit. Native Scene execution pixel tests qualify mixed images and geometry through nested attachment, neutral/removal, member addition/removal, detach/re-add and clean reuse. Python family controls invoke those same Rust operations through checked family handles and the canonical live player without frontend member traversal. Live family copying borrows the published attachment column and allocates independent semantic attachment generations. Equal-topology family transforms and method targets stage ordinary geometry leaves alongside effect-only semantic leaves for unrendered scope owners. Those leaves use the existing allocator, scheduler, exact attachment channels, activation captures and completion barrier; they do not fabricate geometry for controllers. Scope parameters share the family root clock while member lag remains within the geometry expansion. Explicit parameter writes reserve their precise attachment generation, and sequential prepared targets consume completed parameter endpoints. Matching effect-bearing families, unequal effect-bearing topology, attachment enrollment/removal and unit transitions remain outside this animation profile. The explicit reverse-rate flag on the internal family composition remains unsupported. Broader lifecycle/seek/host cohorts remain separate gates.
+
+The compiled plan indexes only derived input and parent dependencies by full existing identity. Initial materialization and authored execution transactions validate live drawable references, contiguous input order and acyclic nearest-parent containment before publication. Transaction preflight borrows unchanged rows and stages only changed metadata and displaced painter positions, so a source plan and its input/order edits can commit together without cloning scene payloads. Compatible parameter edits do not walk source members. Replay exchanges and retired-row compaction preserve the same identity-based dependencies. Non-drawable controller rows stay after the drawable painter domain during native evaluation and seek; they cannot split a capture interval.
+
+The composed renderer profile captures contiguous, fully present source intervals and replaces each outermost active interval at its first member's painter anchor. Nested scopes, including equal intervals, prepare from leaves to ancestors. Painted captures borrow completed child filter textures as integer-aligned draws through the existing mixed source encoder; silhouette captures retain the original declared coverage. Child opacity and external painter order survive both paths. An active ancestor can demand a wholly offscreen child output before final viewport clipping; neutral parents do not demand absent offscreen storage. Disposable reverse input and parent indices invalidate the affected capture closure. Controller parameter rows have no geometry scratch, and compatible parameter-only edits borrow the prepared source. Neutral parents release obsolete child-output snapshots and bindings, while unchanged warmed captures remain reusable. Native pixel oracles qualify filtered-child composition, mask provenance, offscreen contribution and neutral transitions; structural tests cover clean work, retirement and warmed storage reuse. Visibility expansion still depends on source members and candidates. Partial scope opacity and visibility-animation presence changes remain unqualified under #1897. Separate original-mask revisions, effective ordering drivers and broader lifecycle/performance cohorts still need qualification. The genuine worker boundary installs immutable composed plans through its existing resource transaction, validates full input/parent generations and final painter intervals, and commits plan bindings with the frame and publication sequence. Paired Rust/WASM and Pyodide-worker examples qualify finite nested mixed-source controls on WebGPU and WebGL2; their independent outer-filter reference shares source rasterization and inner-filter coverage.
+
+Raster-image capture borrows the existing image texture and sampling pipeline with a disposable normalized instance binding. Intrinsic sampled texel alpha is image coverage in both modes; painted coverage also includes fill modulation, while silhouette coverage ignores that modulation. Final object opacity and appearance apply once after filtering. Immutable pixel resources, source painter anchors and ordinary no-effect instances remain shared and unchanged. Image source preparation remains separate from glow parameters and does not introduce image fills inside vector geometry or a general custom-shader API.
+
+Filtered child captures expose their finite contribution bounds separately from rounded, retained texture capacity. Ancestor capture bounds consume only the contribution, so repeated nested parameter animation cannot feed transparent high-water padding back into source extents. Native animated mixed-source checks use literal premultiplied source fields and independent two-dimensional convolutions, require pixel-exact same-time seek, and check local forward invalidation and bounded warmed texture reuse. Absolute seek currently restores the runtime base frame and marks the restored frame dirty; its pixel determinism is qualified separately from forward-playback locality.
 
 Continuous local gradient fills use that same isolated vector draw path for glow.
 Capture borrows the ordinary gradient program and retained paint binding, with
@@ -1166,8 +1573,8 @@ Settled responsibilities are:
 
 ```text
 noon
-  public Rust authoring facade and shared high-level operations
-  ExecutionSession / LiveSession orchestration and explicit integration surfaces
+  Scene authoring, persistent publication, and effective queries
+  execution segments, callbacks, input, and host publication handoffs
 
 noon-core
   SemanticStore, semantic identity and authored declarations / transactions
@@ -1430,7 +1837,9 @@ Surface cell families use the shared family affine pivots; aggregate world-pose
 and world-center observations are not part of the qualified profile.
 
 `ThreeDScene` and `SpatialScene` use one effective camera and the shared frame
-publication/runtime. Camera profile tracks update the effective pose and
+publication/runtime. Scene initializes the camera before execution. Point lights
+use ordinary Scene creation and membership during setup or playback. Camera
+profile tracks update the effective pose and
 projection together; ambient and 3D-illusion camera motion are authored camera
 state, while ordinary object animation remains on the common timeline.
 Illusion motion evaluates the pinned sine/cosine orientation analytically

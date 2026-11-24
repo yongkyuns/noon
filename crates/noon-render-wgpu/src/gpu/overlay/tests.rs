@@ -172,3 +172,75 @@ fn overlay_draw_is_explicit_and_uses_no_stable_instance_storage() {
     assert_eq!(renderer.circle_capacity_bytes(), 0);
     assert_eq!(renderer.rectangle_capacity_bytes(), 0);
 }
+
+#[test]
+fn display_overlay_reuses_same_camera_and_lazy_programs_without_scene_storage() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba16Float);
+    renderer.set_viewport(&device, &queue, 16, 16);
+    let texture = |format| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 16,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+    };
+    let target = texture(wgpu::TextureFormat::Rgba8Unorm);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut overlay = OverlayGpuState::default();
+    assert_eq!(
+        renderer
+            .encode_display_overlay(&device, &mut encoder, &target, &overlay)
+            .unwrap()
+            .draw_calls,
+        0
+    );
+    assert!(renderer.display_overlay_pipelines.is_none());
+    assert_eq!(
+        renderer.encode_display_overlay(
+            &device,
+            &mut encoder,
+            &texture(wgpu::TextureFormat::Rgba16Float),
+            &overlay
+        ),
+        Err(OverlayPrepareError::UnsupportedOutput)
+    );
+    assert!(renderer.display_overlay_pipelines.is_none());
+    overlay.update(&device, &queue, Some(circle(0.0)));
+    assert_eq!(
+        renderer
+            .encode_display_overlay(&device, &mut encoder, &target, &overlay)
+            .unwrap()
+            .draw_calls,
+        1
+    );
+    let pipelines = renderer.display_overlay_pipelines.clone();
+    for _ in 0..8 {
+        assert_eq!(
+            renderer
+                .encode_display_overlay(&device, &mut encoder, &target, &overlay)
+                .unwrap()
+                .draw_calls,
+            1
+        );
+        assert_eq!(renderer.display_overlay_pipelines, pipelines);
+    }
+    overlay.update(&device, &queue, None);
+    assert_eq!(
+        renderer
+            .encode_display_overlay(&device, &mut encoder, &target, &overlay)
+            .unwrap()
+            .draw_calls,
+        0
+    );
+    assert_eq!(renderer.display_overlay_pipelines, pipelines);
+}

@@ -1,7 +1,48 @@
 //! Coherent effective-state capture shared by Scene-owned live operations.
-use crate::{AuthoringError, ExecutionSession, Mobject, UnsupportedAuthoringOperation};
+use crate::{
+    AuthoringError, ExecutionSession, ExecutionSessionCallbackError, Mobject, Scene,
+    UnsupportedAuthoringOperation,
+};
 use noon_core::{Color, SemanticObjectState, SemanticPaint, SemanticStore, SemanticStyle, Style};
 use std::{cell::RefCell, rc::Rc};
+
+impl Scene {
+    pub(crate) fn require_effective_capture(&self) -> Result<(), AuthoringError> {
+        if let Some(execution) = self.running_execution() {
+            require_target_capture(execution, &self.integration_store().borrow())?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn capture_mobject_state(
+        &self,
+        object: &Mobject,
+    ) -> Result<SemanticObjectState, AuthoringError> {
+        if let Some(execution) = self.running_execution() {
+            capture_mobject_state(self.integration_store(), execution, object)
+        } else {
+            object.state()
+        }
+    }
+}
+
+pub(crate) fn require_target_capture(
+    execution: &ExecutionSession,
+    store: &SemanticStore,
+) -> Result<(), AuthoringError> {
+    execution.require_published_store(store)?;
+    if let Some(token) = execution.pending_callback_token() {
+        return Err(AuthoringError::ExecutionCallback(
+            ExecutionSessionCallbackError::Pending(token),
+        ));
+    }
+    if let Some(termination) = execution.callback_termination() {
+        return Err(AuthoringError::ExecutionCallback(
+            ExecutionSessionCallbackError::Terminated(termination),
+        ));
+    }
+    Ok(())
+}
 
 /// Capture one object's coherent effective state when it is reachable in
 /// the supplied execution, otherwise preserve its authored detached state.
@@ -129,6 +170,7 @@ pub(crate) fn target_style_from_effective(
         (effective.background_stroke.map(SemanticPaint::Solid), 1.0)
     };
     Ok(SemanticStyle {
+        emission: effective.emission,
         fill,
         fill_opacity,
         stroke,
@@ -174,6 +216,25 @@ pub(crate) fn preserve_or_capture_f32(authored: &mut f64, effective: f32) {
     }
 }
 
+/// Unrendered family roots own composite opacity independently from child
+/// paints. Capture that one runtime value, preserving exact authored precision
+/// when lowering has not changed it. Membership and capture scheduling stay in
+/// the existing root-local semantic copy preparation.
+pub(crate) fn capture_family_style(
+    store: &SemanticStore,
+    execution: &ExecutionSession,
+    source: noon_core::SemanticNodeId,
+    style: &mut SemanticStyle,
+) -> Result<(), AuthoringError> {
+    if execution.semantic_object_is_reachable(source) {
+        preserve_or_capture_f32(
+            &mut style.object_opacity,
+            execution.effective_family_opacity(store, source)?,
+        );
+    }
+    Ok(())
+}
+
 /// Stage one independent attachment copy at the same coherent publication as
 /// the target's object state. Detached sources retain authored declarations;
 /// resident sources copy the effective value without borrowing their identity.
@@ -185,28 +246,40 @@ pub(crate) fn stage_effect_copy(
     target: noon_core::SemanticLocalNodeToken,
     transaction: &mut noon_core::SemanticMutationTransaction,
 ) -> Result<(), AuthoringError> {
-    if !execution.semantic_object_is_reachable(source) {
-        store.copy_effects_into(source, target, transaction)?;
-        return Ok(());
+    for effect in capture_effects(store, execution, source)? {
+        store.copy_effect_into_with_definition(
+            effect.attachment,
+            target,
+            effect.definition,
+            transaction,
+        )?;
     }
-    let observed = execution.effective_semantic_object(store, source)?;
-    let node = store
-        .node(source)
-        .ok_or(noon_core::SemanticStoreError::UnknownNode(source))?;
-    match (node.effect_ids(), observed.object.effects.as_deref()) {
-        ([], None) => Ok(()),
-        (attachments, Some(effects)) if attachments == effects.attachments() => {
-            for effect in effects.iter() {
-                store.copy_effect_into_with_definition(
-                    effect.attachment,
-                    target,
-                    effect.definition,
-                    transaction,
-                )?;
-            }
-            Ok(())
-        }
-        // Never rebind a stale generation by name or silently lose an effect.
-        _ => Err(AuthoringError::EffectStateReplacementUnavailable),
+    Ok(())
+}
+
+/// Read one owner's coherent attachment values without importing driver or
+/// lifecycle ownership. Detached owners retain their authored declarations.
+pub(crate) fn capture_effects(
+    store: &SemanticStore,
+    execution: &ExecutionSession,
+    source: noon_core::SemanticNodeId,
+) -> Result<Vec<noon_core::SemanticAnimationEffectSnapshot>, AuthoringError> {
+    let mut snapshot = store.animation_effect_snapshot(source)?;
+    if snapshot.is_empty() || !execution.semantic_object_is_reachable(source) {
+        return Ok(snapshot);
     }
+    let effects = execution
+        .effective_effects(store, source)?
+        .ok_or(AuthoringError::EffectCaptureMismatch { owner: source })?;
+    if snapshot
+        .iter()
+        .map(|effect| effect.attachment)
+        .ne(effects.attachments().iter().copied())
+    {
+        return Err(AuthoringError::EffectCaptureMismatch { owner: source });
+    }
+    for (captured, effective) in snapshot.iter_mut().zip(effects.iter()) {
+        captured.definition = effective.definition;
+    }
+    Ok(snapshot)
 }

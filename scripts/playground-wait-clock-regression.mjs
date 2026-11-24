@@ -11,6 +11,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const out = path.resolve(root, process.env.NOON_WAIT_ARTIFACTS ?? "browser-smoke-artifacts/playground-wait-clock");
 const backend = process.env.NOON_WAIT_BACKEND ?? "webgl";
 assert.ok(["webgl", "webgpu"].includes(backend));
+const profile = process.env.NOON_WAIT_PROFILE ?? "default";
+assert.ok(["default", "live"].includes(profile));
+const firstPassControllable = profile === "default" ? "true" : "false";
 const source = `from noon import *
 class WaitClock(Scene):
     def construct(self):
@@ -21,7 +24,7 @@ class WaitClock(Scene):
         self.wait(3)
         self.play(dot.animate.shift(LEFT), run_time=0.4)
 `;
-const report = { backend, errors: [], samples: {}, controls: {} };
+const report = { backend, profile, errors: [], samples: {}, controls: {} };
 await mkdir(out, { recursive: true });
 const server = await serveRepository(root, Number(process.env.NOON_WAIT_PORT ?? 4197));
 let browser;
@@ -55,6 +58,9 @@ try {
   browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs(backend) });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await createPyodideResourceCache(await readFile(path.join(root, "web/python-worker.js"), "utf8")).install(context);
+  if (profile === "live") await context.addInitScript(() => {
+    window.__NOON_PLAYGROUND_TEST_HOOKS__ = { authoringRunOptions: () => ({ preparedPlayback: false }) };
+  });
   page = await context.newPage();
   page.setDefaultTimeout(60_000);
   page.on("pageerror", error => report.errors.push(error.stack ?? String(error)));
@@ -62,18 +68,23 @@ try {
   // The public editor lifecycle must submit the source; there is no parallel test
   // animation driver, fake UI clock or page-side interpolation in this regression.
   await page.goto(`${server.baseUrl}/web/index.html`);
-  await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" &&
-    window.__noonExampleGallery?.runInFlight === false);
+  await page.waitForFunction(() => window.__noonExampleGallery !== undefined);
+  const previousGeneration = await page.evaluate(() =>
+    window.__noonExampleGallery.generationDiagnostics.runGeneration);
   await page.evaluate(source => {
     const editor = document.querySelector("#python-scene-source");
     editor.value = source;
     editor.dispatchEvent(new Event("input", { bubbles: true }));
   }, source);
-  await page.waitForFunction(() => {
+  await page.locator("#replace-scene").click();
+  await page.waitForFunction(({ expected, previousGeneration }) => {
+    const gallery = window.__noonExampleGallery;
     const controls = document.querySelector(".playback-controls");
     const time = Number(controls?.dataset.elapsedSeconds);
-    return controls?.dataset.controllable === "false" && time > 0.1 && time < 1.5;
-  });
+    return gallery?.executionDiagnostics?.context?.runGeneration > previousGeneration &&
+      gallery.executionDiagnostics.events.some(event => event.stage === "attached") &&
+      controls?.dataset.controllable === expected && time > 0.1 && time < 1.5;
+  }, { expected: firstPassControllable, previousGeneration });
   async function sample(label) {
     const samples = await page.evaluate(async () => {
       const samples = [];
@@ -90,21 +101,35 @@ try {
     checkClock(samples, label, 0.28); // Includes the existing 100 ms UI polling cadence.
     return samples;
   }
-  const live = await sample("initial-wait");
-  assert.ok(live.every(s => s.controllable === "false" && s.time < 3), "must sample inside the first source-owned wait");
+  const initial = await sample("initial-wait");
+  assert.ok(initial.every(s => s.controllable === firstPassControllable && s.time < 3),
+    "must sample inside the first wait with its admitted playback capability");
   await page.screenshot({ path: path.join(out, "initial-wait.png") });
   assert.equal(await page.locator("#status").getAttribute("data-renderer-backend"),
     backend === "webgl" ? "WebGL2" : "WebGPU");
-  await page.waitForFunction(() => {
+  await page.waitForFunction(expected => {
     const controls = document.querySelector(".playback-controls");
     const time = Number(controls?.dataset.elapsedSeconds);
-    return controls?.dataset.controllable === "false" && time > 3.55 && time < 4.9;
-  });
+    return controls?.dataset.controllable === expected && time > 3.55 && time < 4.9;
+  }, firstPassControllable);
   const later = await sample("wait-after-animation");
-  assert.ok(later.every(s => s.controllable === "false" && s.time > 3.4 && s.time < 6.4),
+  assert.ok(later.every(s => s.controllable === firstPassControllable && s.time > 3.4 && s.time < 6.4),
     "must also tick during the wait following an active animation");
   await page.waitForFunction(() => document.querySelector("#patch-status")?.dataset.state === "applied" &&
     window.__noonExampleGallery?.runInFlight === false);
+  // Preparation may finish early. Require the profile's natural disposition;
+  // a configured loop need not leave its clock parked at the exact endpoint.
+  await page.waitForFunction(disposition => {
+    const controls = document.querySelector(".playback-controls")?.dataset;
+    const end = Number(document.querySelector(".playback-scrubber")?.max);
+    const events = window.__noonExampleGallery?.executionDiagnostics?.events ?? [];
+    return controls?.durationKnown === "true" && controls.buffering === "false" &&
+      controls.busy === "false" && Math.abs(end - 6.8) < 1e-9 &&
+      events.some(event => event.stage === "terminal-adopted") &&
+      events.some(event => event.stage === "disposition" && event.disposition === disposition &&
+        (disposition !== "looped" || event.loopCount >= 1));
+  }, profile === "default" ? "looped" : "observed-complete");
+  report.sourceTrace = await page.evaluate(() => window.__noonExampleGallery.executionDiagnostics);
   const duration = await page.locator(".playback-scrubber").getAttribute("max");
   assert.ok(Math.abs(Number(duration) - 6.8) < 1e-9, "both waits must contribute to replay duration");
   await page.waitForFunction(() => {
@@ -146,6 +171,7 @@ try {
   console.log(`wait clock tracks wall time in source and replay, preserves pause/resume (${backend})`);
 } catch (error) {
   report.failure = error.stack ?? String(error);
+  report.sourceTrace = await page?.evaluate(() => window.__noonExampleGallery?.executionDiagnostics).catch(() => null);
   report.controls.failure = await controlSnapshot().catch(() => null);
   await page?.screenshot({ path: path.join(out, "failure.png") }).catch(() => {});
   throw error;

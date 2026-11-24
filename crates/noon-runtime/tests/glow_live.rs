@@ -81,7 +81,7 @@ fn intensity_track(object: &CompiledObject) -> TrackDefinition {
         .unwrap()
         .get(SemanticNodeId::new(7, 3))
         .unwrap()
-        .parameter_channels(EffectUpdate::default().intensity(2.0))
+        .parameter_channels(&EffectUpdate::default().intensity(2.0))
         .unwrap()
         .pop()
         .unwrap();

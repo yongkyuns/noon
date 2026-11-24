@@ -78,7 +78,7 @@ class PaintQueriesGradientsTests(unittest.TestCase):
             self.assertEqual(str(stroke_rgbas.dtype), 'float64')
 
     def test_transparent_black_and_default_background_stroke_match_manim(self):
-        obj = identity_only_wrapper(compat.Circle)
+        obj = identity_only_wrapper(compat.Circle, _semantic_handle=object())
         black = noon.Color(0.0, 0.0, 0.0)
         with patch.object(handles, '_paint_color', return_value=black), \
              patch.object(compat.Circle, 'get_fill_opacity', return_value=0.0):
@@ -92,33 +92,38 @@ class PaintQueriesGradientsTests(unittest.TestCase):
                 "backgroundStrokeOpacity": 1.0,
             }[method]
 
-        with patch.object(handles, '_typed_manim_observation', side_effect=background_observation):
+        with patch.object(handles, '_typed_manim_observation', side_effect=background_observation) as observe:
             self.assertEqual(_as_lists(obj.get_stroke_rgbas(background=True)), [[0.0, 0.0, 0.0, 1.0]])
+            self.assertEqual(observe.call_count, 2)
             self.assertEqual(obj.get_stroke_colors(background=True), [noon.BLACK])
             self.assertEqual(_as_lists(obj.get_stroke_opacities(background=True)), [1.0])
             self.assertEqual(obj.get_stroke_opacity(background=True), 1.0)
+            observe.reset_mock()
             self.assertEqual(obj.get_stroke_width(background=True), 0.0)
+            observe.assert_called_once_with(
+                obj, "backgroundStrokeWidth", "queryMobjectBackgroundStrokeWidth", handle_property=True
+            )
 
     def test_gradient_is_one_shared_family_request_without_python_interpolation(self):
         group = identity_only_wrapper(compat.VGroup)
         handle = object()
-        context = SimpleNamespace(liveSetFamilyColorGradient=Mock())
+        context = SimpleNamespace(setFamilyColorGradient=Mock())
         argument = object()
-        with patch.object(handles, '_style_target', return_value=(handle, context, 'Family')), \
+        with patch.object(handles, '_paint_authoring_target', return_value=(handle, context, 'Family')), \
              patch.object(handles, '_gradient_components', return_value=argument) as components:
             self.assertIs(group.set_color_by_gradient('#FF0000', '#0000FF'), group)
-        context.liveSetFamilyColorGradient.assert_called_once_with(handle, argument)
+        context.setFamilyColorGradient.assert_called_once_with(handle, argument)
         self.assertEqual(len(components.call_args.args[0]), 2)
         self.assertEqual(components.call_args.args[0][0].red, 1.0)
         self.assertEqual(components.call_args.args[0][1].blue, 1.0)
 
-    def test_radial_gradient_is_one_shared_request_for_authored_and_live_targets(self):
+    def test_radial_gradient_is_one_shared_request_for_detached_and_scene_owned_targets(self):
         family = identity_only_wrapper(compat.VGroup)
         handle = Mock()
         argument = object()
-        for context in (None, SimpleNamespace(liveSetFamilyColorRadialGradient=Mock())):
-            with self.subTest(live=context is not None), \
-                 patch.object(handles, '_style_target', return_value=(handle, context, 'Family')), \
+        for context in (None, SimpleNamespace(setFamilyColorRadialGradient=Mock())):
+            with self.subTest(scene_owned=context is not None), \
+                 patch.object(handles, '_paint_authoring_target', return_value=(handle, context, 'Family')), \
                  patch.object(handles, '_gradient_components', return_value=argument) as components:
                 self.assertIs(
                     family.set_colors_by_radial_gradient(
@@ -128,7 +133,7 @@ class PaintQueriesGradientsTests(unittest.TestCase):
                     family,
                 )
             method = (
-                context.liveSetFamilyColorRadialGradient
+                context.setFamilyColorRadialGradient
                 if context is not None
                 else handle.setRadialColorGradient
             )
@@ -143,7 +148,7 @@ class PaintQueriesGradientsTests(unittest.TestCase):
         family.get_center = Mock(return_value=(1., -2., 7.125))
         handle = Mock()
         argument = object()
-        with patch.object(handles, '_style_target', return_value=(handle, None, 'Family')), \
+        with patch.object(handles, '_paint_authoring_target', return_value=(handle, None, 'Family')), \
              patch.object(handles, '_gradient_components', return_value=argument):
             self.assertIs(family.set_colors_by_radial_gradient(), family)
         handle.setRadialColorGradient.assert_called_once_with(1., -2., 7.125, 1., argument)

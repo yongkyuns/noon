@@ -1,7 +1,7 @@
 //! Paired with web/python/examples/returning_transform.py.
 use noon::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveSession, Mobject, RateFunction,
-    Scene, SemanticAnimationCompositionKind, TransformToRequest,
+    AnimationOptions, ContinuationStep, LiveContinuation, Mobject, RateFunction, Scene,
+    SemanticAnimationCompositionKind, TransformToRequest,
 };
 
 struct ReturningTargets {
@@ -14,7 +14,8 @@ struct ReturningTargets {
 impl LiveContinuation for ReturningTargets {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut noon::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         if self.activated {
             return Ok(ContinuationStep::Finished);
         }

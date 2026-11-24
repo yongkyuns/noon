@@ -1,22 +1,6 @@
 //! Root-only appends reuse the existing payload and coherent path publication.
 use super::*;
 
-pub fn publish_append_family_points(
-    store: &Rc<std::cell::RefCell<SemanticStore>>,
-    root: noon_core::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    family: &MobjectFamily,
-    points: &[(f64, f64)],
-) -> Result<(), AuthoringError> {
-    publish_append_family_points_3d(
-        store,
-        root,
-        execution,
-        family,
-        &crate::path_editing::promote_raw_points_3d(points),
-    )
-}
-
 impl MobjectFamily {
     /// Append only this root's coordinates, preserving identity and children.
     pub fn append_points_f64(&self, points: &[(f64, f64)]) -> Result<(), AuthoringError> {
@@ -40,15 +24,7 @@ impl crate::Scene {
         family: &MobjectFamily,
         points: &[(f64, f64)],
     ) -> Result<(), AuthoringError> {
-        if !Rc::ptr_eq(self.integration_store(), family.integration_store()) {
-            return Err(AuthoringError::ForeignStore);
-        }
-        if self.running_execution().is_some() {
-            return self.with_running_execution(|store, root, execution| {
-                publish_append_family_points(store, root, execution, family, points)
-            });
-        }
-        family.append_points_f64(points)
+        self.append_family_points_3d(family, &crate::path_editing::promote_raw_points_3d(points))
     }
 }
 

@@ -129,7 +129,14 @@ impl Fixture {
     }
 
     fn prepare(&mut self, runtime: &mut SceneInstance, submit: bool) -> RetainedEffectStats {
-        let publication = runtime.take_renderer_publication();
+        self.prepare_publication(&runtime.take_renderer_publication(), submit)
+    }
+
+    fn prepare_publication(
+        &mut self,
+        publication: &RendererPublication<'_>,
+        submit: bool,
+    ) -> RetainedEffectStats {
         let mut visible = publication
             .painter_order()
             .iter()
@@ -138,7 +145,7 @@ impl Fixture {
             .collect::<Vec<_>>();
         let expanded = self
             .renderer
-            .effect_source_visibility(&publication, &visible)
+            .effect_source_visibility(publication, &visible)
             .unwrap();
         if publication.frame().objects[1].effects.is_some() && publication.frame().is_present(1) {
             assert_eq!(
@@ -153,7 +160,7 @@ impl Fixture {
         let metrics = TextDeviceMetrics::uniform(10.0).unwrap();
         let prepared = self
             .preparer
-            .prepare_planned_publication_visible(&self.device, &publication, expanded, metrics)
+            .prepare_planned_publication_visible(&self.device, publication, expanded, metrics)
             .unwrap();
         self.last_image_upload = self
             .renderer
@@ -168,7 +175,8 @@ impl Fixture {
                 &mut encoder,
                 &prepared,
                 &self.text,
-                &publication,
+                publication,
+                wgpu::Color::TRANSPARENT,
                 1_000_000,
             )
             .unwrap();
@@ -181,6 +189,45 @@ impl Fixture {
         visible.clear();
         result
     }
+}
+
+#[test]
+fn same_epoch_viewer_scale_reprepares_the_glowing_source() {
+    let mut fixture = Fixture::new();
+    let mut runtime = runtime(3, true, false);
+    let initial = runtime.take_renderer_publication();
+    let context = initial.context();
+    fixture.prepare_publication(&initial, true);
+
+    let source = &runtime.frame().objects[1];
+    runtime
+        .apply_execution_patch(&ExecutionPatch::SetTransform {
+            object: source.id,
+            transform: Transform2D {
+                scale: Vec2::new(1.2, 1.2),
+                ..source.transform
+            },
+        })
+        .unwrap();
+    let changed = runtime.resource_publication();
+    // A worker viewer pulse edits the transport mirror at the same authored
+    // epoch. Only that source row is dirty, even when its halo is cached.
+    let viewer = RendererPublication::from_validated_transport_frame(
+        context,
+        changed.planned_family_frame(),
+        changed.changes().clone(),
+        changed.text_resources(),
+        changed.font_resources(),
+        changed.geometry_resources(),
+        changed.raster_image_resources(),
+        changed.family_animation_plans(),
+        changed.active_family_animation_indices(),
+        changed.painter_order(),
+        &runtime,
+    );
+    let stats = fixture.prepare_publication(&viewer, true);
+    assert_eq!(stats.rows_examined, 1);
+    assert_eq!(stats.source_passes, 1);
 }
 
 #[test]
@@ -241,7 +288,7 @@ fn image_capture_reuses_texture_and_mask_for_local_effect_edits() {
                 edited.composite_passes,
                 edited.texture_allocations
             ),
-            (1, 0, 0, 1, 0)
+            (1, 0, 0, 0, 0)
         );
         assert_eq!(fixture.last_image_upload, RasterImageUploadStats::default());
 
@@ -263,8 +310,9 @@ fn image_capture_reuses_texture_and_mask_for_local_effect_edits() {
                 faded.composite_passes,
                 faded.texture_allocations
             ),
-            (1, 0, 0, 1, 0)
+            (1, 0, 0, 0, 0)
         );
+        assert_eq!(faded.bytes_uploaded, 32, "only placement opacity changes");
         assert_eq!(
             fixture.last_image_upload.textures_uploaded
                 + fixture.last_image_upload.pixel_bytes_uploaded,
@@ -281,6 +329,91 @@ fn image_capture_reuses_texture_and_mask_for_local_effect_edits() {
         assert_eq!(fixture.last_image_upload.textures_retired, 1);
         assert_eq!(fixture.renderer.image_residency_stats().textures, 0);
         assert!(!fixture.renderer.has_draw_source_effect(object));
+    }
+}
+
+#[test]
+fn shrinking_publication_retires_tail_effects_before_painter_sort() {
+    let mut fixture = Fixture::new();
+    let mut scene = runtime(3, true, false);
+    let baseline = fixture.prepare(&mut scene, true);
+    for _ in 0..2 {
+        for index in 0..5 {
+            let mut row = CompiledObject::new(
+                ObjectId::new(200 + index),
+                GeometryRef::circle(0.25),
+                Transform2D::IDENTITY,
+                Style {
+                    fill: Some(Color::WHITE),
+                    stroke: None,
+                    ..Style::default()
+                },
+            );
+            row.effects = Some(Arc::new(
+                CompiledEffectStack::new([CompiledEffect {
+                    attachment: SemanticNodeId::new(200 + index as u32, 0),
+                    definition: Glow::new(EffectUpdate::default().radius(Pixels(3.0)))
+                        .unwrap()
+                        .into(),
+                }])
+                .unwrap(),
+            ));
+            scene
+                .apply_execution_patch(&ExecutionPatch::CreateObject(row))
+                .unwrap();
+        }
+        let full = fixture.prepare(&mut scene, true);
+        assert_eq!(scene.frame().objects.len(), 8);
+        assert!(full.retained_texture_bytes > baseline.retained_texture_bytes);
+        for index in 0..5 {
+            assert_eq!(
+                fixture
+                    .renderer
+                    .retained_effects
+                    .packed
+                    .get(&(3 + index as usize))
+                    .map(|entry| entry.0),
+                Some(ObjectId::new(200 + index))
+            );
+            scene
+                .apply_execution_patch(&ExecutionPatch::RemoveObject(ObjectId::new(200 + index)))
+                .unwrap();
+        }
+        // Publish the compacted frame while renderer captures still refer to
+        // old tail slots. Browser replay restoration exposes this same shrinking
+        // publication invariant; no retired slot has a current painter rank.
+        scene.reclaim_retired_object_slots().unwrap();
+        assert_eq!(scene.frame().objects.len(), 3);
+        let shrunk = fixture.prepare(&mut scene, true);
+        assert_eq!(
+            shrunk.retained_texture_bytes,
+            baseline.retained_texture_bytes
+        );
+        for index in 0..5 {
+            assert!(!fixture
+                .renderer
+                .retained_effects
+                .packed
+                .contains_key(&(3 + index as usize)));
+        }
+        assert_eq!(fixture.renderer.retained_effects.packed.len(), 1);
+        assert_eq!(
+            fixture
+                .renderer
+                .retained_effects
+                .packed
+                .get(&1)
+                .map(|entry| entry.0),
+            Some(ObjectId::new(101))
+        );
+        let clean = fixture.prepare(&mut scene, true);
+        assert_eq!(
+            clean,
+            RetainedEffectStats {
+                retained_texture_bytes: shrunk.retained_texture_bytes,
+                ..Default::default()
+            }
+        );
     }
 }
 
@@ -476,6 +609,75 @@ fn glow_order_attachment_to_object_added_without_effects_stays_local() {
 }
 
 #[test]
+fn effect_context_reset_rebuilds_typed_growth_after_no_effect_fast_path() {
+    let mut fixture = Fixture::new();
+    let mut scene = runtime(6, true, false);
+    let first = fixture.prepare(&mut scene, true);
+    assert_eq!(first.sources_prepared, 1);
+    assert!(first.pipeline_compiles > 0);
+    let effect = scene.frame().objects[1]
+        .effects
+        .as_ref()
+        .unwrap()
+        .get(SemanticNodeId::new(31, 5))
+        .unwrap();
+    let attachment = effect.attachment;
+    let definition = effect.definition.clone();
+
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+            object: ObjectId::new(101),
+            expected: Box::new([attachment]),
+            effects: None,
+        })
+        .unwrap();
+    let retired = fixture.prepare(&mut scene, true);
+    assert_eq!(retired.retained_texture_bytes, 0);
+    assert!(!fixture.renderer.has_retained_effect_sources());
+    assert_eq!(fixture.renderer.effect_capture_texture_bytes(), 0);
+
+    // The canvas leaves glow preparation while ordinary typed publications
+    // continue. Their painter-order changes must not be applied to stale ranks.
+    fixture.renderer.reset_retained_effect_publication_context();
+    let added = ObjectId::new(10_006);
+    scene
+        .apply_execution_patch(&ExecutionPatch::CreateObject(CompiledObject::new(
+            added,
+            GeometryRef::circle(0.4),
+            Transform2D::IDENTITY,
+            Style {
+                fill: Some(Color::WHITE),
+                stroke: None,
+                ..Style::default()
+            },
+        )))
+        .unwrap();
+    drop(scene.take_renderer_publication());
+    scene
+        .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+            object: added,
+            expected: Box::new([]),
+            effects: Some(Arc::new(
+                CompiledEffectStack::new([CompiledEffect {
+                    attachment: SemanticNodeId::new(32, 5),
+                    definition,
+                }])
+                .unwrap(),
+            )),
+        })
+        .unwrap();
+    assert!(scene.frame_changes().painter_order_range().is_none());
+
+    let attached = fixture.prepare(&mut scene, true);
+    assert_eq!((attached.rows_examined, attached.sources_prepared), (7, 1));
+    assert_eq!(
+        attached.pipeline_compiles, 0,
+        "publication reset must keep shared filter programs warm"
+    );
+    assert_eq!(fixture.renderer.retained_effects.painter_ranks.len(), 7);
+}
+
+#[test]
 fn automatic_prepare_preserves_painter_order_mixed_mapping_and_local_updates() {
     for mixed in [false, true] {
         let mut fixture = Fixture::new();
@@ -523,7 +725,7 @@ fn automatic_prepare_preserves_painter_order_mixed_mapping_and_local_updates() {
                 edited.blur_passes,
                 edited.composite_passes
             ),
-            (0, 0, 1)
+            (0, 0, 0)
         );
         assert_eq!((edited.bytes_uploaded, edited.texture_allocations), (32, 0));
         let removed = runtime.frame().objects[1].id;
@@ -648,6 +850,7 @@ fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
                 &prepared,
                 &fixture.text,
                 &publication,
+                wgpu::Color::TRANSPARENT,
                 1_000_000,
             )
             .unwrap();
@@ -659,7 +862,7 @@ fn endpoint_drains_retain_glow_changes_until_a_clean_presented_publication() {
                 presented.blur_passes,
                 presented.composite_passes,
             ),
-            (2, 1, 1, 2, 1)
+            (2, 1, 1, 2, 0)
         );
         assert_eq!(
             prepared.geometry.observe_object(1).unwrap().transform,
@@ -739,6 +942,7 @@ fn omitted_source_is_rejected_and_abandoned_encoder_reprepares() {
             &prepared,
             &fixture.text,
             &publication,
+            wgpu::Color::TRANSPARENT,
             1_000_000
         ),
         Err(EffectPrepareError::PublicationMismatch)
@@ -804,6 +1008,7 @@ fn bad_visibility_and_reduced_clean_budget_fail_without_hiding_work() {
             &prepared,
             &fixture.text,
             &publication,
+            wgpu::Color::TRANSPARENT,
             first.retained_texture_bytes - 1
         ),
         Err(EffectPrepareError::ScratchBudgetExceeded)
@@ -906,7 +1111,7 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
         GeometryRef::circle(0.4),
         GeometryRef::rectangle(0.8, 0.6),
         GeometryRef::line(Vec2::new(-0.7, -0.5), Vec2::new(0.7, 0.5)),
-        GeometryRef::VectorPath(
+        GeometryRef::path(
             noon_core::VectorPath::new()
                 .move_to(Vec2::new(-0.7, -0.5))
                 .cubic_to(
@@ -948,8 +1153,8 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
             (1, 1, 2)
         );
         assert_eq!(
-            first.texture_allocations, 5,
-            "source, MSAA, and three filter images"
+            first.texture_allocations, 4,
+            "source, MSAA, and two filter masks"
         );
         assert!(fixture.renderer.has_draw_source_effect(object));
         let clean = fixture.prepare(&mut runtime, true);
@@ -984,7 +1189,7 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
                 edited.bytes_uploaded,
                 edited.texture_allocations
             ),
-            (1, 1, 0, 0, 1, 32, 0)
+            (1, 1, 0, 0, 0, 32, 0)
         );
         let mut style = runtime.frame().objects[1].style;
         style.opacity = 0.35;
@@ -1004,8 +1209,9 @@ fn general_capture_reuses_masks_for_glow_and_opacity_edits_and_retires_locally()
                 faded.composite_passes,
                 faded.texture_allocations
             ),
-            (1, 0, 0, 1, 0)
+            (1, 0, 0, 0, 0)
         );
+        assert_eq!(faded.bytes_uploaded, 32, "only placement opacity changes");
         assert_eq!(faded.retained_texture_bytes, first.retained_texture_bytes);
         runtime
             .apply_execution_patch(&ExecutionPatch::RemoveObject(object))

@@ -3,124 +3,121 @@
 use super::*;
 
 impl CanonicalAuthoringScene {
+    pub(crate) fn coordinate_scene(&self) -> Result<&noon::Scene, AuthoringFailure> {
+        Ok(self.effective_observation_scene()?.unwrap_or(&self.scene))
+    }
+
     pub(crate) fn number_line_frame(
-        &mut self,
+        &self,
         line: &noon::ManimNumberLine,
     ) -> Result<noon::NumberLineFrame, AuthoringFailure> {
-        let shaft = line
-            .shaft()
-            .map_err(crate::plot_error::coordinate_failure)?;
-        self.mobject_observation(
-            &shaft,
-            |_| {
-                line.authored_frame()
-                    .map_err(crate::plot_error::coordinate_failure)
-            },
-            |player, _| player.live_effective_number_line_frame(line),
-        )
+        self.coordinate_scene()?
+            .number_line_frame(line)
+            .map_err(crate::plot_error::coordinate_failure)
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(super) fn live_create_path_family(
+    pub(crate) fn prepare_riemann_plan(
         &mut self,
-        paths: Vec<(noon::VectorPath, noon_core::SemanticStyle)>,
+        axes: &noon::ManimAxes,
+        graph: &noon::Mobject,
+        options: noon::RiemannRectangleOptions,
+    ) -> Result<noon::RiemannRectanglePlan, AuthoringFailure> {
+        self.local_authoring_scene()?
+            .riemann_plan(axes, graph, options)
+            .map_err(crate::plot_error::coordinate_failure)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn publish_riemann_plan(
+        &mut self,
+        plan: &noon::RiemannRectanglePlan,
+        top: Option<&[f64]>,
+        baseline: Option<&[f64]>,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        self.active_live_player()?.live_create_path_family(paths)
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .publish_riemann_plan(plan, top, baseline)
+            .map_err(|error| match error {
+                noon::CoordinateAuthoringError::Authoring(error) => {
+                    AuthoringFailure::from_scene_mutation(error, running)
+                }
+                error => crate::plot_error::coordinate_failure(error),
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(super) fn live_create_polar_plane(
-        &mut self,
-        options: &noon::ManimPolarPlaneOptions,
-    ) -> Result<noon::ManimPolarPlane, AuthoringFailure> {
-        self.active_live_player()?.live_create_polar_plane(options)
-    }
-
-    pub(super) fn live_create_axes(
-        &mut self,
-        options: &noon::ManimAxesOptions,
-    ) -> Result<noon::ManimAxes, AuthoringFailure> {
-        self.active_live_player()?.live_create_axes(options)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(super) fn live_create_three_d_axes(
-        &mut self,
-        options: &noon::ManimThreeDAxesOptions,
-    ) -> Result<noon::ManimThreeDAxes, AuthoringFailure> {
-        self.active_live_player()?.live_create_three_d_axes(options)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_bar_chart(
+    pub(crate) fn create_bar_chart(
         &mut self,
         options: &noon::ManimBarChartOptions,
     ) -> Result<noon::ManimBarChart, AuthoringFailure> {
-        if self.player_ownership.is_unstarted() {
-            return self
-                .scene
-                .bar_chart(options)
-                .map_err(crate::plot_error::coordinate_failure);
-        }
-        self.active_live_player()?.live_create_bar_chart(options)
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .bar_chart(options)
+            .map_err(|error| {
+                if running {
+                    noon::integration::live_coordinate_publication_failure(error)
+                } else {
+                    crate::plot_error::coordinate_failure(error)
+                }
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_change_bar_values(
+    pub(crate) fn change_bar_values(
         &mut self,
         chart: &mut noon::ManimBarChart,
         values: &[f64],
         update_colors: bool,
     ) -> Result<(), AuthoringFailure> {
-        self.active_live_player()?
-            .live_change_bar_values(chart, values, update_colors)
+        let running = self.requires_live_mutation_routing();
+        chart
+            .change_bar_values(self.local_authoring_scene()?, values, update_colors)
+            .map_err(|error| {
+                if running {
+                    noon::integration::live_coordinate_publication_failure(error)
+                } else {
+                    crate::plot_error::coordinate_failure(error)
+                }
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_create_labeled_bar_chart(
+    pub(crate) fn create_labeled_bar_chart(
         &mut self,
         options: &noon::ManimBarChartOptions,
         labels: &noon::plot_presentation::NumberLabelOptions,
         compiler: &mut impl noon::LatexBackend,
     ) -> Result<noon::ManimBarChart, AuthoringFailure> {
-        if self.player_ownership.is_unstarted() {
-            return self
-                .scene
-                .bar_chart_with_axis_labels(options, labels, compiler)
-                .map_err(|error| AuthoringFailure::unclassified("bar_chart.create", &error));
-        }
-        self.active_live_player()?
-            .live_create_labeled_bar_chart(options, labels, compiler)
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .bar_chart_with_axis_labels(options, labels, compiler)
+            .map_err(|error| {
+                if running {
+                    AuthoringFailure::new("invalid_input", "plot.bar_chart", error.to_string())
+                } else {
+                    AuthoringFailure::unclassified("bar_chart.create", &error)
+                }
+            })
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn live_bar_labels(
+    pub(crate) fn bar_labels(
         &mut self,
         chart: &noon::ManimBarChart,
         compiler: &mut impl noon::LatexBackend,
         options: &noon::BarLabelOptions,
     ) -> Result<noon::MobjectFamily, AuthoringFailure> {
-        if self.player_ownership.is_unstarted() {
-            return chart
-                .get_bar_labels(compiler, options)
-                .map_err(|error| AuthoringFailure::unclassified("bar_chart.labels", &error));
-        }
-        self.active_live_player()?
-            .live_bar_labels(chart, compiler, options)
-    }
-
-    pub(super) fn live_create_number_line(
-        &mut self,
-        options: &noon::ManimNumberLineOptions,
-    ) -> Result<noon::ManimNumberLine, AuthoringFailure> {
-        self.active_live_player()?.live_create_number_line(options)
-    }
-
-    pub(super) fn live_create_number_plane(
-        &mut self,
-        options: &noon::ManimNumberPlaneOptions,
-    ) -> Result<noon::ManimNumberPlane, AuthoringFailure> {
-        self.active_live_player()?.live_create_number_plane(options)
+        let running = self.requires_live_mutation_routing();
+        self.local_authoring_scene()?
+            .bar_labels(chart, compiler, options)
+            .map_err(|error| {
+                if running {
+                    AuthoringFailure::new("invalid_input", "plot.bar_labels", error.to_string())
+                } else {
+                    AuthoringFailure::unclassified("bar_chart.labels", &error)
+                }
+            })
     }
 }
 
@@ -156,7 +153,8 @@ mod tests {
                 };
                 let line = context.scene.number_line(&options).unwrap();
                 let shaft = line.shaft().unwrap();
-                assert!(context.number_line_frame(&line).is_err(), "unbound shaft");
+                let detached = context.number_line_frame(&line).unwrap();
+                near(detached.number_to_point(first).unwrap(), [-1.0, 0.0]);
                 context.bind_mobject(ObjectId::new(0), &shaft).unwrap();
                 context.scene.add_many(&[line.family().into()]).unwrap();
                 let frame = context.number_line_frame(&line).unwrap();
@@ -175,7 +173,8 @@ mod tests {
                 context
                     .active_live_player()
                     .unwrap()
-                    .live_shift_family(line.family(), 2.0, -1.0, 0.0)
+                    .scene_mut()
+                    .shift_family_3d(line.family(), noon::SemanticVec3::new(2.0, -1.0, 0.0))
                     .unwrap();
                 let frame = context.number_line_frame(&line).unwrap();
                 near(frame.number_to_point(first).unwrap(), [1.0, -1.0]);
@@ -186,7 +185,7 @@ mod tests {
                     scale.map(0.0).unwrap()
                 );
 
-                let mut foreign = CanonicalAuthoringScene::default();
+                let foreign = CanonicalAuthoringScene::default();
                 assert!(foreign.number_line_frame(&line).is_err(), "foreign store");
             }
         }
@@ -196,22 +195,24 @@ mod tests {
     fn coordinate_construction_rejects_unstarted_and_transferred_owners() {
         let mut context = CanonicalAuthoringScene::default();
         let before = context.scene.integration_store().borrow().len();
-        assert!(context.live_create_axes(&options()).is_err());
+        assert!(context.active_live_player().is_err());
         assert_eq!(context.scene.integration_store().borrow().len(), before);
         let player = context.take_execution_player(1.0, 41).unwrap();
         let identity = player.ownership_identity();
         let revision = context.scene.integration_store().borrow().scene_revision();
-        assert!(context.live_create_axes(&options()).is_err());
-        assert!(context
-            .live_create_number_line(&noon::ManimNumberLineOptions::new([0.0, 2.0, 1.0]))
-            .is_err());
+        assert!(context.active_live_player().is_err());
         assert_eq!(context.scene.integration_store().borrow().len(), before);
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
             revision
         );
         context.return_execution_player(player).unwrap();
-        let axes = context.live_create_axes(&options()).unwrap();
+        let axes = context
+            .active_live_player()
+            .unwrap()
+            .scene_mut()
+            .axes(&options())
+            .unwrap();
         assert_eq!(
             context.active_live_player().unwrap().ownership_identity(),
             identity
@@ -245,63 +246,26 @@ mod tests {
         invalid.y_length = f64::NAN;
         let revision = context.scene.integration_store().borrow().scene_revision();
         let count = context.scene.integration_store().borrow().len();
-        assert!(context.live_create_axes(&invalid).is_err());
+        assert!(context
+            .active_live_player()
+            .unwrap()
+            .scene_mut()
+            .axes(&invalid)
+            .is_err());
         assert_eq!(context.scene.integration_store().borrow().len(), count);
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
             revision
         );
-        context.live_create_axes(&options()).unwrap();
-        let line = context
-            .live_create_number_line(&noon::ManimNumberLineOptions::new([2.0, 6.0, 1.0]))
+        let scene = context.active_live_player().unwrap().scene_mut();
+        scene.axes(&options()).unwrap();
+        let line = scene
+            .number_line(&noon::ManimNumberLineOptions::new([2.0, 6.0, 1.0]))
             .unwrap();
         assert_eq!(line.range().unwrap(), [2.0, 6.0, 1.0]);
         let player = context.active_live_player().unwrap();
         assert_eq!(player.ownership_identity(), identity);
         assert_eq!(player.time(), 0.25);
-    }
-
-    #[test]
-    fn number_plane_requires_returned_owner_and_stays_detached() {
-        let mut context = CanonicalAuthoringScene::default();
-        let options = noon::ManimNumberPlaneOptions::default();
-        let count = context.scene.integration_store().borrow().len();
-        let revision = context.scene.integration_store().borrow().scene_revision();
-        assert!(context.live_create_number_plane(&options).is_err());
-        assert_eq!(context.scene.integration_store().borrow().len(), count);
-        assert_eq!(
-            context.scene.integration_store().borrow().scene_revision(),
-            revision
-        );
-
-        let player = context.take_execution_player(1.0, 41).unwrap();
-        let identity = player.ownership_identity();
-        let revision = context.scene.integration_store().borrow().scene_revision();
-        assert!(context.live_create_number_plane(&options).is_err());
-        assert_eq!(context.scene.integration_store().borrow().len(), count);
-        assert_eq!(
-            context.scene.integration_store().borrow().scene_revision(),
-            revision
-        );
-        context.return_execution_player(player).unwrap();
-
-        let plane = context.live_create_number_plane(&options).unwrap();
-        assert_eq!(plane.x_axis().unwrap().range().unwrap(), options.x_range);
-        assert_eq!(plane.y_axis().unwrap().range().unwrap(), options.y_range);
-        assert_eq!(
-            context.active_live_player().unwrap().ownership_identity(),
-            identity
-        );
-        assert_eq!(context.live_execution_ownership(), "returned");
-        assert!(context.bindings.is_empty());
-        assert!(context.identities.is_empty());
-        assert!(context
-            .scene
-            .integration_store()
-            .borrow()
-            .semantic_family_members_checked(context.scene.root())
-            .unwrap()
-            .is_empty());
     }
 
     #[test]
@@ -328,7 +292,12 @@ mod tests {
             .borrow()
             .geometry_resources()
             .len();
-        assert!(context.live_create_number_plane(&invalid).is_err());
+        assert!(context
+            .active_live_player()
+            .unwrap()
+            .scene_mut()
+            .number_plane(&invalid)
+            .is_err());
         assert_eq!(context.scene.integration_store().borrow().len(), count);
         assert_eq!(
             context.scene.integration_store().borrow().scene_revision(),
@@ -344,9 +313,11 @@ mod tests {
             resources
         );
 
-        let plane = context
-            .live_create_number_plane(&noon::ManimNumberPlaneOptions::default())
-            .unwrap();
+        let scene = context.active_live_player().unwrap().scene_mut();
+        let options = noon::ManimNumberPlaneOptions::default();
+        let plane = scene.number_plane(&options).unwrap();
+        assert_eq!(plane.x_axis().unwrap().range().unwrap(), options.x_range);
+        assert_eq!(plane.y_axis().unwrap().range().unwrap(), options.y_range);
         assert!(plane.authored_frame().is_ok());
         assert!(context.bindings.is_empty());
         assert!(context.identities.is_empty());

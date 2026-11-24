@@ -23,6 +23,8 @@ pub(crate) fn apply_family_then_resident_preparation<T, E>(
 
 #[cfg(any(target_arch = "wasm32", test))]
 const RENDER_SUBSTAGE_SAMPLE_CAPACITY: usize = 32;
+#[cfg(target_arch = "wasm32")]
+const RENDER_LOCALITY_RECORD_LIMIT: usize = 16;
 
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -35,6 +37,8 @@ struct RenderSubstageSample {
     upload_cpu_wall_ms: f64,
     encode_cpu_wall_ms: f64,
     submit_present_cpu_wall_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    locality: Option<serde_json::Value>,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -98,10 +102,12 @@ mod render_substage_tests {
                 upload_cpu_wall_ms: 3.0,
                 encode_cpu_wall_ms: 4.0,
                 submit_present_cpu_wall_ms: 5.0,
+                locality: None,
             });
         }
-        let drained: Vec<RenderSubstageSample> =
-            serde_json::from_str(&samples.take_json().unwrap()).unwrap();
+        let drained_json = samples.take_json().unwrap();
+        assert!(!drained_json.contains("locality"));
+        let drained: Vec<RenderSubstageSample> = serde_json::from_str(&drained_json).unwrap();
         assert_eq!(drained.len(), RENDER_SUBSTAGE_SAMPLE_CAPACITY);
         assert_eq!(drained.first().and_then(|sample| sample.sequence), Some(1));
         assert_eq!(drained.last().and_then(|sample| sample.sequence), Some(32));
@@ -118,6 +124,7 @@ mod render_substage_tests {
             upload_cpu_wall_ms: 0.0,
             encode_cpu_wall_ms: 0.0,
             submit_present_cpu_wall_ms: 0.0,
+            locality: None,
         });
         assert_eq!(samples.take_json().unwrap().matches("sequence").count(), 1);
     }
@@ -125,17 +132,21 @@ mod render_substage_tests {
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use crate::gpu_effect_programs::EffectProgramTask;
     use noon_core::Vec2;
     use noon_render_wgpu::text::TextDeviceMetrics;
     use noon_render_wgpu::{
         AnalyticOverlay, Camera2D, GpuRenderer, InteractiveRetainedFrame, OverlayGpuState,
         PathMeshPreload, RetainedFramePreparer, RetainedTextGpuState, UploadWrite,
     };
+    use noon_render_wgpu::{AuthoredViewOutput, OutputTransfer};
     use noon_runtime::FrameChanges;
     use wasm_bindgen::{prelude::*, JsCast};
     use web_sys::OffscreenCanvas;
 
-    use super::{apply_family_then_resident_preparation, FamilyAdmission};
+    use super::{
+        apply_family_then_resident_preparation, FamilyAdmission, RENDER_LOCALITY_RECORD_LIMIT,
+    };
 
     #[derive(Default)]
     struct RenderSubstageTimings {
@@ -199,6 +210,7 @@ mod wasm {
         queue: wgpu::Queue,
         backend: wgpu::Backend,
         config: wgpu::SurfaceConfiguration,
+        view_output: AuthoredViewOutput,
     }
 
     struct RetainedGpuState {
@@ -208,6 +220,16 @@ mod wasm {
         preloaded_geometry_count: usize,
         preload_bytes_uploaded: usize,
     }
+
+    enum BrowserVideoPixels {
+        External(wgpu::ExternalImageSource),
+        Rgba(js_sys::Uint8Array),
+    }
+
+    type BrowserRasterFrame = (
+        noon_core::RasterImageResourceHandle,
+        Option<(usize, BrowserVideoPixels)>,
+    );
 
     /// Render-worker endpoint for `noon.execution.retained`.
     ///
@@ -225,14 +247,19 @@ mod wasm {
         canvas: OffscreenCanvas,
         config: wgpu::SurfaceConfiguration,
         drawable: bool,
+        view_output: AuthoredViewOutput,
+        working_profile: noon_core::ViewColorProfile,
         mirror: InstalledRetainedExecutionMirror,
         pending_frame: bool,
+        video_frame_provider: Option<js_sys::Function>,
+        video_uses_cpu_pixels: bool,
         pending_changes: FrameChanges,
         // Renderer-side capability bit, derived only from admitted worker rows.
         // Ordinary no-glow sessions retain the original zero-extra-work path.
         glow_transport_seen: bool,
         preparer: RetainedFramePreparer,
         renderer: GpuRenderer,
+        effect_program_task: EffectProgramTask,
         text_gpu: RetainedTextGpuState,
         selection_overlay: Option<AnalyticOverlay>,
         pointer_view: Option<crate::PointerPresentationView>,
@@ -300,6 +327,7 @@ mod wasm {
                 queue,
                 backend,
                 config,
+                view_output,
             } = initialized;
             install_wgpu_error_handler(
                 &device,
@@ -321,8 +349,11 @@ mod wasm {
             self.queue = queue;
             self.backend = backend;
             self.config = config;
+            self.view_output = view_output;
+            self.working_profile = noon_core::ViewColorProfile::Compatibility;
             self.preparer = preparer;
             self.renderer = renderer;
+            self.effect_program_task.cancel();
             self.text_gpu = text_gpu;
             self.selection_overlay_gpu = OverlayGpuState::default();
             self.gpu_validation_scope = None;
@@ -362,6 +393,7 @@ mod wasm {
                 queue,
                 backend,
                 config,
+                view_output,
             } = initialize_gpu(&canvas, width, height, false).await?;
             if backend == wgpu::Backend::Gl {
                 ensure_webgl_context_available(&canvas)?;
@@ -386,6 +418,10 @@ mod wasm {
                 preload_bytes_uploaded,
             } = build_retained_gpu_state(&mirror, &device, &queue, config.format)?;
 
+            // Software WebGPU can accept a hardware-backed ImageBitmap copy
+            // without making its pixels available to the software texture.
+            let video_uses_cpu_pixels = backend == wgpu::Backend::BrowserWebGpu
+                && device.adapter_info().device_type == wgpu::DeviceType::Cpu;
             let mut result = Self {
                 instance,
                 surface,
@@ -395,12 +431,17 @@ mod wasm {
                 canvas,
                 config,
                 drawable: true,
+                view_output,
+                working_profile: noon_core::ViewColorProfile::Compatibility,
                 mirror,
                 pending_frame: false,
+                video_frame_provider: None,
+                video_uses_cpu_pixels,
                 pending_changes: FrameChanges::default(),
                 glow_transport_seen: false,
                 preparer,
                 renderer,
+                effect_program_task: EffectProgramTask::default(),
                 text_gpu,
                 selection_overlay: None,
                 pointer_view: None,
@@ -430,19 +471,129 @@ mod wasm {
             Ok(result)
         }
 
+        /// Replace the retained source's immutable resources without recreating
+        /// the browser GPU device or claiming the OffscreenCanvas again. The old
+        /// render loop is suspended by the host and a full snapshot must follow.
+        #[wasm_bindgen(js_name = replaceResourceBundle)]
+        pub fn replace_resource_bundle(
+            &mut self,
+            resource_bundle_bytes: Vec<u8>,
+        ) -> Result<(), JsValue> {
+            self.require_webgpu_device()?;
+            if self.webgl_context_lifecycle.is_lost()
+                || self.webgl_context_lifecycle.recovery_pending()
+            {
+                return Err(js_message(
+                    "cannot replace retained resources while the WebGL2 context is unavailable",
+                ));
+            }
+            // Validate/preload before swapping authoritative state, so an
+            // invalid bundle cannot destroy the live renderer.
+            let next_mirror =
+                InstalledRetainedExecutionMirror::from_bundle_bytes(&resource_bundle_bytes)
+                    .map_err(js_error)?;
+            let next_camera = next_mirror.camera();
+            // Source replacement needs a fresh immutable resource projection,
+            // not another set of heavyweight shader pipelines. Preload validates
+            // geometry and device limits before changing resident GPU buffers.
+            let mut preparer = RetainedFramePreparer::new();
+            preparer.set_scene_path_mesh_cache_budget(
+                next_mirror
+                    .resources()
+                    .render_geometries()
+                    .len()
+                    .max(next_mirror.resources().render_geometry_preparation_count()),
+                next_mirror.resources().geometry_count(),
+            );
+            let geometries = next_mirror.resources().render_geometries();
+            let requests = next_mirror
+                .resources()
+                .render_geometry_preparations()
+                .map(|preparation| PathMeshPreload {
+                    geometry: geometries[preparation.resource as usize]
+                        .geometry
+                        .as_ref()
+                        .expect("prepared render geometry is live")
+                        .as_ref(),
+                    style: preparation.style,
+                    transform: preparation.transform,
+                })
+                .collect::<Vec<_>>();
+            let preload = preparer
+                .preload_path_meshes(&self.device, &self.queue, &mut self.renderer, &requests)
+                .map_err(js_error)?;
+            if preload.upload.bytes_uploaded != 0 {
+                self.queue.submit([]);
+            }
+            self.renderer.reset_retained_source_state(&self.device);
+            self.text_gpu
+                .reset_retained_source_state(&self.device, &self.queue);
+
+            self.effect_program_task.cancel();
+            self.effect_program_task = EffectProgramTask::default();
+            self.mirror = next_mirror;
+            self.preparer = preparer;
+            self.selection_overlay_gpu = OverlayGpuState::default();
+            self.selection_overlay = None;
+            self.pointer_view = None;
+            self.glow_transport_seen = false;
+            // The existing renderer still has the previous output format.
+            // The first new publication must choose whether to keep it or
+            // rebuild for a different color profile before presenting.
+            self.camera_center = next_camera.center;
+            self.camera_height = next_camera.height;
+            self.pending_frame = false;
+            self.pending_changes = FrameChanges::default();
+            self.preloaded_geometry_count = preload.geometry.geometry_cache_misses;
+            self.preload_bytes_uploaded = preload.upload.bytes_uploaded;
+            self.last_draw_calls = 0;
+            self.last_instances_drawn = 0;
+            self.last_bytes_uploaded = 0;
+            self.last_geometry_cache_misses = 0;
+            self.last_outline_cache_misses = 0;
+            self.resident_path_maintenance_retry_deferred = false;
+            self.pending_renderer_observation = None;
+            self.last_renderer_observation = None;
+            self.presentation_sequence = 0;
+            self.render_substage_samples.clear();
+            self.gpu_completion_samples.restart();
+            self.update_camera()
+        }
+
         #[wasm_bindgen(js_name = applyDeltaJson)]
         pub fn apply_delta_json(&mut self, json: &str) -> Result<bool, JsValue> {
+            self.ensure_delta_available()?;
+            let delta: RetainedFamilyExecutionDeltaEnvelope =
+                serde_json::from_str(json).map_err(js_error)?;
+            self.apply_delta(delta)
+        }
+
+        #[wasm_bindgen(js_name = applyDeltaTransportJson)]
+        pub fn apply_delta_transport_json(&mut self, packet: &str) -> Result<bool, JsValue> {
+            self.ensure_delta_available()?;
+            let delta = crate::decode_worker_execution_delta_carrier(packet)
+                .map_err(|error| js_message(&error))?;
+            self.apply_delta(delta)
+        }
+    }
+
+    impl WasmRetainedExecutionCanvasRenderer {
+        fn ensure_delta_available(&self) -> Result<(), JsValue> {
             if self.pending_frame {
                 return Err(js_message(
                     "render worker must present the retained execution delta before accepting another",
                 ));
             }
+            Ok(())
+        }
 
+        fn apply_delta(
+            &mut self,
+            delta: RetainedFamilyExecutionDeltaEnvelope,
+        ) -> Result<bool, JsValue> {
             // The mirror remains authoritative through context loss. Resource
             // uploads are deferred until recovery, but the exact delta is still
             // admitted so its frame can be rebuilt without a transport retry.
-            let delta: RetainedFamilyExecutionDeltaEnvelope =
-                serde_json::from_str(json).map_err(js_error)?;
             let gpu_available = !self.webgl_context_lifecycle.is_lost()
                 && !self.webgl_context_lifecycle.recovery_pending();
             let stale = self.mirror.transport_mirror().session() == Some(delta.retained.session)
@@ -456,6 +607,16 @@ mod wasm {
                 .transport_mirror()
                 .session()
                 .is_some_and(|session| session != delta.retained.session);
+
+            // Viewer camera and highlight changes can publish spatial rows
+            // with the same authored runtime context and a new retained sequence.
+            let updates_spatial_inspection = self.mirror.publication_context()
+                == delta.retained.publication_context
+                && delta
+                    .retained
+                    .objects
+                    .iter()
+                    .any(|row| row.spatial.is_some());
 
             // Stale packets cannot change the current overlay. Validate a fresh
             // presentation before resource preparation or mirror admission.
@@ -507,13 +668,40 @@ mod wasm {
                 None
             };
 
+            if delta
+                .retained
+                .primary_view
+                .is_some_and(|view| view.color_profile == noon_core::ViewColorProfile::LinearHdr)
+            {
+                if !self.view_output.supports_hdr() {
+                    return Err(js_message(
+                        "authored HDR requires float render/blend support",
+                    ));
+                }
+                if self.drawable {
+                    AuthoredViewOutput::validate_extent(
+                        &self.device,
+                        [self.config.width, self.config.height],
+                    )
+                    .map_err(js_error)?;
+                }
+            }
             // Mark only validated, accepted source glow publications. Once seen,
             // keep the path active long enough to retire removed GPU scopes.
-            let received_glow = delta
-                .retained
-                .objects
-                .iter()
-                .any(|row| !row.effects.is_empty());
+            let received_glow = delta.retained.objects.iter().any(|row| {
+                !row.effects.is_empty()
+                    || matches!(row.content, crate::TransportObjectContent::Composed { .. })
+                        && row.style.opacity != 1.0
+            }) || self.mirror.transport_mirror().has_composed_source_rows()
+                && delta.retained.object_patches.iter().any(|patch| {
+                    patch.style.is_some_and(|style| style.opacity != 1.0)
+                        && self
+                            .mirror
+                            .transport_mirror()
+                            .frame_index_for_slot(patch.slot)
+                            .and_then(|index| self.mirror.frame()?.objects.get(index))
+                            .is_some_and(|row| row.content.composed_source().is_some())
+                });
             let pointer_view = delta.pointer_view;
             let mirror = &mut self.mirror;
             let preparer = &mut self.preparer;
@@ -585,8 +773,11 @@ mod wasm {
                     // The admitted worker source is authoritative. Retain this
                     // preparation path for subsequent removal/cleanup frames.
                     self.glow_transport_seen |= received_glow;
-                    if replaces_session {
+                    if replaces_session || updates_spatial_inspection {
                         self.renderer.reset_spatial_publication_context();
+                    }
+                    if replaces_session {
+                        self.effect_program_task.cancel();
                         // A previous glow session can already have returned to
                         // the no-effect fast path. Its retained preparer's last
                         // publication epoch must still be retired before a new
@@ -610,7 +801,7 @@ mod wasm {
                         self.camera_height = camera.height;
                         self.update_camera()?;
                     }
-                    self.pending_changes = changes;
+                    self.pending_changes.accumulate(changes);
                     self.pending_frame = true;
                     let defer_path_maintenance = self.resident_path_maintenance_retry_deferred;
                     self.resident_path_maintenance_retry_deferred = false;
@@ -679,7 +870,10 @@ mod wasm {
                 RetainedTransportApplyOutcome::DroppedStale => Ok(false),
             }
         }
+    }
 
+    #[wasm_bindgen(js_class = RetainedExecutionCanvasRenderer)]
+    impl WasmRetainedExecutionCanvasRenderer {
         /// Arm one bounded callback-publication observation. The request is
         /// resolved only against the exact retained delta session/sequence.
         #[wasm_bindgen(js_name = setRendererObservationRequestJson)]
@@ -746,7 +940,64 @@ mod wasm {
             self.gpu_completion_samples.take_json().map_err(js_error)
         }
 
+        #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
+        #[wasm_bindgen(js_name = debugEffectProgramsJson)]
+        pub fn debug_effect_programs_json(&self) -> String {
+            let [rows, programs] = self.renderer.resident_effect_program_counts();
+            serde_json::json!({
+                "rows": rows, "programs": programs,
+                "pipelineCompiles": self.effect_program_task.pipeline_compiles,
+                "pending": self.effect_program_task.is_pending(),
+            })
+            .to_string()
+        }
+
+        /// The future owns only immutable source and device work. This method
+        /// returns before awaiting, so rendering/recovery retain normal access.
+        #[wasm_bindgen(js_name = prepareEffectPrograms)]
+        pub fn prepare_effect_programs(&self, bytes: &[u8]) -> Result<js_sys::Promise, JsValue> {
+            let programs =
+                crate::retained_resource_transport::shader_programs::decode_shader_preparation(
+                    bytes,
+                    self.mirror.resources(),
+                )
+                .map_err(js_error)?;
+            let request = self
+                .renderer
+                .effect_module_preparation(&self.device, &programs);
+            Ok(wasm_bindgen_futures::future_to_promise(async move {
+                let prepared = request.prepare().await.map_err(js_error)?;
+                Ok(crate::gpu_effect_programs::WasmPreparedEffectPrograms { prepared }.into())
+            }))
+        }
+
+        #[wasm_bindgen(js_name = cacheEffectPrograms)]
+        pub fn cache_effect_programs(
+            &mut self,
+            prepared: &crate::gpu_effect_programs::WasmPreparedEffectPrograms,
+        ) -> Result<(), JsValue> {
+            self.renderer
+                .cache_effect_programs(&self.device, &prepared.prepared)
+                .map_err(js_error)?;
+            self.effect_program_task.record(prepared.prepared.stats());
+            Ok(())
+        }
+
+        /// The codec host lends ready pixels for a Rust-selected frame.
+        #[wasm_bindgen(js_name = setVideoFrameProvider)]
+        pub fn set_video_frame_provider(&mut self, provider: js_sys::Function) {
+            self.video_frame_provider = Some(provider);
+        }
+
+        /// Repaint the selected publication for explicit export readback.
+        #[wasm_bindgen(js_name = renderExportFrame)]
+        pub fn render_export_frame(&mut self) -> Result<bool, JsValue> {
+            self.pending_frame = true;
+            self.render()
+        }
+
         pub fn render(&mut self) -> Result<bool, JsValue> {
+            self.require_webgpu_device()?;
             if self.webgl_context_lifecycle.is_lost()
                 || self.webgl_context_lifecycle.recovery_pending()
             {
@@ -754,6 +1005,26 @@ mod wasm {
             }
             if !self.drawable || !self.pending_frame {
                 return Ok(false);
+            }
+
+            let Some(video_frames) = self.prepare_video_frames()? else {
+                return Ok(false);
+            };
+
+            self.prepare_working_profile()?;
+
+            if self.glow_transport_seen || self.effect_program_task.is_pending() {
+                let publication = self
+                    .mirror
+                    .renderer_publication(&self.pending_changes)
+                    .map_err(js_error)?;
+                if !self
+                    .effect_program_task
+                    .poll(&mut self.renderer, &self.device, &publication)
+                    .map_err(js_error)?
+                {
+                    return Ok(false);
+                }
             }
 
             let profiling = self.render_substage_profiling;
@@ -797,12 +1068,13 @@ mod wasm {
             let resolved_observation_target = observation_target
                 .as_ref()
                 .and_then(|target| target.as_ref().ok());
+            let outline_cache_before = profiling.then(|| self.preparer.outline_cache_stats());
             let prepare_started = profiling.then(performance_now_ms);
             let resources = self.mirror.resources();
             // Worker transport has already resolved and validated this frame and
             // its resource handles. The borrowed renderer publication uses those
             // same objects; no JS effects state or separate renderer is introduced.
-            let glow_publication = if self.glow_transport_seen {
+            let glow_publication = if self.glow_transport_seen || self.view_output.is_hdr() {
                 Some(
                     self.mirror
                         .renderer_publication(&self.pending_changes)
@@ -957,11 +1229,37 @@ mod wasm {
                 &self.queue,
                 self.selection_overlay,
             );
+            let mut video_bytes = 0usize;
+            for (handle, frame) in video_frames {
+                let bytes = match frame {
+                    Some((index, BrowserVideoPixels::Rgba(pixels))) => {
+                        if self.renderer.has_video_frame(handle, index) {
+                            Ok(0)
+                        } else {
+                            self.renderer.write_rgba_video_frame(
+                                &self.queue,
+                                handle,
+                                index,
+                                &pixels.to_vec(),
+                            )
+                        }
+                    }
+                    Some((index, BrowserVideoPixels::External(image))) => self
+                        .renderer
+                        .write_external_video_frame(&self.queue, handle, Some((index, image))),
+                    None => self
+                        .renderer
+                        .write_external_video_frame(&self.queue, handle, None),
+                }
+                .map_err(js_error)?;
+                video_bytes = video_bytes.saturating_add(bytes);
+            }
             self.last_bytes_uploaded = upload
                 .bytes_uploaded()
                 .saturating_add(spatial_upload.bytes_uploaded())
                 .saturating_add(transient_upload.bytes_uploaded)
-                .saturating_add(overlay_upload.bytes_uploaded);
+                .saturating_add(overlay_upload.bytes_uploaded)
+                .saturating_add(video_bytes);
             if let (Some(started), Some(timings)) = (upload_started, substage_timings.as_mut()) {
                 timings.upload_cpu_wall_ms = performance_now_ms() - started;
             }
@@ -984,25 +1282,48 @@ mod wasm {
                         &prepared,
                         &self.text_gpu,
                         publication,
+                        CLEAR_COLOR,
                         noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
                     )
                     .map_err(js_error)?;
             }
+            let no_overlay = OverlayGpuState::default();
             let draw = self
                 .renderer
                 .encode_retained_with_transient_presentations_and_overlay(
                     &mut encoder,
-                    &view,
+                    self.view_output.scene_view(&view),
                     InteractiveRetainedFrame {
                         prepared: &prepared,
                         text: &self.text_gpu,
                         transient: Some(&transient),
-                        overlay: &self.selection_overlay_gpu,
+                        overlay: if self.view_output.is_hdr() {
+                            &no_overlay
+                        } else {
+                            &self.selection_overlay_gpu
+                        },
                     },
                     CLEAR_COLOR,
                     None,
                 )
                 .map_err(js_error)?;
+            if let Some(publication) = glow_publication.as_ref() {
+                let work = self
+                    .view_output
+                    .resolve(
+                        &self.device,
+                        &self.queue,
+                        &mut encoder,
+                        &mut self.renderer,
+                        publication,
+                        f64::from(self.camera_height),
+                        &self.selection_overlay_gpu,
+                        &surface_texture.texture,
+                    )
+                    .map_err(js_error)?;
+                self.last_bytes_uploaded =
+                    self.last_bytes_uploaded.saturating_add(work.bytes_uploaded);
+            }
             let command_buffer = encoder.finish();
             if let (Some(started), Some(timings)) = (encode_started, substage_timings.as_mut()) {
                 timings.encode_cpu_wall_ms = performance_now_ms() - started;
@@ -1040,6 +1361,7 @@ mod wasm {
                 && !self.renderer.has_retained_effect_sources()
                 && self.renderer.effect_capture_texture_bytes() == 0
             {
+                self.renderer.reset_retained_effect_publication_context();
                 self.glow_transport_seen = false;
             }
             self.presentation_sequence = self.presentation_sequence.saturating_add(1);
@@ -1047,6 +1369,89 @@ mod wasm {
                 timings.submit_present_cpu_wall_ms = performance_now_ms() - started;
             }
             if let Some(timings) = substage_timings {
+                let changes = &self.pending_changes;
+                let changed_rows = changes.object_indices();
+                let change_range = changes.painter_order_range();
+                let geometry = prepared.geometry_stats();
+                let retained = prepared.stats;
+                let image_residency = self.renderer.image_residency_stats();
+                let resource_handles = self
+                    .mirror
+                    .resources()
+                    .diagnostic_resource_handles(RENDER_LOCALITY_RECORD_LIMIT);
+                let [effect_rows, effect_programs] = self.renderer.resident_effect_program_counts();
+                let locality = serde_json::json!({
+                    "frame": {
+                        "presentationSequence": self.presentation_sequence,
+                        "gpuGeneration": self.gpu_generation,
+                        "bytesUploaded": self.last_bytes_uploaded,
+                    },
+                    "frameChanges": {
+                        "scope": if changes.is_all() { "all" } else if changes.is_structural() {
+                            "structural"
+                        } else if changes.has_painter_order_change() { "painter-order" }
+                        else if changes.object_indices().is_empty() && changes.requires_presentation_redraw() {
+                            "presentation-only"
+                        } else if changes.object_indices().is_empty() { "empty" } else { "objects" },
+                        "all": changes.is_all(),
+                        "presentationRedraw": changes.requires_presentation_redraw(),
+                        "explicitRowIndexCount": changed_rows.len(),
+                        "addedCount": changes.added_indices().len(),
+                        "removedCount": changes.removed_indices().len(),
+                        "explicitRowIndices": changed_rows.iter().take(RENDER_LOCALITY_RECORD_LIMIT).collect::<Vec<_>>(),
+                        "explicitRowIndicesTruncated": changed_rows.len().saturating_sub(RENDER_LOCALITY_RECORD_LIMIT),
+                        "explicitRowIndicesScope": "retained-mirror row indices; not semantic object ids",
+                        "painterOrderRange": change_range.map(|range| [range.start, range.end]),
+                    },
+                    "renderStats": {
+                        "batchCount": geometry.batch_count,
+                        "instanceCount": geometry.instance_count,
+                        "capacityGrowths": geometry.capacity_growths,
+                        "instancesRepacked": geometry.instances_repacked,
+                        "dirtyInstanceCount": geometry.dirty_instance_count,
+                        "geometryCacheMisses": geometry.geometry_cache_misses,
+                        "pathVerticesRepacked": geometry.path_vertices_repacked,
+                        "pathIndicesRepacked": geometry.path_indices_repacked,
+                        "megaPathIndicesRepacked": geometry.mega_path_indices_repacked,
+                        "structuralSlotsAdded": geometry.structural_slots_added,
+                        "structuralSlotsRetired": geometry.structural_slots_retired,
+                        "fullRebuilds": geometry.full_rebuilds,
+                        "renderOrderPositionsVisited": geometry.render_order_positions_visited,
+                        "renderOrderChunksRebuilt": geometry.render_order_chunks_rebuilt,
+                        "semanticObjects": retained.semantic_objects,
+                        "geometrySlots": retained.geometry_slots,
+                        "glyphBatches": retained.glyph_batches,
+                        "vectorItems": retained.vector_items,
+                        "outlineRuns": retained.outline_runs,
+                        "imageObjects": retained.image_objects,
+                        "prepareOutlineCacheHits": retained.outline_cache_hits,
+                        "prepareOutlineCacheMisses": retained.outline_cache_misses,
+                    },
+                    "outlineCache": {
+                        "scope": "cumulative stats sampled immediately before current frame preparation",
+                        "outlineEntries": outline_cache_before.map(|stats| stats.outline_entries),
+                        "strokedEntries": outline_cache_before.map(|stats| stats.stroked_entries),
+                        "retainedCpuBytes": outline_cache_before.map(|stats| stats.retained_bytes),
+                        "fontFaces": outline_cache_before.map(|stats| stats.font_faces),
+                        "hits": outline_cache_before.map(|stats| stats.hits),
+                        "misses": outline_cache_before.map(|stats| stats.misses),
+                        "evictions": outline_cache_before.map(|stats| stats.evictions),
+                        "rejectedAdmissions": outline_cache_before.map(|stats| stats.rejected_admissions),
+                    },
+                    "imageResidency": {
+                        "textures": image_residency.textures,
+                        "objects": image_residency.objects,
+                        "pixelBytes": image_residency.pixel_bytes,
+                        "scope": "renderer-resident RGBA pixel payload; excludes GPU allocation overhead",
+                    },
+                    "resourceHandles": resource_handles,
+                    "effects": {
+                        "residentRows": effect_rows,
+                        "residentPrograms": effect_programs,
+                        "captureAndBackdropBytes": self.renderer.effect_capture_texture_bytes(),
+                        "captureBytesScope": "retained effect capture and backdrop textures; not total GPU allocation",
+                    },
+                });
                 self.render_substage_samples.push(RenderSubstageSample {
                     session: self.mirror.transport_mirror().session(),
                     sequence: self.mirror.transport_mirror().applied_sequence(),
@@ -1055,6 +1460,7 @@ mod wasm {
                     upload_cpu_wall_ms: timings.upload_cpu_wall_ms,
                     encode_cpu_wall_ms: timings.encode_cpu_wall_ms,
                     submit_present_cpu_wall_ms: timings.submit_present_cpu_wall_ms,
+                    locality: Some(locality),
                 });
             }
             self.last_draw_calls = draw.draw_calls();
@@ -1090,6 +1496,10 @@ mod wasm {
             // dimensions are already current.
             if self.canvas.width() == width && self.canvas.height() == height {
                 return Ok(());
+            }
+            if self.view_output.is_hdr() && width > 0 && height > 0 {
+                AuthoredViewOutput::validate_extent(&self.device, [width, height])
+                    .map_err(js_error)?;
             }
             self.canvas.set_width(width);
             self.canvas.set_height(height);
@@ -1128,30 +1538,7 @@ mod wasm {
         /// This is intentionally an explicit diagnostics call; it is not read per frame.
         #[wasm_bindgen(js_name = rendererAdapterInfo)]
         pub fn renderer_adapter_info(&self) -> Result<String, JsValue> {
-            let info = self.device.adapter_info();
-            // Browsers may redact the description mapped into AdapterInfo while
-            // retaining vendor/architecture on this same device's adapterInfo.
-            let browser_device_info = self.device.as_webgpu().map(|device| {
-                let browser = device.adapter_info();
-                serde_json::json!({
-                    "vendor": browser.vendor(),
-                    "architecture": browser.architecture(),
-                    "device": browser.device(),
-                    "description": browser.description(),
-                    "isFallbackAdapter": browser.is_fallback_adapter(),
-                })
-            });
-            serde_json::to_string(&serde_json::json!({
-                "backend": format!("{:?}", info.backend),
-                "vendor": info.vendor,
-                "device": info.device,
-                "name": info.name,
-                "deviceType": format!("{:?}", info.device_type),
-                "driver": info.driver,
-                "driverInfo": info.driver_info,
-                "browserDeviceInfo": browser_device_info,
-            }))
-            .map_err(js_error)
+            crate::gpu_diagnostics::renderer_adapter_info(&self.device).map_err(js_error)
         }
 
         #[wasm_bindgen(js_name = gpuGeneration)]
@@ -1216,6 +1603,7 @@ mod wasm {
 
         #[wasm_bindgen(js_name = takeGpuDiagnosticJson)]
         pub fn take_gpu_diagnostic_json(&self) -> Result<Option<String>, JsValue> {
+            self.require_webgpu_device()?;
             self.gpu_diagnostics
                 .take_for_generation(self.gpu_generation)
                 .map(|diagnostic| serde_json::to_string(&diagnostic).map_err(js_error))
@@ -1224,6 +1612,19 @@ mod wasm {
 
         pub fn time(&self) -> f64 {
             self.mirror.frame().map_or(0.0, |frame| frame.time)
+        }
+
+        fn require_webgpu_device(&self) -> Result<(), JsValue> {
+            if self.backend == wgpu::Backend::BrowserWebGpu
+                && self
+                    .gpu_diagnostics
+                    .device_loss_pending(self.gpu_generation)
+            {
+                return Err(js_message(
+                    "WebGPU device lost; replace the retained receiver",
+                ));
+            }
+            Ok(())
         }
 
         #[wasm_bindgen(js_name = objectCount)]
@@ -1280,6 +1681,44 @@ mod wasm {
     }
 
     impl WasmRetainedExecutionCanvasRenderer {
+        fn prepare_working_profile(&mut self) -> Result<(), JsValue> {
+            let profile = {
+                let publication = self
+                    .mirror
+                    .renderer_publication(&self.pending_changes)
+                    .map_err(js_error)?;
+                self.view_output
+                    .prepare(
+                        &self.device,
+                        &publication,
+                        !self.mirror.inset_2d_views().is_empty(),
+                        [self.config.width, self.config.height],
+                    )
+                    .map_err(js_error)?
+            };
+            if profile == self.working_profile {
+                return Ok(());
+            }
+            let format = if profile == noon_core::ViewColorProfile::LinearHdr {
+                wgpu::TextureFormat::Rgba16Float
+            } else {
+                self.config.format
+            };
+            let mut gpu =
+                build_retained_gpu_state(&self.mirror, &self.device, &self.queue, format)?;
+            gpu.renderer
+                .copy_effect_program_cache_from(&self.device, &self.renderer);
+            self.effect_program_task.cancel();
+            self.preparer = gpu.preparer;
+            self.renderer = gpu.renderer;
+            self.text_gpu = gpu.text_gpu;
+            self.preloaded_geometry_count = gpu.preloaded_geometry_count;
+            self.preload_bytes_uploaded = gpu.preload_bytes_uploaded;
+            self.working_profile = profile;
+            self.pending_changes = FrameChanges::all();
+            self.update_camera()
+        }
+
         fn update_camera(&mut self) -> Result<(), JsValue> {
             if !self.drawable
                 || self.webgl_context_lifecycle.is_lost()
@@ -1308,6 +1747,54 @@ mod wasm {
                 .map_err(js_error)?;
             self.renderer.set_camera(&self.queue, camera);
             Ok(())
+        }
+    }
+
+    impl WasmRetainedExecutionCanvasRenderer {
+        fn prepare_video_frames(&self) -> Result<Option<Vec<BrowserRasterFrame>>, JsValue> {
+            let mut frames = Vec::new();
+            let mut ready = true;
+            let time = self.time();
+            for (origin, handle, video) in self.mirror.resources().video_rasters() {
+                let source = video.source();
+                let frame = if let Some(index) = video.timing().frame_at(source.frame_index(), time)
+                {
+                    let provider = self
+                        .video_frame_provider
+                        .as_ref()
+                        .ok_or_else(|| js_message("video raster requires a frame provider"))?;
+                    let asset_id = source
+                        .external_asset_id()
+                        .ok_or_else(|| js_message("video raster has no browser asset identity"))?;
+                    let clip = format!("{}:{}", origin.arena, origin.id);
+                    let pixels = provider.call4(
+                        &JsValue::NULL,
+                        &asset_id.into(),
+                        &clip.into(),
+                        &(index as u32).into(),
+                        &self.video_uses_cpu_pixels.into(),
+                    )?;
+                    if pixels.is_null() || pixels.is_undefined() {
+                        ready = false;
+                        continue;
+                    }
+                    let pixels = if self.video_uses_cpu_pixels {
+                        BrowserVideoPixels::Rgba(pixels.dyn_into::<js_sys::Uint8Array>().map_err(
+                            |_| js_message("software WebGPU requires RGBA video pixels"),
+                        )?)
+                    } else {
+                        let bitmap = pixels.dyn_into::<web_sys::ImageBitmap>().map_err(|_| {
+                            js_message("browser video provider returned an invalid bitmap")
+                        })?;
+                        BrowserVideoPixels::External(wgpu::ExternalImageSource::ImageBitmap(bitmap))
+                    };
+                    Some((index, pixels))
+                } else {
+                    None
+                };
+                frames.push((handle, frame));
+            }
+            Ok(ready.then_some(frames))
         }
     }
 
@@ -1390,6 +1877,16 @@ mod wasm {
             .get_default_config(&adapter, width, height)
             .ok_or_else(|| js_message("GPU adapter cannot present retained execution"))?;
         surface.configure(&device, &config);
+        let view_output = AuthoredViewOutput::new(
+            &adapter,
+            &device,
+            config.format,
+            if backend == wgpu::Backend::Gl {
+                OutputTransfer::SrgbStore
+            } else {
+                OutputTransfer::Direct
+            },
+        );
         Ok(InitializedGpu {
             instance,
             surface,
@@ -1397,6 +1894,7 @@ mod wasm {
             queue,
             backend,
             config,
+            view_output,
         })
     }
 

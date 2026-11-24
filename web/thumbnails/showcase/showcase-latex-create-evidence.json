@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "1400ea86e2d69e6b9aa04c39383163f0ab9a7520",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "1400ea86e2d69e6b9aa04c39383163f0ab9a7520",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "79d6387757b36d8fbbbc38e11d9022f02c68474347655e1f9f8045d123bf941d"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "d61f72af1889a81fc8deb94e4a32db0ebf4667d05770961ed8502927e1340d7b"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "61b5818f6e664b13ce4243b0a31ff5568c655a6d1a05d3208f214a3341e4e8eb"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "buildId": "e7786578dc25cc31026602963913fedd29ab530fa02b4a24c34f29f2227ff30a"
+  },
+  "posters": [
+    {
+      "id": "showcase-latex-create",
+      "captureBuildId": "e7786578dc25cc31026602963913fedd29ab530fa02b4a24c34f29f2227ff30a",
+      "sourceSha256": "bb59b97174b6332f33ac3c43384319d434f7435a5a1bbdb529e69fff9c010a40",
+      "thumbnailTime": 3.1,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 5074,
+        "pngSha256": "b70ca6abe301ec2695c7d7b643afff9275a5bf3fe63d009da57f033bc5fbc082",
+        "pixelSha256": "a8362f43d9d00cc2f2885fc3201450882b7b2570f1ee1f833bd3f4d0054fea28"
+      },
+      "sample": {
+        "requestedTime": 3.1,
+        "publishedTime": 3.1,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}

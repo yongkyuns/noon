@@ -163,7 +163,9 @@ fn lifecycle_churn_presence_transitions_keep_morphed_paths_resident_on_the_exact
     let mut preparer = FramePreparer::new();
 
     let initial_changes = instance.take_frame_changes();
-    let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);
+    let initial = preparer
+        .prepare_incremental(instance.frame(), &initial_changes)
+        .unwrap();
     assert_eq!(initial.path_ids.len(), SHAPE_COUNT);
     assert_eq!(initial.circle_ids.len(), 0);
     assert!(initial.stats.geometry_cache_misses > 0);
@@ -173,7 +175,9 @@ fn lifecycle_churn_presence_transitions_keep_morphed_paths_resident_on_the_exact
         let local_time = sample_index as f64 / SAMPLE_HZ - LIFECYCLE_START;
         instance.advance_to(local_time).unwrap();
         let changes = instance.take_frame_changes();
-        let prepared = preparer.prepare_incremental(instance.frame(), &changes);
+        let prepared = preparer
+            .prepare_incremental(instance.frame(), &changes)
+            .unwrap();
 
         let expected_paths = expected_path_count(sample_index);
         let expected_pulses = expected_pulse_count(sample_index);

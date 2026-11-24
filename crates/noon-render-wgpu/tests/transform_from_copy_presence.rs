@@ -82,7 +82,9 @@ fn copy_scene() -> SceneInstance {
 fn prepared_ids(instance: &mut SceneInstance, preparer: &mut FramePreparer, time: f64) -> Vec<u64> {
     instance.advance_to(time).expect("valid time");
     let changes = instance.take_frame_changes();
-    let prepared = preparer.prepare_incremental(instance.frame(), &changes);
+    let prepared = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
     prepared
         .ordered_render_batches()
         .filter(|ordered| ordered.batch.primitive == RenderPrimitive::Circle)

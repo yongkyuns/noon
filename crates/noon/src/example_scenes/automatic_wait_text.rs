@@ -14,44 +14,56 @@ pub struct AutomaticWaitText {
 impl LiveContinuation for AutomaticWaitText {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.wait_segment(0.5)
+                scene
+                    .live()
+                    .wait_segment(0.5)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             1 => {
                 let late_objects = [
-                    live.create_text(
-                        Text::new("LATE")
-                            .with_font_size(56.0)
-                            .move_to(Vec2::new(0.0, 2.0)),
-                    )
-                    .map_err(|error| error.to_string())?,
-                    live.create_typst(
-                        Typst::new("*Typst*")
-                            .with_font_size(48.0)
-                            .move_to(Vec2::new(0.0, 0.0)),
-                    )
-                    .map_err(|error| error.to_string())?,
-                    live.create_math_typst(
-                        MathTypst::new("x^2 + y^2")
-                            .with_font_size(48.0)
-                            .move_to(Vec2::new(0.0, -2.0)),
-                    )
-                    .map_err(|error| error.to_string())?,
+                    scene
+                        .text(
+                            Text::new("LATE")
+                                .with_font_size(56.0)
+                                .move_to(Vec2::new(0.0, 2.0)),
+                        )
+                        .map_err(|error| error.to_string())?,
+                    scene
+                        .typst(
+                            Typst::new("*Typst*")
+                                .with_font_size(48.0)
+                                .move_to(Vec2::new(0.0, 0.0)),
+                        )
+                        .map_err(|error| error.to_string())?,
+                    scene
+                        .math_typst(
+                            MathTypst::new("x^2 + y^2")
+                                .with_font_size(48.0)
+                                .move_to(Vec2::new(0.0, -2.0)),
+                        )
+                        .map_err(|error| error.to_string())?,
                 ];
                 for object in &late_objects {
-                    if live.contains(object).map_err(|error| error.to_string())? {
+                    if scene
+                        .contains_direct(object)
+                        .map_err(|error| error.to_string())?
+                    {
                         return Err(
                             "new live text objects must remain detached before FadeIn".into()
                         );
                     }
                 }
-                let segment =
-                    activate_parallel_fade(live, &late_objects, SemanticFadeDirection::In, 1.0)?;
+                let segment = activate_parallel_fade(
+                    &mut scene.live(),
+                    &late_objects,
+                    SemanticFadeDirection::In,
+                    1.0,
+                )?;
                 self.late_objects = Some(late_objects);
                 self.stage = 2;
                 Ok(ContinuationStep::Await(segment))
@@ -62,12 +74,15 @@ impl LiveContinuation for AutomaticWaitText {
                     .as_ref()
                     .ok_or("late text identities disappeared")?;
                 for object in objects {
-                    if !live.contains(object).map_err(|error| error.to_string())? {
+                    if !scene
+                        .contains_direct(object)
+                        .map_err(|error| error.to_string())?
+                    {
                         return Err("FadeIn did not admit every late text scene root".into());
                     }
                 }
                 self.stage = 3;
-                activate_parallel_fade(live, objects, SemanticFadeDirection::Out, 0.5)
+                activate_parallel_fade(&mut scene.live(), objects, SemanticFadeDirection::Out, 0.5)
                     .map(ContinuationStep::Await)
             }
             3 => {
@@ -76,12 +91,17 @@ impl LiveContinuation for AutomaticWaitText {
                     .as_ref()
                     .ok_or("late text identities disappeared")?;
                 for object in objects {
-                    if live.contains(object).map_err(|error| error.to_string())? {
+                    if scene
+                        .contains_direct(object)
+                        .map_err(|error| error.to_string())?
+                    {
                         return Err("FadeOut did not remove every late text scene root".into());
                     }
                 }
                 self.stage = 4;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }

@@ -9,9 +9,11 @@ import { fileURLToPath } from "node:url";
 import playwright from "playwright";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs } from "./manim-raster-support.mjs";
+import { MAX_VIDEO_FILE_BYTES } from "../web/video-source.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const USAGE = `Usage: node scripts/export-python-scene.mjs SOURCE.py CAPTURE_DIRECTORY [options]
+  --video INPUT.mp4      Local file for VideoSource.from_upload()
   --mp4 OUTPUT.mp4       Finalize the capture through the native MP4 sink
   --encoder PATH        Built encode_prepared_capture binary (otherwise cargo run)
   --overwrite           Explicitly replace an existing MP4 after successful export
@@ -24,9 +26,9 @@ const USAGE = `Usage: node scripts/export-python-scene.mjs SOURCE.py CAPTURE_DIR
   --hold SECONDS        Frozen terminal hold (default 0)
   --backend webgpu|webgl  Chromium software renderer (default webgpu)
   --transport transferable|shared  Worker transport (default transferable)
-The Python source must author a complete finite immutable scene. Live source
-continuations/callbacks and trailing waits beyond retained tracks/audio are
-outside this profile. CAPTURE_DIRECTORY must be new.`;
+Supports finite immutable scenes and deterministic completed play()/wait()
+history. Sources requiring observed callbacks or input are rejected.
+CAPTURE_DIRECTORY must be new.`;
 
 function integer(value, name, minimum = 0) {
   const number = Number(value);
@@ -52,7 +54,7 @@ function argumentsFor(argv) {
   const config = {
     sourcePath: path.resolve(argv[0]), directory: path.resolve(argv[1]),
     width: 640, height: 360, backend: "webgpu", transport: "transferable",
-    output: null, encoder: null, overwrite: false,
+    output: null, encoder: null, video: null, overwrite: false,
     frameOptions: {
       frame_rate: { numerator: 30, denominator: 1 }, start_frame: 0,
       stop: { kind: "source_end" }, max_frames: 18_000,
@@ -69,6 +71,7 @@ function argumentsFor(argv) {
     const value = argv[++index];
     if (value === undefined) throw new Error(`missing value for ${flag}`);
     switch (flag) {
+      case "--video": config.video = path.resolve(value); break;
       case "--mp4": config.output = path.resolve(value); break;
       case "--encoder": config.encoder = path.resolve(value); break;
       case "--width": config.width = integer(value, flag, 2); break;
@@ -132,6 +135,12 @@ async function run(config) {
   const sourceInfo = await stat(config.sourcePath);
   if (!sourceInfo.isFile() || sourceInfo.size > 8 * 1024 * 1024) throw new Error("Python source must be a regular file within 8 MiB");
   const source = await readFile(config.sourcePath, "utf8");
+  if (config.video !== null) {
+    const input = await stat(config.video);
+    if (!input.isFile() || input.size === 0 || input.size > MAX_VIDEO_FILE_BYTES) {
+      throw new Error("--video requires a nonempty regular MP4 file up to 128 MiB");
+    }
+  }
   await requireNew(config.directory);
   if (config.output !== null && !config.overwrite) await requireNew(config.output);
   const sourceHash = createHash("sha256").update(source).digest("hex");
@@ -149,11 +158,25 @@ async function run(config) {
   try {
     await mkdir(config.directory);
     directoryOwned = true;
-    browser = await playwright.chromium.launch({ channel: "chromium", headless: true, args: browserArgs(config.backend) });
+    browser = await playwright.chromium.launch({
+      channel: process.env.NOON_VIDEO_CHROMIUM_CHANNEL ?? "chromium",
+      headless: true,
+      args: browserArgs(config.backend),
+    });
     page = await browser.newPage({ viewport: { width: Math.max(config.width, 640), height: Math.max(config.height, 360) }, deviceScaleFactor: 1 });
     page.on("pageerror", error => errors.push(String(error)));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
     await page.goto(`${server.baseUrl}/web/execution-worker-smoke.html`, { waitUntil: "load" });
+    if (config.video !== null) {
+      await page.evaluate(() => {
+        const video = document.createElement("input");
+        video.type = "file";
+        video.id = "capture-video-file";
+        video.hidden = true;
+        document.body.append(video);
+      });
+      await page.locator("#capture-video-file").setInputFiles(config.video);
+    }
     const start = await deadline(page.evaluate(async ({ source, width, height, frameOptions, transport }) => {
       const { PythonAuthoringClient } = await import("./authoring-client.js");
       const { AuthoringExecutionClient } = await import("./authoring-execution-client.js");
@@ -164,25 +187,26 @@ async function run(config) {
       const execution = new AuthoringExecutionClient(canvas, { onError: error => { throw error; } });
       window.noonFiniteCapture = { authoring, execution };
       const runtimeBuildIdentity = await authoring.ready();
-      const authored = await authoring.run(source, {});
-      if (!authored.semanticExecution || authored.semanticExecution.continuationGeneration !== undefined) {
-        throw new Error("export requires a complete immutable Python scene without a live continuation");
-      }
-      await execution.startSemanticExecution(authored.semanticExecution, {
-        authoringClient: authoring, initiallyPaused: true, transportMode: transport,
-        loopDurationSeconds: Math.max(authored.duration, 1),
+      const input = document.querySelector("#capture-video-file");
+      const videoFile = input?.files[0] ?? null;
+      input?.remove();
+      let started = false;
+      const attach = async descriptor => {
+        await execution.startSemanticExecution(descriptor, {
+          authoringClient: authoring, initiallyPaused: true, transportMode: transport,
+        });
+        started = true;
+      };
+      const authored = await authoring.run(source, {}, {
+        videoFile, preparedPlayback: true, preparationLookaheadSeconds: null,
+        loopPlayback: false, historyExportOptions: frameOptions,
+        onSemanticContinuation: ({ semanticExecution }) => attach(semanticExecution),
       });
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (!started) await attach(authored.semanticExecution);
       const plan = await execution.beginFiniteExport(frameOptions);
-      if (authored.duration > plan.source_end) {
+      if (plan.source.kind === "immutable" && authored.duration > plan.source_end) {
         throw new Error(`finite export does not yet support a trailing authored interval beyond retained tracks/audio (${authored.duration} > ${plan.source_end} seconds)`);
       }
-      const copy = document.createElement("canvas");
-      copy.width = width; copy.height = height;
-      const context = copy.getContext("2d", { willReadFrequently: true, alpha: false });
-      if (context === null) throw new Error("RGBA readback canvas is unavailable");
-      window.noonFiniteCapture.copy = copy;
-      window.noonFiniteCapture.context = context;
       window.noonFiniteCapture.base64 = bytes => {
         let encoded = "";
         for (let first = 0; first < bytes.length; first += 32_768) {
@@ -208,7 +232,11 @@ async function run(config) {
     while (status.kind !== "complete") {
       if (interrupted) throw new Error("Python capture cancelled");
       assert.equal(status.kind, "needs_sample");
-      const sample = await deadline(page.evaluate(() => window.noonFiniteCapture.execution.sampleFiniteExport()), "renderer sample");
+      const sample = await deadline(page.evaluate(async () => {
+        const { execution, base64 } = window.noonFiniteCapture;
+        const { pixels, ...sample } = await execution.sampleFiniteExport();
+        return { ...sample, rgba: pixels === undefined ? null : base64(pixels) };
+      }), "renderer sample");
       assert.equal(sample.kind, "sample");
       const observation = sample.observation;
       manifestBytes += Buffer.byteLength(JSON.stringify(observation)) + 1;
@@ -216,19 +244,7 @@ async function run(config) {
       samples.push(observation);
       if (sample.frame !== null) {
         assert.equal(sample.frame.pts, frames);
-        const base64 = await deadline(page.evaluate(async ({ width, height }) => {
-          // The worker command already waited for the matching retained
-          // presentation. Let its OffscreenCanvas placeholder reach the page,
-          // then synchronously copy pixels before acknowledging that sample.
-          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-          const { execution, context, base64 } = window.noonFiniteCapture;
-          if (execution.canvas.width !== width || execution.canvas.height !== height) {
-            throw new Error("renderer dimensions changed during finite capture");
-          }
-          context.drawImage(execution.canvas, 0, 0);
-          return base64(context.getImageData(0, 0, width, height).data);
-        }, { width: config.width, height: config.height }), "RGBA readback");
-        const rgba = Buffer.from(base64, "base64");
+        const rgba = Buffer.from(sample.rgba, "base64");
         assert.equal(rgba.length, frameBytes);
         await framesFile.writeFile(rgba);
         frames += 1;
@@ -266,15 +282,11 @@ async function run(config) {
     }
     assert.deepEqual(errors, [], "browser capture errors");
     const manifest = {
-      format: "noon-prepared-capture-v1", width: config.width, height: config.height,
+      format: "noon-prepared-capture-v2", source: plan.source, width: config.width, height: config.height,
       source_end: plan.source_end, frame_options: plan.frame_options, audio: plan.audio, samples,
     };
     const json = JSON.stringify(manifest);
     assert.ok(Buffer.byteLength(json) <= 16 * 1024 * 1024);
-    // The importable manifest appears only after exact sampling, media writes
-    // and file closes. No partial capture can be mistaken for complete media.
-    await writeFile(path.join(config.directory, "capture.json"), `${json}\n`, { flag: "wx" });
-    captureComplete = true;
     const report = {
       source: config.sourcePath, source_sha256: sourceHash, capture: config.directory,
       renderer_backend: start.rendererBackend, transport: start.transportMode,
@@ -287,11 +299,16 @@ async function run(config) {
       execution.terminate(); authoring.terminate();
     });
     await browser.close(); browser = null;
+    if (interrupted) throw new Error("Python capture cancelled");
+    // Publish the importable manifest after both media files and the browser close.
+    await writeFile(path.join(config.directory, "capture.json"), `${json}\n`, { flag: "wx" });
+    if (interrupted) throw new Error("Python capture cancelled");
+    captureComplete = true;
     if (config.output !== null) {
       const args = [config.directory, config.output, ...(config.overwrite ? ["--overwrite"] : [])];
       const executable = config.encoder ?? "cargo";
       const nativeArgs = config.encoder === null
-        ? ["run", "--locked", "-p", "noon-export", "--example", "encode_prepared_capture", "--", ...args]
+        ? ["run", "--locked", "-p", "noon-export", "--no-default-features", "--example", "encode_prepared_capture", "--", ...args]
         : args;
       let stdout = "";
       await new Promise((resolve, reject) => {

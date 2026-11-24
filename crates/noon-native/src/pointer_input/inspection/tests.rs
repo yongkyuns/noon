@@ -1,8 +1,6 @@
 use super::*;
 use crate::NativeViewportConfig;
-use noon::{
-    AnimationOptions, ContinuationStep, IndicateOptions, LiveContinuation, LiveSession, Scene,
-};
+use noon::{AnimationOptions, ContinuationStep, IndicateOptions, LiveContinuation, Scene};
 use noon_core::Vec2;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton};
@@ -311,7 +309,11 @@ struct IndicateOnce {
 }
 impl LiveContinuation for IndicateOnce {
     type Error = noon::LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         if self.started {
             return Ok(ContinuationStep::Finished);
         }
@@ -328,19 +330,20 @@ impl LiveContinuation for IndicateOnce {
 
 #[test]
 fn live_indicate_and_endpoint_presentation_survive_independent_native_zoom() {
-    use crate::execution_source::LiveProgramExecutionSource;
+    use crate::execution_source::PlaybackExecutionSource;
     let mut scene = Scene::new();
     let mut circle = scene.circle(0.5).unwrap();
     circle.set_fill(0.0, 0.5, 1.0, 1.0).unwrap();
     scene.add(&circle).unwrap();
+    let opacity = scene.control_signal("opacity", 1.0).unwrap();
+    scene.bind_opacity(&circle, &opacity).unwrap();
     let program = scene
         .into_live_program(IndicateOnce {
             object: circle,
             started: false,
         })
         .unwrap();
-    let source =
-        LiveProgramExecutionSource::new(program, noon::RustHostCallbackTable::new()).unwrap();
+    let source = PlaybackExecutionSource::new(program, noon::RustHostCallbackTable::new()).unwrap();
     let mut app = NativeApp::from_source(
         Box::new(source),
         NativeViewportConfig {

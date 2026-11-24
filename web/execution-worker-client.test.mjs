@@ -10,7 +10,7 @@ globalThis.HTMLCanvasElement = FakeCanvas;
 globalThis.Worker = FakeWorker;
 globalThis.window = { devicePixelRatio: 1 };
 
-const { ExecutionWorkerClient, MAX_IN_FLIGHT_NATIVE_INPUTS } = await import("./execution-worker-client.js");
+const { ExecutionTransitionCancelled, ExecutionWorkerClient, MAX_IN_FLIGHT_NATIVE_INPUTS } = await import("./execution-worker-client.js");
 const { resetRenderHostSelectionForTests } = await import("./render-host-selection.js");
 
 
@@ -289,6 +289,153 @@ async function startClient(errors = []) {
   return { client, authoring, engine, render };
 }
 
+for (const explicit of [true, false]) test(`prepared reader replaces its receiver regardless of caller hint (${explicit})`, async () => {
+  const authoring = new FakeSemanticAuthoringClient();
+  authoring.preparedPlayback = true;
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("prepared-scene", authoring, {
+      transportMode: "transferable", continuationGeneration: 7,
+      initiallyPaused: explicit, ...(explicit ? { preparedPlayback: true } : {}),
+    });
+    const { render } = await finishStartup(starting, authoring, offset);
+    assert.equal(authoring.attachments[0].options.initiallyPaused, explicit);
+    assert.equal(authoring.attachments[0].options.continuationGeneration, 7);
+    const canvas = client.canvas;
+    for (const failedOwner of ["render", "engine"]) {
+      const nextOffset = FakeWorker.instances.length;
+      const restarting = client.restart({ failedOwner });
+      const recovered = await finishStartup(restarting, authoring, nextOffset);
+      assert.equal(recovered.ready.engine.preparedPlayback, true);
+      assert.equal(authoring.attachments.at(-1).options.replaceExistingEndpoint, true);
+      assert.equal(authoring.attachments.at(-1).options.continuationGeneration, undefined);
+    }
+    await assert.rejects(client.switchToSemanticExecution("prepared-scene", authoring), /historical player/);
+    assert.notEqual(client.canvas, canvas);
+    assert.equal(render.terminated, true);
+    assert.equal(authoring.attachments.length, 3);
+    assert.deepEqual(authoring.stoppedContexts, []);
+    assert.equal((await client.seek(12)).time, 12, "prepared readiness belongs to the reader, not the bootstrap loop duration");
+    for (const time of [-1, NaN, Infinity]) await assert.rejects(client.seek(time), /finite and non-negative/);
+    assert.equal((await client.pause()).playing, false, "the existing endpoint remains usable");
+  } finally { client.terminate(); }
+});
+
+test("late prepared source uses the allocated next session and a fresh renderer", async () => {
+  const authoring = new FakeSemanticAuthoringClient();
+  authoring.preparedPlayback = true;
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("prepared-scene", authoring, {
+      transportMode: "transferable", continuationGeneration: 7, preparedPlayback: true,
+    });
+    const { render, engine } = await finishStartup(starting, authoring, offset);
+    authoring.preparedPlayback = false;
+    const handoff = client.handoffPreparedSource(7);
+    const rebuild = await waitForRequest(render, "rebuild_engine");
+    assert.equal(authoring.attachments.length, 2);
+    const next = authoring.attachments[1];
+    assert.equal(next.contextId, "prepared-scene");
+    assert.equal(next.options.session, 2);
+    assert.equal(next.options.continuationGeneration, 7);
+    assert.equal(next.options.sourceHandoff, true);
+    assert.equal(engine.messages.some(message => message.type === "stop"), false);
+    replyRender(render, rebuild, "engine_rebuilt");
+    assert.equal((await handoff).session, 2);
+    assert.deepEqual(authoring.stoppedContexts, ["prepared-scene"]);
+    assert.deepEqual(authoring.releasedContexts, []);
+    await assert.rejects(client.handoffPreparedSource(7), /historical player/);
+    assert.equal((await client.pause()).playing, false);
+  } finally { client.terminate(); }
+});
+
+test("failed recovered renderer setup keeps the prepared reader available for retry", async () => {
+  const authoring = new FakeSemanticAuthoringClient(); authoring.preparedPlayback = true;
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  try {
+    let offset = FakeWorker.instances.length;
+    await finishStartup(client.startSemanticExecution("prepared", authoring, { preparedPlayback: true, transportMode: "transferable" }), authoring, offset);
+    offset = FakeWorker.instances.length;
+    const recovering = client.restart({ failedOwner: "render" });
+    const rejected = assert.rejects(recovering, /replacement surface failed/);
+    const render = await waitForNewWorker(offset, "noon-render");
+    replyRender(render, await waitForRequest(render, "prepare"), "prepared");
+    const starting = await waitForRequest(render, "start_engine");
+    render.emitMessage(renderMessage("error", { requestId: starting.requestId, message: "replacement surface failed" }));
+    await rejected;
+    assert.deepEqual(authoring.stoppedContexts, []);
+    assert.deepEqual(authoring.releasedContexts, []);
+    offset = FakeWorker.instances.length;
+    const retried = await finishStartup(client.restart({ failedOwner: "render" }), authoring, offset);
+    assert.equal(retried.ready.session, 3);
+    assert.equal(authoring.attachments.at(-1).options.replaceExistingEndpoint, true);
+  } finally { client.terminate(); }
+});
+
+for (const retire of [false, true]) test(`failed source handoff settles active queries and ignores retired errors (${retire})`, async () => {
+  const authoring = new FakeSemanticAuthoringClient(); authoring.preparedPlayback = true;
+  let rejectHandoff;
+  const errors = [];
+  const client = new ExecutionWorkerClient(new FakeCanvas(), {
+    onError: error => errors.push(error),
+    onSourceHandoff: () => new Promise((_, reject) => { rejectHandoff = reject; }),
+  });
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("prepared-scene", authoring, {
+      transportMode: "transferable", continuationGeneration: 7, preparedPlayback: true,
+    });
+    const { engine } = await finishStartup(starting, authoring, offset);
+    authoring.autoRespond = false;
+    const pending = client.state();
+    const rejected = assert.rejects(pending, retire ? /terminated/ : /source attachment failed/);
+    await Promise.resolve();
+    engine.emitMessage(engineMessage("source_handoff_required", { generation: 7 }));
+    if (retire) client.terminate();
+    rejectHandoff(new Error("source attachment failed"));
+    await rejected;
+    await Promise.resolve();
+    assert.equal(errors.length, retire ? 0 : 1);
+  } finally { client.terminate(); }
+});
+
+test("completed source reconciliation returns its held player before reattachment", async () => {
+  const authoring = new FakeSemanticAuthoringClient();
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("source", authoring, {
+      transportMode: "transferable", continuationGeneration: 7,
+    });
+    const { render } = await finishStartup(starting, authoring, offset);
+    const reconcile = client.switchToSemanticExecution("source", authoring, { loopDurationSeconds: 3 });
+    const rebuild = await waitForRequest(render, "rebuild_engine");
+    assert.equal(authoring.attachments[1].contextId, "source");
+    assert.equal(authoring.attachments[1].options.replaceExistingEndpoint, true);
+    assert.equal(authoring.attachments[1].options.continuationGeneration, undefined);
+    replyRender(render, rebuild, "engine_rebuilt");
+    assert.equal((await reconcile).session, 2);
+    assert.deepEqual(authoring.releasedContexts, []);
+  } finally { client.terminate(); }
+});
+
+test("invalid prepared startup profiles reject before allocating a renderer", async () => {
+  for (const options of [
+    { preparedPlayback: "true", continuationGeneration: 1 },
+    { preparedPlayback: true, continuationGeneration: 1, pacing: "external_samples" },
+  ]) {
+    const canvas = new FakeCanvas();
+    const client = new ExecutionWorkerClient(canvas);
+    const offset = FakeWorker.instances.length;
+    await assert.rejects(client.startSemanticExecution("scene", new FakeSemanticAuthoringClient(), options), /preparedPlayback|prepared playback/);
+    assert.equal(FakeWorker.instances.length, offset);
+    assert.equal(canvas.transfers, 0);
+    client.terminate();
+  }
+});
+
 function requestMessage(worker, type) {
   const entry = worker.messages.findLast(entry => (entry.message ?? entry).type === type);
   assert.ok(entry, `missing ${worker.name} ${type} request`);
@@ -554,6 +701,8 @@ test("drops duplicate issued responses but keeps owner-local future IDs fatal", 
   assert.equal(client.diagnostics.render.staleResponses, 0);
   assert.equal(errors.length, 1);
   assert.match(errors[0], /render: render worker returned unissued request ID 4/);
+  await assert.rejects(client.submitBrowserPointerInput(pointerInput), ExecutionTransitionCancelled);
+  assert.equal(errors.length, 1);
   client.terminate();
 });
 
@@ -1151,6 +1300,45 @@ test("a retired device unlock cannot resume its former worker", async t => {
   assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false);
 });
 
+test("a prepared prefix extension is forwarded without issuing a second playback start", async t => {
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  const anchors = [];
+  t.mock.method(WorkerAudioDevice.prototype, "extendAnchor", (anchor, session) => {
+    anchors.push({ anchor, session });
+    return true;
+  });
+  const { client, engine } = await startClient();
+  try {
+    const anchor = { session: 1, time: 0.2, playing: true, buffering: false, sampledEpochMs: 1234,
+      authorizedUntil: 0.75 };
+    engine.emitMessage(engineMessage("audio_state", { audioAnchor: anchor }));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(anchors, [{ anchor, session: 1 }]);
+    assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false,
+      "an append notification extends an existing device graph; it never starts playback");
+  } finally { client.terminate(); }
+});
+
+test("a queued playback activation unlock is synchronous and remains owner-qualified", async t => {
+  const { WorkerAudioDevice } = await import("./worker-audio-device.js");
+  let completeUnlock;
+  const unlock = new Promise(resolve => { completeUnlock = resolve; });
+  let unlockCalls = 0;
+  t.mock.method(WorkerAudioDevice.prototype, "unlock", () => {
+    unlockCalls += 1;
+    return unlock;
+  });
+  const { client, engine } = await startClient();
+  const activation = client.preparePlaybackActivation();
+  assert.equal(unlockCalls, 1, "the click's turn starts unlocking before any seek can be awaited");
+  const resumed = client.resume(activation);
+  assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false);
+  client.terminate();
+  completeUnlock();
+  await assert.rejects(resumed, error => error.name === "AbortError");
+  assert.equal(engine.messages.some(entry => (entry.message ?? entry).type === "resume"), false);
+});
+
 test("pause supersedes an outstanding device unlock without a delayed restart", async t => {
   const { WorkerAudioDevice } = await import("./worker-audio-device.js");
   let completeUnlock;
@@ -1557,3 +1745,21 @@ for (const later of [
     });
   }
 }
+
+test("completed prepared source can attach without an active source continuation", async () => {
+  const authoring = new FakeSemanticAuthoringClient(); authoring.preparedPlayback = true;
+  const client = new ExecutionWorkerClient(new FakeCanvas());
+  const offset = FakeWorker.instances.length;
+  try {
+    const starting = client.startSemanticExecution("static", authoring, {
+      preparedPlayback: true, initiallyPaused: true, transportMode: "transferable",
+    });
+    await finishStartup(starting, authoring, offset);
+    assert.equal(authoring.attachments[0].options.continuationGeneration, undefined);
+    assert.equal(authoring.attachments[0].options.initiallyPaused, true);
+    const recoveryOffset = FakeWorker.instances.length;
+    const recovering = client.restart({ failedOwner: "render" });
+    await finishStartup(recovering, authoring, recoveryOffset);
+    assert.equal(authoring.attachments.at(-1).options.replaceExistingEndpoint, true);
+  } finally { client.terminate(); }
+});

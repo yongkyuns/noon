@@ -308,12 +308,15 @@ impl SemanticObjectRole {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SemanticObjectProperty {
     Presence,
+    /// Fraction of a retained vector path revealed in drawable-curve order.
+    Reveal,
     Translation,
     Scale,
     RotationZ,
     FillOpacity,
     StrokeOpacity,
     StrokeWidth,
+    Emission,
     ObjectOpacity,
 }
 
@@ -322,10 +325,12 @@ impl SemanticObjectProperty {
         match self {
             Self::Presence => SemanticSignalValueKind::Bool,
             Self::Translation | Self::Scale => SemanticSignalValueKind::Vec3,
-            Self::RotationZ
+            Self::Reveal
+            | Self::RotationZ
             | Self::FillOpacity
             | Self::StrokeOpacity
             | Self::StrokeWidth
+            | Self::Emission
             | Self::ObjectOpacity => SemanticSignalValueKind::Scalar,
         }
     }
@@ -391,6 +396,7 @@ pub struct SemanticObjectState {
     pub sheen_direction: crate::SemanticSheenDirection,
     presentation: SemanticPresentation,
     role: SemanticObjectRole,
+    view_color_profile: crate::ViewColorProfile,
     // Numeric inputs are only present on DecimalNumber objects. Keep ordinary
     // semantic objects to one optional pointer rather than embedding the
     // metadata payload in every authored object state.
@@ -405,6 +411,7 @@ pub struct SemanticObjectState {
     /// invocation; this declaration is only the language-neutral trigger/action.
     /// Unbound objects pay one pointer, with allocation only for declared actions.
     click_action: Option<Arc<SemanticClickAction>>,
+    viewer_draggable: bool,
     /// Camera projection, non-default material, and non-default composition
     /// domain share one optional immutable payload. Ordinary 2D objects keep no
     /// spatial metadata allocation.
@@ -558,11 +565,13 @@ impl SemanticObjectState {
             sheen_direction: crate::SemanticSheenDirection::DEFAULT,
             presentation: SemanticPresentation::default(),
             role: SemanticObjectRole::default(),
+            view_color_profile: crate::ViewColorProfile::Compatibility,
             decimal_number: None,
             text_presentation_baseline: None,
             bar_metadata: None,
             signal_bindings: Vec::new(),
             click_action: None,
+            viewer_draggable: false,
             spatial_properties: None,
         }
     }
@@ -582,6 +591,8 @@ impl SemanticObjectState {
             sheen_direction: target.sheen_direction,
             presentation: self.presentation,
             role: self.role,
+            // Camera/view meaning stays with the receiver, like its role.
+            view_color_profile: self.view_color_profile,
             // Manim become replaces geometry and paint, not the receiver's
             // number or formatting inputs. Explicit set_value changes those.
             decimal_number: self.decimal_number.clone(),
@@ -589,6 +600,7 @@ impl SemanticObjectState {
             bar_metadata: self.bar_metadata.clone(),
             signal_bindings: self.signal_bindings.clone(),
             click_action: self.click_action.clone(),
+            viewer_draggable: self.viewer_draggable,
             spatial_properties: self.spatial_properties.clone(),
         };
         // Visual copy may replace a camera pose, so retain its projection
@@ -597,6 +609,14 @@ impl SemanticObjectState {
             copied.set_transform(target.transform);
         }
         copied
+    }
+
+    pub const fn viewer_draggable(&self) -> bool {
+        self.viewer_draggable
+    }
+
+    pub(crate) fn set_viewer_draggable(&mut self, enabled: bool) {
+        self.viewer_draggable = enabled;
     }
 
     pub const fn presentation(&self) -> SemanticPresentation {
@@ -623,12 +643,30 @@ impl SemanticObjectState {
         self.presentation.insertion_order
     }
 
+    /// A copied animation endpoint has its own store-assigned painter tie-break.
+    pub fn matches_authored_state_of(&self, source: &Self) -> bool {
+        let mut candidate = self.clone();
+        candidate.presentation.insertion_order = source.presentation.insertion_order;
+        &candidate == source
+    }
+
+    pub const fn view_color_profile(&self) -> crate::ViewColorProfile {
+        self.view_color_profile
+    }
+
+    pub(crate) fn set_view_color_profile(&mut self, profile: crate::ViewColorProfile) {
+        self.view_color_profile = profile;
+    }
+
     pub const fn role(&self) -> SemanticObjectRole {
         self.role
     }
 
     pub fn set_role(&mut self, role: SemanticObjectRole) {
         self.role = role;
+        if role != SemanticObjectRole::Camera2D {
+            self.view_color_profile = crate::ViewColorProfile::Compatibility;
+        }
     }
 
     pub fn camera_projection(&self) -> Option<SemanticProjection3D> {
@@ -1104,37 +1142,99 @@ impl std::fmt::Display for SemanticCameraDeclarationError {
 }
 impl std::error::Error for SemanticCameraDeclarationError {}
 
+/// Immutable derived inputs of one composed source. Semantic family membership
+/// remains in the store; these are existing execution identities in painter order.
+/// The compiler validates isolation/containment before publishing this plan.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposedSource {
+    members: Box<[crate::ObjectId]>,
+    parent_scope: Option<crate::ObjectId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposedSourceError {
+    Empty,
+    Duplicate(crate::ObjectId),
+    ParentIsMember(crate::ObjectId),
+}
+
+impl std::fmt::Display for ComposedSourceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid composed source: {self:?}")
+    }
+}
+impl std::error::Error for ComposedSourceError {}
+
+impl ComposedSource {
+    pub fn new(
+        members: impl IntoIterator<Item = crate::ObjectId>,
+        parent_scope: Option<crate::ObjectId>,
+    ) -> Result<Self, ComposedSourceError> {
+        let members = members.into_iter().collect::<Box<[_]>>();
+        if members.is_empty() {
+            return Err(ComposedSourceError::Empty);
+        }
+        let mut seen = std::collections::HashSet::with_capacity(members.len());
+        for &member in &members {
+            if !seen.insert(member) {
+                return Err(ComposedSourceError::Duplicate(member));
+            }
+        }
+        if let Some(parent) = parent_scope.filter(|parent| seen.contains(parent)) {
+            return Err(ComposedSourceError::ParentIsMember(parent));
+        }
+        Ok(Self {
+            members,
+            parent_scope,
+        })
+    }
+    pub fn members(&self) -> &[crate::ObjectId] {
+        &self.members
+    }
+    pub const fn parent_scope(&self) -> Option<crate::ObjectId> {
+        self.parent_scope
+    }
+}
+
 /// Renderer-independent lowered content referenced by one compiled object slot.
-///
-/// The execution plan and runtime carry this same payload so geometry and text
-/// share identity, ordering, timeline evaluation, and incremental invalidation.
-/// Heavy text stays behind its immutable resource handle.
+/// Execution and runtime share this payload and immutable resource references.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ObjectContentRef {
     Geometry(GeometryRef),
     Text(TextResourceHandle),
     Image(crate::RasterImageContentRef),
+    /// Non-drawable execution target for a composed effect scope. This is a
+    /// derived capture plan, never authored geometry or a second scene graph.
+    Composed(Arc<ComposedSource>),
 }
 
 impl ObjectContentRef {
     pub const fn image(&self) -> Option<crate::RasterImageContentRef> {
         match self {
             Self::Image(image) => Some(*image),
-            Self::Geometry(_) | Self::Text(_) => None,
+            Self::Geometry(_) | Self::Text(_) | Self::Composed(_) => None,
         }
     }
 
     pub fn geometry(&self) -> Option<&GeometryRef> {
         match self {
             Self::Geometry(geometry) => Some(geometry),
-            Self::Text(_) | Self::Image(_) => None,
+            Self::Text(_) | Self::Image(_) | Self::Composed(_) => None,
         }
     }
 
     pub const fn text(&self) -> Option<TextResourceHandle> {
         match self {
-            Self::Geometry(_) | Self::Image(_) => None,
+            Self::Geometry(_) | Self::Image(_) | Self::Composed(_) => None,
             Self::Text(handle) => Some(*handle),
+        }
+    }
+
+    pub fn composed_source(&self) -> Option<&ComposedSource> {
+        if let Self::Composed(source) = self {
+            Some(source)
+        } else {
+            None
         }
     }
 }
@@ -1161,6 +1261,39 @@ impl From<TextResourceHandle> for ObjectContentRef {
 mod tests {
     use super::*;
     use crate::{Color, GeometryResourceArena, SemanticVec3, TextResourceId, Vec2, VectorPath};
+
+    #[test]
+    fn composed_execution_content_has_no_fabricated_drawable_or_duplicate_input() {
+        use crate::ObjectId;
+        let a = ObjectId::new(7);
+        let b = ObjectId::new((1_u64 << 32) | 7);
+        let parent = ObjectId::new(12);
+        assert_eq!(
+            ComposedSource::new([], None),
+            Err(ComposedSourceError::Empty)
+        );
+        assert_eq!(
+            ComposedSource::new([a, a], None),
+            Err(ComposedSourceError::Duplicate(a))
+        );
+        assert_eq!(
+            ComposedSource::new([a, b], Some(a)),
+            Err(ComposedSourceError::ParentIsMember(a))
+        );
+        let content = ObjectContentRef::Composed(Arc::new(
+            ComposedSource::new([a, b], Some(parent)).unwrap(),
+        ));
+        assert!(content.geometry().is_none());
+        assert!(content.text().is_none());
+        assert!(content.image().is_none());
+        let source = content.composed_source().unwrap();
+        assert_eq!(source.members(), &[a, b]);
+        assert_eq!(source.parent_scope(), Some(parent));
+        let members =
+            crate::RetainedAnimationMembers::resolve(&content, &crate::TextResourceArena::new())
+                .unwrap();
+        assert_eq!(members.member_count(), 0);
+    }
 
     #[test]
     fn numeric_metadata_is_an_optional_shared_pointer() {
@@ -1543,6 +1676,7 @@ mod tests {
             SemanticObjectProperty::FillOpacity,
             SemanticObjectProperty::StrokeOpacity,
             SemanticObjectProperty::StrokeWidth,
+            SemanticObjectProperty::Emission,
             SemanticObjectProperty::ObjectOpacity,
         ] {
             assert_eq!(property.value_kind(), SemanticSignalValueKind::Scalar);

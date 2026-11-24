@@ -7,6 +7,7 @@ import {
 import { replaceExecutionCanvas } from "./execution-canvas.js";
 import { MainThreadRenderWorker } from "./main-thread-render-worker.js";
 import { WorkerAudioDevice } from "./worker-audio-device.js";
+import { loadEmbeddedRuntimeBuild } from "./runtime-build-verifier.js";
 import {
   RENDER_HOST_MAIN_THREAD,
   RENDER_HOST_WORKER,
@@ -31,8 +32,8 @@ const LIFECYCLE_CANCELLED_MESSAGE =
 // Local lifecycle cancellation, never a remote callback/runtime error. Input
 // callers still receive rejection; DOM collectors can retire without an alert.
 export class ExecutionTransitionCancelled extends Error {
-  constructor() {
-    super("execution engine transitioning to semantic");
+  constructor(message = "execution engine transitioning to semantic") {
+    super(message);
   }
 }
 
@@ -77,16 +78,18 @@ export class ExecutionWorkerClient {
   #pendingSceneControl = null;
   #onError;
   #onRecoverableError;
+  #onSourceHandoff;
   #semanticAuthoringClient = null;
   #semanticContextId = null;
   #semanticCallbackSessionId = null;
   #semanticPacing = SEMANTIC_PACING_REALTIME;
+  #semanticPreparedPlayback = false;
   #fatalOwner = null;
   #lifecycleGeneration = 0;
   #staleWorkerEvents = { engine: 0, render: 0 };
   #staleResponses = { engine: 0, render: 0 };
 
-  constructor(canvas, { onError = null, onRecoverableError = null } = {}) {
+  constructor(canvas, { onError = null, onRecoverableError = null, onSourceHandoff = null } = {}) {
     if (!(canvas instanceof HTMLCanvasElement)) {
       throw new TypeError("ExecutionWorkerClient requires an HTMLCanvasElement");
     }
@@ -99,6 +102,8 @@ export class ExecutionWorkerClient {
     this.#canvas = canvas;
     this.#onError = onError;
     this.#onRecoverableError = onRecoverableError;
+    if (onSourceHandoff !== null && typeof onSourceHandoff !== "function") throw new TypeError("onSourceHandoff must be a function");
+    this.#onSourceHandoff = onSourceHandoff;
   }
 
   get canvas() {
@@ -130,6 +135,7 @@ export class ExecutionWorkerClient {
     {
       transportMode = selectExecutionTransportMode(),
       sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
+      connectRuntimeModule = undefined,
     } = {},
   ) {
     if (
@@ -166,12 +172,19 @@ export class ExecutionWorkerClient {
       const transferredCanvas = this.#canvas;
 
       let canvasTransferred = false;
+      let moduleChannel = null;
       try {
+        const sharedBuild = this.#renderHost === RENDER_HOST_MAIN_THREAD ? loadEmbeddedRuntimeBuild() : null;
+        const wasmModule = sharedBuild === null ? null : (await sharedBuild).wasmModule;
+        if (sharedBuild !== null) this.#assertLifecycleCurrent(generation);
+        if (this.#renderHost === RENDER_HOST_WORKER && connectRuntimeModule) {
+          moduleChannel = new MessageChannel();
+        }
         const offscreen = this.#canvas.transferControlToOffscreen();
         canvasTransferred = true;
         this.#renderWorker = this.#createRenderWorker();
         this.#attachCurrentWorkerEvents(this.#renderWorker, RENDER_CHANNEL, "render");
-        this.#renderPrepared = this.#request(
+        const renderPrepared = this.#request(
           this.#renderWorker,
           "render",
           renderEnvelope,
@@ -181,9 +194,15 @@ export class ExecutionWorkerClient {
             transportMode,
             width,
             height,
+            ...(wasmModule === null ? {} : { wasmModule }),
+            ...(moduleChannel === null ? {} : { wasmModulePort: moduleChannel.port2 }),
           },
-          [offscreen],
+          moduleChannel === null ? [offscreen] : [offscreen, moduleChannel.port2],
         );
+        this.#renderPrepared = moduleChannel === null ? renderPrepared : Promise.all([
+          renderPrepared,
+          connectRuntimeModule(moduleChannel.port1),
+        ]).then(([render]) => render);
         if (this.#preparedStartReservation === reservation) {
           this.#preparedStartReservation = null;
         }
@@ -198,6 +217,9 @@ export class ExecutionWorkerClient {
           );
         }
         throw error;
+      } finally {
+        moduleChannel?.port1.close();
+        moduleChannel?.port2.close();
       }
     } finally {
       if (this.#preparedStartReservation === reservation) {
@@ -221,16 +243,24 @@ export class ExecutionWorkerClient {
     );
     const initiallyPaused = validateInitiallyPaused(options.initiallyPaused);
     const pacing = validateSemanticPacing(options.pacing);
+    const preparedPlayback = options.preparedPlayback ?? false;
+    const replaceExistingEndpoint = options.replaceExistingEndpoint ?? false;
+    if (typeof replaceExistingEndpoint !== "boolean") throw new TypeError("replaceExistingEndpoint must be a boolean");
+    if (typeof preparedPlayback !== "boolean") throw new TypeError("preparedPlayback must be a boolean");
+    if (preparedPlayback && pacing !== SEMANTIC_PACING_REALTIME) {
+      throw new Error("prepared playback requires realtime pacing");
+    }
     const initialPointerView = options.initialPointerView === undefined ? undefined
       : validatedBrowserPointerView(options.initialPointerView.revision, options.initialPointerView.width, options.initialPointerView.height);
-    if (initiallyPaused && continuationGeneration !== null) {
-      throw new Error("source-owned semantic continuations cannot start paused");
-    }
     if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && continuationGeneration === null) {
       throw new Error("external sample pacing requires a source-owned semantic continuation");
     }
     if (this.#renderWorker === null) {
-      await this.prepare({ transportMode, sharedSlotCapacity });
+      await this.prepare({
+        transportMode,
+        sharedSlotCapacity,
+        connectRuntimeModule: authoringClient.sendRuntimeModule?.bind(authoringClient),
+      });
     }
     if (transportMode !== this.#transportMode) {
       throw new Error("prepared render transport mode does not match semantic execution startup");
@@ -247,6 +277,8 @@ export class ExecutionWorkerClient {
       initiallyPaused,
       pacing,
       initialPointerView,
+      preparedPlayback,
+      replaceExistingEndpoint,
     );
   }
 
@@ -259,6 +291,8 @@ export class ExecutionWorkerClient {
     initiallyPaused,
     pacing,
     initialPointerView,
+    preparedPlayback,
+    replaceExistingEndpoint,
   ) {
     if (this.#engineWorker !== null || this.#preparedStartReservation !== null) {
       throw new Error("ExecutionWorkerClient is already started");
@@ -302,7 +336,7 @@ export class ExecutionWorkerClient {
           continuationGeneration,
           initiallyPaused,
           pacing,
-        ), initialPointerView },
+        ), initialPointerView, replaceExistingEndpoint },
       );
       this.#ready = Promise.all([engineReady, renderReady, attached]).then(
         async ([engine, renderResult]) => {
@@ -314,19 +348,25 @@ export class ExecutionWorkerClient {
       );
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
+      if (preparedPlayback && ready.engine.preparedPlayback !== true && ready.engine.sourceExecution !== "observed") {
+        throw new Error("playback startup attached neither a reader nor its observed source");
+      }
       this.#rememberPlaybackDuration(ready.engine, loopDurationSeconds);
       this.#renderPrepared = null;
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
       this.#semanticCallbackSessionId = callbackSessionId;
       this.#semanticPacing = pacing;
+      // The source owner chooses the profile. Caller options only request
+      // admission and cannot hide a prepared reader from recovery guards.
+      this.#semanticPreparedPlayback = ready.engine.preparedPlayback === true;
       this.#playing = ready.engine.playing ?? !initiallyPaused;
       this.#fatalOwner = null;
       return ready;
     } catch (error) {
       this.#assertLifecycleCurrent(generation);
       this.#renderPrepared = null;
-      this.#rollbackFailedStart(error, true);
+      this.#rollbackFailedStart(error, true, replaceExistingEndpoint && this.#semanticPreparedPlayback);
       throw error;
     } finally {
       if (this.#preparedStartReservation === reservation) {
@@ -384,6 +424,8 @@ export class ExecutionWorkerClient {
       callbackSessionId: validateOptionalCallbackSessionId(callbackSessionId),
       continuationGeneration: validateOptionalContinuationGeneration(continuationGeneration),
       renderCommand: "rebuild_engine",
+      replaceExistingEndpoint: continuationGeneration === null &&
+        contextId === this.#semanticContextId && authoringClient === this.#semanticAuthoringClient,
     });
   }
 
@@ -408,6 +450,7 @@ export class ExecutionWorkerClient {
     this.#semanticContextId = null;
     this.#semanticCallbackSessionId = null;
     this.#ready = null;
+    this.#semanticPreparedPlayback = false;
     this.#playing = false;
     this.#pointerView = null;
     this.#pointerViewRegistration = null;
@@ -425,12 +468,16 @@ export class ExecutionWorkerClient {
       continuationGeneration = null,
       renderCommand,
       replaceExistingEndpoint = false,
+      sourceHandoff = false,
     },
   ) {
     // Explicit Run may have released its source before authoring in the same
     // store. The retained renderer/canvas can accept the ordinary new endpoint.
     if (this.#renderWorker === null || this.#session === 0) {
       throw new Error("ExecutionWorkerClient has not been started");
+    }
+    if (this.#semanticPreparedPlayback && !sourceHandoff) {
+      throw new Error("prepared playback retains its historical player; use a fresh Run to replace it");
     }
     validateSemanticContextId(contextId);
     validateSemanticAuthoringClient(authoringClient);
@@ -442,7 +489,7 @@ export class ExecutionWorkerClient {
     const duration = loopDurationSeconds ?? this.#loopDurationSeconds;
     const oldEngine = this.#engineWorker;
     this.#invalidateSceneControl();
-    if (this.#audioDevice.available) {
+    if (!sourceHandoff && this.#audioDevice.available) {
       this.#audioControlGeneration += 1;
       this.#audioDevice.stop();
       this.#rememberPlaying(await this.#requestEngine("pause", {}));
@@ -467,7 +514,7 @@ export class ExecutionWorkerClient {
           callbackSessionId,
           continuationGeneration,
           continuationGeneration === null ? !wasPlaying : false,
-        ), replaceExistingEndpoint },
+        ), replaceExistingEndpoint, ...(sourceHandoff ? { sourceHandoff: true } : {}) },
       );
       [candidateReady] = await Promise.all([candidateReadyPromise, attached]);
       this.#assertLifecycleCurrent(generation);
@@ -520,6 +567,7 @@ export class ExecutionWorkerClient {
       const ready = await this.#ready;
       this.#assertLifecycleCurrent(generation);
       this.#playing = candidateReady.playing ?? (continuationGeneration === null ? wasPlaying : true);
+      this.#semanticPreparedPlayback = candidateReady.preparedPlayback === true;
       this.#semanticAuthoringClient = authoringClient;
       this.#semanticContextId = contextId;
       this.#semanticCallbackSessionId = callbackSessionId;
@@ -561,14 +609,40 @@ export class ExecutionWorkerClient {
     return this.#audioCommand("pause", {});
   }
 
-  async resume() {
-    // Web Audio resume must be initiated in the click's activation turn.
-    const unlocked = this.#audioDevice.unlock();
+  preparePlaybackActivation() {
+    // Start the device unlock synchronously in the user activation turn. Store
+    // only its result plus the worker owner identity for a later queued resume.
+    const session = this.#session;
+    const lifecycle = this.#lifecycleGeneration;
+    const unlock = this.#audioDevice.unlock().then(
+      () => ({ ok: true }), error => ({ error }),
+    );
+    return Object.freeze({ session, lifecycle, unlock });
+  }
+
+  async resume(activation = null) {
+    let unlocked;
+    if (activation === null) {
+      // Direct callers retain the same activation-turn contract.
+      unlocked = this.#audioDevice.unlock();
+    } else {
+      if (activation.session !== this.#session || activation.lifecycle !== this.#lifecycleGeneration ||
+          !(activation.unlock instanceof Promise)) {
+        const error = new Error("audio playback activation belongs to a retired execution");
+        error.name = "AbortError";
+        throw error;
+      }
+      unlocked = activation.unlock.then(result => {
+        if (result.error !== undefined) throw result.error;
+      });
+    }
     return this.#audioCommand("resume", {}, unlocked);
   }
 
   async seek(timeSeconds) {
-    const time = validateSeekTimeSeconds(timeSeconds, this.#loopDurationSeconds);
+    // A prepared source has an open future. Its Rust reader alone validates
+    // readiness; the bootstrap segment horizon is not a playback duration.
+    const time = validateSeekTimeSeconds(timeSeconds, this.#semanticPreparedPlayback ? null : this.#loopDurationSeconds);
     return this.#audioCommand("seek", { time });
   }
 
@@ -598,6 +672,11 @@ export class ExecutionWorkerClient {
     this.#requireStarted();
     const result = await this.#requestEngine("debug_frame", {});
     return result.debugFrame;
+  }
+
+  async feedbackTargets(query) {
+    this.#requireStarted();
+    return (await this.#requestEngine("feedback_targets", { query })).feedbackTargets;
   }
 
   async sampleToAuthoredTime(timeSeconds, { stopAtSourceCompletion = false, collectTimings = false } = {}) {
@@ -663,7 +742,13 @@ export class ExecutionWorkerClient {
   }
 
   async sampleFiniteExport() {
-    return (await this.#requestEngine("sample_finite_export", {})).finiteExport;
+    const { finiteExport, presentationReceipt } = await this.#requestEngine("sample_finite_export", {});
+    if (finiteExport.frame === null) return finiteExport;
+    if (presentationReceipt == null) throw new Error("finite export sample has no renderer receipt");
+    const { pixels } = await this.#requestRender("capture_export_frame", {
+      publication: { session: presentationReceipt.session, sequence: presentationReceipt.sequence },
+    });
+    return { ...finiteExport, pixels };
   }
 
   async acknowledgeFiniteExport(observation) {
@@ -718,13 +803,13 @@ export class ExecutionWorkerClient {
   }
 
   // Session/editor policy, ordered with pointer input and never auto-replayed.
-  async setPointerFillSelection(maxMovement) {
+  async setPointerFillSelection(maxMovement, viewerDefault = false) {
     this.#requireStarted();
     if (maxMovement !== null &&
         (typeof maxMovement !== "number" || !Number.isFinite(maxMovement) || maxMovement < 0)) {
       throw new TypeError("selection tolerance must be a finite nonnegative number or null");
     }
-    return this.#requestNativeInput("pointer_fill_selection", { maxMovement });
+    return this.#requestNativeInput("pointer_fill_selection", { maxMovement, ...(viewerDefault ? { viewerDefault } : {}) });
   }
 
   // Platform view registration is not proof of presentation. Retire the locally
@@ -782,6 +867,7 @@ export class ExecutionWorkerClient {
 
   // Pin the last observed successful presentation at collection, before readiness
   // or delivery yields. A later acknowledgement never relabels this occurrence.
+  // Coalesced motion shares that receipt and one reservation for all samples.
   async submitBrowserPointerInput(input) {
     this.#requireStarted();
     if (["press", "cancel", "capture_lost", "focus_lost"].includes(input.kind)) {
@@ -916,6 +1002,11 @@ export class ExecutionWorkerClient {
     });
   }
 
+  async moveSpatialInspection(input) {
+    this.#requireStarted();
+    return this.#requestNativeInput("spatial_inspection", { input });
+  }
+
   // Forward one normalized semantic native-event source to the canonical session.
   async emitNativeEvent(source) {
     this.#requireStarted();
@@ -965,10 +1056,20 @@ export class ExecutionWorkerClient {
     if (failedOwner !== null && failedOwner !== "engine" && failedOwner !== "render") {
       throw new TypeError(`unsupported failed execution owner ${failedOwner}`);
     }
-    if (failedOwner === "engine" && this.#renderWorker !== null) {
+    if (!this.#semanticPreparedPlayback && failedOwner === "engine" && this.#renderWorker !== null) {
       return this.#restartEngine();
     }
     return this.#restartAll();
+  }
+
+  async handoffPreparedSource(generation) {
+    if (!this.#semanticPreparedPlayback || !Number.isSafeInteger(generation) || generation <= 0) {
+      throw new Error("source handoff requires its active historical player and continuation");
+    }
+    return this.#transitionSemanticExecution(this.#semanticContextId, this.#semanticAuthoringClient, {
+      loopDurationSeconds: this.#loopDurationSeconds, callbackSessionId: this.#semanticCallbackSessionId,
+      continuationGeneration: generation, renderCommand: "rebuild_engine", sourceHandoff: true,
+    });
   }
 
   async #restartEngine() {
@@ -992,6 +1093,7 @@ export class ExecutionWorkerClient {
     const semanticAuthoringClient = this.#semanticAuthoringClient;
     const semanticContextId = this.#semanticContextId;
     const semanticCallbackSessionId = this.#semanticCallbackSessionId;
+    const preparedPlayback = this.#semanticPreparedPlayback;
 
     if (this.#engineWorker !== null || this.#renderWorker !== null) {
       this.terminate({ preserveHostConfiguration: true });
@@ -1003,6 +1105,8 @@ export class ExecutionWorkerClient {
       sharedSlotCapacity,
       callbackSessionId: semanticCallbackSessionId,
       initiallyPaused: !wasPlaying,
+      preparedPlayback,
+      replaceExistingEndpoint: preparedPlayback,
     });
     this.#fatalOwner = null;
     return ready;
@@ -1020,11 +1124,13 @@ export class ExecutionWorkerClient {
     this.#candidateEngineReject = null;
     closeEndpoint(this.#candidateEngineWorker);
     this.#candidateEngineWorker = null;
-    retireSemanticEndpoint(this.#engineWorker);
+    if (preserveHostConfiguration && this.#semanticPreparedPlayback) closeEndpoint(this.#engineWorker);
+    else retireSemanticEndpoint(this.#engineWorker);
     if (!preserveHostConfiguration) {
       void releaseSemanticContext(
         this.#semanticAuthoringClient,
         this.#semanticContextId,
+        this.#semanticPreparedPlayback,
       );
     }
     this.#renderWorker?.terminate();
@@ -1051,6 +1157,7 @@ export class ExecutionWorkerClient {
       this.#semanticContextId = null;
       this.#semanticCallbackSessionId = null;
       this.#semanticPacing = SEMANTIC_PACING_REALTIME;
+      this.#semanticPreparedPlayback = false;
     }
     this.#fatalOwner = null;
   }
@@ -1061,7 +1168,7 @@ export class ExecutionWorkerClient {
   async #requestNativeInput(type, payload) {
     this.#requireStarted();
     if (this.#candidateEngineWorker !== null || this.#fatalOwner !== null) {
-      throw new Error("native input requires a stable, non-transitioning execution endpoint");
+      throw new ExecutionTransitionCancelled("native input requires a stable, non-transitioning execution endpoint");
     }
     if (this.#nativeInputsInFlight >= MAX_IN_FLIGHT_NATIVE_INPUTS) {
       throw new Error("native input in-flight capacity is full; wait for acknowledgement before retrying");
@@ -1077,7 +1184,7 @@ export class ExecutionWorkerClient {
       if (worker !== this.#engineWorker || ready !== this.#ready ||
           generation !== this.#lifecycleGeneration ||
           this.#candidateEngineWorker !== null || this.#fatalOwner !== null) {
-        throw new Error("native input belongs to a retired or transitioning execution endpoint");
+        throw new ExecutionTransitionCancelled("native input belongs to a retired or transitioning execution endpoint");
       }
       return await this.#request(worker, "engine", engineEnvelope, type, snapshot);
     } finally {
@@ -1163,6 +1270,20 @@ export class ExecutionWorkerClient {
       const message = event.data;
       try {
         validateWorkerEnvelope(message, channel);
+        if (owner === "engine" && message.type === "source_handoff_required") {
+          if (!this.#semanticPreparedPlayback || !Number.isSafeInteger(message.generation) || message.generation <= 0) {
+            throw new Error("invalid source handoff notification");
+          }
+          const generation = this.#lifecycleGeneration;
+          const transition = this.#onSourceHandoff === null
+            ? this.handoffPreparedSource(message.generation) : this.#onSourceHandoff(message.generation);
+          void Promise.resolve(transition).catch(error => {
+            if (generation !== this.#lifecycleGeneration || this.#engineWorker === null) return;
+            this.#rejectOwner("engine", error);
+            this.#notifyError(error, "engine");
+          });
+          return;
+        }
         if (owner === "engine" && message.type === "audio_stopped") {
           this.#invalidateSceneControl();
           this.#audioControlGeneration += 1;
@@ -1170,9 +1291,17 @@ export class ExecutionWorkerClient {
           return;
         }
         if (owner === "engine" && message.type === "audio_state") {
-          // Unsolicited anchors can only retire naturally completed output.
-          if (message.audioAnchor?.session !== this.#session || message.audioAnchor?.playing !== false) {
-            throw new Error("invalid terminal worker audio state");
+          if (message.audioAnchor?.session !== this.#session) {
+            throw new Error("worker audio state belongs to a different playback session");
+          }
+          if (message.audioAnchor.playing === true) {
+            // Prefix growth can extend only an already-started, gesture-unlocked
+            // graph. It cannot start playback or revive a retired device.
+            this.#audioDevice.extendAnchor(message.audioAnchor, this.#session);
+            return;
+          }
+          if (message.audioAnchor.playing !== false) {
+            throw new Error("invalid worker audio state");
           }
           this.#audioDevice.pause();
           this.#playing = false;
@@ -1339,9 +1468,10 @@ export class ExecutionWorkerClient {
     }
   }
 
-  #rollbackFailedStart(error, replaceCanvas) {
+  #rollbackFailedStart(error, replaceCanvas, preservePreparedReceiver = false) {
     this.#retireAudio();
-    retireSemanticEndpoint(this.#engineWorker);
+    if (preservePreparedReceiver) closeEndpoint(this.#engineWorker);
+    else retireSemanticEndpoint(this.#engineWorker);
     this.#renderWorker?.terminate();
     this.#engineWorker = null;
     this.#renderWorker = null;
@@ -1451,6 +1581,9 @@ export class ExecutionWorkerClient {
   }
 
   #rememberPlaybackDuration(engine, requestedDuration) {
+    // Prepared readiness belongs to the reader; its current frontier is not
+    // a finite client seek bound.
+    if (engine.preparedPlayback === true) return;
     // Rust admits the finite endpoint. This is only the client's seek bound;
     // audio-device availability cannot change it. Ordinary looping playback
     // without a finite endpoint retains its explicitly requested duration.
@@ -1563,10 +1696,10 @@ function validateSemanticAuthoringClient(authoringClient) {
   }
 }
 
-async function releaseSemanticContext(authoringClient, contextId) {
+async function releaseSemanticContext(authoringClient, contextId, cancelActiveSource = false) {
   if (authoringClient === null || authoringClient === undefined || contextId === null) return;
   try {
-    await authoringClient.releaseSemanticExecution(contextId);
+    await authoringClient.releaseSemanticExecution(contextId, { cancelActiveSource });
   } catch (error) {
     console.warn(`[Noon execution] failed to release semantic context ${contextId}`, error);
   }
@@ -1663,7 +1796,7 @@ function validateSeekTimeSeconds(timeSeconds, loopDurationSeconds) {
   if (!Number.isFinite(timeSeconds) || timeSeconds < 0) {
     throw new TypeError("playback seek time must be finite and non-negative");
   }
-  if (timeSeconds > loopDurationSeconds) {
+  if (loopDurationSeconds !== null && timeSeconds > loopDurationSeconds) {
     throw new RangeError(
       `playback seek time ${timeSeconds} exceeds loop duration ${loopDurationSeconds}`,
     );

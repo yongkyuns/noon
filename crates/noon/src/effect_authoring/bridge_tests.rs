@@ -185,7 +185,7 @@ fn prepared_existing_glow_updates_merge_fields_without_mutating_either_authority
     assert_eq!(effect.attachment, handle.node_id());
     assert_eq!(effect.definition.as_glow().unwrap().intensity(), 1.5);
     assert_eq!(effect.definition.as_glow().unwrap().color(), Color::BLUE);
-    assert_eq!(effect.definition.radius(), Pixels(3.25).into());
+    assert_eq!(effect.definition.radius(), Some(Pixels(3.25).into()));
     assert_eq!(semantic.store().scene_revision(), revision);
     assert_eq!(original.definition.as_glow().unwrap().intensity(), 0.4);
     compiled

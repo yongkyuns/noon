@@ -1,19 +1,27 @@
 [package]
 name = "noon-web"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
 description = "Browser-facing persistent runtime and live patch control for Noon"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["renderer"]
+wgsl-effects = ["noon/wgsl-effects"]
+default = ["renderer", "wgsl-effects", "prepared-prefix"]
 # Explicit release-profile qualification only; production builds omit the fixtures.
-renderer-smoke = ["renderer"]
+renderer-smoke = ["renderer", "wgsl-effects"]
+# Experimental synchronous Rust source stacks require a JSPI-capable browser.
+blocking-scene = ["renderer", "web-sys/AbortController", "web-sys/AbortSignal"]
 # Opt-in typed replay fixtures for optimized qualification, not production exports.
 replay-smoke = []
+# Bounded incremental history; source/runtime admission controls its use.
+prepared-prefix = ["noon/prepared-prefix"]
 renderer = [
     "dep:noon-render-wgpu",
     "dep:wgpu",
@@ -21,20 +29,20 @@ renderer = [
 
 [dependencies]
 ciborium = "0.2"
-noon = { path = "../noon", features = ["diagnostics", "latex"] }
-noon-compile = { path = "../noon-compile" }
-noon-core = { path = "../noon-core" }
-noon-geometry = { path = "../noon-geometry" }
-noon-runtime = { path = "../noon-runtime" }
+noon = { version = "0.1.0", path = "../noon", features = ["diagnostics", "latex"] }
+noon-compile = { version = "0.1.0", path = "../noon-compile" }
+noon-core = { version = "0.1.0", path = "../noon-core" }
+noon-geometry = { version = "0.1.0", path = "../noon-geometry" }
+noon-runtime = { version = "0.1.0", path = "../noon-runtime" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
-noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["web"], optional = true }
+noon-render-wgpu = { version = "0.1.0", path = "../noon-render-wgpu", default-features = false, features = ["web"], optional = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["console", "AudioBuffer", "AudioBufferSourceNode", "AudioContext", "AudioContextState", "AudioDestinationNode", "AudioNode", "AudioParam", "AudioScheduledSourceNode", "BaseAudioContext", "GainNode", "Document", "Event", "EventTarget", "HtmlCanvasElement", "OffscreenCanvas", "Performance", "WebGl2RenderingContext", "WebGlContextAttributes", "Window"] }
+web-sys = { version = "0.3", features = ["console", "AudioBuffer", "AudioBufferSourceNode", "AudioContext", "AudioContextState", "AudioDestinationNode", "AudioNode", "AudioParam", "AudioScheduledSourceNode", "BaseAudioContext", "GainNode", "Document", "Event", "EventTarget", "HtmlCanvasElement", "ImageBitmap", "OffscreenCanvas", "Performance", "WebGl2RenderingContext", "WebGlContextAttributes", "Window"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "webgpu", "webgl"], optional = true }
 
 [dev-dependencies]

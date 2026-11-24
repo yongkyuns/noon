@@ -69,15 +69,7 @@ impl Scene {
         family: &MobjectFamily,
         points: &[(f64, f64)],
     ) -> Result<(), AuthoringError> {
-        if !Rc::ptr_eq(self.integration_store(), family.integration_store()) {
-            return Err(AuthoringError::ForeignStore);
-        }
-        if self.running_execution().is_some() {
-            return self.with_running_execution(|store, root, execution| {
-                crate::family_points::publish_family_points(store, root, execution, family, points)
-            });
-        }
-        family.set_points_f64(points)
+        self.set_family_points_3d(family, &crate::path_editing::promote_raw_points_3d(points))
     }
 }
 

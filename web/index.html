@@ -180,8 +180,19 @@
 
       .actions {
         display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
         align-items: center;
         gap: 0.38rem;
+      }
+
+      .auto-run-option {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        color: #d5dbea;
+        font-size: 0.76rem;
+        white-space: nowrap;
       }
 
       .secondary-button,
@@ -289,6 +300,14 @@
         color: var(--danger);
       }
 
+      #draft-status {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--muted-2);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
       .preview-pane {
         display: flex;
         height: 100%;
@@ -299,6 +318,9 @@
           #090c13;
       }
 
+      #scene[data-viewer-inspection], #scene[data-spatial-inspection] { touch-action: none; }
+      #scene[data-spatial-inspection] { cursor: grab; }
+      #scene[data-spatial-inspection]:active { cursor: grabbing; }
       .preview-pane:fullscreen {
         width: 100%;
         height: 100%;
@@ -371,6 +393,8 @@
         border-radius: 0.8rem;
         background: #090c13;
         box-shadow: inset 0 0 0 1px rgb(255 255 255 / 2%);
+        touch-action: none;
+        touch-action: pinch-zoom;
       }
 
       /*
@@ -476,6 +500,12 @@
           <div class="pane-toolbar">
             <span class="file-label">main.py</span>
             <div class="actions">
+              <input id="video-file" type="file" accept=".mp4,video/mp4" hidden>
+              <button id="choose-video-file" type="button" class="secondary-button">Video file</button>
+              <label class="auto-run-option">
+                <input id="auto-run" type="checkbox" autocomplete="off">
+                Auto-run
+              </label>
               <button id="replace-scene" class="primary-button" type="button" disabled>
                 Run
               </button>
@@ -496,6 +526,7 @@
           </div>
 
           <footer class="editor-footer">
+            <output id="draft-status" aria-live="polite"></output>
             <output id="patch-status" aria-live="polite">Loading Python examples…</output>
             <details id="python-diagnostics" hidden>
               <summary>Python error details</summary>
@@ -520,6 +551,10 @@
         <section class="preview-pane" aria-label="Animation preview">
           <div class="preview-head">
             <span class="preview-title">Preview</span>
+            <button id="preview-recover" class="secondary-button" type="button" hidden title="Restore playback without running the source again">Recover preview</button>
+            <button id="preview-comment" class="secondary-button" type="button" hidden>Comment</button>
+            <button id="preview-reset-view" class="secondary-button" type="button" hidden
+              title="Click to highlight, Shift-drag to pan, scroll to zoom, and double-click to reset. Drag to orbit in 3D.">Reset view</button>
             <button id="preview-fullscreen" class="secondary-button" type="button" aria-pressed="false">Fullscreen</button>
           </div>
           <div class="canvas-wrap">

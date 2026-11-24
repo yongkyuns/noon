@@ -6,10 +6,13 @@ owns authoring syntax, argument conversion, and wrapper identity.
 
 from __future__ import annotations
 
+__version__ = "0.1.0"
+
 import math
 import operator
+import sys
 from functools import partialmethod
-from typing import TYPE_CHECKING, Any, Callable, Self
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Self
 from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
 
@@ -1184,9 +1187,9 @@ class Mobject:
         from _noon_effects import get_effect
         return get_effect(self, name)
 
-    def set_effect(self, selector, *, color=None, radius=None, intensity=None, source=None, offset=None) -> Mobject:
+    def set_effect(self, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None) -> Mobject:
         from _noon_effects import set_effect
-        return set_effect(self, selector, color=color, radius=radius, intensity=intensity, source=source, offset=offset)
+        return set_effect(self, selector, color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size, parameters=parameters, threshold=threshold)
 
     def remove_effect(self, selector) -> Mobject:
         from _noon_effects import remove_effect
@@ -1216,6 +1219,10 @@ class Mobject:
     def fade_to(self, color: Color, alpha: float, family: bool = True) -> Mobject:
         """Interpolate this object's color toward ``color`` by ``alpha``."""
         return _callback_operations()._canonical_fade_to(self, color, alpha, family)
+
+    def set_emission(self, strength: float) -> Mobject:
+        """Set checked linear-HDR material strength (0–63), independently of alpha."""
+        return _callback_operations()._canonical_set_emission(self, strength)
 
     def set_object_opacity(self, opacity: float) -> Mobject:
         """Set whole-object opacity independently of fill/stroke paint alpha."""
@@ -1465,6 +1472,14 @@ def _scene_operations():
     return _manim_scene
 
 
+def _membership_result(pending, result):
+    continuation = getattr(sys.modules.get("_manim_scene"), "_SemanticContinuationAwaitable", ())
+    if isinstance(pending, continuation):
+        pending._result = result
+        return pending
+    return result
+
+
 class Scene:
     """Python authoring facade; semantic operations require the shared Rust host."""
 
@@ -1500,8 +1515,10 @@ class Scene:
 
     def _edit_membership(
         self, kind: str, values: tuple[object, ...] = (), *, key=None
-    ) -> None:
-        _scene_operations()._canonical_edit_membership(self, kind, values, key=key)
+    ):
+        return _scene_operations()._canonical_edit_membership(
+            self, kind, values, key=key,
+        )
 
     def add(self, *mobjects: object, key: str | None = None) -> Mobject | Scene:
         if not mobjects:
@@ -1511,12 +1528,12 @@ class Scene:
         leaves = [member for value in mobjects for member in _leaf_mobjects(value)]
         if key is not None and (len(mobjects) != 1 or not isinstance(mobjects[0], Mobject)):
             raise ValueError("an explicit key requires one ordinary Mobject add")
-        self._edit_membership("add", mobjects, key=key)
-        return leaves[0] if len(leaves) == 1 else self
+        return _membership_result(self._edit_membership("add", mobjects, key=key),
+                                  leaves[0] if len(leaves) == 1 else self)
 
     def add_foreground_mobjects(self, *mobjects: object) -> Scene:
         if mobjects:
-            self._edit_membership("add_foreground", mobjects)
+            return _membership_result(self._edit_membership("add_foreground", mobjects), self)
         return self
 
     def add_foreground_mobject(self, mobject: object) -> Scene:
@@ -1524,31 +1541,26 @@ class Scene:
 
     def remove_foreground_mobjects(self, *mobjects: object) -> Scene:
         if mobjects:
-            self._edit_membership("remove_foreground", mobjects)
+            return _membership_result(self._edit_membership("remove_foreground", mobjects), self)
         return self
 
     def remove_foreground_mobject(self, mobject: object) -> Scene:
         return self.remove_foreground_mobjects(mobject)
 
     def bring_to_front(self, *mobjects: object) -> Scene:
-        self.add(*mobjects)
-        return self
+        return _membership_result(self.add(*mobjects), self)
 
     def bring_to_back(self, *mobjects: object) -> Scene:
-        self._edit_membership("bring_to_back", mobjects)
-        return self
+        return _membership_result(self._edit_membership("bring_to_back", mobjects), self)
 
     def remove(self, *mobjects: object) -> Scene:
-        self._edit_membership("remove", mobjects)
-        return self
+        return _membership_result(self._edit_membership("remove", mobjects), self)
 
     def clear(self) -> Scene:
-        self._edit_membership("clear")
-        return self
+        return _membership_result(self._edit_membership("clear"), self)
 
     def replace(self, old_mobject: object, new_mobject: object) -> Scene:
-        self._edit_membership("replace", (old_mobject, new_mobject))
-        return self
+        return _membership_result(self._edit_membership("replace", (old_mobject, new_mobject)), self)
 
     def _bind_camera_frame(self, mobject: Mobject) -> Any:
         return _scene_operations()._bind_camera_frame(self, mobject)
@@ -1594,6 +1606,15 @@ class Scene:
             gain=gain, fade_in=fade_in, fade_out=fade_out,
         )
 
+    def video(
+        self, source: object, *, start_time: float = 0.0, source_start: float = 0.0,
+        source_end: float | None = None, height: float = 6.0,
+    ) -> Mobject:
+        """Place native MP4 or a prepared browser VideoSource on the timeline."""
+        return _scene_operations()._canonical_video(
+            self, source, start_time, source_start, source_end, height,
+        )
+
     def on_click_playback(self, target: Mobject, action: object) -> Scene:
         """Declare a finite viewer control through the normal shared Rust picker."""
         from _noon_audio import on_click_playback
@@ -1621,6 +1642,21 @@ class Scene:
     ) -> Scene:
         return _scene_operations()._canonical_bind_position(self, mobject, tracker, direction, offset)
 
+    def bind_sampled(self, mobject: object, tracker: object, channel: str,
+                     samples: Iterable[Iterable[float]], *, linear: bool = True) -> Scene:
+        """Bind a channel to keyframes indexed by a ValueTracker.
+
+        Rows contain a strictly increasing tracker value, followed by a scalar
+        or two planar components. Position, scale, and rotation are absolute
+        poses. Stroke widths use the same units as set_stroke. Reveal values
+        are between 0 and 1 and follow a retained vector path's curve order.
+        With linear=False a value is held until the next key. Values outside
+        the table clamp to its endpoints.
+        """
+        return _scene_operations()._canonical_bind_sampled(
+            self, mobject, tracker, channel, samples, linear,
+        )
+
     def on_click(self, target: Mobject, animation: object) -> Scene:
         """Bind Indicate(target), GlowPulse(target), or None to a primary click.
 
@@ -1630,6 +1666,10 @@ class Scene:
         time stays unchanged. No Python callback or captured attachment is kept.
         """
         return _scene_operations()._on_click(self, target, animation)
+
+    def set_viewer_draggable(self, mobject: Mobject, enabled: bool = True) -> Scene:
+        """Allow a paused retained viewer to drag this shape until playback resumes or seeks."""
+        return _scene_operations()._set_viewer_draggable(self, mobject, enabled)
 
     def set_drag_targets(self, *mobjects: Mobject) -> Scene:
         """Allow primary native translation dragging for these bound Mobjects.
@@ -1699,6 +1739,38 @@ class Scene:
     def bind_morph(self, mobject: object, tracker: object) -> Any:
         return _scene_operations()._canonical_bind_morph_dispatch(self, mobject, tracker)
 
+    def set_translation(self, mobject: Mobject, x: float, y: float) -> Scene:
+        """Set the planar translation of a typed object on this Scene."""
+        return _scene_operations()._edit_scene_transform(
+            self, mobject, "setTranslation", "Scene.set_translation", x, y,
+        )
+
+    def shift(self, mobject: Mobject, x: float, y: float) -> Scene:
+        """Offset the planar translation of a typed object on this Scene."""
+        return _scene_operations()._edit_scene_transform(
+            self, mobject, "shift", "Scene.shift", x, y,
+        )
+
+    def set_scale(self, mobject: Mobject, x: float, y: float) -> Scene:
+        """Set the object's planar scale about its local origin."""
+        return _scene_operations()._edit_scene_transform(
+            self, mobject, "setScale", "Scene.set_scale", x, y,
+        )
+
+    def set_rotation(self, mobject: Mobject, angle: float) -> Scene:
+        """Set the object's planar rotation about its local origin."""
+        return _scene_operations()._edit_scene_transform(
+            self, mobject, "setRotation", "Scene.set_rotation", angle,
+        )
+
+    def replace_content(self, target: Mobject, source: Mobject) -> Scene:
+        """Replace retained content while preserving the target's other state."""
+        return _scene_operations()._replace_scene_content(self, target, source)
+
+    def effective_translation(self, mobject: Mobject) -> Vec2:
+        """Read the object's translation from the current execution publication."""
+        return _scene_operations()._effective_scene_translation(self, mobject)
+
     def live_execution(self, duration: float | None = None) -> Any:
         return _scene_operations()._live_execution(self, duration)
 
@@ -1762,6 +1834,7 @@ def always_redraw(producer: Callable[[], Mobject]) -> Mobject:
 
 _PUBLIC_EXPORTS = {
     "AudioSource": "_noon_audio",
+    "VideoSource": "_noon_video",
     "AudioClip": "_noon_audio",
     "PlaybackControl": "_noon_audio",
     "typing": "_manim_typing",
@@ -1945,7 +2018,15 @@ _PUBLIC_EXPORTS = {
     "ImageMobject": "_manim_image",
     "Glow": "_noon_effects",
     "Blur": "_noon_effects",
+    "Bloom": "_noon_effects",
+    "BackdropBlur": "_noon_effects",
     "Shadow": "_noon_effects",
+    "NoiseDissolve": "_noon_effects",
+    "Pixelate": "_noon_effects",
+    "ShaderEffect": "_noon_shaders",
+    "WgslEffectProgram": "_noon_shaders",
+    "ShaderParameter": "_noon_shaders",
+    "Dissolve": "_noon_effects",
     "LinearGradient": "_noon_paints",
     "RadialGradient": "_noon_paints",
     "NoisePaint": "_noon_paints",
@@ -2052,12 +2133,17 @@ def __dir__():
 
 
 __all__ = [
+    "ShaderEffect",
+    "WgslEffectProgram",
+    "ShaderParameter",
     "annotations",
     "PackageNotFoundError",
     "version",
     "Glow",
     "Blur",
+    "BackdropBlur",
     "GlowPulse",
+    "Dissolve",
     "Pixels",
     "EffectHandle",
     "NoonError",

@@ -1,4 +1,4 @@
-use noon::{integration::BorrowedPathEdit, AuthoringError, Scene};
+use noon::{AuthoringError, Scene};
 use noon_core::VectorPath;
 use noon_geometry::PathProportionError;
 
@@ -96,48 +96,25 @@ fn effective_raw_layout_uses_current_precise_resource_and_rejects_unpaired_bound
         )
         .unwrap();
     scene.add(&object).unwrap();
-    let mut execution = scene.execution_session().unwrap();
+    let mut running = scene.into_execution().unwrap();
     assert_eq!(
-        scene
-            .live(&mut execution)
-            .effective_layout(&object)
-            .unwrap()
-            .center,
+        running.scene().effective_layout(&object).unwrap().center,
         (1.0 + delta, 0.0)
     );
     let new_points = [(2.0 + delta, -delta); 4];
-    noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut execution,
-        BorrowedPathEdit::RawPoints {
-            object: &object,
-            points: &new_points,
-        },
-    )
-    .unwrap();
+    running
+        .scene_mut()
+        .set_points_f64(&object, &new_points)
+        .unwrap();
     assert_eq!(
-        scene
-            .live(&mut execution)
-            .effective_layout(&object)
-            .unwrap()
-            .center,
+        running.scene().effective_layout(&object).unwrap().center,
         (2.0 + delta, -delta)
     );
-    noon::integration::publish_borrowed_path_edit(
-        scene.integration_store(),
-        scene.root(),
-        &mut execution,
-        BorrowedPathEdit::RawPoints {
-            object: &object,
-            points: &new_points[..2],
-        },
-    )
-    .unwrap();
-    assert!(scene
-        .live(&mut execution)
-        .effective_layout(&object)
-        .is_err());
+    running
+        .scene_mut()
+        .set_points_f64(&object, &new_points[..2])
+        .unwrap();
+    assert!(running.scene().effective_layout(&object).is_err());
     let anchor = noon::LayoutAnchor::from(&object);
     assert_eq!(
         anchor
@@ -146,9 +123,9 @@ fn effective_raw_layout_uses_current_precise_resource_and_rejects_unpaired_bound
         0.0
     );
     assert_eq!(
-        scene
-            .live(&mut execution)
-            .dimension_length(&anchor, noon::LayoutDimension::Width)
+        running
+            .scene()
+            .effective_dimension_length(&anchor, noon::LayoutDimension::Width)
             .unwrap(),
         0.0
     );
@@ -169,8 +146,8 @@ fn dimensions_of_incomplete_paths_and_families_do_not_require_anchors() {
     let family = scene.family(&[(&object).into()]).unwrap();
     assert!(family.layout().is_err());
     scene.add(&object).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let revision = scene.revision();
+    let execution = scene.into_execution().unwrap();
+    let revision = execution.scene().revision();
     for anchor in [
         noon::LayoutAnchor::from(&object),
         noon::LayoutAnchor::from(&family),
@@ -179,15 +156,15 @@ fn dimensions_of_incomplete_paths_and_families_do_not_require_anchors() {
         for (dimension, expected) in [(Width, 3.0), (Height, 7.0)] {
             assert_eq!(anchor.dimension_length(dimension).unwrap(), expected);
             assert_eq!(
-                scene
-                    .live(&mut execution)
-                    .dimension_length(&anchor, dimension)
+                execution
+                    .scene()
+                    .effective_dimension_length(&anchor, dimension)
                     .unwrap(),
                 expected
             );
         }
     }
-    assert_eq!(scene.revision(), revision);
+    assert_eq!(execution.scene().revision(), revision);
 }
 
 #[test]

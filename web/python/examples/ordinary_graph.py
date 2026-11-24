@@ -1,11 +1,10 @@
 """Graph/DiGraph topology edits and shared circular/explicit layouts."""
 
-from noon import BLUE, GREEN, RED, DiGraph, Graph, Scene
+from noon import BLUE, GREEN, RED, DiGraph, Graph, Group, Scene, UP, linear
 
 
 class OrdinaryGraph(Scene):
     def construct(self):
-        self.wait(0.01)
         styles = dict(
             vertex_config={"radius": 0.21, "fill_color": RED, "fill_opacity": 0.35,
                            "stroke_color": BLUE, "stroke_width": 3},
@@ -22,5 +21,9 @@ class OrdinaryGraph(Scene):
                            [("u", "v"), ("v", "w"), ("w", "u")], layout="explicit", **styles)
         directed.change_layout("circular", scale=1.6, center=(3.5, 0))
         directed.add_vertices({"x": (5, -2.3)}).add_edges([("w", "x")])
-        self.add(graph, directed)
-        self.wait(0.2)
+        diagrams = Group(graph, directed)
+        first_vertex = graph["a"]
+        last_vertex = directed["x"]
+        self.add(diagrams)
+        self.play(diagrams.animate.shift(UP * 0.75), run_time=1, rate_func=linear)
+        assert graph["a"] is first_vertex and directed["x"] is last_vertex

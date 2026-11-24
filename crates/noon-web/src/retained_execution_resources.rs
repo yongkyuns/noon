@@ -1,5 +1,9 @@
+mod spatial_queries;
+
 use crate::retained_resource_transport::residency::{ResourceResidency, ResourceRoot};
 use crate::retained_resource_transport::{render_geometry_id, RenderGeometrySlot};
+#[cfg(test)]
+use noon::integration::scene_execution;
 use std::collections::HashMap;
 
 use noon_core::{Camera2DState, RetainedFamilyAnimationPlan};
@@ -23,6 +27,8 @@ pub struct InstalledRetainedExecutionMirror {
     family: InstalledRetainedFamilyExecutionState,
     transient_presentations: Vec<noon_runtime::TransientPresentationOccurrence>,
     resource_roots: ResourceResidency,
+    spatial_index: Option<noon_runtime::ExecutionSpatialIndex>,
+    spatial_update_stats: noon_runtime::SpatialIndexUpdateStats,
 }
 
 impl InstalledRetainedExecutionMirror {
@@ -34,13 +40,29 @@ impl InstalledRetainedExecutionMirror {
             resources.text_handle_remap(),
         );
         wire.extend_installed_image_handles(&resources.image_handle_remap());
-        wire.extend_installed_geometry_handles(&resources.geometry_handle_remap());
+        wire.extend_installed_geometry_bindings(resources.geometry_handle_remap().into_iter().map(
+            |(key, local)| {
+                (
+                    key,
+                    resolved_geometry_binding(
+                        local,
+                        resources
+                            .geometry_for_transport(key)
+                            .expect("installed geometry binding"),
+                    ),
+                )
+            },
+        ));
+        wire.extend_installed_composed_sources(&resources.composed_source_remap());
+        wire.extend_installed_shader_programs(&resources.shader_program_remap());
         Ok(Self {
             wire,
             resources,
             family: InstalledRetainedFamilyExecutionState::default(),
             transient_presentations: Vec::new(),
             resource_roots: ResourceResidency::default(),
+            spatial_index: None,
+            spatial_update_stats: noon_runtime::SpatialIndexUpdateStats::default(),
         })
     }
 
@@ -81,20 +103,26 @@ impl InstalledRetainedExecutionMirror {
         } else {
             self.family.planned_frame(frame)?
         };
-        Ok(
-            noon_runtime::RendererPublication::from_validated_transport_frame(
-                self.wire.publication_context(),
-                planned_family_frame,
-                changes.clone(),
-                self.resources.texts(),
-                self.resources.fonts(),
-                self.resources.geometries(),
-                self.resources.images(),
-                self.family.plans(),
-                self.family.active_indices(),
-                self.wire.painter_order(),
-            ),
+        let publication = noon_runtime::RendererPublication::from_validated_transport_frame(
+            self.wire.publication_context(),
+            planned_family_frame,
+            changes.clone(),
+            self.resources.texts(),
+            self.resources.fonts(),
+            self.resources.geometries(),
+            self.resources.images(),
+            self.family.plans(),
+            self.family.active_indices(),
+            self.wire.painter_order(),
+            &self.wire,
         )
+        .with_primary_view(self.wire.primary_view().map(|view| view.camera))
+        .with_view_color_profiles(&self.wire);
+        Ok(if let Some(index) = &self.spatial_index {
+            publication.with_spatial_index(index)
+        } else {
+            publication
+        })
     }
 
     pub fn family_frame(&self) -> Result<Option<RetainedFamilyFrame<'_>>, InstalledExecutionError> {
@@ -204,6 +232,11 @@ impl InstalledRetainedExecutionMirror {
             self.family = InstalledRetainedFamilyExecutionState::default();
             self.transient_presentations.clear();
         }
+        // Resource-addition publication updates the index only after committing
+        // its prepared resources below; ordinary deltas can update it here.
+        if validate_snapshot_resources {
+            self.update_spatial_query_index(&changes, snapshot);
+        }
         Ok((outcome, changes))
     }
 
@@ -237,11 +270,15 @@ impl InstalledRetainedExecutionMirror {
         }
         self.resources.retire(&retirements);
         self.wire
+            .remove_installed_composed_sources(retirements.composed_sources.iter());
+        self.wire
+            .remove_installed_shader_programs(retirements.shader_programs.iter());
+        self.wire
             .remove_installed_image_handles(retirements.images.iter());
         self.wire
             .remove_installed_text_handles(retirements.texts.iter());
         self.wire
-            .remove_installed_geometry_handles(retirements.geometries.iter());
+            .remove_installed_geometry_bindings(retirements.geometries.iter());
         self.family.commit_prepared(prepared_family);
         self.transient_presentations = prepared_transient;
         Ok((outcome, changes))
@@ -252,7 +289,59 @@ impl InstalledRetainedExecutionMirror {
         delta: RetainedFamilyExecutionDeltaEnvelope,
         bundle: RetainedResourceBundle,
     ) -> Result<(RetainedTransportApplyOutcome, FrameChanges), InstalledExecutionError> {
+        let snapshot = delta.retained.snapshot;
         let additions = self.resources.prepare_additions_with_render(bundle)?;
+        let composed_sources = additions.composed_source_remap();
+        let shader_programs = additions.shader_program_remap();
+        let referenced_programs = delta
+            .retained
+            .objects
+            .iter()
+            .flat_map(|row| &row.effects)
+            .filter_map(|effect| match effect.definition {
+                crate::TransportEffectDefinition::Shader { program, .. } => Some(program),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        for key in shader_programs.keys() {
+            if key.session != delta.retained.session
+                || key.version != delta.retained.sequence
+                || !referenced_programs.contains(key)
+            {
+                return Err(RetainedResourceTransportError::InvalidShaderProgram {
+                    handle: *key,
+                    reason: "new program must bind an effect in its originating publication".into(),
+                }
+                .into());
+            }
+        }
+        let referenced_sources = delta
+            .retained
+            .objects
+            .iter()
+            .filter_map(|row| {
+                if let TransportObjectContent::Composed { source } = row.content {
+                    Some(source)
+                } else {
+                    None
+                }
+            })
+            .collect::<std::collections::HashSet<_>>();
+        // Reusing an installed immutable key is valid for parameter rows. A new
+        // resource must belong to this accepted publication and a proposed row;
+        // retired keys cannot be rebound or unused plans accumulated as preload.
+        for key in composed_sources.keys() {
+            if key.session != delta.retained.session
+                || key.version != delta.retained.sequence
+                || !referenced_sources.contains(key)
+            {
+                return Err(RetainedResourceTransportError::InvalidComposedSource {
+                    handle: *key,
+                    reason: "new plan must bind a row in its originating publication".into(),
+                }
+                .into());
+            }
+        }
         // Validate the changed rows against the existing plus staged immutable
         // geometry closure before publishing any resource or worker state.
         validate_hatch_geometry(&delta.retained, |handle| {
@@ -264,6 +353,7 @@ impl InstalledRetainedExecutionMirror {
             &delta.retained,
             additions.render_geometry_updates(),
         )?;
+        self.resources.reserve_additions_with_render(&additions)?;
         let image_handles = additions.image_handle_remap();
         self.wire.extend_installed_image_handles(&image_handles);
         let text_handles = additions.text_handle_remap();
@@ -271,7 +361,20 @@ impl InstalledRetainedExecutionMirror {
         self.wire.extend_installed_text_handles(&text_handles);
         let geometry_handles = additions.geometry_handle_remap();
         self.wire
-            .extend_installed_geometry_handles(&geometry_handles);
+            .extend_installed_geometry_bindings(geometry_handles.iter().map(|(&key, &local)| {
+                (
+                    key,
+                    resolved_geometry_binding(
+                        local,
+                        additions
+                            .geometry_for_transport(key)
+                            .expect("prepared geometry binding"),
+                    ),
+                )
+            }));
+        self.wire.extend_installed_shader_programs(&shader_programs);
+        self.wire
+            .extend_installed_composed_sources(&composed_sources);
 
         let render_rollback = match (
             additions.render_geometry_session(),
@@ -285,10 +388,14 @@ impl InstalledRetainedExecutionMirror {
                     Ok(rollback) => Some(rollback),
                     Err(error) => {
                         self.wire
+                            .remove_installed_composed_sources(composed_sources.keys());
+                        self.wire
+                            .remove_installed_shader_programs(shader_programs.keys());
+                        self.wire
                             .remove_installed_image_handles(image_handles.keys());
                         self.wire.remove_installed_text_handles(text_handles.keys());
                         self.wire
-                            .remove_installed_geometry_handles(geometry_handles.keys());
+                            .remove_installed_geometry_bindings(geometry_handles.keys());
                         return Err(error.into());
                     }
                 }
@@ -301,10 +408,14 @@ impl InstalledRetainedExecutionMirror {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.wire
+                    .remove_installed_composed_sources(composed_sources.keys());
+                self.wire
+                    .remove_installed_shader_programs(shader_programs.keys());
+                self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 self.wire
-                    .remove_installed_geometry_handles(geometry_handles.keys());
+                    .remove_installed_geometry_bindings(geometry_handles.keys());
                 if let Some(rollback) = render_rollback {
                     self.wire.rollback_installed_render_geometries(rollback);
                 }
@@ -315,10 +426,14 @@ impl InstalledRetainedExecutionMirror {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.wire
+                    .remove_installed_composed_sources(composed_sources.keys());
+                self.wire
+                    .remove_installed_shader_programs(shader_programs.keys());
+                self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 self.wire
-                    .remove_installed_geometry_handles(geometry_handles.keys());
+                    .remove_installed_geometry_bindings(geometry_handles.keys());
                 if let Some(rollback) = render_rollback {
                     self.wire.rollback_installed_render_geometries(rollback);
                 }
@@ -331,10 +446,14 @@ impl InstalledRetainedExecutionMirror {
             Ok(applied) => applied,
             Err(error) => {
                 self.wire
+                    .remove_installed_composed_sources(composed_sources.keys());
+                self.wire
+                    .remove_installed_shader_programs(shader_programs.keys());
+                self.wire
                     .remove_installed_image_handles(image_handles.keys());
                 self.wire.remove_installed_text_handles(text_handles.keys());
                 self.wire
-                    .remove_installed_geometry_handles(geometry_handles.keys());
+                    .remove_installed_geometry_bindings(geometry_handles.keys());
                 if let Some(rollback) = render_rollback {
                     self.wire.rollback_installed_render_geometries(rollback);
                 }
@@ -343,10 +462,14 @@ impl InstalledRetainedExecutionMirror {
         };
         if outcome == RetainedTransportApplyOutcome::DroppedStale {
             self.wire
+                .remove_installed_composed_sources(composed_sources.keys());
+            self.wire
+                .remove_installed_shader_programs(shader_programs.keys());
+            self.wire
                 .remove_installed_image_handles(image_handles.keys());
             self.wire.remove_installed_text_handles(text_handles.keys());
             self.wire
-                .remove_installed_geometry_handles(geometry_handles.keys());
+                .remove_installed_geometry_bindings(geometry_handles.keys());
             if let Some(rollback) = render_rollback {
                 self.wire.rollback_installed_render_geometries(rollback);
             }
@@ -356,15 +479,20 @@ impl InstalledRetainedExecutionMirror {
         self.resources.commit_additions_with_render(additions);
         self.resources.retire(&retirements);
         self.wire
+            .remove_installed_composed_sources(retirements.composed_sources.iter());
+        self.wire
+            .remove_installed_shader_programs(retirements.shader_programs.iter());
+        self.wire
             .remove_installed_image_handles(retirements.images.iter());
         self.wire
             .remove_installed_text_handles(retirements.texts.iter());
         self.wire
-            .remove_installed_geometry_handles(retirements.geometries.iter());
+            .remove_installed_geometry_bindings(retirements.geometries.iter());
         self.wire
             .remove_installed_text_handles(superseded_text_handles.iter());
         self.family.commit_prepared(prepared_family);
         self.transient_presentations = prepared_transient;
+        self.update_spatial_query_index(&changes, snapshot);
         Ok((outcome, changes))
     }
 
@@ -373,6 +501,57 @@ impl InstalledRetainedExecutionMirror {
         delta: &RetainedFamilyExecutionDeltaEnvelope,
     ) -> Result<(), InstalledExecutionError> {
         let staged = self.resource_roots.stage(&delta.retained);
+        let released = self.resource_roots.retirements(&staged);
+        let retired = delta
+            .resource_retirements
+            .composed_sources
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        for program in released.shader_programs {
+            if !delta
+                .resource_retirements
+                .shader_programs
+                .contains(&program)
+            {
+                return Err(RetainedResourceTransportError::InvalidShaderProgram {
+                    handle: program,
+                    reason: "missing final program retirement".into(),
+                }
+                .into());
+            }
+        }
+        for program in &delta.resource_retirements.shader_programs {
+            if self
+                .resource_roots
+                .references_after(&staged, ResourceRoot::Shader(*program))
+                > 0
+            {
+                return Err(RetainedResourceTransportError::InvalidShaderProgram {
+                    handle: *program,
+                    reason: "cannot retire a referenced program".into(),
+                }
+                .into());
+            }
+        }
+        for source in released.composed_sources {
+            if !retired.contains(&source) {
+                return Err(
+                    RetainedResourceTransportError::MissingComposedSourceRetirement(source).into(),
+                );
+            }
+        }
+        for source in &delta.resource_retirements.composed_sources {
+            if self
+                .resource_roots
+                .references_after(&staged, ResourceRoot::Composed(*source))
+                > 0
+            {
+                return Err(
+                    RetainedResourceTransportError::RetiredLiveComposedSource(*source).into(),
+                );
+            }
+        }
         for image in &delta.resource_retirements.images {
             if self
                 .resource_roots
@@ -566,6 +745,13 @@ impl InstalledRetainedExecutionMirror {
         delta: &RetainedExecutionDeltaEnvelope,
     ) -> Result<(), InstalledExecutionError> {
         for object in &delta.objects {
+            if let TransportObjectContent::Composed { source } = object.content {
+                if self.resources.composed_source(source).is_none() {
+                    return Err(
+                        RetainedExecutionTransportError::UnknownComposedSource(source).into(),
+                    );
+                }
+            }
             if let Some(image) = object
                 .fill_paint
                 .as_deref()
@@ -616,6 +802,21 @@ impl InstalledRetainedExecutionMirror {
             }
         }
         Ok(())
+    }
+}
+
+// Resolve once through a full arena/id/version handle, then share the immutable
+// vector lease with the typed frame. Never guess an addition layer from a bare
+// GeometryId; slots and generations are local to their owning resource arena.
+fn resolved_geometry_binding(
+    local: noon_core::GeometryResourceHandle,
+    resource: &noon_core::GeometryResource,
+) -> noon_core::GeometryRef {
+    match resource {
+        noon_core::GeometryResource::VectorPath(path) => {
+            noon_core::GeometryRef::VectorPath(path.clone())
+        }
+        noon_core::GeometryResource::Mesh(_) => noon_core::GeometryRef::External(local.id),
     }
 }
 
@@ -936,6 +1137,7 @@ mod tests {
         };
         let context = noon_core::PublicationContext::default();
         let retained = RetainedExecutionDeltaEnvelope {
+            primary_view: None,
             channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
             protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: 82,
@@ -954,7 +1156,8 @@ mod tests {
                 },
                 order: 0,
                 object: ObjectId::new(90),
-                effects: vec![crate::TransportEffectState::from(&compiled_glow)],
+                effects: vec![crate::TransportEffectState::try_from(&compiled_glow).unwrap()],
+                visibility: None,
                 z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::External(source.id),
@@ -993,17 +1196,17 @@ mod tests {
                 pointer_view: None,
             })
             .unwrap();
-        let Some(noon_core::GeometryResource::VectorPath(_)) =
+        let Some(noon_core::GeometryResource::VectorPath(source_path)) =
             mirror.resources().geometries().get(local_handle)
         else {
             panic!("versioned source must resolve to an immutable VectorPath");
         };
         let resolved_frame = mirror.frame().unwrap();
         let resolved = &resolved_frame.objects[0];
-        assert_eq!(
-            resolved.content.geometry(),
-            Some(&GeometryRef::External(local_handle.id))
-        );
+        let Some(GeometryRef::VectorPath(resolved_path)) = resolved.content.geometry() else {
+            panic!("planar vector binding retains its qualified immutable lease");
+        };
+        assert!(std::sync::Arc::ptr_eq(source_path, resolved_path));
         assert_eq!(resolved_frame.reveals[0], 0.35);
         assert_eq!(
             resolved
@@ -1018,6 +1221,72 @@ mod tests {
                 .intensity(),
             1.25
         );
+    }
+
+    #[test]
+    fn prepared_surface_snapshot_resolves_meshes_added_after_empty_bootstrap() {
+        let (scene, _, _) = noon::example_scenes::spatial_surface::scene().unwrap();
+        let mut source = scene_execution::lower(&scene).unwrap();
+        source
+            .begin_replay_retention(noon_runtime::ReplayLimits::default())
+            .unwrap();
+        let wait = source.wait_segment(0.5).unwrap();
+        source.advance_to(wait.end_time()).unwrap();
+        scene_execution::borrow_uninstalled(&scene, &mut source)
+            .complete_segment(wait)
+            .unwrap();
+        let (_, reader) = source.create_prepared_prefix(wait).unwrap();
+        let mut player = crate::PreparedExecutionPlayer::from_reader(reader, 81);
+        let mut mirror = InstalledRetainedExecutionMirror::from_bundle_bytes(
+            &player.resource_bundle_bytes().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(mirror.resources().geometry_count(), 0);
+        let initial = player.initial_delta_json().unwrap();
+        let mut invalid: RetainedFamilyExecutionDeltaEnvelope =
+            serde_json::from_str(&initial).unwrap();
+        let row = invalid
+            .retained
+            .objects
+            .iter_mut()
+            .find(|row| {
+                matches!(
+                    row.content,
+                    TransportObjectContent::Geometry {
+                        resource: Some(_),
+                        ..
+                    },
+                )
+            })
+            .unwrap();
+        if let TransportObjectContent::Geometry { resource, .. } = &mut row.content {
+            *resource = None;
+        }
+        assert!(mirror.apply_family(invalid).is_err());
+        assert!(mirror.frame().is_none());
+        assert_eq!(mirror.resources().geometry_count(), 0);
+        mirror.apply_json(&initial).unwrap();
+        let frame = mirror.frame().unwrap();
+        let mesh = frame
+            .objects
+            .iter()
+            .find(|object| {
+                object.spatial.as_deref().is_some_and(|spatial| {
+                    spatial.draw_kind == noon_compile::CompiledSpatialDrawKind::Mesh
+                })
+            })
+            .unwrap();
+        let Some(GeometryRef::External(id)) = mesh.content.geometry() else {
+            panic!("spatial mesh must retain its geometry reference");
+        };
+        let resources = mirror.resources().geometries();
+        let handle = resources
+            .current_handle(*id)
+            .expect("renderer must resolve added mesh");
+        assert!(matches!(
+            resources.get(handle),
+            Some(noon_core::GeometryResource::Mesh(_))
+        ));
     }
 
     #[test]
@@ -1153,6 +1422,7 @@ mod tests {
                 noon_core::FrameEpoch::new(7),
             );
             let delta = RetainedExecutionDeltaEnvelope {
+                primary_view: None,
                 channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
                 protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
                 session: 77,
@@ -1172,6 +1442,7 @@ mod tests {
                     order: 0,
                     object: ObjectId::new(90),
                     effects: Vec::new(),
+                    visibility: None,
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::External(source.id),
@@ -1219,6 +1490,7 @@ mod tests {
                     order: slot,
                     object: ObjectId::new(object),
                     effects: Vec::new(),
+                    visibility: None,
                     z_index: 0.0,
                     content: TransportObjectContent::Geometry {
                         geometry: GeometryRef::circle(0.1),
@@ -1333,6 +1605,7 @@ mod tests {
 
             let replacement = RetainedFamilyExecutionDeltaEnvelope {
                 retained: RetainedExecutionDeltaEnvelope {
+                    primary_view: None,
                     channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
                     protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
                     session: 77,
@@ -1356,6 +1629,7 @@ mod tests {
                         order: 0,
                         object: ObjectId::new(90),
                         effects: Vec::new(),
+                        visibility: None,
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::External(replacement_source.id),
@@ -1417,6 +1691,7 @@ mod tests {
 
             let path_replacement = RetainedFamilyExecutionDeltaEnvelope {
                 retained: RetainedExecutionDeltaEnvelope {
+                    primary_view: None,
                     channel: crate::RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
                     protocol_version: crate::RETAINED_EXECUTION_TRANSPORT_VERSION,
                     session: 77,
@@ -1440,6 +1715,7 @@ mod tests {
                         order: 0,
                         object: ObjectId::new(90),
                         effects: Vec::new(),
+                        visibility: None,
                         z_index: 0.0,
                         content: TransportObjectContent::Geometry {
                             geometry: GeometryRef::circle(1.0),
@@ -1552,7 +1828,9 @@ mod tests {
             .collect::<Vec<_>>();
         let wire_text = match wire.objects[0].content {
             TransportObjectContent::Text { text } => text,
-            TransportObjectContent::Image { .. } | TransportObjectContent::Geometry { .. } => {
+            TransportObjectContent::Image { .. }
+            | TransportObjectContent::Geometry { .. }
+            | TransportObjectContent::Composed { .. } => {
                 panic!("expected text")
             }
         };
@@ -1883,6 +2161,7 @@ mod tests {
         let changed = initial.objects[0].clone();
         let invalid = RetainedFamilyExecutionDeltaEnvelope {
             retained: RetainedExecutionDeltaEnvelope {
+                primary_view: None,
                 channel: initial.channel,
                 protocol_version: initial.protocol_version,
                 session: initial.session,
@@ -1937,6 +2216,7 @@ mod tests {
         let mut changed = initial.objects[0].clone();
         changed.transform.translation = Vec2::new(2.0, -1.0);
         let delta = RetainedExecutionDeltaEnvelope {
+            primary_view: None,
             channel: initial.channel,
             protocol_version: initial.protocol_version,
             session: initial.session,
@@ -1986,4 +2266,9 @@ mod tests {
 mod morph_tests;
 
 #[cfg(test)]
+mod composed_tests;
+#[cfg(test)]
 mod image_tests;
+
+#[cfg(all(test, feature = "wgsl-effects"))]
+mod shader_tests;

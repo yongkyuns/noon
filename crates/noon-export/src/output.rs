@@ -4,18 +4,31 @@
 //! shell. PNG bundles are lossless diagnostics; MP4 is SDR H.264/YUV420p. No output
 //! is reported successful before EOF, encoder exit and destination publication.
 mod audio;
+mod blocking;
+#[cfg(feature = "prepared-prefix")]
+mod completed_prefix;
 mod destination;
 mod prepared;
 mod process;
 mod session;
 mod terminal_duration;
 
-pub use prepared::{
-    export_prepared_capture, PreparedCaptureLimits, PreparedCaptureManifest,
-    PreparedCaptureSummary, PreparedFrameOptions, PreparedFrameRate, PreparedPublication,
-    PreparedSample, PreparedStop,
+pub use blocking::{
+    export_blocking_scene, export_blocking_scene_with_limits, BlockingFileExportError,
+    BlockingSourceLimits,
 };
-pub use session::{export_session_file, SessionFileExportError};
+
+#[cfg(feature = "prepared-prefix")]
+pub use completed_prefix::export_completed_prefix_file;
+pub use prepared::{
+    export_prepared_capture, PreparedCaptureLimits, PreparedCaptureManifest, PreparedCaptureSource,
+    PreparedCaptureSourceKind, PreparedCaptureSummary, PreparedFrameOptions, PreparedFrameRate,
+    PreparedPublication, PreparedSample, PreparedStop,
+};
+pub use session::{
+    export_scene_file, export_scene_file_with_interrupt, export_session_file,
+    SessionFileExportError,
+};
 
 use std::error::Error;
 use std::fmt;
@@ -361,6 +374,13 @@ impl FileSink {
 
     fn write(&mut self, frame: CapturedFrame<'_>) -> io::Result<()> {
         let result = (|| {
+            // Both qualified capture profiles contain encoded SDR RGBA8. HDR
+            // capture has already applied Reinhard and sRGB exactly once.
+            // A future pixel format must make an explicit admission decision.
+            let encoded_rgba = match frame.format {
+                CapturePixelFormat::RendererRgba8UnormOpaque
+                | CapturePixelFormat::LinearHdrSdrRgba8Opaque => frame.rgba,
+            };
             if self.failed
                 || frame.frame.pts != self.frames
                 || frame.frame.source_sample.time_base() != self.rate.time_base()
@@ -372,19 +392,24 @@ impl FileSink {
                     && frame.observation.published_time != frame.observation.requested_time)
                 || frame.width != self.width
                 || frame.height != self.height
-                || frame.format != CapturePixelFormat::RendererRgba8UnormOpaque
-                || frame.rgba.len() != self.bytes
-                || frame.rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 255)
+                || encoded_rgba.len() != self.bytes
+                || encoded_rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 255)
             {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "invalid, out-of-order or nonopaque captured frame",
+                    format!(
+                        "invalid, out-of-order or nonopaque captured frame: pts={}/{} requested={} published={} sample={} held={} format={:?} first_nonopaque={:?}",
+                        frame.frame.pts, self.frames,
+                        frame.observation.requested_time, frame.observation.published_time,
+                        frame.frame.source_sample.authored_time(), frame.frame.held, frame.format,
+                        encoded_rgba.as_chunks::<4>().0.iter().find(|pixel| pixel[3] != 255),
+                    ),
                 ));
             }
             self.encoder
                 .as_mut()
                 .ok_or_else(|| io::Error::other("encoder already finished"))?
-                .enqueue(frame.rgba)?;
+                .enqueue(encoded_rgba)?;
             if let Some(manifest) = self.manifest.as_mut() {
                 writeln!(
                     manifest,
@@ -415,9 +440,18 @@ impl FileSink {
     }
 
     fn finish_with_source_end(
+        self,
+        expected_frames: u64,
+        source_end: Option<f64>,
+    ) -> io::Result<(PathBuf, OutputFormat, String)> {
+        self.finish_with_source_end_and_interrupt(expected_frames, source_end, &mut || Ok(()))
+    }
+
+    fn finish_with_source_end_and_interrupt(
         mut self,
         expected_frames: u64,
         source_end: Option<f64>,
+        interrupt: &mut impl FnMut() -> io::Result<()>,
     ) -> io::Result<(PathBuf, OutputFormat, String)> {
         if self.failed || self.frames == 0 || self.frames != expected_frames {
             return Err(io::Error::other(
@@ -429,6 +463,7 @@ impl FileSink {
             .take()
             .ok_or_else(|| io::Error::other("encoder is inactive"))?
             .finish()?;
+        interrupt()?;
         check_publication_cancellation(&self.cancellation)?;
         if self.options.format == OutputFormat::Mp4
             && (self.audio_frames.is_some() || source_end.is_some())
@@ -462,6 +497,7 @@ impl FileSink {
             .take()
             .ok_or_else(|| io::Error::other("output already published"))?
             .publish(self.frames, || {
+                interrupt()?;
                 check_publication_cancellation(&self.cancellation)
             })?;
         Ok((path, self.options.format, diagnostics))

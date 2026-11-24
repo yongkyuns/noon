@@ -2,7 +2,7 @@
 //! The cases share setup; camera motion stays in the ordinary live timeline.
 use crate::{
     AnimationOptions, CameraRotationAxis, Color, ContinuationStep, LiveContinuation, LiveProgram,
-    LiveSession, ManimThreeDAxesOptions, Mobject, MobjectTarget, RateFunction, Scene,
+    ManimThreeDAxesOptions, Mobject, MobjectTarget, RateFunction, Scene,
     SemanticSpatialCompositionDomain, SemanticVec3, StyleUpdate, SurfaceOptions, SurfaceSample,
     Text, UvSurfacePlan, WorldAffineEdit,
 };
@@ -187,18 +187,20 @@ pub struct CameraContinuation {
 }
 impl LiveContinuation for CameraContinuation {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         let step = match (self.case, self.stage) {
-            (CameraCase::FixedFrame, 0) => live.wait_segment(1.),
+            (CameraCase::FixedFrame, 0) => scene.live().wait_segment(1.),
             (CameraCase::Ambient, 0) => {
-                live.begin_ambient_camera_rotation(&self.camera, CameraRotationAxis::Theta, 0.1)
+                scene
+                    .begin_ambient_camera_rotation(&self.camera, CameraRotationAxis::Theta, 0.1)
                     .map_err(|e| e.to_string())?;
-                live.wait_segment(1.)
+                scene.live().wait_segment(1.)
             }
             (CameraCase::Ambient, 1) => {
-                live.stop_ambient_camera_rotation(&self.camera)
+                scene
+                    .stop_ambient_camera_rotation(&self.camera)
                     .map_err(|e| e.to_string())?;
-                live.move_camera_profile(
+                scene.live().move_camera_profile(
                     &self.camera,
                     profile(self.case),
                     AnimationOptions::new()
@@ -206,14 +208,16 @@ impl LiveContinuation for CameraContinuation {
                         .rate_func(RateFunction::Smooth),
                 )
             }
-            (CameraCase::Ambient, 2) => live.wait_segment(1.),
+            (CameraCase::Ambient, 2) => scene.live().wait_segment(1.),
             (CameraCase::Illusion, 0) => {
-                live.begin_3dillusion_camera_rotation(&self.camera, 2., None, None)
+                scene
+                    .begin_3dillusion_camera_rotation(&self.camera, 2., None, None)
                     .map_err(|e| e.to_string())?;
-                live.wait_segment(FRAC_PI_2)
+                scene.live().wait_segment(FRAC_PI_2)
             }
             (CameraCase::Illusion, 1) => {
-                live.stop_3dillusion_camera_rotation(&self.camera)
+                scene
+                    .stop_3dillusion_camera_rotation(&self.camera)
                     .map_err(|e| e.to_string())?;
                 self.stage += 1;
                 return Ok(ContinuationStep::Finished);

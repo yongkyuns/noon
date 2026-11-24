@@ -39,21 +39,19 @@ const browserSmokeRunner = await readFile(
 );
 
 for (const required of [
-  "SemanticStore::new()",
-  "SemanticObjectRole::Camera2D",
-  "session.camera()",
-  "Scene::with_integration_store(Rc::clone(&store))",
-  "scene.execution_session()",
-  ".into_execution_with_session(session)",
+  "Scene::new()",
+  "scene.camera_frame()",
+  "execution.session().camera()",
+  "scene.into_execution()",
   "create_from_scene_execution",
   "createDirectTypstCanvasRenderer",
   "createDirectSingleTypstCanvasRenderer",
   "noon::example_scenes::spatial_mesh::session()",
   "noon::example_scenes::vector_space::session()",
   "createDirectVectorSpaceSmokeRenderer",
-  "activate_animation",
-  "Mobject::from_text",
-  "Text::new(\"Noon\")",
+  ".declare_transform_to(",
+  ".play_animation(&animation)",
+  ".text(Text::new(\"Noon\")",
   "example_scenes::live_affine_callbacks",
   "example_scenes::live_callback_paint",
   "example_scenes::live_affine_completion",
@@ -89,6 +87,9 @@ for (const forbidden of [
   "ExecutionFrameMirror",
   "initial_delta_json",
   "apply_json",
+  "SemanticStore::new()",
+  "Scene::with_integration_store(",
+  ".with_store_and_session(",
   "ExecutionSession::from_semantic_store",
   "create_from_execution_session",
 ]) {
@@ -146,8 +147,8 @@ for (const constructor of [
 }
 assert.match(
   directCanvasHost,
-  /enum DirectSourceAuthority\s*\{\s*Session\s*\{\s*session:\s*SceneExecution,/,
-  "the static direct source must retain the canonical SceneExecution owner",
+  /enum DirectSourceAuthority\s*\{\s*Session\s*\{\s*session:\s*Box<SceneExecution>,/,
+  "the static direct source must retain the canonical SceneExecution owner off the WASM stack",
 );
 assert.equal(
   directCanvasHost.includes("let publication = direct.take_renderer_publication();"),

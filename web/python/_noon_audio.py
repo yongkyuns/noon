@@ -37,7 +37,7 @@ def _integer(value, name, maximum):
 
 def _host():
     try:
-        from js import noonAudioSource
+        from _noon_host import noonAudioSource
     except ImportError as error:
         raise RuntimeError("audio requires the shared Rust authoring host") from error
     return noonAudioSource
@@ -77,11 +77,14 @@ class AudioSource:
         rate = _integer(sample_rate, "sample_rate", 0xffffffff)
         count = _integer(channels, "channels", 0xffff)
         host = _host()
-        from pyodide.ffi import to_js
-        # A contiguous float32 payload, not a Python list of per-sample bridge calls.
+        from _noon_host import _native_active
         pcm = samples if isinstance(samples, array) and samples.typecode == "f" else array("f", samples)
+        buffer = memoryview(pcm)
+        if not _native_active():
+            from pyodide.ffi import to_js
+            buffer = to_js(buffer)
         return cls._from_handle(engine_call(
-            host.fromInterleaved, to_js(memoryview(pcm)), rate, count,
+            host.fromInterleaved, buffer, rate, count,
             operation="AudioSource.from_interleaved",
         ))
 
@@ -164,7 +167,7 @@ def audio(scene, source, *, start_time=0.0, source_start_frame=0,
         _number(fade_in, "fade_in"),
         _number(fade_out, "fade_out"),
     )
-    from js import noonAudioClipOptions
+    from _noon_host import noonAudioClipOptions
     from _manim_scene import _context
     options = engine_call(noonAudioClipOptions, *arguments, operation="Scene.audio")
     try:

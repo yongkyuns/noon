@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, Color, ContinuationStep,
-    FadeEndpoint, LiveContinuation, LiveProgram, LiveSession, Mobject, RateFunction, Scene,
+    FadeEndpoint, LiveContinuation, LiveProgram, Mobject, RateFunction, Scene,
     SemanticAnimationCompositionKind as Kind, SemanticFadeDirection,
 };
 
@@ -16,7 +16,7 @@ pub struct TimedComposition {
 impl LiveContinuation for TimedComposition {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         match self.stage {
             0 => {
                 let add = AnimationOptions::new().run_time(0.2);
@@ -48,7 +48,8 @@ impl LiveContinuation for TimedComposition {
                     children,
                     options: AnimationOptions::new().rate_func(RateFunction::Smooth),
                 };
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_composition(&request, AnimationOptions::new())
                     .map_err(|error| error.to_string())?;
                 self.stage = 1;
@@ -56,12 +57,17 @@ impl LiveContinuation for TimedComposition {
             }
             1 => {
                 for square in &self.squares {
-                    if !live.contains(square).map_err(|error| error.to_string())? {
+                    if !scene
+                        .contains_direct(square)
+                        .map_err(|error| error.to_string())?
+                    {
                         return Err("timed Add did not preserve its semantic target".into());
                     }
                 }
                 self.stage = 2;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
@@ -86,20 +92,28 @@ impl LiveContinuation for TimedComposition {
                         .lag_ratio(0.5)
                         .rate_func(RateFunction::Linear),
                 };
-                live.declare_and_activate_composition(&request, AnimationOptions::new())
+                scene
+                    .live()
+                    .declare_and_activate_composition(&request, AnimationOptions::new())
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }
             3 => {
                 for square in &self.squares {
-                    if live.contains(square).map_err(|error| error.to_string())? {
+                    if scene
+                        .contains_direct(square)
+                        .map_err(|error| error.to_string())?
+                    {
                         return Err("composed FadeOut did not remove its semantic target".into());
                     }
                 }
-                live.add(&self.squares[0])
+                scene
+                    .add(&self.squares[0])
                     .map_err(|error| error.to_string())?;
                 self.stage = 4;
-                live.wait_segment(0.25)
+                scene
+                    .live()
+                    .wait_segment(0.25)
                     .map(ContinuationStep::Await)
                     .map_err(|error| error.to_string())
             }

@@ -92,6 +92,9 @@ fn update_uses_the_current_transformed_axes_frame() {
     let mut scene = Scene::new();
     let mut chart = scene.bar_chart(&options()).unwrap();
     chart.family().shift(2.0, -1.0).unwrap();
+    scene.add_many(&[chart.family().into()]).unwrap();
+    let session = scene.execution_session().unwrap();
+    crate::integration::scene_execution::attach(&mut scene, session).unwrap();
     chart.change_bar_values(&mut scene, &[2.0], false).unwrap();
     let node = direct_bar_nodes(chart.bars()).unwrap()[0];
     let state = scene
@@ -313,8 +316,10 @@ mod labeled_tests {
 
     #[test]
     fn named_labeled_construction_rolls_back_when_compilation_fails() {
-        let scene = Scene::new();
-        let store = Rc::clone(scene.integration_store());
+        let mut scene = Scene::new().into_execution().unwrap();
+        let chart = scene.scene_mut().bar_chart(&options()).unwrap();
+        let before_publication = scene.session().publication_context();
+        let store = Rc::clone(scene.scene().integration_store());
         let before = {
             let store = store.borrow();
             (
@@ -333,6 +338,23 @@ mod labeled_tests {
             &mut FailingCompiler,
         )
         .is_err());
+        assert!(scene
+            .scene_mut()
+            .bar_chart_with_axis_labels(
+                &options,
+                &crate::plot_presentation::NumberLabelOptions::default(),
+                &mut FailingCompiler,
+            )
+            .is_err());
+        assert!(scene
+            .scene_mut()
+            .bar_labels(
+                &chart,
+                &mut FailingCompiler,
+                &crate::BarLabelOptions::default(),
+            )
+            .is_err());
+        assert_eq!(scene.session().publication_context(), before_publication);
         let store = store.borrow();
         assert_eq!(
             before,

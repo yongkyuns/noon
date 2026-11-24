@@ -108,13 +108,11 @@ fn runtime(
         SourceGeometry::StrokedPath | SourceGeometry::TransparentSilhouettePath => {
             let transparent = matches!(source_geometry, SourceGeometry::TransparentSilhouettePath);
             (
-                GeometryRef::VectorPath(
-                    VectorPath::new().move_to(Vec2::new(-0.7, -0.35)).cubic_to(
-                        Vec2::new(-0.5, 0.7),
-                        Vec2::new(0.45, -0.65),
-                        Vec2::new(0.7, 0.35),
-                    ),
-                ),
+                GeometryRef::path(VectorPath::new().move_to(Vec2::new(-0.7, -0.35)).cubic_to(
+                    Vec2::new(-0.5, 0.7),
+                    Vec2::new(0.45, -0.65),
+                    Vec2::new(0.7, 0.35),
+                )),
                 Style {
                     fill: None,
                     stroke: Some(Color::rgba(
@@ -162,7 +160,7 @@ fn runtime(
         .into(),
     };
     source.effects = Some(Arc::new(
-        noon_compile::CompiledEffectStack::new([effect]).unwrap(),
+        noon_compile::CompiledEffectStack::new([effect.clone()]).unwrap(),
     ));
     let objects = vec![
         CompiledObject::new(
@@ -211,7 +209,7 @@ fn runtime(
             .color(Color::rgba(0.15, 0.85, 0.25, 0.5))
     };
     for (i, (property, values)) in effect
-        .parameter_channels(update)
+        .parameter_channels(&update)
         .unwrap()
         .into_iter()
         .enumerate()
@@ -424,7 +422,7 @@ fn fixture() -> Fixture {
             frames.push(Sample {
                 delta,
                 references,
-                sigma: effect.radius().value(),
+                sigma: effect.as_glow().unwrap().radius().value(),
                 intensity: effect.as_glow().unwrap().intensity(),
                 tint: [color.red, color.green, color.blue, color.alpha],
                 opacity: frame.objects[1].style.opacity,
@@ -455,7 +453,9 @@ fn fixture() -> Fixture {
         runtime
             .apply_execution_patch(&ExecutionPatch::SetEffects {
                 object: ObjectId::new(2),
-                effects: Arc::new(noon_compile::CompiledEffectStack::new([effect]).unwrap()),
+                effects: Arc::new(
+                    noon_compile::CompiledEffectStack::new([effect.clone()]).unwrap(),
+                ),
             })
             .unwrap();
         let publication = runtime.take_renderer_publication();

@@ -1,0 +1,285 @@
+//! Read-only historical facade over the ordinary shared execution session.
+//!
+//! The session owns the sole historical runtime, picking index and interaction
+//! state. The receiver owns only ordered-delivery/readiness metadata. No mutable
+//! session/runtime accessor or authoring/causal input entry point is exposed.
+use crate::ExecutionSession;
+use noon_core::{ObjectId, PublicationContext, SemanticClickIndicate};
+use noon_runtime::{
+    apply_execution_slot_membership_changes, preflight_execution_slot_membership_changes,
+    AudioPlaybackClip, AudioPlaybackError, FrameState, PrefixBatch, PrefixBatchStats, PrefixError,
+    PrefixReceiver, PreparedTransientAnimation, RendererPublication, ReplayStats, RuntimeIdentity,
+};
+
+mod input;
+mod presentation;
+
+#[derive(Debug)]
+pub struct PrefixReader {
+    session: ExecutionSession,
+    receiver: PrefixReceiver,
+    viewer_drag_enabled: bool,
+}
+
+impl PrefixReader {
+    pub(super) fn matches_publisher(&self, publisher: &noon_runtime::PrefixPublisher) -> bool {
+        self.receiver.matches_publisher(publisher)
+    }
+    pub(super) fn new(session: ExecutionSession, receiver: PrefixReceiver) -> Self {
+        Self {
+            session,
+            receiver,
+            viewer_drag_enabled: true,
+        }
+    }
+
+    pub(crate) fn session(&self) -> &ExecutionSession {
+        &self.session
+    }
+
+    pub(crate) fn set_native_state_input(
+        &mut self,
+        source: noon_core::NativeStateSource,
+        value: noon_core::NativeInputValue,
+    ) -> Result<(), crate::ExecutionSessionInputError> {
+        // Source admission excludes semantic input routes. Preserve ordinary
+        // validation and ambient platform occurrence ordering in this session.
+        self.session
+            .set_native_state_input(source, value)
+            .map(|_| ())
+    }
+
+    pub(crate) fn emit_native_event(
+        &mut self,
+        event: noon_core::NativeEventOccurrence,
+    ) -> Result<(), crate::ExecutionSessionInputError> {
+        self.session.emit_native_event(event).map(|_| ())
+    }
+
+    pub fn contains_time(&self, time: f64) -> bool {
+        self.receiver.contains_time(time)
+    }
+
+    /// Shared selectable timeline bounds. Unlike a displayed frontier, the
+    /// open upper value is a concrete timestamp this exact reader can admit.
+    pub fn selectable_time_bounds(&self) -> Result<Option<(f64, f64)>, PrefixError> {
+        self.receiver.selectable_time_bounds(&self.session.runtime)
+    }
+
+    pub fn runtime_identity(&self) -> RuntimeIdentity {
+        self.session.runtime_identity()
+    }
+    pub fn publication_context(&self) -> PublicationContext {
+        self.session.publication_context()
+    }
+    pub fn frontier(&self) -> f64 {
+        self.receiver.frontier()
+    }
+    pub fn end_time(&self) -> Option<f64> {
+        self.receiver.end_time()
+    }
+    /// Validate this reader's adopted terminal history without evaluating it.
+    /// Unfinished, stale or foreign history is not a completed export source.
+    pub fn completed_history_end_time(&self) -> Result<f64, PrefixError> {
+        self.receiver.completed_end_time(&self.session.runtime)
+    }
+
+    pub(crate) fn mix_completed_audio_block(
+        &self,
+        scene_start: f64,
+        first_output_frame: u64,
+        format: noon_runtime::AudioMixFormat,
+        output: &mut [f32],
+    ) -> Result<(), noon_runtime::AudioMixError> {
+        self.session
+            .mix_audio_block(scene_start, first_output_frame, format, output)
+    }
+
+    /// Authored/effective camera, excluding disposable viewer navigation.
+    pub fn camera_2d(
+        &self,
+    ) -> Result<Option<noon_core::Camera2DState>, crate::ExecutionSessionCameraError> {
+        self.session.camera_2d()
+    }
+
+    pub fn frame(&self) -> &FrameState {
+        self.session.frame()
+    }
+    /// Immutable authored audio retained with this reader's original runtime.
+    pub fn has_audio(&self) -> bool {
+        self.session.has_audio()
+    }
+    pub fn audio_end_time(&self) -> Option<f64> {
+        self.session.audio_end_time()
+    }
+    /// Borrow the original PCM and clip schedule at an accepted reader time.
+    /// This query does not advance or publish history.
+    pub fn audio_playback_at(
+        &self,
+        time: f64,
+    ) -> Result<impl Iterator<Item = AudioPlaybackClip<'_>>, AudioPlaybackError> {
+        self.session.audio_playback_at(time)
+    }
+    pub fn replay_stats(&self) -> ReplayStats {
+        self.session.replay_stats()
+    }
+    /// Logical immutable-resource payloads pinned by this history scope.
+    /// This excludes revision/storage capacity, allocator overhead and GPU state.
+    pub fn retained_resource_bytes(&self) -> usize {
+        self.receiver.retained_resource_bytes()
+    }
+    pub fn retained_history_payload_bytes(&self) -> usize {
+        self.receiver.retained_history_payload_bytes()
+    }
+    pub fn history_payload_budget_bytes(&self) -> usize {
+        self.receiver.history_payload_budget_bytes()
+    }
+    pub fn resource_budget_bytes(&self) -> usize {
+        self.receiver.resource_budget_bytes()
+    }
+
+    /// Explicit seek cancels transient gestures/effects through the same session
+    /// policy as ordinary replay. Invalid/unavailable times change nothing.
+    pub fn seek(&mut self, time: f64) -> Result<&FrameState, PrefixError> {
+        self.receiver
+            .prepare_seek(&mut self.session.runtime, time)?;
+        self.session.seek(time)?;
+        self.session.translation_drag.viewer = Default::default();
+        Ok(self.session.frame())
+    }
+
+    /// Forward playback never silently rewinds. Readiness is admitted before the
+    /// shared session advances; disjoint transient effects keep their own clock.
+    pub fn advance_to(&mut self, time: f64) -> Result<&FrameState, PrefixError> {
+        self.receiver
+            .prepare_advance(&mut self.session.runtime, time)?;
+        if time > self.session.frame().time {
+            self.session
+                .runtime
+                .clear_viewer_translations()
+                .map_err(PrefixError::Interaction)?;
+            self.session.translation_drag.viewer = Default::default();
+        }
+        self.session.advance_to(time)?;
+        Ok(self.session.frame())
+    }
+
+    /// Explicit allocation barrier for both runtime rows and their derived input
+    /// slots. Partial allocation failure changes capacity only, not live state.
+    pub fn reserve_object_capacity(&mut self, total: usize) -> Result<usize, PrefixError> {
+        // Validate the runtime's bounded capacity before allocating the slot map.
+        let capacity = self
+            .receiver
+            .reserve_object_capacity(&mut self.session.runtime, total)?;
+        self.session
+            .slots
+            .reserve_object_capacity(capacity)
+            .map_err(PrefixError::Slots)?;
+        Ok(capacity)
+    }
+
+    /// Explicit storage-growth barrier for a borrowed, source-bound batch.
+    /// Reserves only required object slots and immutable glyph-plan tables.
+    /// It never consumes output, evaluates a frame or invokes source code.
+    pub fn reserve_append_capacity(&mut self, batch: &PrefixBatch) -> Result<(), PrefixError> {
+        self.receiver.reserve_append_capacity_with_scalar_timeline(
+            &mut self.session.runtime,
+            batch,
+            &self.session.signal_timeline,
+        )?;
+        self.session
+            .slots
+            .reserve_object_capacity(batch.required_object_capacity())
+            .map_err(PrefixError::Slots)?;
+        Ok(())
+    }
+
+    /// Observe delivery admission without consuming the batch or publishing its
+    /// future targets. Slot work is proportional only to newly delivered rows.
+    pub fn preflight_append(&self, batch: &PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
+        let stats = self.receiver.preflight_append_with_scalar_timeline(
+            &self.session.runtime,
+            batch,
+            &self.session.signal_timeline,
+        )?;
+        if batch.required_object_capacity() > self.session.slots.reserved_object_capacity() {
+            return Err(PrefixError::CapacityRequired {
+                object_slots: batch.required_object_capacity(),
+            });
+        }
+        let new_objects: Vec<_> = batch.new_object_ids().collect();
+        preflight_execution_slot_membership_changes(&self.session.slots, &[], &new_objects)
+            .map_err(PrefixError::Slots)?;
+        Ok(stats)
+    }
+
+    /// Adopt history and pin new derived identities, never new live input targets.
+    /// The displayed publication, pending gesture, selection and effect survive.
+    /// Explicit seeking/advancement alone selects a newer historical revision.
+    pub fn append(&mut self, batch: PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
+        self.preflight_append(&batch)?;
+        let new_objects: Vec<_> = batch.new_object_ids().collect();
+        let stats = self.receiver.append_with_scalar_timeline(
+            &mut self.session.runtime,
+            batch,
+            &mut self.session.signal_timeline,
+        )?;
+        apply_execution_slot_membership_changes(&mut self.session.slots, &[], &new_objects)
+            .expect("same-owner prefix identity batch was preflighted before adoption");
+        Ok(stats)
+    }
+
+    pub fn prepare_click_indicate(
+        &self,
+        object: ObjectId,
+        binding: SemanticClickIndicate,
+    ) -> Result<Option<PreparedTransientAnimation>, PrefixError> {
+        self.receiver
+            .prepare_click_indicate(&self.session.runtime, object, binding)
+    }
+    pub fn prepare_bound_click_indicate(
+        &self,
+        object: ObjectId,
+    ) -> Result<Option<PreparedTransientAnimation>, PrefixError> {
+        self.receiver
+            .prepare_bound_click_indicate(&self.session.runtime, object)
+    }
+    pub fn start_transient_animation(
+        &mut self,
+        prepared: PreparedTransientAnimation,
+    ) -> Result<(), PrefixError> {
+        self.session
+            .runtime
+            .start_transient_animation(prepared)
+            .map_err(PrefixError::Interaction)
+    }
+    pub fn advance_interactions(&mut self, wall_time: f64) -> Result<(), PrefixError> {
+        self.session
+            .runtime
+            .advance_interactions(wall_time)
+            .map_err(PrefixError::Interaction)
+    }
+    pub fn interactions_active(&self) -> bool {
+        self.session.interactions_active()
+    }
+    /// Borrow the selected historical frame for fallible device preparation.
+    /// Delivery, dirty changes and the displayed history cursor remain pending.
+    pub fn resource_publication(&self) -> RendererPublication<'_> {
+        self.session.resource_publication()
+    }
+
+    pub(crate) fn with_viewer_renderer_publication<T>(
+        &mut self,
+        samples: &[crate::ViewerIndication],
+        spatial_camera: Option<(usize, noon_core::SemanticCamera3D)>,
+        previous: &noon_runtime::ViewerPresentation,
+        draw: impl FnOnce(RendererPublication<'_>) -> T,
+    ) -> T {
+        self.session
+            .with_viewer_renderer_publication(samples, spatial_camera, previous, draw)
+    }
+
+    pub fn take_renderer_publication(&mut self) -> RendererPublication<'_> {
+        self.session.take_renderer_publication()
+    }
+}

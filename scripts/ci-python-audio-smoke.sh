@@ -10,6 +10,7 @@ cd "$repository_root"
 mkdir -p "$NOON_PYTHON_AUDIO_ARTIFACTS"
 NOON_PYTHON_AUDIO_ARTIFACTS="$(cd "$NOON_PYTHON_AUDIO_ARTIFACTS" && pwd)"
 export NOON_PYTHON_AUDIO_ARTIFACTS
+export NOON_PYTHON_AUDIO_PROFILE=scene-controls
 
 record_provenance() {
   NOON_AUDIO_PROVENANCE_STAGE="$1" NOON_AUDIO_EXIT_STATUS="${2:-}" node --input-type=module <<'NODE'
@@ -45,6 +46,7 @@ const receipt = {
   unexpectedUntrackedPaths: untracked.filter(name => !expectedOutput(name)),
   smokeSha256: createHash("sha256").update(await readFile("scripts/python-background-audio-smoke.mjs")).digest("hex"),
   browser: process.env.NOON_PYTHON_AUDIO_BROWSER, backend: process.env.NOON_PYTHON_AUDIO_BACKEND,
+  profile: process.env.NOON_PYTHON_AUDIO_PROFILE,
   requestedRenderHost: process.env.NOON_PLAYGROUND_RENDER_HOST ?? "auto",
   ...(process.env.NOON_AUDIO_PROVENANCE_STAGE === "after" ? {
     actualRenderHost: report?.renderHost ?? null,

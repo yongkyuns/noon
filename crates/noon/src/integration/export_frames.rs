@@ -95,6 +95,7 @@ pub struct ExportFrameSummary {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ExportFramesStatus {
     Progress,
+    ResourcePreparationPending,
     /// A semantic endpoint receipt, never an additional output frame.
     PublicationPending(PublicationContext),
     SampleReady(ExportSample),
@@ -148,6 +149,15 @@ impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
         self.sample.session()
     }
 
+    pub fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+        self.sample.pending_effect_programs()
+    }
+    pub fn publish_prepared_effects(&mut self) -> Result<(), ExportFramesError<C::Error>> {
+        self.sample
+            .publish_prepared_effects()
+            .map_err(ExportFramesError::Sample)
+    }
+
     /// Query visibility through the original session-owned spatial index. This
     /// does not advance the source or consume/acknowledge the current sample.
     pub fn query_viewport(
@@ -170,6 +180,9 @@ impl<'a, C: LiveContinuation> ExportFrames<'a, C> {
         }
         let result = match self.sample.advance() {
             Ok(ForwardSampleStatus::Progress) => Ok(ExportFramesStatus::Progress),
+            Ok(ForwardSampleStatus::ResourcePreparationPending) => {
+                Ok(ExportFramesStatus::ResourcePreparationPending)
+            }
             Ok(ForwardSampleStatus::PublicationPending(context)) => {
                 Ok(ExportFramesStatus::PublicationPending(context))
             }

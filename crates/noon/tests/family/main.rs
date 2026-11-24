@@ -7,6 +7,7 @@ mod callback_paint;
 mod callback_translation;
 mod construction;
 mod copy;
+mod effect_restore;
 mod grid;
 mod layout;
 mod membership_order;

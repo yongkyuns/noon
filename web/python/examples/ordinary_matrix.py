@@ -3,6 +3,5 @@ from noon import *
 
 
 class OrdinaryMatrix(Scene):
-    async def construct(self):
-        await prepare_latex()
+    def construct(self):
         self.add(Matrix([["1", "2"], ["x", "y"]]))

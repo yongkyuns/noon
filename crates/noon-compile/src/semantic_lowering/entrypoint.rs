@@ -202,8 +202,8 @@ pub fn lower_semantic_execution_root(
 
 /// Lower one scene and an explicit initial animation root at time zero.
 ///
-/// Exact property tracks retain their absolute timing. Neutral family animation
-/// compositions use the shared scheduler before runtime construction.
+/// Exact property tracks retain their absolute timing. Affine/effect targets and
+/// neutral family animations use shared scheduling/lowering before runtime construction.
 pub fn lower_semantic_execution_root_with_animation_root(
     store: &SemanticStore,
     root: SemanticNodeId,
@@ -213,7 +213,7 @@ pub fn lower_semantic_execution_root_with_animation_root(
     lower_semantic_execution_root_with_animation_root_at(store, root, index, animation_root, 0.0)
 }
 
-/// Activate initial family compositions at an explicit finite origin.
+/// Activate initial targets and family compositions at an explicit finite origin.
 /// Negative origins allow an imported animation to be in progress at time zero.
 /// Exact property tracks already own absolute timing and are not shifted by this origin.
 pub fn lower_semantic_execution_root_with_animation_root_at(
@@ -302,6 +302,9 @@ fn semantic_camera_object(
 ) -> Result<Option<(SemanticNodeId, ObjectId)>, SemanticExecutionLoweringError> {
     let mut camera = None;
     for object in projection.objects() {
+        if matches!(object.content, super::SemanticExecutionContent::Composed(_)) {
+            continue;
+        }
         let state = store
             .node(object.semantic_id)
             .and_then(|node| node.semantic_object_state())
@@ -335,6 +338,19 @@ fn validate_camera_object(
         .iter()
         .find(|object| object.live && object.id == object_id)
         .expect("semantic camera object must exist in its compiled projection");
+    if object.view_color_profile == Some(noon_core::ViewColorProfile::LinearHdr)
+        && compiled.objects().iter().any(|row| {
+            row.live
+                && row.effects.as_ref().is_some_and(|effects| {
+                    effects
+                        .definitions()
+                        .iter()
+                        .any(|effect| effect.as_shader().is_some())
+                })
+        })
+    {
+        return Err(SemanticLoweringError::UnsupportedEffectProfile { owner: node }.into());
+    }
     let role = object
         .spatial
         .as_deref()

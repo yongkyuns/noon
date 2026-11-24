@@ -75,8 +75,8 @@ test("capture does not turn a logfile write failure into a successful verdict", 
     const result = spawnSync("bash", ["-e", "-c", command(stages[0][1])], {
       cwd: root, env: { ...env, TEST_EXIT: "0" }, encoding: "utf8",
     });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /tee:/);
+    assert.ok(result.status > 0, result.stderr);
+    assert.match(result.stderr, /ci-artifacts\/foreground-matching\/raster\.log/);
   });
 });
 

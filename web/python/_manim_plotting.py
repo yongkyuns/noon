@@ -5,7 +5,6 @@ range normalization, defaults, ticks, and retained filled tips to Rust. The
 bounded ThreeDAxes constructor retains its three default tips.
 Coordinates may be constructed after ordinary plays/waits;
 add late coordinates to the Scene before querying or plotting against them.
-Numeric native Text label families must be constructed before the first play/wait.
 Existing coordinates remain queryable after plays; curves use ordinary live
 geometry publication. Python owns callables/coercion, never coordinate math.
 """
@@ -22,16 +21,26 @@ import _manim_compat as _compat
 import _manim_semantic_handles as _shared
 from _noon_errors import engine_call
 
+from _noon_host import array_value as _to_js
 try:
-    from js import noonAuthoringCoordinateOptions as _coordinate_options
-    from js import noonCreateAuthoringCoordinateHandle as _create_coordinates
-    from js import noonAuthoringBarChartOptions as _bar_chart_options
-    from js import noonCreateAuthoringBarChart as _create_bar_chart
-    from js import noonBarChartLabels as _bar_labels
-    from js import noonPlotSamplingPlan as _sampling_plan
-    from pyodide.ffi import to_js as _to_js, jsnull as _jsnull
+    from pyodide.ffi import jsnull as _jsnull
 except ImportError:
-    _coordinate_options = _create_coordinates = _bar_chart_options = _create_bar_chart = _bar_labels = _sampling_plan = _to_js = _jsnull = None
+    _jsnull = None
+try:
+    from _noon_host import noonAuthoringCoordinateOptions as _coordinate_options
+    from _noon_host import noonCreateAuthoringCoordinateHandle as _create_coordinates
+except ImportError:
+    _coordinate_options = _create_coordinates = None
+try:
+    from _noon_host import noonAuthoringBarChartOptions as _bar_chart_options
+    from _noon_host import noonCreateAuthoringBarChart as _create_bar_chart
+    from _noon_host import noonBarChartLabels as _bar_labels
+except ImportError:
+    _bar_chart_options = _create_bar_chart = _bar_labels = None
+try:
+    from _noon_host import noonPlotSamplingPlan as _sampling_plan
+except ImportError:
+    _sampling_plan = None
 
 
 class _NumberLabel(NamedTuple):
@@ -102,19 +111,15 @@ def _outside_callback():
         )
 
 
-def _coordinate_context(shafts):
+def _coordinate_context(owner, *shafts):
     _outside_callback()
-    contexts = [context for shaft in shafts
-                if (context := _shared._live_mutation_context(shaft)) is not None]
-    if contexts and any(context is not contexts[0] for context in contexts[1:]):
-        raise RuntimeError("coordinate shafts belong to different execution contexts")
-    context = contexts[0] if contexts else _shared._live_constructor_context("coordinate query")
-    if context is not None and not all(_shared._is_bound(shaft) for shaft in shafts):
-        raise NotImplementedError(
-            "add live coordinates to the Scene before querying or plotting; "
-            "detached live coordinate reads are not yet exposed by the Python context"
-        )
-    return context
+    contexts = [context for target in (owner, *shafts)
+                if (context := _shared._object_authoring_context(target)) is not None]
+    if contexts:
+        if any(context is not contexts[0] for context in contexts[1:]):
+            raise RuntimeError("coordinate shafts belong to different execution contexts")
+        return contexts[0]
+    return _shared._path_authoring_context()
 
 
 def _family(wrapper, handle, members):
@@ -173,7 +178,7 @@ def _coordinate_constructor_context():
     _outside_callback()
     if _create_coordinates is None:
         raise RuntimeError("coordinates require the shared Rust authoring host")
-    return _shared._live_constructor_context("coordinates")
+    return _shared._path_authoring_context()
 
 
 _THREE_D_AXIS_CONFIG_KEYS = {
@@ -569,7 +574,7 @@ class NumberLine(_compat.Group):
             raise
         _attach_number_line(
             self,
-            engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options),
+            engine_call(context.createCoordinates if context is not None else _create_coordinates, options),
             tick_size=tick_size,
             include_ticks=bool(include_ticks),
             include_tip=bool(include_tip),
@@ -614,7 +619,7 @@ class NumberLine(_compat.Group):
         self._tip = value
 
     def _coordinate_frame(self):
-        context = _coordinate_context([self.shaft])
+        context = _coordinate_context(self, self.shaft)
         if context is not None:
             return engine_call(context.queryNumberLineFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.numberLineFrame)
@@ -789,11 +794,11 @@ class NumberLine(_compat.Group):
         return self
 
     def add_numbers(self, x_values=None, excluding=None, **kwargs):
-        """Atomically append DecimalNumber labels before playback; expose .numbers.
+        """Atomically append numeric labels and expose the latest family as .numbers.
 
         Repeated calls append another label family, rather than replacing the
-        earlier one. Call ``await prepare_latex()`` first. Passing ``font`` opts
-        into the native-Text subset. Explicit values keep ordinary numeric labels
+        earlier one. Passing ``font`` opts into the native-Text subset. Explicit
+        values keep ordinary numeric labels
         even when the line has logarithmic scaling.
         """
         from _manim_number_labels import number_mobjects
@@ -870,7 +875,7 @@ class Axes(_compat.Group):
         except BaseException:
             options.free()
             raise
-        handle = engine_call(context.liveCreateCoordinates if context is not None else _create_coordinates, options)
+        handle = engine_call(context.createCoordinates if context is not None else _create_coordinates, options)
         members = []
         axis_setups = (
             (0, x_options, x_scale, x_range_values),
@@ -926,7 +931,7 @@ class Axes(_compat.Group):
                          buff=_base.SMALL_BUFF, **kwargs):
         """Create a retained label next to the upper-right x-axis edge.
 
-        Strings and numeric values use MathTex; call await prepare_latex() first.
+        Strings and numeric values use MathTex.
         Retained text mobjects are placed without recompiling.
         """
         if kwargs:
@@ -1008,7 +1013,7 @@ class Axes(_compat.Group):
 
     def _coordinate_frame(self):
         # Observe only two shaft identities, not every tick/label in the family.
-        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        context = _coordinate_context(self, self.x_axis.shaft, self.y_axis.shaft)
         if context is not None:
             return engine_call(context.queryAxesFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.axesFrame)
@@ -1067,29 +1072,24 @@ class Axes(_compat.Group):
     def get_area(self, graph, x_range=None, color=None, opacity=0.3,
                  bounded_graph=None, **kwargs):
         """Create one static closed path prepared by the shared Rust query."""
-        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
-        if context is not None:
-            options = engine_call(
-                context.effectiveAxesAreaOptions, self._semantic_family_handle,
-                graph._semantic_handle, _array(() if x_range is None else x_range),
-                graph._semantic_handle if bounded_graph is None else bounded_graph._semantic_handle,
-                bounded_graph is not None,
-            )
-        else:
+        _outside_callback()
+        context = _shared._path_authoring_context(self, graph, bounded_graph)
+        graph_handle = graph._semantic_handle
+        bounded_handle = graph_handle if bounded_graph is None else bounded_graph._semantic_handle
+        args = (graph_handle, _array(() if x_range is None else x_range),
+                bounded_handle, bounded_graph is not None)
+        if context is None:
             with _owned(self._coordinate_frame()) as frame:
-                options = engine_call(
-                    frame.area, graph._semantic_handle,
-                    _array(() if x_range is None else x_range),
-                    graph._semantic_handle if bounded_graph is None else bounded_graph._semantic_handle,
-                    bounded_graph is not None,
-                )
+                options = engine_call(frame.area, *args)
+        else:
+            options = engine_call(context.prepareAxesArea, self._semantic_family_handle, *args)
         kwargs.setdefault("fill_opacity", float(opacity))
         kwargs.setdefault("stroke_opacity", float(opacity))
         colors = (_base.BLUE, _base.GREEN) if color is None else color
         if isinstance(colors, (list, tuple)):
-            result = _curve(object.__new__(_compat.VMobject), options, None, kwargs)
+            result = _curve(object.__new__(_compat.VMobject), options, None, kwargs, context=context)
             return result.set_color_by_gradient(*colors)
-        return _curve(object.__new__(_compat.VMobject), options, colors, kwargs)
+        return _curve(object.__new__(_compat.VMobject), options, colors, kwargs, context=context)
 
     def get_riemann_rectangles(self, graph, x_range=None, dx=0.1,
                                input_sample_type="left", stroke_width=1,
@@ -1097,7 +1097,8 @@ class Axes(_compat.Group):
                                color=(_base.BLUE, _base.GREEN), show_signed_area=True,
                                bounded_graph=None, blend=False, width_scale_factor=1.001):
         """Sample original scalar callables against one Rust-captured snapshot."""
-        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        _outside_callback()
+        context = _shared._path_authoring_context(self, graph, bounded_graph)
         sample = {"left": 0, "right": 1, "center": 2}.get(input_sample_type)
         if sample is None:
             raise ValueError("input_sample_type must be 'left', 'right', or 'center'")
@@ -1110,7 +1111,7 @@ class Axes(_compat.Group):
             prepare = self._semantic_family_handle.riemannSamplePlan
             prepare_args = (graph_handle,)
         else:
-            prepare = context.liveEffectiveRiemannSamplePlan
+            prepare = context.prepareRiemannPlan
             prepare_args = (self._semantic_family_handle, graph_handle)
         options = engine_call(_coordinate_options.riemann, _array(() if x_range is None else x_range),
                               float(dx), sample, float(width_scale_factor))
@@ -1137,15 +1138,15 @@ class Axes(_compat.Group):
                     baseline_values.append(float(bounded_function(float(x))))
             values = (_array(top_values), _array(baseline_values))
             handle = (engine_call(plan.publish, *values) if context is None else
-                      engine_call(context.livePublishRiemannPlan, plan, *values))
+                      engine_call(context.publishRiemannPlan, plan, *values))
         members = [_leaf(member, _compat.Rectangle) for member in engine_call(handle.directMobjects)]
         return _family(object.__new__(_compat.VGroup), handle, members)
 
     def add_coordinates(self, *axes_numbers, x_config=None, y_config=None, **kwargs):
         """Add default or positional per-axis coordinate labels.
 
-        Numeric defaults use retained DecimalNumber labels and require
-        ``await prepare_latex()``. Passing ``font`` selects native Text.
+        Numeric defaults use retained DecimalNumber labels. Passing ``font``
+        selects native Text.
         Two-axis numeric labels commit together and must use one text type.
         Add mixed text types or custom mappings one axis at a time.
         """
@@ -1341,7 +1342,7 @@ class ThreeDAxes(_compat.Group):
             options.free()
             raise
         handle = engine_call(
-            context.liveCreateCoordinates if context is not None else _create_coordinates,
+            context.createCoordinates if context is not None else _create_coordinates,
             options,
         )
         axes = [
@@ -1364,6 +1365,7 @@ class ThreeDAxes(_compat.Group):
         _family(self, handle, axes)
 
     def _axis_label_family(self, labels, *, buff=0.1, fixed_orientation=False, **kwargs):
+        _outside_callback()
         if kwargs:
             raise NotImplementedError("unsupported ThreeDAxes label option(s): " + ", ".join(sorted(kwargs)))
         if not isinstance(fixed_orientation, bool):
@@ -1382,13 +1384,16 @@ class ThreeDAxes(_compat.Group):
             raise ValueError("at least one ThreeDAxes label is required")
         selected_axes = sum(1 << index for index, handle in enumerate(handles) if handle is not None)
         active_handle = next(handle for handle in handles if handle is not None)
-        family = engine_call(
-            self._semantic_family_handle.threeDAxesLabelFamilies,
-            *(active_handle if handle is None else handle for handle in handles),
-            selected_axes, buff, fixed_orientation,
-        )
-        wrapper = object.__new__(_compat.Group)
-        return _family(wrapper, family, selected)
+        context = _shared._path_authoring_context(self, *selected)
+        args = (*(active_handle if handle is None else handle for handle in handles),
+                selected_axes, buff, fixed_orientation)
+        family = (engine_call(self._semantic_family_handle.threeDAxesLabelFamilies, *args)
+                  if context is None else
+                  engine_call(context.createThreeDAxesLabels, self._semantic_family_handle, *args))
+        wrapper = _family(object.__new__(_compat.Group), family, selected)
+        if context is not None:
+            wrapper._canonical_live_target_context = context
+        return wrapper
 
     def get_x_axis_label(self, label, *, buff=0.1, fixed_orientation=False, **kwargs):
         """Place one existing retained text object at the positive X endpoint."""
@@ -1431,7 +1436,7 @@ class ThreeDAxes(_compat.Group):
 
     def _coordinate_frame(self):
         shafts = [self.x_axis.shaft, self.y_axis.shaft, self.z_axis.shaft]
-        context = _coordinate_context(shafts)
+        context = _coordinate_context(self, *shafts)
         if context is not None:
             return engine_call(context.queryThreeDAxesFrame, self._semantic_family_handle)
         return engine_call(self._semantic_family_handle.threeDAxesFrame)
@@ -1498,7 +1503,7 @@ class BarChart(Axes):
                     _compat._as_color("bar color", color).alpha,
                 )]
                 engine_call(options.setColors, _array(rgba))
-            context = _shared._live_constructor_context("bar chart", allow_unstarted=True)
+            context = _shared._path_authoring_context()
             if bar_names is not None:
                 engine_call(options.setNames, _to_js(list(bar_names)), name_size)
             from _manim_number_labels import _options
@@ -1554,7 +1559,7 @@ class BarChart(Axes):
             raise NotImplementedError("BarChart labels support Tex or MathTex")
         if _bar_labels is None:
             raise RuntimeError("BarChart labels require the shared Rust authoring host")
-        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        context = _shared._path_authoring_context(self)
         rgba = []
         if color is not None:
             c = _compat._as_color("label color", color)
@@ -1565,12 +1570,12 @@ class BarChart(Axes):
 
     def change_bar_values(self, values, update_colors=True):
         values = tuple(float(value) for value in values)
-        context = _coordinate_context([self.x_axis.shaft, self.y_axis.shaft])
+        context = _shared._path_authoring_context(self)
         old = engine_call(self._bar_chart_handle.barPrefix, len(values))
         if context is None:
             engine_call(self._bar_chart_handle.changeBarValues, _array(values), bool(update_colors))
         else:
-            engine_call(context.liveChangeBarValues, self._bar_chart_handle, _array(values), bool(update_colors))
+            engine_call(context.changeBarValues, self._bar_chart_handle, _array(values), bool(update_colors))
         new = engine_call(self._bar_chart_handle.barPrefix, len(values))
         changed = []
         for before, after in zip(old, new):
@@ -1585,8 +1590,8 @@ class BarChart(Axes):
                 changed.extend((previous, replacement) if previous is not None else (replacement,))
         scene = self.x_axis.shaft._scene
         if changed and scene is not None:
-            from _manim_scene import _reconcile_completed_family_bindings
-            _reconcile_completed_family_bindings(scene, tuple(changed))
+            from _manim_scene import _associate_published_wrappers
+            _associate_published_wrappers(scene, tuple(changed), operation="Scene.completion")
         return self
 
 
@@ -1626,14 +1631,14 @@ def _evaluate(plan, function, use_smoothing, *, parametric):
         return engine_call(plan.functionSamples, values, bool(use_smoothing))
 
 
-def _curve(wrapper, options, color, kwargs):
+def _curve(wrapper, options, color, kwargs, *, context=None):
     try:
         _shared._apply_shared_constructor_options(options, kwargs)
         _shared._apply_constructor_color(options, color)
     except BaseException:
         options.free()
         raise
-    _shared._attach_geometry_options(wrapper, options, "static plot")
+    _shared._attach_geometry_options(wrapper, options, "static plot", context=context)
     return wrapper
 
 

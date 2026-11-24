@@ -1,0 +1,970 @@
+//! Prepared playback at the existing execution-to-render worker boundary.
+//!
+//! This host owns one PrefixReader and disposable transport/presentation state,
+//! never source semantics. The same retained codec, pointer admission, evaluator
+//! and clock policy as the existing hosts handle its selected historical frame.
+use crate::browser_pointer_input::{BrowserPointerBinding, BrowserPointerTarget};
+use crate::prepared_canvas_playback::PreparedCanvasPlayback;
+use crate::semantic_execution_player::WasmExecutionWake;
+use crate::video_asset::readiness::BrowserVideoReadiness;
+use crate::worker_pointer_presentation::{WorkerPointerInput, WorkerPointerPresentation};
+use crate::{
+    BrowserExecutionCadence, BrowserExecutionWakeClock, BrowserExecutionWakePlan, BrowserHostWake,
+    RetainedFamilyExecutionDeltaEncoder, RetainedFamilyExecutionDeltaEnvelope,
+    RetainedResourceBundle,
+};
+use noon::{PrefixBatch, PrefixBatchStats, PrefixError, PrefixReader};
+
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedPresentationIdentity {
+    session: u32,
+    sequence: u64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedHeldPresentation {
+    publication: PreparedPresentationIdentity,
+    evaluated_time: f64,
+    time: f64,
+    valid_until: f64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedPlaybackState {
+    #[serde(flatten)]
+    observation: crate::prepared_canvas_playback::PreparedPlaybackObservation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    held_presentation: Option<PreparedHeldPresentation>,
+}
+
+use crate::retained_family_execution_encoder::NoChangePresentation as PreparedNoChangePresentation;
+
+mod export;
+pub(crate) mod source;
+use source::SourceDelivery;
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
+pub struct PreparedExecutionPlayer {
+    playback: PreparedCanvasPlayback,
+    section_navigation: noon::SceneSectionNavigation,
+    clock: BrowserExecutionWakeClock,
+    video: BrowserVideoReadiness,
+    encoder: RetainedFamilyExecutionDeltaEncoder,
+    snapshot_sent: bool,
+    last_selection: Option<noon::integration::PointerSelectionPresentation>,
+    pointer: WorkerPointerPresentation,
+    binding: Option<BrowserPointerBinding>,
+    sequence: u64,
+    last_publication: Option<PreparedPresentationIdentity>,
+    no_change_presentation: Option<PreparedNoChangePresentation>,
+    // Optional interpreter delivery cursor; never the source scene/runtime.
+    source: Option<SourceDelivery>,
+    finite_export: Option<noon::integration::CompletedPrefixExport>,
+}
+
+impl PreparedExecutionPlayer {
+    /// Move the independent reader into its worker host. The producer stays with
+    /// its caller. No runtime, authoring context or history is cloned/transferred
+    /// across WASM instances by this typed in-process constructor.
+    pub fn from_reader(reader: PrefixReader, transport_session: u32) -> Self {
+        Self {
+            playback: PreparedCanvasPlayback::new(reader),
+            section_navigation: noon::SceneSectionNavigation::default(),
+            clock: BrowserExecutionWakeClock::default(),
+            video: BrowserVideoReadiness::default(),
+            encoder: RetainedFamilyExecutionDeltaEncoder::new(transport_session),
+            snapshot_sent: false,
+            last_selection: None,
+            pointer: WorkerPointerPresentation::default(),
+            binding: None,
+            sequence: 0,
+            last_publication: None,
+            no_change_presentation: None,
+            source: None,
+            finite_export: None,
+        }
+    }
+
+    pub fn reserve_object_capacity(&mut self, total: usize) -> Result<usize, PrefixError> {
+        self.playback.reader.reserve_object_capacity(total)
+    }
+
+    /// Borrow before transfer so failed admission cannot lose the host's batch.
+    pub fn preflight_append(&self, batch: &PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
+        self.playback.reader.preflight_append(batch)
+    }
+
+    pub fn has_audio(&self) -> bool {
+        self.playback.reader.has_audio()
+    }
+
+    /// Delivery does not issue a render sequence or alter a displayed receipt.
+    pub fn append(&mut self, batch: PrefixBatch) -> Result<PrefixBatchStats, PrefixError> {
+        let was_buffering = self.playback.buffering();
+        let was_preparing = self.playback.preparing();
+        let terminal = batch.is_terminal();
+        let stats = self.playback.append(batch)?;
+        if (was_buffering && !self.playback.buffering()) || (was_preparing && terminal) {
+            self.clock = BrowserExecutionWakeClock::default();
+        }
+        Ok(stats)
+    }
+
+    /// Supply the immutable cue snapshot owned by the same Rust Scene that
+    /// produced this reader. Bare readers intentionally start without cues.
+    pub fn set_section_navigation(&mut self, navigation: noon::SceneSectionNavigation) {
+        self.section_navigation = navigation;
+    }
+
+    fn selectable_section_index(
+        &self,
+        time: f64,
+        direction: noon::SectionNavigation,
+    ) -> Result<Option<usize>, String> {
+        let Some((index, section)) = self.section_navigation.target(time, direction)? else {
+            return Ok(None);
+        };
+        Ok(self
+            .playback
+            .reader
+            .contains_time(section.time)
+            .then_some(index))
+    }
+
+    fn selectable_section_query_time(&self, time: f64) -> Result<Option<f64>, String> {
+        if !time.is_finite() || time < 0.0 {
+            return Err("section navigation time must be finite and non-negative".into());
+        }
+        let Some((start, end)) = self
+            .playback
+            .reader
+            .selectable_time_bounds()
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(None);
+        };
+        if time < start {
+            return Err("section navigation time is before the prepared reader range".into());
+        }
+        Ok(Some(time.min(end)))
+    }
+
+    fn delta(
+        &mut self,
+        snapshot: bool,
+    ) -> Result<Option<RetainedFamilyExecutionDeltaEnvelope>, String> {
+        self.no_change_presentation = None;
+        let reader = &mut self.playback.reader;
+        let selection = reader.pointer_selection_presentation();
+        let overlay = selection
+            .as_ref()
+            .map(crate::SelectionOverlayPresentation::from_presentation)
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        let camera = reader
+            .inspection_camera()
+            .map_err(|error| error.to_string())?;
+        let frame = self.pointer.capture(reader)?;
+        let refresh = self.pointer.needs_delta(reader);
+        let planar_enabled = self.finite_export.is_none() && reader.uses_planar_viewer_input();
+        let spatial_inspection = reader
+            .inspection_spatial_camera()
+            .map_err(|error| error.to_string())?;
+        let viewer_indications = if self.finite_export.is_none() {
+            reader.viewer_indications()
+        } else {
+            Vec::new()
+        };
+        let publication = reader.take_renderer_publication();
+        let Some(mut delta) = self.encoder.encode_renderer_publication(
+            &publication,
+            camera,
+            spatial_inspection,
+            &viewer_indications,
+            snapshot || !self.snapshot_sent,
+            refresh || selection != self.last_selection || self.finite_export.is_some(),
+        )?
+        else {
+            self.no_change_presentation =
+                self.last_publication
+                    .map(|publication| PreparedNoChangePresentation {
+                        session: publication.session,
+                        sequence: publication.sequence,
+                        time: reader.frame().time,
+                        publication_context: reader.publication_context(),
+                    });
+            return Ok(None);
+        };
+        // The prepared source gate rejects inset views; no frontend reconstructs
+        // them. Selection and pointer receipts remain host-derived presentation.
+        delta.selection_overlay = overlay;
+        delta.pointer_view = self.pointer.view().filter(|view| view.drawable());
+        self.pointer
+            .retire_planar_binding_if_changed(frame.as_ref(), &mut self.binding);
+        self.pointer
+            .issue(delta.retained.session, delta.retained.sequence, frame);
+        self.pointer.issue_viewer(
+            &publication,
+            spatial_inspection.map(|(_, camera)| camera),
+            delta.retained.snapshot,
+            planar_enabled,
+        );
+        self.snapshot_sent = true;
+        self.last_selection = selection;
+        self.encoder.compact_dense_rows(&mut delta);
+        self.last_publication = Some(PreparedPresentationIdentity {
+            session: delta.retained.session,
+            sequence: delta.retained.sequence,
+        });
+        self.no_change_presentation = None;
+        Ok(Some(delta))
+    }
+
+    fn validate_wall_time(wall_time_ms: f64) -> Result<(), String> {
+        if !wall_time_ms.is_finite() || wall_time_ms < 0.0 {
+            return Err("prepared playback requires finite non-negative wall time".into());
+        }
+        Ok(())
+    }
+
+    fn wake_state(&self) -> noon_runtime::RuntimeWakeState {
+        let wake = self.playback.wake_state();
+        if self.video.waiting() {
+            return wake.without_timeline_wake();
+        }
+        if self.playback.advancing() {
+            if let Some(deadline) = self.video.next_preload(
+                self.playback.reader.video_rasters(),
+                self.playback.reader.frame().time,
+            ) {
+                return wake
+                    .with_additional_timeline(noon_runtime::TimelineWakeState::Deadline(deadline));
+            }
+        }
+        wake
+    }
+
+    fn observe_clock(
+        &mut self,
+        wall_time_ms: f64,
+    ) -> Result<crate::BrowserExecutionWakeDirective, String> {
+        Self::validate_wall_time(wall_time_ms)?;
+        self.clock
+            .directive(
+                BrowserExecutionWakePlan::from_runtime(self.wake_state()),
+                wall_time_ms,
+                self.playback.reader.frame().time,
+            )
+            .ok_or_else(|| "prepared playback clock cannot represent wall time".into())
+    }
+
+    fn tick(&mut self, wall_time_ms: f64) -> Result<(), String> {
+        let plan = BrowserExecutionWakePlan::from_runtime(self.wake_state());
+        let directive = self.observe_clock(wall_time_ms)?;
+        let target = if self.video.pending.is_some() {
+            self.video.pending
+        } else {
+            match (directive.wake(), plan.cadence()) {
+                (BrowserHostWake::AnimationFrame, BrowserExecutionCadence::AnimationFrame) => Some(
+                    self.clock
+                        .scene_time_at(wall_time_ms)
+                        .ok_or("missing prepared playback epoch")?,
+                ),
+                (
+                    BrowserHostWake::TimerAfterMilliseconds(delay),
+                    BrowserExecutionCadence::TimerAtSceneTime(deadline),
+                ) if delay <= 0.0 => Some(
+                    self.clock
+                        .scene_time_at(wall_time_ms)
+                        .ok_or("missing prepared playback epoch")?
+                        .max(deadline),
+                ),
+                _ => None,
+            }
+        };
+        if let Some(target) = target {
+            let current = self.playback.reader.frame().time;
+            let selected = self.playback.time_from_clock(target);
+            let videos = self.playback.reader.video_rasters();
+            if videos.is_empty() || self.video.allow_sample(videos, current, target, selected) {
+                self.playback
+                    .advance_clock_sample(target)
+                    .map_err(|error| error.to_string())?;
+            }
+            if self.playback.take_clock_reanchor() && !self.video.awaiting_picture {
+                self.clock
+                    .reanchor(wall_time_ms, self.playback.reader.frame().time)
+                    .ok_or("prepared playback loop cannot re-anchor its clock")?;
+            }
+        }
+        self.playback
+            .reader
+            .advance_interactions(wall_time_ms / 1_000.0)
+            .map_err(|error| error.to_string())?;
+        self.playback
+            .reader
+            .advance_viewer_inspection(wall_time_ms / 1_000.0)
+            .map_err(|error| error.to_string())?;
+        self.observe_clock(wall_time_ms)?;
+        Ok(())
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
+impl PreparedExecutionPlayer {
+    /// Cue markers retain their Scene indices while only admitted times are
+    /// published. An open frontier cue stays hidden until a later append or
+    /// terminal adoption makes that exact timestamp selectable.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sectionsJson))]
+    pub fn sections_json(&self) -> String {
+        serde_json::Value::Array(
+            self.section_navigation
+                .sections()
+                .iter()
+                .enumerate()
+                .filter(|(_, section)| self.playback.reader.contains_time(section.time))
+                .map(|(index, section)| {
+                    serde_json::json!({
+                        "index": index,
+                        "name": section.name,
+                        "time": section.time,
+                    })
+                })
+                .collect(),
+        )
+        .to_string()
+    }
+
+    /// Query the same immutable cue metadata from a Rust-observed time while
+    /// requiring every reported cue target to be admitted by this reader.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = sectionStateJson))]
+    pub fn section_state_json(&self, time: f64) -> Result<String, String> {
+        let query_time = self.selectable_section_query_time(time)?;
+        let (current, previous, next) = if let Some(query_time) = query_time {
+            let current = self
+                .section_navigation
+                .current(query_time)?
+                .filter(|(_, section)| self.playback.reader.contains_time(section.time))
+                .map(|(index, _)| index);
+            (
+                current,
+                self.selectable_section_index(query_time, noon::SectionNavigation::Previous)?,
+                self.selectable_section_index(query_time, noon::SectionNavigation::Next)?,
+            )
+        } else {
+            (None, None, None)
+        };
+        Ok(serde_json::json!({
+            "current": current,
+            "previous": previous,
+            "next": next,
+        })
+        .to_string())
+    }
+
+    /// Resolve a strict cue target in Rust and seek through the ordinary reader
+    /// path, which revalidates its inclusive/open selectable range.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekSectionDeltaJson))]
+    pub fn seek_section_delta_json(
+        &mut self,
+        previous: bool,
+        observed_time: f64,
+    ) -> Result<Option<String>, String> {
+        let direction = if previous {
+            noon::SectionNavigation::Previous
+        } else {
+            noon::SectionNavigation::Next
+        };
+        let target = self
+            .selectable_section_query_time(observed_time)?
+            .map(|time| self.section_navigation.target(time, direction))
+            .transpose()?
+            .flatten()
+            .filter(|(_, section)| self.playback.reader.contains_time(section.time))
+            .map(|(_, section)| section.time);
+        match target {
+            Some(time) => self.seek_delta_json(time),
+            // The endpoint still needs a current Rust receipt for an unchanged
+            // selected frame. Drain through the ordinary publication path so
+            // stale proofs are cleared and pending renderer work is surfaced.
+            None => self.drain_delta_json(),
+        }
+    }
+
+    /// Rebuild disposable delivery state for a fresh renderer without seeking,
+    /// cloning history or invoking source. Old receipts require a new transport
+    /// session; its first snapshot carries only the selected resource closure.
+    /// Reset the wake epoch so the host can resume on the new receiver's first
+    /// presentation, excluding downtime while preserving playback intent/history.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = resetReceiver))]
+    pub fn reset_receiver(&mut self, transport_session: u32) -> Result<(), String> {
+        if !self.snapshot_sent || transport_session <= self.encoder.session() {
+            return Err(
+                "prepared receiver reset requires a started stream and a newer transport session"
+                    .into(),
+            );
+        }
+        self.pointer.reset_receiver(
+            &mut self.playback.reader,
+            &mut self.binding,
+            &mut self.sequence,
+        )?;
+        self.encoder = RetainedFamilyExecutionDeltaEncoder::new(transport_session);
+        self.snapshot_sent = false;
+        self.last_selection = None;
+        self.last_publication = None;
+        self.no_change_presentation = None;
+        self.video = BrowserVideoReadiness::default();
+        self.clock = BrowserExecutionWakeClock::default();
+        Ok(())
+    }
+
+    /// Valid empty bootstrap bundle: selected resources accompany the initial
+    /// ordinary delta. Future resources are not scanned or sent at bootstrap.
+    /// Each receiver bootstraps once. Retry a drained delta exactly as issued;
+    /// replacing the receiver instead requires an explicit new-session reset.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = resourceBundleBytes))]
+    pub fn resource_bundle_bytes(&self) -> Result<Vec<u8>, String> {
+        if self.snapshot_sent {
+            return Err(
+                "prepared transport has already started; resource bootstrap cannot be replayed"
+                    .into(),
+            );
+        }
+        RetainedResourceBundle::empty()
+            .encode_binary()
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = hasAudio))]
+    pub fn has_audio_wasm(&self) -> bool {
+        self.has_audio()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = finiteAudioDuration))]
+    pub fn finite_audio_duration(&self) -> Option<f64> {
+        self.playback.reader.end_time()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioResourceBundleBytes))]
+    pub fn audio_resource_bundle_bytes(&self) -> Result<Vec<u8>, String> {
+        crate::worker_audio::encode_prepared(&self.playback.reader, self.encoder.session())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioAnchorJson))]
+    pub fn audio_anchor_json(&self, sampled_epoch_ms: f64) -> Result<String, String> {
+        self.serialize_audio_anchor(self.prepared_time(), sampled_epoch_ms)
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = audioAnchorJsonAt))]
+    pub fn audio_anchor_json_at(
+        &self,
+        wall_time_ms: f64,
+        sampled_epoch_ms: f64,
+    ) -> Result<String, String> {
+        let time = self.prepared_playback_time_at(wall_time_ms)?;
+        self.serialize_audio_anchor(time, sampled_epoch_ms)
+    }
+
+    fn serialize_audio_anchor(&self, time: f64, sampled_epoch_ms: f64) -> Result<String, String> {
+        if !sampled_epoch_ms.is_finite() {
+            return Err("audio anchor requires a finite host timestamp".into());
+        }
+        let horizon = self
+            .playback
+            .reader
+            .end_time()
+            .unwrap_or_else(|| self.playback.reader.frontier());
+        let authorized = self
+            .video
+            .boundary(self.playback.reader.video_rasters(), time)
+            .map_or(horizon, |limit| horizon.min(limit));
+        Ok(serde_json::json!({
+            "session": self.encoder.session(),
+            "time": time,
+            "playing": self.playback.playing(),
+            "buffering": self.prepared_buffering() || self.playback.preparing(),
+            "sampledEpochMs": sampled_epoch_ms,
+            "authorizedUntil": authorized,
+        })
+        .to_string())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = initialDeltaJson))]
+    pub fn initial_delta_json(&mut self) -> Result<String, String> {
+        if self.snapshot_sent {
+            return Err(
+                "prepared transport has already started; initial delta cannot be repeated".into(),
+            );
+        }
+        self.video
+            .demand(self.playback.reader.video_rasters(), self.prepared_time());
+        serde_json::to_string(
+            &self
+                .delta(true)?
+                .ok_or("initial prepared snapshot missing")?,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = drainDeltaJson))]
+    pub fn drain_delta_json(&mut self) -> Result<Option<String>, String> {
+        self.delta(false)?
+            .map(|delta| serde_json::to_string(&delta).map_err(|error| error.to_string()))
+            .transpose()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = drainDeltaTransportJson))]
+    pub fn drain_delta_transport_json(&mut self) -> Result<Option<String>, String> {
+        self.delta(false)?
+            .map(|delta| delta.encode_worker_carrier())
+            .transpose()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = tickDeltaJson))]
+    pub fn tick_delta_json(&mut self, wall_time_ms: f64) -> Result<Option<String>, String> {
+        self.tick(wall_time_ms)?;
+        self.drain_delta_json()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = tickDeltaTransportJson))]
+    pub fn tick_delta_transport_json(
+        &mut self,
+        wall_time_ms: f64,
+    ) -> Result<Option<String>, String> {
+        self.tick(wall_time_ms)?;
+        self.drain_delta_transport_json()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setVideoWindow))]
+    pub fn set_video_window(
+        &mut self,
+        clip: &str,
+        start: usize,
+        end: usize,
+    ) -> Result<bool, String> {
+        self.video
+            .update(self.playback.reader.video_rasters(), clip, start, end)
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = videoReadyUntil))]
+    pub fn video_ready_until(&self) -> f64 {
+        let reader = &self.playback.reader;
+        let horizon = reader.end_time().unwrap_or_else(|| reader.frontier());
+        self.video
+            .boundary(reader.video_rasters(), self.prepared_time())
+            .map_or(horizon, |limit| horizon.min(limit))
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = videoBuffering))]
+    pub fn video_buffering(&self) -> bool {
+        self.video.pending.is_some()
+    }
+
+    /// Finish the existing presentation barrier after a blocked video sample.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = acknowledgeVideoPresentation))]
+    pub fn acknowledge_video_presentation(&mut self, wall_time_ms: f64) -> Result<(), String> {
+        Self::validate_wall_time(wall_time_ms)?;
+        if std::mem::take(&mut self.video.awaiting_picture) {
+            self.clock
+                .reanchor(wall_time_ms, self.prepared_time())
+                .ok_or("video presentation cannot re-anchor the prepared clock")?;
+        }
+        Ok(())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = takeVideoDemands))]
+    pub fn take_video_demands(&mut self) -> Option<String> {
+        self.video.take_demands()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = executionWake))]
+    pub fn execution_wake(&mut self, wall_time_ms: f64) -> Result<WasmExecutionWake, String> {
+        let directive = self.observe_clock(wall_time_ms)?;
+        let wake = self.wake_state();
+        let wake = if !self.playback.preparing()
+            && (self.playback.reader.interactions_active()
+                || self.playback.reader.viewer_inspection_active())
+        {
+            wake.with_additional_timeline(noon_runtime::TimelineWakeState::Continuous)
+        } else {
+            wake
+        };
+        let timer = match directive.wake() {
+            BrowserHostWake::TimerAfterMilliseconds(delay) => Some(delay),
+            _ => None,
+        };
+        Ok(WasmExecutionWake::from_plan(
+            BrowserExecutionWakePlan::from_runtime(wake),
+            timer,
+        ))
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekDeltaJson))]
+    pub fn seek_delta_json(&mut self, time: f64) -> Result<Option<String>, String> {
+        self.no_change_presentation = None;
+        self.playback
+            .seek(time)
+            .map_err(|error| error.to_string())?;
+        self.playback.reader.cancel_planar_viewer_pointer();
+        self.pointer.retire_viewer_frames();
+        self.video.clear_selection();
+        self.video
+            .demand(self.playback.reader.video_rasters(), time);
+        self.clock = BrowserExecutionWakeClock::default();
+        self.delta(false)?
+            .map(|delta| serde_json::to_string(&delta).map_err(|error| error.to_string()))
+            .transpose()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPreparedPlaying))]
+    pub fn set_prepared_playing(&mut self, playing: bool) {
+        if self.playback.set_playing(playing) {
+            self.video.clear_selection();
+            self.clock = BrowserExecutionWakeClock::default();
+            if !playing {
+                self.pointer.refresh_paused_viewer(&self.playback.reader);
+            }
+        }
+    }
+
+    /// Hold the open prepared reader at its current sample while the original
+    /// source continuation fills the complete finite timeline. Playback intent
+    /// remains separate; successful terminal adoption releases this gate.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = prepareSourceBeforePlayback))]
+    pub fn prepare_source_before_playback(&mut self) -> Result<(), String> {
+        let source = self
+            .source
+            .as_ref()
+            .ok_or("prepared source delivery is closed")?;
+        if self.snapshot_sent {
+            return Err(
+                "source-before-playback must be selected before the initial snapshot".into(),
+            );
+        }
+        if self.playback.reader.end_time().is_some() || source.finished() {
+            return Err("source-before-playback requires an open prepared source".into());
+        }
+        self.playback.begin_preparation();
+        self.clock = BrowserExecutionWakeClock::default();
+        Ok(())
+    }
+
+    /// Configure the gallery's existing loop policy. The duration is retained
+    /// while the prefix is open, but can only take effect after terminal admission.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPreparedLoopDuration))]
+    pub fn set_prepared_loop_duration(&mut self, duration: Option<f64>) -> Result<(), String> {
+        self.playback
+            .set_loop_duration(duration)
+            .map_err(str::to_owned)?;
+        self.clock = BrowserExecutionWakeClock::default();
+        Ok(())
+    }
+
+    /// Last coherent evaluated sample, independent of the producer's frontier.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedTime))]
+    pub fn prepared_time(&self) -> f64 {
+        self.playback.reader.frame().time
+    }
+
+    /// Consume a Rust-owned proof that the last seek selected no renderer
+    /// changes relative to its latest emitted publication.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = takePreparedNoChangePresentationJson))]
+    pub fn take_prepared_no_change_presentation_json(&mut self) -> Option<String> {
+        self.no_change_presentation
+            .take()
+            .map(|proof| serde_json::to_string(&proof).expect("presentation proof is serializable"))
+    }
+
+    /// Adopted history frontier. It is open until a terminal batch is adopted.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedFrontier))]
+    pub fn prepared_frontier(&self) -> f64 {
+        self.playback.reader.frontier()
+    }
+
+    /// Inclusive final time, available only after terminal history adoption.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedEndTime))]
+    pub fn prepared_end_time(&self) -> Option<f64> {
+        self.playback.reader.end_time()
+    }
+
+    /// User playback intent; buffering and terminal readiness remain separate.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedPlaying))]
+    pub fn prepared_playing(&self) -> bool {
+        self.playback.playing()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedBuffering))]
+    pub fn prepared_buffering(&self) -> bool {
+        self.playback.buffering() || self.video.waiting()
+    }
+
+    /// One coherent Rust-owned observation for status and qualification traces.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedPlaybackStateJson))]
+    pub fn prepared_playback_state_json(&self, wall_time_ms: f64) -> Result<String, String> {
+        Self::validate_wall_time(wall_time_ms)?;
+        let held_presentation = self.held_presentation(wall_time_ms);
+        let mut observation = self.playback.observation();
+        observation.buffering = self.prepared_buffering();
+        observation.advancing &= !observation.buffering;
+        serde_json::to_string(&PreparedPlaybackState {
+            observation,
+            held_presentation,
+        })
+        .map_err(|error| error.to_string())
+    }
+
+    fn held_presentation(&self, wall_time_ms: f64) -> Option<PreparedHeldPresentation> {
+        let publication = self.last_publication?;
+        let plan = BrowserExecutionWakePlan::from_runtime(self.wake_state());
+        let BrowserExecutionCadence::TimerAtSceneTime(valid_until) = plan.cadence() else {
+            return None;
+        };
+        let evaluated_time = self.playback.reader.frame().time;
+        let time = self.clock.scene_time_at(wall_time_ms)?;
+        if !self.snapshot_sent
+            || publication.session != self.encoder.session()
+            || !self.playback.playing()
+            || self.playback.buffering()
+            || self.playback.reader.interactions_active()
+            || self.playback.reader.viewer_inspection_active()
+            || plan.present_now()
+            || !valid_until.is_finite()
+            || !evaluated_time.is_finite()
+            || !time.is_finite()
+            || time < evaluated_time
+            || time >= valid_until
+        {
+            return None;
+        }
+        Some(PreparedHeldPresentation {
+            publication,
+            evaluated_time,
+            time,
+            valid_until,
+        })
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedRetentionMetricsJson))]
+    pub fn prepared_retention_metrics_json(&self) -> String {
+        self.retention_metrics_json()
+    }
+
+    /// Observe elapsed time in a sleeping static interval through the existing
+    /// Rust clock. This never starts/reanchors that clock or evaluates a frame.
+    /// Active animation stays at its last coherent sample; a static observation
+    /// stops at the next runtime deadline, which may be the unreadable frontier.
+    /// Observing that boundary does not authorize selecting it or prove display.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = preparedPlaybackTimeAt))]
+    pub fn prepared_playback_time_at(&self, wall_time_ms: f64) -> Result<f64, String> {
+        Self::validate_wall_time(wall_time_ms)?;
+        let current = self.prepared_time();
+        let BrowserExecutionCadence::TimerAtSceneTime(deadline) =
+            BrowserExecutionWakePlan::from_runtime(self.wake_state()).cadence()
+        else {
+            return Ok(current);
+        };
+        let observed = self.clock.scene_time_at(wall_time_ms).unwrap_or(current);
+        if self.playback.reader.end_time().is_some()
+            && self.playback.loop_duration().is_some()
+            && matches!(
+                self.playback.reader.wake_state().timeline(),
+                noon_runtime::TimelineWakeState::Quiescent
+            )
+        {
+            return Ok(self.playback.time_from_clock(observed));
+        }
+        let limit = self
+            .video
+            .boundary(self.playback.reader.video_rasters(), current)
+            .unwrap_or(deadline)
+            .min(deadline);
+        Ok(observed.min(limit).max(current))
+    }
+
+    /// Preserve elapsed interior static-wait time before pausing, without a
+    /// frontend clock or an epsilon seek. Reaching an open frontier buffers at
+    /// the last coherent sample instead. Any renderer delta remains available to
+    /// the caller's ordinary ordered drain; this call never acknowledges display.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = pausePreparedAt))]
+    pub fn pause_prepared_at(&mut self, wall_time_ms: f64) -> Result<(), String> {
+        let time = self.prepared_playback_time_at(wall_time_ms)?;
+        if self
+            .video
+            .boundary(self.playback.reader.video_rasters(), self.prepared_time())
+            .is_some_and(|limit| limit <= time)
+        {
+            self.set_prepared_playing(false);
+            return Ok(());
+        }
+        let looping = self.playback.loop_duration().is_some()
+            && self.playback.reader.end_time().is_some_and(|end| end > 0.0);
+        if looping && self.video.pending.is_none() {
+            if let Some(requested) = self.clock.scene_time_at(wall_time_ms) {
+                self.playback
+                    .advance_clock_sample(requested)
+                    .map_err(|error| error.to_string())?;
+            }
+            self.playback.take_clock_reanchor();
+        } else if time > self.prepared_time() {
+            self.playback
+                .advance(time)
+                .map_err(|error| error.to_string())?;
+            self.playback.take_clock_reanchor();
+        }
+        self.set_prepared_playing(false);
+        Ok(())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = needsPreparation))]
+    pub fn needs_preparation(&self, lookahead_seconds: f64) -> Result<bool, String> {
+        self.playback
+            .needs_preparation(lookahead_seconds)
+            .map_err(str::to_owned)
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = enableDefaultViewerSelection))]
+    pub fn enable_default_viewer_selection(&mut self) {
+        let reader = &mut self.playback.reader;
+        let already_enabled = reader.default_viewer_selection();
+        reader.enable_default_viewer_selection();
+        if !already_enabled && reader.uses_planar_viewer_input() {
+            self.pointer.refresh_planar_viewer();
+        }
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = viewerPointerMotion))]
+    pub fn viewer_pointer_motion(&self) -> Option<bool> {
+        let session = &self.playback.reader;
+        session
+            .default_viewer_selection()
+            .then(|| session.has_native_pointer_subscribers())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setPointerFillSelection))]
+    pub fn set_pointer_fill_selection(&mut self, tolerance: Option<f32>) -> Result<(), String> {
+        match tolerance {
+            Some(tolerance) => self
+                .playback
+                .reader
+                .enable_pointer_fill_selection(tolerance),
+            None => self.playback.reader.disable_pointer_fill_selection(),
+        }
+        .map_err(|error| error.to_string())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setBrowserPointerViewJson))]
+    pub fn set_browser_pointer_view_json(&mut self, json: &str) -> Result<(), String> {
+        let view =
+            serde_json::from_str(json).map_err(|error| format!("invalid pointer view: {error}"))?;
+        self.pointer.set_view(
+            &mut self.playback.reader,
+            &mut self.binding,
+            &mut self.sequence,
+            view,
+        )
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = notePointerPresentationJson))]
+    pub fn note_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
+        let receipt = serde_json::from_str(json)
+            .map_err(|error| format!("invalid pointer receipt: {error}"))?;
+        self.pointer
+            .note_presented(&mut self.playback.reader, receipt)
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = invalidatePointerPresentationJson))]
+    pub fn invalidate_pointer_presentation_json(&mut self, json: &str) -> Result<bool, String> {
+        let receipt = serde_json::from_str(json)
+            .map_err(|error| format!("invalid pointer receipt: {error}"))?;
+        self.pointer.invalidate(
+            &mut self.playback.reader,
+            &mut self.binding,
+            &mut self.sequence,
+            receipt,
+        )
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = canUndoTranslationDrag))]
+    pub fn can_undo_translation_drag(&self) -> bool {
+        self.playback.reader.can_undo_translation_drag()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = undoTranslationDrag))]
+    pub fn undo_translation_drag(&mut self) -> Result<bool, String> {
+        self.playback
+            .reader
+            .undo_translation_drag()
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = submitBrowserPointerInputJson))]
+    pub fn submit_browser_pointer_input_json(&mut self, json: &str) -> Result<bool, String> {
+        let envelope: WorkerPointerInput = serde_json::from_str(json)
+            .map_err(|error| format!("invalid browser pointer input: {error}"))?;
+        let allow_drag = !self.playback.playing();
+        self.playback.reader.set_viewer_drag_enabled(allow_drag);
+        self.pointer.submit(
+            &mut self.playback.reader,
+            &mut self.binding,
+            &mut self.sequence,
+            envelope.input,
+            envelope.presentation,
+        )
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(getter, js_name = spatialNavigation))]
+    pub fn spatial_navigation(&self) -> bool {
+        self.playback.reader.has_spatial_camera()
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = moveSpatialInspectionJson))]
+    pub fn move_spatial_inspection_json(&mut self, json: &str) -> Result<bool, String> {
+        use crate::worker_pointer_presentation::SpatialInput;
+        let Some(input) = self.pointer.spatial_input(json)? else {
+            return Ok(false);
+        };
+        let target = &mut self.playback.reader;
+        match input {
+            SpatialInput::CancelContacts => {
+                target.cancel_spatial_pointer_gestures();
+                Ok(false)
+            }
+            SpatialInput::Motion(motion) => target
+                .move_spatial_inspection(motion)
+                .map_err(|error| error.to_string()),
+            SpatialInput::Pointer(samples, displayed, aspect) => {
+                let mut changed = false;
+                for sample in samples {
+                    changed |= target
+                        .submit_spatial_pointer(sample, displayed, aspect)
+                        .map_err(|error| error.to_string())?;
+                }
+                Ok(changed)
+            }
+        }
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = scrollInspectionViewJson))]
+    pub fn scroll_inspection_view_json(&mut self, json: &str) -> Result<Option<bool>, String> {
+        let input = serde_json::from_str(json)
+            .map_err(|error| format!("invalid inspection scroll: {error}"))?;
+        self.pointer
+            .scroll(&mut self.playback.reader, &mut self.binding, input)
+    }
+
+    /// Observations only. Hosts must use executionWake/needsPreparation to decide
+    /// when to schedule work, never parse these diagnostics as another timeline.
+    #[cfg(any(test, debug_assertions, feature = "renderer-smoke"))]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = debugPreparedPlaybackJson))]
+    pub fn debug_prepared_playback_json(&self) -> String {
+        self.prepared_playback_state_json(0.0)
+            .expect("zero is a valid diagnostic wall timestamp")
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -17,9 +17,13 @@ use super::{
 /// Failure while materializing the object-value projection into compiled slots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticCompiledSceneError {
+    InvalidComposedSource(crate::CompiledComposedSourceError),
     TooManyObjects(usize),
     TooManyGraphDependencies(usize),
     InvalidPresentation {
+        node: SemanticNodeId,
+    },
+    InvalidClickIndicate {
         node: SemanticNodeId,
     },
     UnsupportedSignalBindings {
@@ -46,9 +50,16 @@ pub enum SemanticCompiledSceneError {
 impl std::fmt::Display for SemanticCompiledSceneError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidComposedSource(error) => error.fmt(formatter),
             Self::InvalidPresentation { node } => write!(
                 formatter,
                 "semantic object {}:{} contains a non-finite z-index",
+                node.slot(),
+                node.generation()
+            ),
+            Self::InvalidClickIndicate { node } => write!(
+                formatter,
+                "semantic object {}:{} requires a valid analytic click Indicate binding without signal drivers",
                 node.slot(),
                 node.generation()
             ),
@@ -153,10 +164,17 @@ fn materialize_semantic_projection(
         }
     }
     ordered.sort_by(|left, right| {
-        left.presentation
-            .z_index
-            .partial_cmp(&right.presentation.z_index)
-            .unwrap()
+        matches!(left.content, super::SemanticExecutionContent::Composed(_))
+            .cmp(&matches!(
+                right.content,
+                super::SemanticExecutionContent::Composed(_)
+            ))
+            .then_with(|| {
+                left.presentation
+                    .z_index
+                    .partial_cmp(&right.presentation.z_index)
+                    .unwrap()
+            })
     });
 
     let count = ordered.len();
@@ -196,8 +214,26 @@ fn materialize_semantic_projection(
 
         let object_index =
             u32::try_from(index).map_err(|_| SemanticCompiledSceneError::TooManyObjects(count))?;
-        let (content, text_bounds) =
-            lower_content(object.semantic_id, object.content, store, &mut resources)?;
+        let (content, text_bounds) = match &object.content {
+            super::SemanticExecutionContent::Object(content) => {
+                lower_content(object.semantic_id, *content, store, &mut resources)?
+            }
+            super::SemanticExecutionContent::Composed(source) => {
+                (ObjectContentRef::Composed(source.clone()), None)
+            }
+        };
+        if (object.click_indicate.is_some() && !object.signal_bindings.is_empty())
+            || crate::validate_click_indicate_binding(
+                object.execution_id,
+                crate::is_click_indicate_target(&content),
+                object.click_indicate.as_deref(),
+            )
+            .is_err()
+        {
+            return Err(SemanticCompiledSceneError::InvalidClickIndicate {
+                node: object.semantic_id,
+            });
+        }
         if let Some(paint) = object.fill_paint.as_deref() {
             if let Some(image) = paint.as_image() {
                 let store = store.ok_or(SemanticCompiledSceneError::Resource {
@@ -213,9 +249,13 @@ fn materialize_semantic_projection(
             }
         }
         objects.push(CompiledObject {
+            view_color_profile: object.view_color_profile,
             fill_paint: object.fill_paint.clone(),
             draw_enabled: object.presentation.draw_enabled,
             effects: object.effects.clone(),
+            click_indicate: object.click_indicate.clone(),
+            viewer_draggable: object.viewer_draggable,
+            viewer_group: object.viewer_group,
             id: object.execution_id,
             content,
             text_bounds,
@@ -259,6 +299,14 @@ fn materialize_semantic_projection(
                     },
                     font_size: number.font_size(),
                     point_to_scene_scale: binding.point_to_scene_scale(),
+                    anchor_left: store
+                        .and_then(|store| {
+                            store.text_resources().get(objects[index].content.text()?)
+                        })
+                        .expect("lowered numeric object has its authored text resource")
+                        .bounds
+                        .min
+                        .x,
                     token_resources: binding.token_resources().to_vec().into(),
                 });
             }
@@ -385,6 +433,15 @@ fn materialize_semantic_projection(
         family_order,
         family_ranks,
         live_object_count: objects.len(),
+        viewer_groups: CompiledScene::index_viewer_groups(&objects),
+        viewer_drag_target_count: objects
+            .iter()
+            .filter(|object| object.viewer_draggable)
+            .count(),
+        click_indicate_count: objects
+            .iter()
+            .filter(|object| object.click_indicate.is_some())
+            .count(),
         painter_ranks: painter_order.iter().copied().map(Some).collect(),
         painter_order,
         objects,
@@ -393,6 +450,7 @@ fn materialize_semantic_projection(
         object_indices,
         retired_object_indices: BTreeMap::new(),
         inset_2d_views: projection.inset_2d_views.clone(),
+        composed_dependencies: Default::default(),
         track_locators: BTreeMap::new(),
         family_animation_plans: Vec::new(),
         family_animations: Vec::new(),
@@ -414,6 +472,9 @@ fn materialize_semantic_projection(
         resources,
     };
     compiled.rebuild_spatial_anchor_groups();
+    compiled
+        .rebuild_composed_dependencies()
+        .map_err(SemanticCompiledSceneError::InvalidComposedSource)?;
     if let Some(store) = store {
         let anchors = compiled.spatial_anchor_families();
         for anchor in anchors {
@@ -531,7 +592,7 @@ pub(crate) fn lower_semantic_geometry_value(
         StoredGeometry::Resource(resource) => {
             match store.and_then(|store| store.geometry_resources().get(resource)) {
                 Some(GeometryResource::VectorPath(path)) => {
-                    Ok(GeometryRef::path(path.as_ref().clone()))
+                    Ok(GeometryRef::VectorPath(path.clone()))
                 }
                 Some(GeometryResource::Mesh(_)) => Ok(GeometryRef::External(resource.id)),
                 None => Err(SemanticGeometryValueError::UnsupportedGeometryResource(
@@ -563,6 +624,17 @@ mod tests {
         store.attach_to_scene(node).unwrap();
         let mut index = SemanticExecutionIndex::new();
         let lowered = crate::lower_semantic_execution(&store, &mut index).unwrap();
+        let Some(GeometryRef::VectorPath(lowered_path)) =
+            lowered.compiled().objects()[0].geometry()
+        else {
+            panic!("qualified path lowers to an immutable shared path");
+        };
+        let Some(GeometryResource::VectorPath(stored_path)) =
+            store.geometry_resources().get(resource)
+        else {
+            panic!("owning store retains the path resource");
+        };
+        assert!(std::sync::Arc::ptr_eq(lowered_path, stored_path));
         assert_eq!(
             lowered.compiled().objects()[0].geometry(),
             Some(&GeometryRef::path(path))

@@ -1,17 +1,60 @@
 use std::mem::size_of;
 
+// Backend GPU leases stay in their browser context; native jobs may share them
+// across threads. CPU semantic/resource values continue to use ordinary Arc.
+#[cfg(target_arch = "wasm32")]
+pub(super) use std::rc::{Rc as GpuLease, Weak as WeakGpuLease};
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) use std::sync::{Arc as GpuLease, Weak as WeakGpuLease};
+
 use bytemuck::{Pod, Zeroable};
 use noon_core::{Inset2DViewState, Vec2};
 use noon_runtime::{FrameChanges, FrameState};
 
+/// Source-color specialization follows the derived raster target contract.
+/// Float scene inputs are linear radiance; compatibility UNORM inputs retain
+/// their established encoded-space/Cairo quantization. Neither path transfers
+/// output here; HDR display resolution is a distinct final operator.
+fn source_color_shader(format: wgpu::TextureFormat) -> &'static str {
+    if format == wgpu::TextureFormat::Rgba16Float {
+        include_str!("../linear_color.wgsl")
+    } else {
+        include_str!("../cairo_color.wgsl")
+    }
+}
+
 mod analytic_glow;
+mod backdrop_composite;
+pub use backdrop_composite::{
+    BackdropCompositeFilter, BackdropCompositeInputs, BackdropCompositeParameters,
+    BackdropCompositeScope,
+};
 mod derived_display;
 mod paint;
 mod source_capture;
 pub use analytic_glow::{EffectCaptureRequest, EffectCaptureStats, PublishedEffectCaptureRequest};
+pub use source_capture::{
+    PainterPrefixCaptureFilter, PainterPrefixCaptureRequest, PainterPrefixCaptureScope,
+};
 mod effect_stack;
 mod gaussian_blur;
+mod hdr_bloom;
+mod view_output;
+#[cfg(test)]
+pub(crate) use hdr_bloom::tests::{decode as test_decode_hdr, read as test_read_hdr};
+pub use view_output::{AuthoredViewOutput, ViewOutputError};
+#[cfg(test)]
+mod hdr_scene_raster_tests;
+pub use hdr_bloom::{
+    HdrBloomCapture, HdrBloomFilter, HdrBloomParameters, HdrBloomPrepareError, HdrBloomScope,
+    HdrBloomStats,
+};
 mod glow_filter;
+mod sample_filter;
+mod shader_effects;
+pub use shader_effects::{
+    EffectProgramPreparation, EffectProgramPrepareError, EffectProgramStats, PreparedEffectPrograms,
+};
 mod shadow_filter;
 pub use effect_stack::{
     EffectStackFilter, EffectStackParameters, EffectStackScope, MAX_EFFECT_STACK_LEN,
@@ -24,9 +67,16 @@ pub use glow_filter::{
     EffectCaptureParameters, EffectCaptureTile, EffectPixelBounds, EffectPrepareError,
     EffectRasterStats, GlowCapture, GlowFilter, GlowParameters, GlowScope,
 };
+pub use sample_filter::{
+    PreparedShaderProgram, SampleFilter, SampleParameters, SampleScope, ShaderSampleContext,
+};
+mod encoded_display;
 mod overlay;
 mod path_batching;
 mod presentation;
+pub use encoded_display::{
+    DisplayPresentationError, DisplayPresentationStats, EncodedDisplayPresenter,
+};
 pub use overlay::{AnalyticOverlay, OverlayGpuState, OverlayPrepareError};
 mod inset_capture;
 mod mesh;
@@ -38,7 +88,9 @@ mod raster_image_prepare;
 use derived_display::DerivedDisplayGpu;
 pub use presentation::OutputTransfer;
 use presentation::PresentationBridge;
+mod video_presentation;
 pub use raster_image_prepare::RasterImagePrepareError;
+pub use video_presentation::VideoPresentation;
 
 use crate::{
     CircleInstance, LineInstance, OrderedRenderBatch, PathBatch, PathCoverage, PathInstance,
@@ -267,6 +319,22 @@ struct CameraUniform {
     clip_scale: [f32; 2],
     viewport_size: [f32; 2],
     viewport_origin: [f32; 2],
+    // Image texel decisions retain the original output-pixel projection when
+    // the vertex camera is cropped for an isolated capture. Reconstructing the
+    // same pixel through a recentered f32 camera can flip nearest texel ties.
+    sample_center: [f32; 2],
+    sample_clip_scale: [f32; 2],
+    sample_viewport_size: [f32; 2],
+    sample_viewport_origin: [f32; 2],
+}
+impl CameraUniform {
+    fn with_sample_projection(mut self, original: Self) -> Self {
+        self.sample_center = original.center;
+        self.sample_clip_scale = original.clip_scale;
+        self.sample_viewport_size = original.viewport_size;
+        self.sample_viewport_origin = original.viewport_origin;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -327,6 +395,10 @@ impl Camera2D {
             clip_scale: [2.0 / self.world_size.x, 2.0 / self.world_size.y],
             viewport_size: [viewport_size[0] as f32, viewport_size[1] as f32],
             viewport_origin: [origin[0] as f32, origin[1] as f32],
+            sample_center: [self.center.x, self.center.y],
+            sample_clip_scale: [2.0 / self.world_size.x, 2.0 / self.world_size.y],
+            sample_viewport_size: [viewport_size[0] as f32, viewport_size[1] as f32],
+            sample_viewport_origin: [origin[0] as f32, origin[1] as f32],
         }
     }
 }
@@ -518,11 +590,13 @@ impl std::error::Error for PathPreloadUploadError {}
 pub struct GpuRenderer {
     fill_paints: Option<Box<paint::PaintGpu>>,
     effect_captures: Option<Box<analytic_glow::EffectCaptureGpu>>,
+    effect_programs: shader_effects::EffectPrograms,
     retained_effects: retained_text::glow_publication::RetainedEffectPublication,
     spatial: mesh::SpatialGpuState,
     circle_pipeline: wgpu::RenderPipeline,
     rectangle_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    display_overlay_pipelines: Option<[wgpu::RenderPipeline; 2]>,
     circle_pipeline_single_sample: wgpu::RenderPipeline,
     rectangle_pipeline_single_sample: wgpu::RenderPipeline,
     line_pipeline_single_sample: wgpu::RenderPipeline,
@@ -604,6 +678,14 @@ impl<'a> FramePassOptions<'a> {
 }
 
 impl GpuRenderer {
+    /// Planar geometry draws to `Rgba16Float` consume unassociated linear radiance
+    /// in packed source colors and blend without compatibility clipping. The
+    /// publication-aware preparer decodes authored geometry colors for that view.
+    /// Image assets and glyph tints retain authored sRGB input contracts; float
+    /// pipelines decode them before association/filtering, respecting the color
+    /// atlas's existing hardware decode. The producer owns emission; HDR display resolution
+    /// must happen once after scene composition. Other targets retain the
+    /// established encoded-premultiplied compatibility contract.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -664,7 +746,7 @@ impl GpuRenderer {
             }],
         });
         let polygon_coverage = include_str!("../polygon_coverage.wgsl");
-        let cairo_color = include_str!("../cairo_color.wgsl");
+        let cairo_color = source_color_shader(target_format);
         let analytic_source = format!(
             "{}\n{}\n{}",
             include_str!("../analytic.wgsl"),
@@ -761,7 +843,7 @@ impl GpuRenderer {
         let path_source = format!(
             "{}\n{}\n{}",
             include_str!("../path.wgsl"),
-            include_str!("../cairo_color.wgsl"),
+            cairo_color,
             polygon_coverage
         );
         let path_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -846,6 +928,7 @@ impl GpuRenderer {
             circle_pipeline,
             rectangle_pipeline,
             line_pipeline,
+            display_overlay_pipelines: None,
             circle_pipeline_single_sample,
             rectangle_pipeline_single_sample,
             line_pipeline_single_sample,
@@ -885,6 +968,7 @@ impl GpuRenderer {
             derived_display,
             images: None,
             effect_captures: None,
+            effect_programs: Default::default(),
             fill_paints: None,
             retained_effects: Default::default(),
             circle_capacity_bytes: 0,
@@ -948,6 +1032,7 @@ impl GpuRenderer {
             context,
             frame,
             changes,
+            false,
             geometry_resources,
             text_resources,
             font_resources,
@@ -960,6 +1045,22 @@ impl GpuRenderer {
     /// may begin at an earlier frame epoch than the session just replaced.
     pub fn reset_spatial_publication_context(&mut self) {
         self.spatial.reset_publication_context();
+    }
+
+    /// Retire scene-specific GPU bindings without recompiling immutable
+    /// shader pipelines on the same device. Called between retained sessions
+    /// after candidate geometry residency has been validated and uploaded.
+    pub fn reset_retained_source_state(&mut self, device: &wgpu::Device) {
+        self.spatial = mesh::SpatialGpuState::default();
+        self.reset_retained_effect_publication();
+        self.fill_paints = None;
+        self.images = None;
+        self.derived_display = DerivedDisplayGpu::new(device);
+        self.inset_views.clear();
+        self.inset_targets.clear();
+        self.inset_camera_buffers.clear();
+        self.inset_camera_bind_groups.clear();
+        self.inset_camera_by_display.clear();
     }
 
     pub fn set_viewport(
@@ -2659,7 +2760,7 @@ mod tests {
 
     #[test]
     fn camera_maps_world_size_to_clip_scale() {
-        assert_eq!(size_of::<CameraUniform>(), 32);
+        assert_eq!(size_of::<CameraUniform>(), 64);
         let camera =
             Camera2D::new(Vec2::new(3.0, -2.0), Vec2::new(16.0, 9.0)).expect("valid camera");
         let uniform = camera.uniform([1_920, 1_080]);
@@ -2764,7 +2865,7 @@ mod tests {
 
         let mut frame = test_frame();
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
 
         let first_upload = renderer.upload(&device, &queue, &prepared);
         assert_eq!(first_upload.buffer_reallocations, 3);
@@ -2778,13 +2879,17 @@ mod tests {
         assert!(renderer.rectangle_capacity_bytes() >= size_of::<RectangleInstance>());
         assert!(renderer.line_capacity_bytes() >= size_of::<LineInstance>());
 
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::default());
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::default())
+            .unwrap();
         let second_upload = renderer.upload(&device, &queue, &prepared);
         assert_eq!(second_upload.buffer_reallocations, 0);
         assert_eq!(second_upload.bytes_uploaded, 0);
 
         frame.objects[0].transform.translation = Vec2::new(0.25, -0.5);
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+            .unwrap();
         let partial_upload = renderer.upload(&device, &queue, &prepared);
         assert_eq!(partial_upload.buffer_reallocations, 0);
         assert_eq!(partial_upload.bytes_uploaded, size_of::<CircleInstance>());
@@ -2821,7 +2926,7 @@ mod tests {
             &device,
             &queue,
             WEBGL_FORMAT,
-            OutputTransfer::BrowserWebGlSrgb,
+            OutputTransfer::SrgbStore,
         );
         let camera =
             Camera2D::new(Vec2::new(1.0, -1.0), Vec2::new(16.0, 9.0)).expect("valid camera");
@@ -2873,14 +2978,14 @@ mod tests {
             &device,
             &queue,
             WEBGL_FORMAT,
-            OutputTransfer::BrowserWebGlSrgb,
+            OutputTransfer::SrgbStore,
         );
         renderer.set_viewport(&device, &queue, 64, 64);
         assert_eq!(renderer.target_format, WEBGL_FORMAT);
 
         let frame = test_frame();
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         renderer.upload(&device, &queue, &prepared);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -2919,7 +3024,7 @@ mod tests {
 
         let frame = test_frame_with_path();
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         renderer.upload(&device, &queue, &prepared);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -2971,7 +3076,7 @@ mod tests {
         renderer.set_viewport(&device, &queue, 64, 64);
         let frame = test_frame_with_path();
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
 
         let upload = renderer.upload(&device, &queue, &prepared);
         // The compact ordinary-path stream is a distinct retained GPU buffer.
@@ -3001,7 +3106,9 @@ mod tests {
         assert_eq!(draw.draw_calls, 2);
         assert_eq!(draw.instances_drawn, 2);
 
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::default());
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::default())
+            .unwrap();
         let unchanged_upload = renderer.upload(&device, &queue, &prepared);
         assert_eq!(unchanged_upload.buffer_reallocations, 0);
         assert_eq!(unchanged_upload.bytes_uploaded, 0);

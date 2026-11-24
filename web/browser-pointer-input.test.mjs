@@ -60,6 +60,7 @@ async function prepare(client) {
 }
 
 const { MAX_IN_FLIGHT_NATIVE_INPUTS } = await import("./execution-worker-client.js");
+const { MAX_BROWSER_POINTER_SAMPLES } = await import("./browser-pointer-input.js");
 const inputTurn = () => new Promise(resolve => setImmediate(resolve));
 
 async function startInputClient(t, canvas = new FakeCanvas(), callbacks = {}) {
@@ -93,7 +94,7 @@ function pointerCanvas(t) {
     target.addEventListener(type, listener, options);
   };
   let buttons = 0;
-  return { canvas, listeners, rect, win, emit(type, values = {}) {
+  return { canvas, listeners, rect, win, emit(type, values = {}, receiver = target) {
     if (type === "pointerdown") buttons = 1;
     if (type === "pointerup" || type === "pointercancel") buttons = 0;
     const event = new Event(type, { cancelable: type === "wheel" });
@@ -102,7 +103,7 @@ function pointerCanvas(t) {
       button: type === "pointermove" ? -1 : 0, buttons,
       pointerId: 1, pointerType: "mouse", isPrimary: true, ...values,
     });
-    target.dispatchEvent(event);
+    receiver.dispatchEvent(event);
     return event;
   } };
 }
@@ -148,9 +149,9 @@ test("a viewport changed while startup waits registers its actual dimensions", a
 
 // Unwrap only for the pre-existing collector assertions; worker receipt tests
 // below assert the full immutable wire envelope independently.
-const pointerMessages = engine => engine.messages
-  .filter(message => message.type === "browser_pointer_input")
-  .map(({ input, ...envelope }) => ({ ...envelope, ...input }));
+const pointerRequests = engine => engine.messages.filter(message => message.type === "browser_pointer_input");
+const pointerMessages = engine => pointerRequests(engine).flatMap(({ input, ...envelope }) =>
+  (Array.isArray(input) ? input : [input]).map(sample => ({ ...envelope, ...sample })));
 
 // Supply raw samples; browsers can copy one parent button label into several
 // samples. Test the real collector/client route, not a second click recognizer.
@@ -165,7 +166,7 @@ function coalescedSamples(values) {
 }
 
 function acknowledgePointers(engine) {
-  for (const message of pointerMessages(engine)) {
+  for (const message of pointerRequests(engine)) {
     engine.emitMessage(envelope("noon.engine", message.type, { requestId: message.requestId }));
   }
 }
@@ -287,6 +288,66 @@ test("coalesced chord labels do not duplicate button edges or erase sample-local
   ]);
 });
 
+for (const [label, inconsistent] of [
+  ["multiple changed buttons", { buttons: 6 }],
+  ["unlabelled transition", { buttons: 0, button: -1 }],
+  ["different final mask", { buttons: 3, button: 2 }],
+]) {
+  test(`coalesced ${label} uses the parent motion without ending a held drag`, async t => {
+    const dom = pointerCanvas(t);
+    const errors = [];
+    const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
+    dom.emit("pointerdown");
+    dom.emit("pointermove", {
+      clientX: 160,
+      shiftKey: true,
+      getCoalescedEvents: coalescedSamples([{ clientX: 120 }, { clientX: 130, ...inconsistent }]),
+    });
+    dom.emit("pointerup", { clientX: 160 });
+    await inputTurn();
+    const messages = pointerMessages(engine);
+    assert.deepEqual(messages.map(m => [m.kind, m.button, m.surface_x]), [
+      ["press", 0, 100], ["move", null, 150], ["release", 0, 150],
+    ]);
+    assert.equal(messages[1].shift, true);
+    assert.equal(new Set(messages.map(m => m.source_id)).size, 1);
+    assert.deepEqual(errors, []);
+  });
+}
+
+test("an inconsistent coalesced packet preserves a confirmed parent chord edge", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
+  dom.emit("pointerdown");
+  dom.emit("pointermove", { clientX: 140, button: 2, buttons: 3,
+    getCoalescedEvents: coalescedSamples([{ clientX: 130, button: -1 }]),
+  });
+  dom.emit("pointermove", { clientX: 150, button: 2, buttons: 1 });
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(m => [m.kind, m.button, m.surface_x]), [
+    ["press", 0, 100], ["press", 2, 130], ["release", 2, 140], ["release", 0, 100],
+  ]);
+  assert.deepEqual(errors, []);
+});
+
+test("a coalesced packet with no confirmed button edge cancels only its gesture", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
+  dom.emit("pointerdown");
+  dom.emit("pointermove", { buttons: 0, getCoalescedEvents: coalescedSamples([{}]) });
+  dom.emit("pointerup");
+  dom.emit("pointerdown");
+  dom.emit("pointerup");
+  await inputTurn();
+  const messages = pointerMessages(engine);
+  assert.deepEqual(messages.map(m => m.kind), ["press", "cancel", "press", "release"]);
+  assert.ok(messages[2].source_id > messages[0].source_id);
+  assert.deepEqual(errors, []);
+});
+
 for (const [label, invalid] of [
   ["foreign identity", { pointerId: 2 }],
   ["foreign pointer type", { pointerType: "pen" }],
@@ -295,9 +356,6 @@ for (const [label, invalid] of [
   ["nonfinite timestamp", { timeStamp: Infinity }],
   ["future timestamp", { timeStamp: Number.MAX_VALUE }],
   ["unsupported mask", { buttons: 64 }],
-  ["ambiguous button transition", { buttons: 6 }],
-  ["missing button edge", { buttons: 3, button: -1 }],
-  ["inconsistent final mask", { buttons: 3, button: 2 }],
 ]) {
   test(`malformed coalesced ${label} faults before forwarding any packet prefix`, async t => {
     const dom = pointerCanvas(t);
@@ -363,7 +421,7 @@ test("oversized coalesced packets fail before walking samples or posting a trunc
   const dom = pointerCanvas(t);
   const errors = [];
   const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
-  const oversized = new Array(MAX_IN_FLIGHT_NATIVE_INPUTS + 1);
+  const oversized = new Array(MAX_BROWSER_POINTER_SAMPLES + 1);
   Object.defineProperty(oversized, 0, { get() { assert.fail("size must be checked before visiting samples"); } });
   dom.emit("pointermove", { getCoalescedEvents: () => oversized });
   dom.emit("pointerdown");
@@ -373,14 +431,31 @@ test("oversized coalesced packets fail before walking samples or posting a trunc
   assert.equal(pointerMessages(engine).length, 0);
 });
 
-test("coalesced packets use the existing aggregate producer bound and ordered overflow cleanup", async t => {
+test("motion batches leave room for a quick release before any acknowledgements", async t => {
   const dom = pointerCanvas(t);
   const errors = [];
   const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
   dom.emit("pointerdown");
-  dom.emit("pointermove", { getCoalescedEvents: coalescedSamples(
-    Array.from({ length: MAX_IN_FLIGHT_NATIVE_INPUTS }, (_, i) => ({ clientX: 110 + i })),
-  ) });
+  const motion = coalescedSamples(Array.from({ length: 48 }, (_, i) => ({ clientX: 110 + i })));
+  dom.emit("pointermove", { getCoalescedEvents: motion });
+  dom.emit("pointermove", { getCoalescedEvents: motion });
+  dom.emit("pointermove", { getCoalescedEvents: motion });
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerRequests(engine).map(({ input }) => Array.isArray(input) ? input.length : input.kind),
+    ["press", 48, 48, 48, "release"]);
+  assert.deepEqual(errors, []);
+  acknowledgePointers(engine);
+});
+
+test("separate requests still enforce the aggregate producer bound and ordered cleanup", async t => {
+  const dom = pointerCanvas(t);
+  const errors = [];
+  const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
+  dom.emit("pointerdown");
+  for (let i = 0; i < MAX_IN_FLIGHT_NATIVE_INPUTS; i += 1) {
+    dom.emit("pointermove", { clientX: 110 + i });
+  }
   await inputTurn();
   assert.equal(pointerMessages(engine).length, MAX_IN_FLIGHT_NATIVE_INPUTS);
   assert.equal(errors.length, 1);
@@ -410,12 +485,13 @@ test("an exactly capacity-sized coalesced packet forwards all samples without a 
   const errors = [];
   const { engine } = await startInputClient(t, dom.canvas, { onRecoverableError: e => errors.push(e) });
   dom.emit("pointermove", { getCoalescedEvents: coalescedSamples(
-    Array.from({ length: MAX_IN_FLIGHT_NATIVE_INPUTS }, (_, i) => ({ clientX: 110 + i })),
+    Array.from({ length: MAX_BROWSER_POINTER_SAMPLES }, (_, i) => ({ clientX: 110 + i })),
   ) });
   await inputTurn();
+  assert.equal(pointerRequests(engine).length, 1);
   const messages = pointerMessages(engine);
-  assert.equal(messages.length, MAX_IN_FLIGHT_NATIVE_INPUTS);
-  assert.deepEqual(messages.map(m => m.surface_x), Array.from({ length: MAX_IN_FLIGHT_NATIVE_INPUTS }, (_, i) => 100 + i));
+  assert.equal(messages.length, MAX_BROWSER_POINTER_SAMPLES);
+  assert.deepEqual(messages.map(m => m.surface_x), Array.from({ length: MAX_BROWSER_POINTER_SAMPLES }, (_, i) => 100 + i));
   assert.equal(errors.length, 0);
 });
 
@@ -445,6 +521,52 @@ test("retired coalesced callbacks neither inspect history nor deliver to a repla
   });
   await inputTurn();
   assert.equal(pointerMessages(replacement.attachments.at(-1).controlPort.peer).length, 0);
+});
+
+for (const outside of [false, true]) {
+  test(`real release survives zero-button capture loss ${outside ? "outside" : "inside"} the canvas`, async t => {
+    const dom = pointerCanvas(t);
+    const { engine } = await startInputClient(t, dom.canvas);
+    dom.emit("pointerdown");
+    dom.emit("pointermove", { clientX: 180 });
+    dom.emit("lostpointercapture", { buttons: 0, button: -1 });
+    dom.emit("pointermove", { buttons: 0, getCoalescedEvents() {
+      assert.fail("zero-button motion before the release must not replace the active drag");
+    } });
+    if (outside) dom.emit("pointerleave", { buttons: 0, button: -1 });
+    // Only the selected pointer's actual release can complete its drag.
+    dom.emit("pointerup", { pointerId: 2 }, dom.win);
+    dom.emit("pointerup", { clientX: outside ? 700 : 190 }, outside ? dom.win : undefined);
+    await inputTurn();
+    const events = pointerMessages(engine);
+    assert.deepEqual(events.map(({ kind }) => kind), ["press", "move", "release"]);
+    assert.equal(events[2].source_id, events[0].source_id);
+    assert.equal(events[2].surface_x, outside ? 690 : 180);
+  });
+}
+
+test("zero-button capture loss without a release still cancels the gesture", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  dom.emit("lostpointercapture", { buttons: 0, button: -1 });
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(({ kind }) => kind), ["press"]);
+  t.mock.timers.tick(50);
+  dom.emit("pointerup", {}, dom.win);
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(({ kind }) => kind), ["press", "capture_lost"]);
+});
+
+test("capture loss while a button is still held cancels immediately", async t => {
+  const dom = pointerCanvas(t);
+  const { engine } = await startInputClient(t, dom.canvas);
+  dom.emit("pointerdown");
+  dom.emit("lostpointercapture", { button: -1 });
+  dom.emit("pointerup");
+  await inputTurn();
+  assert.deepEqual(pointerMessages(engine).map(({ kind }) => kind), ["press", "capture_lost"]);
 });
 
 test("held coalesced re-entry after viewport cancellation is ignored until a new press", async t => {

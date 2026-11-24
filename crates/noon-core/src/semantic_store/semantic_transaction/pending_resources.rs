@@ -11,7 +11,7 @@ use super::*;
 #[derive(Debug, Default, PartialEq)]
 pub(super) struct PendingResourceDeclarations {
     next_token: u32,
-    paths: Vec<(SemanticLocalResourceToken, VectorPath)>,
+    paths: Vec<(SemanticLocalResourceToken, std::sync::Arc<VectorPath>)>,
 }
 
 impl SemanticMutationTransaction {
@@ -41,8 +41,9 @@ impl SemanticMutationTransaction {
     /// resource publication scope resolves that declaration atomically at commit.
     pub fn stage_geometry_path(
         &mut self,
-        path: VectorPath,
+        path: impl Into<std::sync::Arc<VectorPath>>,
     ) -> Result<SemanticLocalResourceToken, SemanticMutationTransactionError> {
+        let path = path.into();
         // Count the complete payload before recursive finite validation. Nested
         // morph targets cannot bypass the working-set or nesting-depth bound.
         let commands = Self::pending_path_command_count(&path)
@@ -103,13 +104,13 @@ impl SemanticMutationTransaction {
             .as_ref()?
             .paths
             .iter()
-            .find_map(|(candidate, path)| (*candidate == token).then_some(path))
+            .find_map(|(candidate, path)| (*candidate == token).then_some(path.as_ref()))
     }
 
     pub(super) fn take_pending_geometry_paths(
         &mut self,
         tokens: &[SemanticLocalResourceToken],
-    ) -> Vec<(SemanticLocalResourceToken, VectorPath)> {
+    ) -> Vec<(SemanticLocalResourceToken, std::sync::Arc<VectorPath>)> {
         // Every unselected payload belongs to a canceled pending node and is
         // discarded here rather than admitted into the resource arena.
         self.pending_resources

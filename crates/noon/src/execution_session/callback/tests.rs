@@ -42,6 +42,45 @@ fn an_invisible_camera_has_effective_callback_bounds_without_a_spatial_index_ent
 }
 
 #[test]
+fn sampled_reveal_advances_across_a_required_callback_phase() {
+    let mut scene = Scene::new();
+    let path = noon_core::VectorPath::new()
+        .move_to(Vec2::ZERO)
+        .line_to(Vec2::new(1.0, 0.0));
+    let trace = scene.path(path, Default::default()).unwrap();
+    let object = scene.circle(0.1).unwrap();
+    scene.add(&trace).unwrap();
+    scene.add(&object).unwrap();
+    let phase = scene.value_tracker(0.0).unwrap();
+    scene
+        .bind_sampled(&trace, &phase, "reveal", true, vec![0.0, 0.0, 1.0, 1.0])
+        .unwrap();
+    let mut register = SemanticMutationTransaction::new();
+    register.add_updater(object.node_id(), HostCallbackId::new(1), 0.5, None);
+    register
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    scene
+        .play_value(&phase, 1.0)
+        .rate_func(RateFunction::Linear)
+        .run_time(1.0)
+        .unwrap();
+
+    let mut session = scene.execution_session().unwrap();
+    let CallbackAdvance::HostRequired { overlay, .. } =
+        session.advance_to_callback_barrier(0.5).unwrap()
+    else {
+        panic!("callback phase");
+    };
+    assert_eq!(overlay.time(), 0.5);
+    assert_eq!(session.frame().reveal(0), 0.0);
+    session
+        .commit_required_callback_phase(overlay.finish())
+        .unwrap();
+    assert_eq!(session.frame().reveal(0), 0.5);
+}
+
+#[test]
 fn callback_store_preflight_rejects_a_foreign_scene_store() {
     let store = SemanticStore::new();
     let mut session = ExecutionSession::from_semantic_store(&store).unwrap();
@@ -859,7 +898,24 @@ fn scoped_callback_writes_preserve_other_channels_and_whole_write_order() {
             opacity: 0.25,
         })
         .unwrap();
+    let emission = noon_core::Emission::new(7.000000000000001).unwrap();
+    overlay
+        .write(EffectiveSemanticPropertyWrite::Emission { object, emission })
+        .unwrap();
+    assert_eq!(
+        session.frame().objects[0].style.emission,
+        noon_core::Emission::NONE
+    );
+    assert_eq!(
+        store
+            .semantic_object_state_checked(object)
+            .unwrap()
+            .style
+            .emission,
+        noon_core::Emission::NONE
+    );
     let read = overlay.object(object).unwrap();
+    assert_eq!(read.style.emission, emission);
     assert_eq!(read.transform.rotation, transform.rotation);
     assert_eq!(read.transform.scale, transform.scale);
     assert_eq!(read.transform.translation, Vec2::new(4.0, 5.0));
@@ -885,7 +941,11 @@ fn scoped_callback_writes_preserve_other_channels_and_whole_write_order() {
     let receipt = session.last_callback_receipt.as_ref().unwrap();
     assert_eq!(
         receipt.domains[&object],
-        CALLBACK_TRANSLATION | CALLBACK_ROTATION | CALLBACK_SCALE | CALLBACK_OPACITY
+        CALLBACK_TRANSLATION
+            | CALLBACK_ROTATION
+            | CALLBACK_SCALE
+            | CALLBACK_OPACITY
+            | CALLBACK_EMISSION
     );
     let mut next = session
         .begin_required_callback_phase(1.0, [object])
@@ -900,6 +960,7 @@ fn scoped_callback_writes_preserve_other_channels_and_whole_write_order() {
         .commit_required_callback_phase(next.finish())
         .unwrap();
     assert_eq!(session.frame().objects[0].transform, transform);
+    assert_eq!(session.frame().objects[0].style.emission, emission);
 }
 
 #[test]

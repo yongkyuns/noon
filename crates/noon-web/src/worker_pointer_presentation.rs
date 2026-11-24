@@ -1,8 +1,7 @@
-//! Collection-time worker association. Retains bounded immutable frame metadata,
-//! never geometry or scene history. Consumption is not presentation, and receipt
-//! IDs never reconstruct a frame. Ordinary input uses its actual acknowledged
-//! snapshot; shared Rust proves point compatibility with the current publication.
-//! An acquired drag retains its separate mapping until release or invalidation.
+//! Collection-time worker association. Authored input retains bounded actual
+//! acknowledged metadata and uses the shared point-specific compatibility proof.
+//! Viewer picking retains bounded immutable roots. An acquired drag keeps its
+//! original mapping until release or invalidation.
 use serde::{Deserialize, Serialize};
 
 const MAX_JS_INTEGER: u64 = (1_u64 << 53) - 1;
@@ -58,6 +57,15 @@ impl WorkerPointerReceipt {
     }
 }
 
+/// Shared collection-time pointer envelope for the existing worker control port.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkerPointerInput {
+    pub(crate) input: crate::browser_pointer_input::BrowserPointerInput,
+    pub(crate) presentation: Option<WorkerPointerReceipt>,
+}
+
 /// One normalized view-navigation occurrence at the genuine worker boundary.
 /// The receipt is captured when the DOM event arrives, never at delivery time.
 #[cfg(any(target_arch = "wasm32", test))]
@@ -75,15 +83,16 @@ pub(crate) struct WorkerInspectionScroll {
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod admission {
+    use std::collections::VecDeque;
+
     use super::*;
     use crate::browser_pointer_input::{
         self, BrowserPointerAdmissionError, BrowserPointerBinding, BrowserPointerInput,
         BrowserPointerKind, BrowserPointerTarget,
     };
     use noon::integration::PointerFrameSnapshot;
-    use noon::ExecutionSession;
+    use noon::PlanarViewerPointer;
     use noon_core::Vec2;
-    use std::collections::VecDeque;
 
     const RETAINED_FRAMES: usize = 8;
 
@@ -128,6 +137,69 @@ mod admission {
         }
     }
 
+    pub(crate) enum SpatialInput<'a> {
+        CancelContacts,
+        Motion(noon::SpatialInspectionMotion),
+        Pointer(
+            Vec<noon::SpatialPointerInput>,
+            Option<&'a noon::SpatialPickFrame>,
+            f64,
+        ),
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum WorkerSpatialInput {
+        CancelContacts {
+            view_revision: u64,
+            cancel_contacts: bool,
+        },
+        Pointer {
+            view_revision: u64,
+            samples: Vec<SpatialPointerSample>,
+            presentation: Option<WorkerPointerReceipt>,
+        },
+        Motion {
+            view_revision: u64,
+            orbit: [f64; 2],
+            pan: [f64; 2],
+            zoom: f64,
+            reset: bool,
+        },
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum SpatialPointerPhase {
+        Press,
+        Move,
+        Release,
+        Cancel,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SpatialPointerSample {
+        id: i32,
+        phase: SpatialPointerPhase,
+        x: f32,
+        y: f32,
+        timestamp_ms: f64,
+        touch: bool,
+        pan: bool,
+    }
+
+    // Render receipts and input arrive asynchronously. Keep a short bounded
+    // window of actual pick frames, sharing unaffected tree branches.
+    const VIEWER_FRAME_WINDOW: usize = 4;
+
+    #[derive(Clone)]
+    struct ViewerFrame {
+        mapping: PointerFrameSnapshot,
+        planar: Option<noon::PlanarPickFrame>,
+        spatial: Option<noon::SpatialPickFrame>,
+    }
+
     #[derive(Default)]
     pub(crate) struct WorkerPointerPresentation {
         view: Option<PointerPresentationView>,
@@ -136,12 +208,227 @@ mod admission {
         acknowledged: VecDeque<PresentedFrame>,
         presented_frame: Option<PresentedFrame>,
         retired_presentation: u64,
+        spatial_cache: noon::SpatialPickCache,
+        planar_cache: noon::PlanarPickCache,
+        issued_viewer: VecDeque<(u32, u64, ViewerFrame)>,
+        presented_viewer: VecDeque<(WorkerPointerReceipt, ViewerFrame)>,
         rejected: Option<RejectedSource>,
         refresh_pending: bool,
     }
     impl WorkerPointerPresentation {
+        pub(crate) fn spatial_input(&self, json: &str) -> Result<Option<SpatialInput<'_>>, String> {
+            let input: WorkerSpatialInput = serde_json::from_str(json)
+                .map_err(|error| format!("invalid spatial inspection input: {error}"))?;
+            let revision = match input {
+                WorkerSpatialInput::CancelContacts { view_revision, .. }
+                | WorkerSpatialInput::Pointer { view_revision, .. }
+                | WorkerSpatialInput::Motion { view_revision, .. } => view_revision,
+            };
+            let Some(view) = self
+                .view
+                .filter(|view| view.drawable() && view.revision == revision)
+            else {
+                return Ok(None);
+            };
+            match input {
+                WorkerSpatialInput::CancelContacts {
+                    cancel_contacts: true,
+                    ..
+                } => Ok(Some(SpatialInput::CancelContacts)),
+                WorkerSpatialInput::CancelContacts { .. } => {
+                    Err("spatial gesture cancellation requires cancel_contacts to be true".into())
+                }
+                WorkerSpatialInput::Motion {
+                    orbit,
+                    pan,
+                    zoom,
+                    reset,
+                    ..
+                } => Ok(Some(SpatialInput::Motion(noon::SpatialInspectionMotion {
+                    orbit,
+                    pan,
+                    zoom,
+                    reset,
+                }))),
+                WorkerSpatialInput::Pointer {
+                    samples,
+                    presentation,
+                    ..
+                } => {
+                    if samples.is_empty()
+                        || samples.len() > 256
+                        || (samples.len() > 1
+                            && samples
+                                .iter()
+                                .any(|s| !matches!(s.phase, SpatialPointerPhase::Move)))
+                    {
+                        return Err("invalid spatial pointer batch".into());
+                    }
+                    let displayed = presentation.and_then(|receipt| {
+                        self.presented_viewer
+                            .iter()
+                            .find(|(key, _)| *key == receipt)
+                            .and_then(|(_, frame)| frame.spatial.as_ref())
+                    });
+                    let samples = samples
+                        .into_iter()
+                        .map(|s| noon::SpatialPointerInput {
+                            id: s.id,
+                            phase: match s.phase {
+                                SpatialPointerPhase::Press => noon::SpatialPointerPhase::Press,
+                                SpatialPointerPhase::Move => noon::SpatialPointerPhase::Move,
+                                SpatialPointerPhase::Release => noon::SpatialPointerPhase::Release,
+                                SpatialPointerPhase::Cancel => noon::SpatialPointerPhase::Cancel,
+                            },
+                            position: Vec2::new(s.x, s.y),
+                            view_revision: revision,
+                            viewport_height: view.height,
+                            timestamp_ms: s.timestamp_ms,
+                            touch: s.touch,
+                            pan: s.pan,
+                        })
+                        .collect();
+                    Ok(Some(SpatialInput::Pointer(
+                        samples,
+                        displayed,
+                        f64::from(view.width) / f64::from(view.height),
+                    )))
+                }
+            }
+        }
+
+        pub(crate) fn issue_viewer(
+            &mut self,
+            publication: &noon_runtime::RendererPublication<'_>,
+            camera_override: Option<noon_core::SemanticCamera3D>,
+            snapshot: bool,
+            planar_enabled: bool,
+        ) {
+            let Some(issued) = self.issued.back() else {
+                self.spatial_cache = noon::SpatialPickCache::default();
+                self.planar_cache = noon::PlanarPickCache::default();
+                return;
+            };
+            let (session, sequence, mapping) =
+                (issued.session, issued.sequence, issued.frame.clone());
+            if self
+                .issued_viewer
+                .back()
+                .is_some_and(|(previous, _, frame)| {
+                    *previous != session
+                        || frame.mapping.inspection_revision() != mapping.inspection_revision()
+                })
+            {
+                self.issued_viewer.clear();
+                self.presented_viewer.clear();
+            }
+            let spatial = self
+                .spatial_cache
+                .capture(publication, camera_override, snapshot);
+            let planar = if planar_enabled && spatial.is_none() {
+                let view = mapping.view();
+                let world_units_per_pixel =
+                    f64::from(view.camera().height) / f64::from(view.viewport().y);
+                Some(
+                    self.planar_cache
+                        .capture(publication, snapshot, world_units_per_pixel),
+                )
+            } else {
+                self.planar_cache = noon::PlanarPickCache::default();
+                None
+            };
+            if spatial.is_none() && planar.is_none() {
+                self.issued_viewer.clear();
+                self.presented_viewer.clear();
+                return;
+            }
+            if self.issued_viewer.len() == VIEWER_FRAME_WINDOW {
+                self.issued_viewer.pop_front();
+            }
+            self.issued_viewer.push_back((
+                session,
+                sequence,
+                ViewerFrame {
+                    mapping,
+                    planar,
+                    spatial,
+                },
+            ));
+        }
+
+        fn note_viewer_presented(&mut self, receipt: WorkerPointerReceipt) -> bool {
+            if receipt.presentation <= self.retired_presentation {
+                return false;
+            }
+            if let Some((last, _)) = self.presented_viewer.back() {
+                if receipt.presentation <= last.presentation {
+                    return receipt == *last;
+                }
+            }
+            let Some((_, _, frame)) =
+                self.issued_viewer
+                    .iter()
+                    .find(|(session, sequence, frame)| {
+                        receipt.session == *session
+                            && receipt.sequence == *sequence
+                            && receipt.view_revision == frame.mapping.view().revision()
+                    })
+            else {
+                return false;
+            };
+            if self.presented_viewer.len() == VIEWER_FRAME_WINDOW {
+                self.presented_viewer.pop_front();
+            }
+            self.presented_viewer.push_back((receipt, frame.clone()));
+            true
+        }
+
+        pub(crate) fn retire_viewer_frames(&mut self) {
+            if !self.issued_viewer.is_empty() || !self.presented_viewer.is_empty() {
+                self.issued_viewer.clear();
+                self.presented_viewer.clear();
+                self.refresh_pending = self.view.is_some();
+            }
+        }
+
         pub(crate) fn view(&self) -> Option<PointerPresentationView> {
             self.view
+        }
+
+        /// A new receiver cannot inherit an old surface's presentation or contact.
+        /// Keep semantic input sequencing in the same runtime; only peer receipts
+        /// and collected-frame associations are disposable here.
+        pub(crate) fn reset_receiver(
+            &mut self,
+            target: &mut (impl BrowserPointerTarget + ?Sized),
+            binding: &mut Option<BrowserPointerBinding>,
+            sequence: &mut u64,
+        ) -> Result<(), String> {
+            browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, true)?;
+            target.cancel_spatial_pointer_gestures();
+            target.cancel_planar_viewer_pointer();
+            let retired = binding.map(|contact| {
+                let (pointer, view, viewport) = contact.identity_and_view();
+                RejectedSource {
+                    source: pointer.source,
+                    pointer: (pointer.pointer as u32).cast_signed(),
+                    view,
+                    viewport: Some(viewport),
+                }
+            });
+            let rejected = match (self.rejected, retired) {
+                (Some(previous), Some(retired)) if previous.source > retired.source => {
+                    Some(previous)
+                }
+                (previous, retired) => retired.or(previous),
+            };
+            *self = Self {
+                view: self.view,
+                rejected,
+                refresh_pending: self.view.is_some(),
+                ..Self::default()
+            };
+            Ok(())
         }
 
         pub(crate) fn set_view(
@@ -164,11 +451,14 @@ mod admission {
             // Cancel before changing admission metadata; callback/sequence failure
             // must not claim that the old gesture was retired.
             browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, true)?;
+            target.cancel_spatial_pointer_gestures();
+            target.cancel_planar_viewer_pointer();
             if let Some(old) = self.presented {
                 self.retired_presentation = self.retired_presentation.max(old.presentation);
             }
             self.view = Some(view);
             self.issued.clear();
+            self.retire_viewer_frames();
             self.presented = None;
             self.acknowledged.clear();
             self.presented_frame = None;
@@ -178,22 +468,29 @@ mod admission {
 
         pub(crate) fn capture(
             &self,
-            session: &mut noon::ExecutionSession,
+            target: &mut (impl BrowserPointerTarget + ?Sized),
         ) -> Result<Option<PointerFrameSnapshot>, String> {
             self.view
                 .filter(|view| view.drawable())
                 .map(|view| {
-                    let view = session
+                    let view = target
                         .inspection_pointer_view(view.revision, Vec2::new(view.width, view.height))
                         .map_err(|e| e.to_string())?;
-                    session
+                    target
                         .capture_pointer_frame(view)
                         .map_err(|e| e.to_string())
                 })
                 .transpose()
         }
 
-        pub(crate) fn needs_delta(&self, session: &ExecutionSession) -> bool {
+        /// A static scene may opt into viewer input after its first picture.
+        pub(crate) fn refresh_planar_viewer(&mut self) {
+            if !self.issued.is_empty() {
+                self.refresh_pending = true;
+            }
+        }
+
+        pub(crate) fn needs_delta(&self, target: &(impl BrowserPointerTarget + ?Sized)) -> bool {
             // A registered DOM view is not semantic input interest. Ordinary
             // scenes must retain their quiet-wait presentation without emitting
             // receipt-only deltas on every external authored-time sample.
@@ -201,14 +498,49 @@ mod admission {
             // through this same session-owned query. Admission still validates
             // every collected receipt; no stale frame is relabelled as current.
             self.refresh_pending
-                || (session.has_native_pointer_subscribers()
-                    && self.issued.back().is_some_and(|issued| {
-                        issued.frame.needs_input_refresh(session)
-                            || issued
-                                .frame
-                                .validate_current(session, issued.frame.view())
-                                .is_err_and(|e| browser_pointer_input::recoverable_frame_error(&e))
-                    }))
+                || (target.has_native_pointer_subscribers() && self.issued_frame_is_stale(target))
+        }
+
+        /// Pausing can advance a quiet timeline without changing its pixels.
+        /// Present the new pointer publication at this control boundary so the
+        /// first click can use it without requiring receipt-only playback ticks.
+        pub(crate) fn refresh_paused_viewer(
+            &mut self,
+            target: &(impl BrowserPointerTarget + ?Sized),
+        ) {
+            if target.default_viewer_selection() && self.issued_frame_is_stale(target) {
+                self.refresh_pending = true;
+            }
+        }
+
+        fn issued_frame_is_stale(&self, target: &(impl BrowserPointerTarget + ?Sized)) -> bool {
+            self.issued.back().is_some_and(|issued| {
+                target.pointer_frame_needs_refresh(&issued.frame)
+                    || target
+                        .validate_pointer_frame(
+                            &issued.frame,
+                            issued.frame.view(),
+                            crate::browser_pointer_input::PointerFrameValidation::Input,
+                        )
+                        .is_err_and(|error| browser_pointer_input::recoverable_frame_error(&error))
+            })
+        }
+
+        pub(crate) fn retire_planar_binding_if_changed(
+            &self,
+            frame: Option<&PointerFrameSnapshot>,
+            binding: &mut Option<BrowserPointerBinding>,
+        ) {
+            if self
+                .issued
+                .back()
+                .zip(frame)
+                .is_some_and(|(previous, next)| {
+                    previous.frame.inspection_revision() != next.inspection_revision()
+                })
+            {
+                BrowserPointerBinding::retire_after_inspection(binding);
+            }
         }
 
         pub(crate) fn issue(
@@ -255,17 +587,20 @@ mod admission {
 
         pub(crate) fn note_presented(
             &mut self,
-            session: &mut noon::ExecutionSession,
+            target: &mut (impl BrowserPointerTarget + ?Sized),
             receipt: WorkerPointerReceipt,
         ) -> Result<bool, String> {
             receipt.validate()?;
+            let viewer_presented = self.note_viewer_presented(receipt);
             let Some(latest) = self.issued.back() else {
-                return Ok(false);
+                return Ok(viewer_presented);
             };
             let Some(view) = self.view.filter(|view| view.drawable()) else {
                 return Ok(false);
             };
             if receipt.session != latest.session
+                || (receipt.sequence != latest.sequence
+                    && !target.supports_compatible_pointer_receipts())
                 || receipt.view_revision != view.revision
                 || receipt.presentation <= self.retired_presentation
                 || self.presented.is_some_and(|old| {
@@ -273,7 +608,7 @@ mod admission {
                         || (receipt.session == old.session && receipt.sequence < old.sequence)
                 })
             {
-                return Ok(false);
+                return Ok(viewer_presented);
             }
             let Some(issued) = self.issued.iter().find(|issued| {
                 issued.session == receipt.session
@@ -286,13 +621,16 @@ mod admission {
             // A delayed renderer receipt may still describe the held contact's
             // visible mapping. Refresh hover only if that frame is current;
             // observing an older frame must not retarget the current session.
-            if issued
-                .frame
-                .validate_presentation(session, issued.frame.view())
+            if target
+                .validate_pointer_frame(
+                    &issued.frame,
+                    issued.frame.view(),
+                    crate::browser_pointer_input::PointerFrameValidation::Presentation,
+                )
                 .is_ok()
             {
-                session
-                    .refresh_pointer_hover(&issued.frame, issued.frame.view())
+                target
+                    .observe_pointer_frame(&issued.frame)
                     .map_err(|error| error.to_string())?;
             }
             if self.presented != Some(receipt) {
@@ -305,7 +643,7 @@ mod admission {
                 });
             }
             self.presented = Some(receipt);
-            if !session.translation_drag_active() {
+            if !target.translation_drag_active() {
                 self.presented_frame = Some(PresentedFrame {
                     receipt,
                     frame: issued.frame.clone(),
@@ -322,7 +660,11 @@ mod admission {
             receipt: WorkerPointerReceipt,
         ) -> Result<bool, String> {
             receipt.validate()?;
-            let latest = self.presented == Some(receipt);
+            let latest = self.presented == Some(receipt)
+                || self
+                    .presented_viewer
+                    .back()
+                    .is_some_and(|(last, _)| *last == receipt);
             if !latest
                 && !self
                     .acknowledged
@@ -335,6 +677,9 @@ mod admission {
             // gesture cannot cross an unavailable current surface. An older
             // acknowledgement retires only its records, not a newer gesture.
             if latest {
+                target.cancel_spatial_pointer_gestures();
+                target.cancel_planar_viewer_pointer();
+                self.retire_viewer_frames();
                 browser_pointer_input::cancel_browser_pointer_input(
                     target, binding, sequence, false,
                 )?;
@@ -382,7 +727,6 @@ mod admission {
                 receipt.validate()?;
             }
             let view = target
-                .session()
                 .inspection_pointer_view(
                     input.view_revision,
                     Vec2::new(input.viewport_width, input.viewport_height),
@@ -397,7 +741,11 @@ mod admission {
             };
             // Request a fresh coherent view only when the issued frame itself
             // is obsolete. A stale packet must not trigger an endless repaint.
-            match issued.frame.validate_current(target.session(), view) {
+            match target.validate_pointer_frame(
+                &issued.frame,
+                view,
+                crate::browser_pointer_input::PointerFrameValidation::Input,
+            ) {
                 Ok(()) => {}
                 Err(error) if browser_pointer_input::recoverable_frame_error(&error) => {
                     self.refresh_pending = true;
@@ -436,6 +784,8 @@ mod admission {
                     });
                 }
                 BrowserPointerBinding::retire_after_inspection(binding);
+                target.cancel_planar_viewer_pointer();
+                self.retire_viewer_frames();
                 self.retired_presentation = self.retired_presentation.max(receipt.presentation);
                 self.presented = None;
                 self.acknowledged.clear();
@@ -444,6 +794,67 @@ mod admission {
                 self.refresh_pending = true;
             }
             Ok(Some(changed))
+        }
+
+        fn submit_viewer(
+            &self,
+            target: &mut (impl BrowserPointerTarget + ?Sized),
+            input: BrowserPointerInput,
+            pointer: noon_core::NativePointerId,
+            coordinates: Option<(Vec2, Vec2)>,
+            receipt: Option<WorkerPointerReceipt>,
+        ) -> Result<bool, String> {
+            let Some(view) = self
+                .view
+                .filter(|view| view.revision == input.view_revision)
+            else {
+                return Ok(false);
+            };
+            let Some((surface, viewport)) = coordinates else {
+                target.submit_planar_viewer_pointer(pointer, PlanarViewerPointer::Cancel, None);
+                return Ok(true);
+            };
+            if viewport != Vec2::new(view.width, view.height) {
+                return Ok(false);
+            }
+            let frame = if input.kind == BrowserPointerKind::Press && input.button == Some(0) {
+                let Some((_, frame)) = self
+                    .presented_viewer
+                    .iter()
+                    .find(|(key, frame)| Some(*key) == receipt && frame.planar.is_some())
+                else {
+                    target.cancel_planar_viewer_pointer();
+                    return Ok(false);
+                };
+                if !self
+                    .capture(target)?
+                    .is_some_and(|current| frame.mapping.same_inspection_attachment(&current))
+                {
+                    return Ok(false);
+                }
+                Some(frame)
+            } else {
+                None
+            };
+            let occurrence = match (input.kind, input.button, frame) {
+                (BrowserPointerKind::Press, Some(0), Some(frame)) => {
+                    let scene = frame
+                        .mapping
+                        .position(surface)
+                        .map_err(|error| error.to_string())?
+                        .scene();
+                    PlanarViewerPointer::Press { surface, scene }
+                }
+                (BrowserPointerKind::Move, _, _) => PlanarViewerPointer::Move(surface),
+                (BrowserPointerKind::Release, Some(0), _) => PlanarViewerPointer::Release(surface),
+                _ => PlanarViewerPointer::Cancel,
+            };
+            target.submit_planar_viewer_pointer(
+                pointer,
+                occurrence,
+                frame.and_then(|frame| frame.planar.as_ref()),
+            );
+            Ok(true)
         }
 
         pub(crate) fn submit(
@@ -458,6 +869,9 @@ mod admission {
             let coordinates = input.coordinates()?;
             if let Some(receipt) = receipt {
                 receipt.validate()?;
+            }
+            if binding.is_none() && target.uses_planar_viewer_input() {
+                return self.submit_viewer(target, input, pointer, coordinates, receipt);
             }
             // A rejected asynchronous source can already have a bounded packet
             // tail in flight. Drop only that exact source, without another cancel
@@ -480,7 +894,7 @@ mod admission {
             sequence
                 .checked_add(1)
                 .ok_or("native input event sequence exhausted")?;
-            if target.session().translation_drag_active()
+            if target.translation_drag_active()
                 && binding.as_ref().is_some_and(|contact| {
                     contact.changes_captured_contact(pointer, input.view_revision, coordinates)
                 })
@@ -508,7 +922,7 @@ mod admission {
                 self.presented_frame = None;
                 return Ok(true);
             }
-            let drag_active = target.session().translation_drag_active();
+            let drag_active = target.translation_drag_active();
             let captured_continuation = !needs_binding
                 && drag_active
                 && matches!(
@@ -531,7 +945,7 @@ mod admission {
                     ) {
                         Ok(_) => {
                             self.rejected = None;
-                            if !target.session().translation_drag_active() {
+                            if !target.translation_drag_active() {
                                 self.presented_frame = None;
                             }
                             return Ok(true);
@@ -548,7 +962,9 @@ mod admission {
             // callback-only scenes. Keep callback admission strict for actual
             // subscribers and retire uninterested sources through the same
             // bounded rejection path (including their asynchronous packet tail).
-            let interested = binding.is_some() || target.session().has_native_pointer_subscribers();
+            let interested = binding.is_some()
+                || target.has_native_pointer_subscribers()
+                || (target.default_viewer_selection() && input.kind == BrowserPointerKind::Press);
             if let (true, false, Some(receipt)) = (interested, captured_continuation, receipt) {
                 if let Some(presented) = self
                     .acknowledged
@@ -564,7 +980,7 @@ mod admission {
                     ) {
                         Ok(_) => {
                             self.rejected = None;
-                            if !drag_active && target.session().translation_drag_active() {
+                            if !drag_active && target.translation_drag_active() {
                                 // Acquisition alone pins a mapping. Later receipt
                                 // IDs never authorize a new hit or replace it.
                                 self.presented_frame = Some(PresentedFrame {
@@ -598,4 +1014,4 @@ mod admission {
     }
 }
 #[cfg(any(target_arch = "wasm32", test))]
-pub(crate) use admission::WorkerPointerPresentation;
+pub(crate) use admission::{SpatialInput, WorkerPointerPresentation};

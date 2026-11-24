@@ -1,8 +1,8 @@
 //! An elliptical field changes center, radii, opacity and paint kind on authored time.
 //! Paired with `web/python/examples/radial_gradient.py`.
 use crate::{
-    AnimationOptions, Color, ContinuationStep, GradientStop, LiveContinuation, LiveProgram,
-    LiveSession, Mobject, RadialGradient, RateFunction, Scene,
+    AnimationOptions, Color, ContinuationEffects, ContinuationStep, GradientStop, LiveContinuation,
+    LiveProgram, Mobject, RadialGradient, RateFunction, Scene,
 };
 use std::sync::Arc;
 
@@ -34,27 +34,31 @@ fn paint(vertical: bool) -> Result<Arc<RadialGradient>, String> {
 }
 
 impl LiveContinuation for RadialSurface {
+    const EFFECTS: ContinuationEffects = ContinuationEffects::SceneOnly;
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         let segment = match self.stage {
-            0 => live.wait_segment(0.5),
+            0 => scene.live().wait_segment(0.5),
             1 | 3 | 5 => {
-                let target = live.target_editor(&self.panel).map_err(message)?;
+                let target = scene.target_editor(&self.panel).map_err(message)?;
                 match self.stage {
                     1 => {
-                        live.set_fill_radial_gradient(&target, paint(true)?, Some(0.5))
+                        scene
+                            .set_fill_radial_gradient(&target, paint(true)?, Some(0.5))
                             .map_err(message)?;
                     }
                     3 => {
-                        live.set_fill(&target, 1.0, 0.0, 0.0, 1.0)
+                        scene
+                            .set_fill_rgb(&target, 1.0, 0.0, 0.0, 1.0)
                             .map_err(message)?;
                     }
                     _ => {
-                        live.set_fill_radial_gradient(&target, paint(false)?, None)
+                        scene
+                            .set_fill_radial_gradient(&target, paint(false)?, None)
                             .map_err(message)?;
                     }
                 }
-                live.declare_and_activate_transform_to(
+                scene.live().declare_and_activate_transform_to(
                     &self.panel,
                     &target,
                     AnimationOptions::new()
@@ -62,7 +66,7 @@ impl LiveContinuation for RadialSurface {
                         .rate_func(RateFunction::Linear),
                 )
             }
-            2 | 4 | 6 => live.wait_segment(0.25),
+            2 | 4 | 6 => scene.live().wait_segment(0.25),
             7 => return Ok(ContinuationStep::Finished),
             _ => return Err("painted surface resumed after completion".into()),
         }

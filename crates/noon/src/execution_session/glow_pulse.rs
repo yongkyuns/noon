@@ -68,7 +68,8 @@ impl ExecutionSession {
                 .map_err(|error| {
                     ExecutionSessionAnimationError::InvalidComposition(error.to_string())
                 })?
-                .is_empty()
+                .iter()
+                .all(|effect| effect.name.authored() != Some("glow"))
             {
                 missing.insert(owner);
             }
@@ -208,21 +209,25 @@ pub(super) fn adopt_ordinary_parameter_tracks(
         {
             if let Some(ownership) = attachments.get_mut(attachment) {
                 ownership.remove_on_completion = false;
-                for parameter in from.update().parameters() {
-                    ownership.ordinary_parameters |= parameter_bit(parameter);
-                }
+                ownership.ordinary_parameters |= parameter_bit(from.parameter());
             }
         }
     }
 }
 
-const fn parameter_bit(parameter: EffectParameter) -> u8 {
+const fn parameter_bit(parameter: EffectParameter) -> u16 {
     match parameter {
         EffectParameter::Color => 1,
         EffectParameter::Radius => 2,
         EffectParameter::Intensity => 4,
         EffectParameter::Source => 8,
         EffectParameter::Offset => 16,
+        EffectParameter::Progress => 32,
+        EffectParameter::Softness => 64,
+        EffectParameter::Seed => 128,
+        EffectParameter::Size => 256,
+        EffectParameter::Threshold => 512,
+        EffectParameter::Shader(_) => 0,
     }
 }
 

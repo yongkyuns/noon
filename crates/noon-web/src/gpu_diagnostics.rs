@@ -5,6 +5,34 @@ use std::{
 
 use serde::Serialize;
 
+/// Identity of the adapter backing this device, queried only for diagnostics.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn renderer_adapter_info(device: &wgpu::Device) -> Result<String, serde_json::Error> {
+    let info = device.adapter_info();
+    // Browser descriptions can be redacted while same-device vendor and
+    // architecture remain available. Do not request a separate diagnostic GPU.
+    let browser_device_info = device.as_webgpu().map(|device| {
+        let browser = device.adapter_info();
+        serde_json::json!({
+            "vendor": browser.vendor(),
+            "architecture": browser.architecture(),
+            "device": browser.device(),
+            "description": browser.description(),
+            "isFallbackAdapter": browser.is_fallback_adapter(),
+        })
+    });
+    serde_json::to_string(&serde_json::json!({
+        "backend": format!("{:?}", info.backend),
+        "vendor": info.vendor,
+        "device": info.device,
+        "name": info.name,
+        "deviceType": format!("{:?}", info.device_type),
+        "driver": info.driver,
+        "driverInfo": info.driver_info,
+        "browserDeviceInfo": browser_device_info,
+    }))
+}
+
 const GPU_COMPLETION_IN_FLIGHT_LIMIT: usize = 4;
 const GPU_COMPLETION_SAMPLE_LIMIT: usize = 32;
 

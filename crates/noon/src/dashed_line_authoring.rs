@@ -123,7 +123,7 @@ pub(crate) fn dashed_line_geometry(
         dashed_ratio,
     )
     .map_err(AuthoringError::from)?;
-    Ok(GeometryRef::VectorPath(path))
+    Ok(GeometryRef::path(path))
 }
 
 fn point_is_finite(point: Vec2) -> bool {

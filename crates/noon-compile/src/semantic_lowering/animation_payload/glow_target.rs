@@ -23,6 +23,7 @@ pub enum EffectTargetLoweringError {
     MissingEffectiveValue,
     UnsupportedContentChange,
     UnsupportedPulseOptions,
+    UnsupportedTargetOptions,
     Parameter(EffectParameterError),
     Timeline(TimelineError),
 }
@@ -38,6 +39,42 @@ impl std::fmt::Display for EffectTargetLoweringError {
 }
 impl std::error::Error for EffectTargetLoweringError {}
 
+/// Common frozen-generation and activation-value projection for object and
+/// composed-family targets. Scheduling and track installation stay with the
+/// ordinary prepared animation path.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn prepared_channels(
+    prepared: &noon_core::PreparedSemanticMutationTransaction<'_>,
+    animation: noon_core::SemanticTransactionNodeRef,
+    owner: noon_core::SemanticTransactionNodeRef,
+    target: noon_core::SemanticTransactionNodeRef,
+    current: Option<std::sync::Arc<crate::CompiledEffectStack>>,
+    newly_admitted: bool,
+    method_target: bool,
+    temporary: &HashSet<SemanticNodeId>,
+) -> Result<Vec<(Property, TrackValues)>, EffectTargetLoweringError> {
+    let source = prepared
+        .animation_effect_snapshot(owner)
+        .map_err(EffectTargetLoweringError::Read)?;
+    let target = prepared
+        .animation_effect_snapshot(target)
+        .map_err(EffectTargetLoweringError::Read)?;
+    let snapshot = prepared
+        .transform_effect_snapshot(animation)
+        .map_err(EffectTargetLoweringError::Read)?;
+    let effective = prepared_effective(current, &source, newly_admitted, |attachment| {
+        prepared.store().node(attachment).is_none()
+    })?;
+    channels(
+        snapshot,
+        &source,
+        &target,
+        effective.as_deref(),
+        method_target,
+        temporary,
+    )
+}
+
 pub(super) fn channels(
     snapshot: Option<&SemanticTransformEffectSnapshot>,
     source: &[SemanticAnimationEffectSnapshot],
@@ -51,15 +88,16 @@ pub(super) fn channels(
     let omitted: HashSet<_> = source
         .iter()
         .filter(|effect| {
-            temporary_attachments.contains(&effect.attachment)
-                && effect
-                    .definition
-                    .as_glow()
-                    .is_some_and(|glow| glow.intensity() == 0.0)
-                && effective.is_some_and(|stack| stack.get(effect.attachment).is_some())
-                && !target
-                    .iter()
-                    .any(|destination| destination.name == effect.name)
+            effect.name.is_visibility()
+                || (temporary_attachments.contains(&effect.attachment)
+                    && effect
+                        .definition
+                        .as_glow()
+                        .is_some_and(|glow| glow.intensity() == 0.0)
+                    && effective.is_some_and(|stack| stack.get(effect.attachment).is_some())
+                    && !target
+                        .iter()
+                        .any(|destination| destination.name == effect.name))
         })
         .map(|effect| effect.attachment)
         .collect();
@@ -68,6 +106,12 @@ pub(super) fn channels(
         .filter(|effect| !omitted.contains(&effect.attachment))
         .cloned()
         .collect();
+    let target: Vec<_> = target
+        .iter()
+        .filter(|effect| !effect.name.is_visibility())
+        .cloned()
+        .collect();
+    let target = target.as_slice();
     let Some(snapshot) = snapshot else {
         return if source.is_empty()
             && target.is_empty()
@@ -118,12 +162,13 @@ fn attachment_channels(
     if effective.attachment != initial.attachment {
         return Err(EffectTargetLoweringError::StaleAttachment);
     }
-    let authored_source = initial.definition;
+    let authored_source = &initial.definition;
     let copy_intent = destination
         .copy_provenance
+        .as_ref()
         .filter(|copy| copy.source_attachment() == initial.attachment);
-    let initial = effective.definition;
-    let destination = destination.definition;
+    let initial = &effective.definition;
+    let destination = &destination.definition;
     // The attachment kind and discrete parameters cannot change in-place.
     use noon_core::EffectValue;
     effective
@@ -161,9 +206,17 @@ fn attachment_channels(
             update.color = Some(b);
         }
     }
-    if let (Some(a), Some(b)) = (baseline.as_glow(), destination.as_glow()) {
-        if writes_intensity || a.intensity() != b.intensity() {
-            update.intensity = Some(b.intensity());
+    if let (Some(a), Some(b)) = (baseline.intensity(), destination.intensity()) {
+        if writes_intensity || a != b {
+            update.intensity = Some(b);
+        }
+    }
+    if let (Some(a), Some(b)) = (baseline.threshold(), destination.threshold()) {
+        if a != b
+            || copy_intent
+                .is_some_and(|copy| copy.writes_parameter(noon_core::EffectParameter::Threshold))
+        {
+            update.threshold = Some(b);
         }
     }
     if let (Some(a), Some(b)) = (baseline.as_shadow(), destination.as_shadow()) {
@@ -171,11 +224,50 @@ fn attachment_channels(
             update.offset = Some(b.offset());
         }
     }
-    if writes_radius || baseline.radius() != destination.radius() {
-        update.radius = Some(destination.radius());
+    if let (Some(a), Some(b)) = (baseline.radius(), destination.radius()) {
+        if writes_radius || a != b {
+            update.radius = Some(b);
+        }
+    }
+    if let (Some(a), Some(b)) = (baseline.as_pixelate(), destination.as_pixelate()) {
+        if a.size() != b.size()
+            || copy_intent.is_some_and(|c| c.writes_parameter(noon_core::EffectParameter::Size))
+        {
+            update.size = Some(b.size());
+        }
+    }
+    if let (Some(a), Some(b)) = (
+        baseline.as_noise_dissolve(),
+        destination.as_noise_dissolve(),
+    ) {
+        if a.progress() != b.progress()
+            || copy_intent.is_some_and(|c| c.writes_parameter(noon_core::EffectParameter::Progress))
+        {
+            update.progress = Some(b.progress());
+        }
+        if a.softness() != b.softness()
+            || copy_intent.is_some_and(|c| c.writes_parameter(noon_core::EffectParameter::Softness))
+        {
+            update.softness = Some(b.softness());
+        }
+    }
+    if let (Some(a), Some(b)) = (baseline.as_shader(), destination.as_shader()) {
+        for (index, value) in b.values().iter().enumerate() {
+            if a.values()[index] != *value
+                || copy_intent.is_some_and(|copy| {
+                    copy.writes_parameter(noon_core::EffectParameter::Shader(index as u8))
+                })
+            {
+                let key = b
+                    .program()
+                    .parameter(&b.program().schema().parameters[index].name)
+                    .expect("checked shader schema");
+                update = update.shader_parameter(&key, *value);
+            }
+        }
     }
     effective
-        .parameter_channels(update)
+        .parameter_channels(&update)
         .map_err(EffectTargetLoweringError::Parameter)
 }
 
@@ -217,21 +309,28 @@ pub(super) fn prepared_effective(
             values.push(value);
         } else if newly_admitted
             || (unpublished(effect.attachment)
-                && effect
-                    .definition
-                    .as_glow()
-                    .is_some_and(|glow| glow.intensity() == 0.0))
+                && (effect.name.is_visibility()
+                    || effect
+                        .definition
+                        .as_glow()
+                        .is_some_and(|glow| glow.intensity() == 0.0)))
         {
             values.push(crate::CompiledEffect {
                 attachment: effect.attachment,
-                definition: effect.definition,
+                definition: effect.definition.clone(),
             });
         } else {
             return Err(EffectTargetLoweringError::MissingEffectiveValue);
         }
     }
-    let stack = crate::CompiledEffectStack::new(values)
-        .map_err(|_| EffectTargetLoweringError::UnsupportedTopology)?;
+    let stack = crate::CompiledEffectStack::new_with_visibility(
+        values,
+        source
+            .iter()
+            .find(|effect| effect.name.is_visibility())
+            .map(|effect| effect.attachment),
+    )
+    .map_err(|_| EffectTargetLoweringError::UnsupportedTopology)?;
     Ok(Some(std::sync::Arc::new(stack)))
 }
 
@@ -243,8 +342,16 @@ pub(super) fn validate_sources(
     target: &noon_core::SemanticObjectState,
 ) -> Result<(), EffectTargetLoweringError> {
     for (id, state) in [(source_id, source), (target_id, target)] {
-        super::super::projection::validate_effect_source_profile(id, state, store)
-            .map_err(EffectTargetLoweringError::Profile)?;
+        if state.role() == noon_core::SemanticObjectRole::Camera2D {
+            if state.view_color_profile() != noon_core::ViewColorProfile::LinearHdr {
+                return Err(EffectTargetLoweringError::Profile(
+                    crate::SemanticLoweringError::UnsupportedEffectProfile { owner: id },
+                ));
+            }
+        } else {
+            super::super::projection::validate_effect_source_profile(id, state, store)
+                .map_err(EffectTargetLoweringError::Profile)?;
+        }
     }
     if source.content != target.content {
         return Err(EffectTargetLoweringError::UnsupportedContentChange);
@@ -304,7 +411,7 @@ mod tests {
         } else {
             EffectDefinition::Glow(noon_core::Glow::default())
         };
-        let value = noon_core::EffectTrackValue::from_definition(property, definition).unwrap();
+        let value = noon_core::EffectTrackValue::from_definition(property, &definition).unwrap();
         TrackValues::Effect {
             attachment,
             from: value,

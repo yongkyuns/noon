@@ -15,9 +15,14 @@ on:
       - 'web/python/_manim_image.py'
       - 'web/python/test_manim_image.py'
       - 'web/image-raster-workflow.test.mjs'
+      - 'web/video-*.js'
+      - 'web/python/_noon_video.py'
       - 'web/python/examples/raster_image.py'
       - 'web/python-worker.source.js'
       - 'scripts/image-*'
+      - 'scripts/export-python-scene.mjs'
+      - 'scripts/playground-video-lifecycle.mjs'
+      - 'scripts/test_browser_video_export.py'
       - '.github/workflows/image-raster-qualification.yml'
   workflow_dispatch:
 permissions:
@@ -93,6 +98,11 @@ jobs:
         run: cargo test -p noon --no-default-features --features image-decode --test image_raster_qualification -- --ignored --nocapture
       - name: Direct Rust WASM and Python on WebGPU and WebGL2
         run: timeout --signal=TERM 300s node scripts/image-raster-smoke.mjs
+      - name: Qualify uploaded video playback and synced MP4 exports
+        env:
+          # Use the runner's Google Chrome for its H.264 and AAC decoders.
+          NOON_VIDEO_CHROMIUM_CHANNEL: chrome
+        run: timeout --signal=TERM 300s python scripts/test_browser_video_export.py -v
       - uses: actions/upload-artifact@v7
         if: always()
         with:

@@ -1,8 +1,8 @@
 //! Shared Rust counterpart of ManimCE CyclicReplace over a flat three-member family.
 
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    MobjectFamily, RateFunction, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, Mobject, MobjectFamily,
+    RateFunction, Scene,
 };
 
 pub struct CyclicReplace {
@@ -17,35 +17,39 @@ pub struct CyclicReplace {
 impl LiveContinuation for CyclicReplace {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.declare_and_activate_family_transform_to(
-                    &self.source,
-                    &self.shifted,
-                    AnimationOptions::new()
-                        .run_time(0.25)
-                        .rate_func(RateFunction::Linear),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_family_transform_to(
+                        &self.source,
+                        &self.shifted,
+                        AnimationOptions::new()
+                            .run_time(0.25)
+                            .rate_func(RateFunction::Linear),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
-                let target = live
+                let target = scene
                     .cyclic_replace_target(&self.source)
                     .map_err(|error| error.to_string())?;
                 self.stage = 2;
-                live.declare_and_activate_family_transform_to(
-                    &self.source,
-                    target.root(),
-                    AnimationOptions::new()
-                        .run_time(1.0)
-                        .rate_func(RateFunction::Linear)
-                        .path_arc(std::f64::consts::PI / 2.0),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_family_transform_to(
+                        &self.source,
+                        target.root(),
+                        AnimationOptions::new()
+                            .run_time(1.0)
+                            .rate_func(RateFunction::Linear)
+                            .path_arc(std::f64::consts::PI / 2.0),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             2 => {
                 let expected = [(0.0, 1.0), (2.0, 1.0), (-2.0, 1.0)];
@@ -54,7 +58,7 @@ impl LiveContinuation for CyclicReplace {
                     (&self.second, expected[1]),
                     (&self.third, expected[2]),
                 ] {
-                    let center = live
+                    let center = scene
                         .effective_layout(mobject)
                         .map_err(|error| error.to_string())?
                         .center;

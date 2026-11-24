@@ -55,7 +55,7 @@ fn analytic_line_packs_all_cap_modes_without_changing_existing_flag_bits() {
         ] {
             let frame = line_frame(cap, width_mode);
             let mut preparer = FramePreparer::new();
-            let prepared = preparer.prepare(&frame);
+            let prepared = preparer.prepare(&frame).unwrap();
             let flags = prepared.lines[0].style.stroke_enabled;
             assert_eq!(flags & 1, 1, "stroke enabled bit changed");
             assert_eq!(flags & 2, expected_width_bit, "width-mode bit changed");
@@ -71,7 +71,7 @@ fn rectangle_packing_does_not_carry_line_cap_bits() {
         frame.objects[0].content =
             noon_core::ObjectContentRef::Geometry(GeometryRef::rectangle(2.0, 2.0));
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         let flags = prepared.rectangles[0].style.stroke_enabled;
         assert_eq!(
             flags, 3,
@@ -102,7 +102,7 @@ fn background_strokes_promote_analytic_primitives_and_invalidate_width_caches() 
         frame.objects[0].style.background_stroke = Some(Color::BLUE);
         frame.objects[0].style.background_stroke_width = 0.4;
         let mut preparer = FramePreparer::new();
-        let initial = preparer.prepare(&frame);
+        let initial = preparer.prepare(&frame).unwrap();
         assert_eq!(initial.paths.len(), 1);
         assert!(initial.circles.is_empty());
         assert!(initial.rectangles.is_empty());
@@ -121,12 +121,12 @@ fn background_strokes_promote_analytic_primitives_and_invalidate_width_caches() 
 
         frame.objects[0].style.background_stroke_width = 0.8;
         let changed = noon_runtime::FrameChanges::objects(vec![0]);
-        let updated = preparer.prepare_incremental(&frame, &changed);
+        let updated = preparer.prepare_incremental(&frame, &changed).unwrap();
         assert_eq!(updated.stats.geometry_cache_misses, 1);
         assert!(max_y(updated.path_vertices) > before + 0.15);
 
         frame.objects[0].style.background_stroke_width = 0.0;
-        let removed = preparer.prepare_incremental(&frame, &changed);
+        let removed = preparer.prepare_incremental(&frame, &changed).unwrap();
         assert!(removed.paths.is_empty());
     }
 }
@@ -138,7 +138,7 @@ fn screen_space_background_stroke_width_is_independent_of_object_scale() {
     frame.objects[0].style.background_stroke_width = 0.4;
     frame.objects[0].transform.scale = Vec2::new(3.0, 2.0);
     let mut preparer = FramePreparer::new();
-    let prepared = preparer.prepare(&frame);
+    let prepared = preparer.prepare(&frame).unwrap();
     let half_width = prepared
         .path_vertices
         .iter()

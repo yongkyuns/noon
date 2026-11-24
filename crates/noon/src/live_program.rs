@@ -6,9 +6,23 @@
 //! callback ordering, semantic publication, and renderer-facing invalidation
 //! remain in their existing owners.
 
-use std::{error::Error, rc::Rc};
+use std::{
+    error::Error,
+    ops::{Deref, DerefMut},
+    rc::Rc,
+};
 
+mod blocking_replay;
 mod inspection;
+pub use blocking_replay::BlockingReplayError;
+#[cfg(feature = "prepared-prefix")]
+mod playback;
+#[cfg(feature = "prepared-prefix")]
+pub use playback::{PlaybackProgram, PlaybackProgramError};
+#[cfg(feature = "prepared-prefix")]
+mod prepared;
+#[cfg(feature = "prepared-prefix")]
+pub use prepared::{PreparedSource, PreparedSourceError, PreparedSourceStatus};
 
 use noon_core::{
     NativeEventOccurrence, NativeInputValue, NativePointerId, NativePointerInput,
@@ -21,7 +35,8 @@ use crate::execution_session::{
 };
 use crate::{
     ExecutionSegment, ExecutionSegmentAdvanceError, ExecutionSegmentState, ExecutionSession,
-    ExecutionSessionInputError, LiveSession, RustHostCallbackError, RustHostCallbackTable, Scene,
+    ExecutionSessionInputError, LiveSession, LiveSessionError, RustHostCallbackError,
+    RustHostCallbackTable, Scene,
 };
 use noon_runtime::{FrameState, RendererPublication};
 
@@ -30,17 +45,113 @@ use noon_runtime::{FrameState, RendererPublication};
 /// The continuation owns ordinary Rust locals and semantic handles. It supplies
 /// an existing segment created through the borrowed [`LiveSession`], never a
 /// host-defined interval, clock, scheduler entry, or semantic identity.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum ContinuationStep {
     Await(ExecutionSegment),
+    /// Publish this existing transaction only after the host prepares its resources.
+    Publish(crate::StagedEffectPublication),
     Finished,
+}
+
+/// Host effects of a continuation and its teardown, independent of scene replay support.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ContinuationEffects {
+    /// Arbitrary host work keeps ordinary observed execution and its barriers.
+    #[default]
+    Opaque,
+    /// The continuation reads/writes only its owned authoring state and Noon scene.
+    /// Neither execution nor teardown observes external time, external randomness,
+    /// I/O or shared host state. The same contract applies to owned values' destructors.
+    /// Registering callbacks/input is allowed; their separate runtime admission
+    /// still requires observed execution before they can run.
+    SceneOnly,
 }
 
 /// Resumable direct Rust authoring over one shared live scene/session pair.
 pub trait LiveContinuation {
     type Error;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error>;
+    /// Source-level contract, not a claim that the resulting scene is seekable.
+    /// Unknown Rust code is opaque. Only a body satisfying `SceneOnly` may run
+    /// ahead of presentation; the engine cannot infer this from compiled code.
+    const EFFECTS: ContinuationEffects = ContinuationEffects::Opaque;
+
+    /// Whether this source currently has work for one continuation invocation.
+    ///
+    /// Ordinary compiled continuations are ready at every admitted boundary.
+    /// An externally driven authoring stack may remain idle until it supplies
+    /// its next boundary. Observing readiness must not execute source code.
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    /// Resume with the owning Scene. Borrow [`ContinuationScene::live`] to
+    /// declare or await an execution segment.
+    fn resume(&mut self, scene: &mut ContinuationScene) -> Result<ContinuationStep, Self::Error>;
+
+    /// An authoring source may own its callable table instead of requiring the host
+    /// to assemble it. The execution session still owns callback ordering.
+    #[doc(hidden)]
+    fn callbacks(&mut self) -> Option<&mut RustHostCallbackTable> {
+        None
+    }
+}
+
+/// The single scene owner at a compiled continuation boundary.
+///
+/// Only the crate's async adapter may temporarily move the scene into its scoped
+/// authoring capability. Host-facing borrows are available again before resumption
+/// returns, including when source code unwinds.
+pub struct ContinuationScene {
+    scene: Option<Scene>,
+}
+
+impl ContinuationScene {
+    pub(crate) fn new(scene: Scene) -> Self {
+        Self { scene: Some(scene) }
+    }
+
+    const fn get(&self) -> &Scene {
+        match &self.scene {
+            Some(scene) => scene,
+            None => panic!("scene is temporarily loaned to its authoring continuation"),
+        }
+    }
+
+    /// Borrow execution controls for this continuation's current boundary.
+    pub fn live(&mut self) -> LiveSession<'_> {
+        self.owned_live()
+    }
+
+    pub(crate) fn take(&mut self) -> Scene {
+        self.scene
+            .take()
+            .expect("scene is already loaned to its authoring continuation")
+    }
+
+    pub(crate) fn restore(&mut self, scene: Scene) {
+        assert!(
+            self.scene.is_none(),
+            "scene owner already contains its scene"
+        );
+        self.scene = Some(scene);
+    }
+}
+
+impl Deref for ContinuationScene {
+    type Target = Scene;
+
+    fn deref(&self) -> &Self::Target {
+        self.get()
+    }
+}
+
+impl DerefMut for ContinuationScene {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.scene
+            .as_mut()
+            .expect("scene is temporarily loaned to its authoring continuation")
+    }
 }
 
 /// Observable control-plane state for one live Rust program.
@@ -51,6 +162,7 @@ pub trait LiveContinuation {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LiveProgramStatus {
     ReadyToResume,
+    PreparingResources,
     Awaiting(ExecutionSegmentState),
     PublicationPending(PublicationContext),
     Finished,
@@ -60,6 +172,7 @@ pub enum LiveProgramStatus {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum LiveProgramPhase {
     ReadyToResume,
+    PreparingResources,
     Awaiting(ExecutionSegment),
     PublicationPending(PublicationContext),
     Finished,
@@ -81,6 +194,8 @@ pub enum LiveProgramError<E> {
         expected: PublicationContext,
     },
     CompletedSegment(ExecutionSegment),
+    /// Source-owned and separately supplied host callables cannot compete.
+    CompetingCallbackTables,
     Callback(RustHostCallbackError),
     Input(ExecutionSessionInputError),
     PointerFrame(crate::integration::PointerFrameError),
@@ -113,6 +228,9 @@ impl<E: std::fmt::Display> std::fmt::Display for LiveProgramError<E> {
                 "continuation returned an already completed segment ending at {}",
                 segment.end_time()
             ),
+            Self::CompetingCallbackTables => formatter.write_str(
+                "this source owns its callbacks; drive it with an empty host callback table",
+            ),
             Self::Callback(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
             Self::PointerFrame(error) => error.fmt(formatter),
@@ -138,6 +256,7 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
             Self::Continuation(error) => Some(error),
             Self::InvalidState { .. }
             | Self::CompletedSegment(_)
+            | Self::CompetingCallbackTables
             | Self::PublicationMismatch { .. }
             | Self::PublicationStillPending { .. } => None,
         }
@@ -150,16 +269,17 @@ impl<E: Error + 'static> Error for LiveProgramError<E> {
 /// accidentally pair a semantic store with a foreign runtime. It retains at most
 /// one existing segment and never creates another timeline or cursor.
 pub struct LiveProgram<C> {
-    scene: Scene,
+    scene: ContinuationScene,
     continuation: C,
     phase: LiveProgramPhase,
+    pending_effects: Option<crate::StagedEffectPublication>,
 }
 
 impl Scene {
     /// Consume this scene into one paired live program.
     ///
     /// Lowering happens once before the continuation starts. All later semantic
-    /// work is available only through the program's temporary [`LiveSession`].
+    /// work uses the same [`Scene`] at each continuation boundary.
     pub fn into_live_program<C: LiveContinuation>(
         mut self,
         continuation: C,
@@ -181,17 +301,23 @@ impl Scene {
         }
         self.install_execution(execution);
         Ok(LiveProgram {
-            scene: self,
+            scene: ContinuationScene::new(self),
             continuation,
             phase: LiveProgramPhase::ReadyToResume,
+            pending_effects: None,
         })
     }
 }
 
 impl<C: LiveContinuation> LiveProgram<C> {
-    /// Borrow the authoritative runtime for frame, wake, camera, and query observations.
+    /// Borrow the owning Scene for authoring observations during execution.
+    pub const fn scene(&self) -> &Scene {
+        self.scene.get()
+    }
+
+    /// Borrow the runtime for host frame delivery and diagnostics.
     pub const fn session(&self) -> &ExecutionSession {
-        self.scene.owned_execution()
+        self.scene().owned_execution()
     }
 
     /// Derive host cadence from the runtime and this program's one continuation barrier.
@@ -201,6 +327,10 @@ impl<C: LiveContinuation> LiveProgram<C> {
     /// underlying tokenless wait already reports a complete interval.
     pub fn wake_state(&self) -> noon_runtime::RuntimeWakeState {
         let wake = self.session().wake_state();
+        if self.phase == LiveProgramPhase::PreparingResources {
+            // Poll external preparation without advancing the authoritative frame.
+            return wake.with_additional_timeline(noon_runtime::TimelineWakeState::Continuous);
+        }
         let LiveProgramPhase::Awaiting(segment) = self.phase else {
             // Only an awaited segment authorizes authored-time advancement.
             // Endpoint presentation, authoring resumption, and a finished source
@@ -240,14 +370,17 @@ impl<C: LiveContinuation> LiveProgram<C> {
     }
 
     /// Retire input-owned state before releasing this source's canonical owner.
-    /// This leaves authored time and continuation state unchanged; renderer
-    /// recovery that retains the source must not call this method.
+    /// This leaves authored time unchanged and cancels unpublished resource work.
+    /// Renderer recovery that retains the source must not call this method.
     pub fn retire_execution_source(&mut self) -> Result<(), LiveProgramError<C::Error>> {
         let store = std::rc::Rc::clone(self.scene.integration_store());
         self.scene
             .owned_execution_mut()
             .retire_interactions_for_source_replacement(&mut store.borrow_mut())
             .map_err(LiveProgramError::Input)?;
+        if self.pending_effects.take().is_some() {
+            self.phase = LiveProgramPhase::Terminal;
+        }
         self.refresh_pending_publication();
         Ok(())
     }
@@ -322,22 +455,16 @@ impl<C: LiveContinuation> LiveProgram<C> {
         targets: impl IntoIterator<Item = &'target crate::Mobject>,
     ) -> Result<(), LiveProgramError<C::Error>> {
         self.ensure_host_input_available("configure translation drag targets")?;
-        let mut nodes = Vec::new();
-        for target in targets {
-            if !Rc::ptr_eq(self.scene.integration_store(), target.integration_store()) {
-                return Err(LiveProgramError::TranslationDrag(
-                    TranslationDragError::ForeignStore,
-                ));
-            }
-            target.validate().map_err(|error| {
-                LiveProgramError::TranslationDrag(TranslationDragError::Semantic(error.to_string()))
-            })?;
-            nodes.push(target.node_id());
-        }
         self.scene
-            .owned_execution_mut()
-            .set_translation_drag_targets(nodes)
-            .map_err(LiveProgramError::TranslationDrag)?;
+            .owned_live()
+            .set_translation_drag_targets(targets)
+            .map_err(|error| {
+                LiveProgramError::TranslationDrag(match error {
+                    LiveSessionError::ForeignMobjectStore => TranslationDragError::ForeignStore,
+                    LiveSessionError::TranslationDrag(error) => error,
+                    error => TranslationDragError::Semantic(error.to_string()),
+                })
+            })?;
         self.refresh_pending_publication();
         Ok(())
     }
@@ -440,6 +567,7 @@ impl<C: LiveContinuation> LiveProgram<C> {
     pub fn status(&self) -> LiveProgramStatus {
         match self.phase {
             LiveProgramPhase::ReadyToResume => LiveProgramStatus::ReadyToResume,
+            LiveProgramPhase::PreparingResources => LiveProgramStatus::PreparingResources,
             LiveProgramPhase::Awaiting(segment) => {
                 LiveProgramStatus::Awaiting(self.session().segment_state(segment))
             }
@@ -451,19 +579,91 @@ impl<C: LiveContinuation> LiveProgram<C> {
         }
     }
 
+    /// Whether both the completion barrier and the source permit one resume.
+    ///
+    /// A ready completion barrier does not manufacture work for an externally
+    /// driven source whose next boundary has not yet been submitted.
+    pub fn can_resume(&self) -> bool {
+        self.phase == LiveProgramPhase::ReadyToResume && self.continuation.is_ready()
+    }
+
+    /// Lend the existing owner only while an external author has no queued work.
+    /// The closure must return before its platform host waits or suspends.
+    pub(crate) fn with_external_authoring<R>(
+        &mut self,
+        operation: impl FnOnce(&mut Scene, &mut C) -> R,
+    ) -> Result<R, LiveProgramError<C::Error>> {
+        if self.phase != LiveProgramPhase::ReadyToResume || self.continuation.is_ready() {
+            return Err(self.invalid_state("edit an externally driven source"));
+        }
+        Ok(operation(&mut self.scene, &mut self.continuation))
+    }
+
+    /// Retire this source even when cleanup reports an error. No later source
+    /// operation may repair or resume a cancelled invocation implicitly.
+    pub(crate) fn cancel_external_authoring(&mut self) -> Result<(), LiveProgramError<C::Error>> {
+        let result = self.retire_execution_source();
+        self.pending_effects = None;
+        self.phase = LiveProgramPhase::Terminal;
+        result
+    }
+
+    /// Renderer integration enables mandatory preparation for later shader
+    /// introductions. Detached/headless semantic construction stays device-free.
+    pub fn require_effect_resource_preparation(&mut self) {
+        self.scene
+            .owned_execution_mut()
+            .require_effect_resource_preparation();
+    }
+
+    /// Owned immutable requests only; borrowing these is never necessary while
+    /// awaiting compilation. The semantic transaction remains unpublished.
+    pub fn pending_effect_programs(&self) -> Option<&[noon_core::WgslEffectProgram]> {
+        self.pending_effects
+            .as_ref()
+            .map(|pending| pending.programs())
+    }
+
+    /// Host acknowledgement after successful resource preparation. The normal
+    /// publisher reruns semantic/compiler/runtime preflight against current state.
+    /// The resulting frame must then pass the existing retention barrier before
+    /// the authoring continuation can resume.
+    pub fn publish_prepared_effects(
+        &mut self,
+    ) -> Result<LiveProgramStatus, LiveProgramError<C::Error>> {
+        if self.phase != LiveProgramPhase::PreparingResources {
+            return Err(self.invalid_state("publish prepared effects"));
+        }
+        let pending = self
+            .pending_effects
+            .take()
+            .expect("preparation owns a transaction");
+        let segment = match self.scene.owned_live().publish_staged_effects(pending) {
+            Ok(segment) => segment,
+            Err(error) => {
+                self.phase = LiveProgramPhase::Terminal;
+                return Err(LiveProgramError::Completion(error));
+            }
+        };
+        self.phase = match segment {
+            Some(segment) => LiveProgramPhase::Awaiting(segment),
+            None => LiveProgramPhase::PublicationPending(self.session().publication_context()),
+        };
+        Ok(self.status())
+    }
+
     /// Invoke the application continuation exactly once from a ready barrier.
     ///
     /// A returned segment becomes the only segment this program can drive. A
     /// continuation error terminally closes the program and is never retried.
     pub fn resume(&mut self) -> Result<LiveProgramStatus, LiveProgramError<C::Error>> {
-        if self.phase != LiveProgramPhase::ReadyToResume {
+        if !self.can_resume() {
             return Err(self.invalid_state("resume authoring"));
         }
-        let result = {
-            let continuation = &mut self.continuation;
-            let mut live = self.scene.owned_live();
-            continuation.resume(&mut live)
-        };
+        // An unwinding source must not be retried. The async adapter restores the
+        // one Scene before unwinding out of this call.
+        self.phase = LiveProgramPhase::Terminal;
+        let result = self.continuation.resume(&mut self.scene);
         match result {
             Ok(ContinuationStep::Await(segment)) => {
                 match self.session().validate_segment_for_advance(segment) {
@@ -478,6 +678,17 @@ impl<C: LiveContinuation> LiveProgram<C> {
                     }
                 }
                 self.phase = LiveProgramPhase::Awaiting(segment);
+                Ok(self.status())
+            }
+            Ok(ContinuationStep::Publish(pending)) => {
+                if !pending.belongs_to(self.session()) {
+                    self.phase = LiveProgramPhase::Terminal;
+                    return Err(LiveProgramError::Completion(
+                        crate::ExecutionSessionPublicationError::ForeignSemanticStore.into(),
+                    ));
+                }
+                self.pending_effects = Some(pending);
+                self.phase = LiveProgramPhase::PreparingResources;
                 Ok(self.status())
             }
             Ok(ContinuationStep::Finished) => {
@@ -505,9 +716,28 @@ impl<C: LiveContinuation> LiveProgram<C> {
         let LiveProgramPhase::Awaiting(segment) = self.phase else {
             return Err(self.invalid_state("drive a segment"));
         };
-        if let Err(error) =
-            callbacks.advance_segment_to(self.scene.owned_execution_mut(), segment, requested_time)
-        {
+        let advance = match self.continuation.callbacks() {
+            Some(source_callbacks) => {
+                if !callbacks.is_empty() {
+                    return Err(LiveProgramError::CompetingCallbackTables);
+                }
+                let result = source_callbacks.advance_segment_to(
+                    self.scene.owned_execution_mut(),
+                    segment,
+                    requested_time,
+                );
+                callbacks.record_completed_callback_phase(
+                    source_callbacks.last_advance_completed_callback_phase(),
+                );
+                result
+            }
+            None => callbacks.advance_segment_to(
+                self.scene.owned_execution_mut(),
+                segment,
+                requested_time,
+            ),
+        };
+        if let Err(error) = advance {
             self.phase = LiveProgramPhase::Terminal;
             return Err(LiveProgramError::Callback(error));
         }
@@ -595,6 +825,147 @@ mod tests {
     use super::*;
     use noon_runtime::TimelineWakeState;
 
+    #[cfg(feature = "wgsl-effects")]
+    struct AttachShaders([crate::Mobject; 2], bool);
+    #[cfg(feature = "wgsl-effects")]
+    impl LiveContinuation for AttachShaders {
+        type Error = crate::LiveSessionError;
+        fn resume(
+            &mut self,
+            scene: &mut ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            use crate::effects::{
+                ShaderCoordinates, ShaderDependencies, ShaderEffect, ShaderProfile, ShaderSchema,
+                WgslEffectProgram,
+            };
+            if self.1 {
+                // Ordinary controls and detached animation targets must still work.
+                let target = scene.target_editor(&self.0[0])?;
+                scene.set_translation(&target, 1.0, 0.0)?;
+                let definition = target.get_effect("stripes")?.authored_definition()?;
+                let detached =
+                    scene.prepare_effect_attachments([(&target, definition, "detached")])?;
+                assert!(
+                    detached.programs().is_empty(),
+                    "detached authoring needs no GPU work"
+                );
+                return Ok(ContinuationStep::Finished);
+            }
+            let material = WgslEffectProgram::prepare(ShaderSchema {
+                profile: ShaderProfile::PaintedPointwiseV1,
+                dependencies: ShaderDependencies { coordinates: ShaderCoordinates::Scene, authored_time: false, seed: false },
+                parameters: Box::new([]),
+            }, "fn shade(input: NoonShaderInput, p: NoonShaderParameters) -> vec4<f32> { return input.color; }").unwrap();
+            assert!(matches!(
+                scene.add_effect(&self.0[0], ShaderEffect::new(material.clone()), "stripes"),
+                Err(crate::AuthoringError::ExecutionPublication(
+                    crate::ExecutionSessionPublicationError::ExternalEffectPreparationRequired
+                ))
+            ));
+            self.1 = true;
+            Ok(ContinuationStep::Publish(
+                scene.prepare_effect_attachments(self.0.iter().map(|object| {
+                    (
+                        object,
+                        ShaderEffect::new(material.clone()).into(),
+                        "stripes",
+                    )
+                }))?,
+            ))
+        }
+    }
+
+    #[cfg(feature = "wgsl-effects")]
+    fn shader_attachment_program() -> LiveProgram<AttachShaders> {
+        let mut scene = Scene::new();
+        let panels = [scene.circle(0.4).unwrap(), scene.circle(0.5).unwrap()];
+        for panel in &panels {
+            scene.add(panel).unwrap();
+        }
+        let mut program = scene
+            .into_live_program(AttachShaders(panels, false))
+            .unwrap();
+        program.require_effect_resource_preparation();
+        program.take_renderer_publication();
+        program
+    }
+
+    #[cfg(feature = "wgsl-effects")]
+    #[test]
+    fn shader_resources_are_staged_before_one_coherent_publication_and_retention() {
+        let mut program = shader_attachment_program();
+        let store = Rc::clone(program.scene.integration_store());
+        let before = program.session().publication_context();
+        let revision = store.borrow().scene_revision();
+        let count = store.borrow().len();
+        assert_eq!(
+            program.resume().unwrap(),
+            LiveProgramStatus::PreparingResources
+        );
+        assert_eq!(program.pending_effect_programs().unwrap().len(), 1);
+        assert_eq!(program.session().publication_context(), before);
+        assert_eq!(store.borrow().scene_revision(), revision);
+        assert_eq!(store.borrow().len(), count);
+        for panel in &program.continuation.0 {
+            assert!(store
+                .borrow()
+                .effect_by_name(panel.node_id(), "stripes")
+                .unwrap()
+                .is_none());
+        }
+        assert!(program.take_renderer_publication().changes().is_empty());
+        assert!(program.resume().is_err());
+        let LiveProgramStatus::PublicationPending(published) =
+            program.publish_prepared_effects().unwrap()
+        else {
+            panic!("the published frame still needs renderer retention");
+        };
+        assert_eq!(
+            store.borrow().scene_revision(),
+            revision.checked_next().unwrap()
+        );
+        assert_eq!(store.borrow().len(), count + 2);
+        assert_ne!(published, before);
+        assert!(program.resume().is_err());
+        program.take_renderer_publication();
+        program.admit_publication(published).unwrap();
+        assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    }
+
+    #[cfg(feature = "wgsl-effects")]
+    #[test]
+    fn shader_preparation_revalidates_current_state_and_source_retirement_cancels_it() {
+        let mut program = shader_attachment_program();
+        program.resume().unwrap();
+        let panels = program.continuation.0.clone();
+        program
+            .scene
+            .add_effect(&panels[1], crate::effects::Glow::default(), "stripes")
+            .unwrap();
+        let store = Rc::clone(program.scene.integration_store());
+        let revision = store.borrow().scene_revision();
+        let count = store.borrow().len();
+        let before = program.session().publication_context();
+        assert!(program.publish_prepared_effects().is_err());
+        assert_eq!(program.status(), LiveProgramStatus::Terminal);
+        assert_eq!(program.session().publication_context(), before);
+        assert_eq!(store.borrow().scene_revision(), revision);
+        assert_eq!(store.borrow().len(), count);
+        assert!(store
+            .borrow()
+            .effect_by_name(panels[0].node_id(), "stripes")
+            .unwrap()
+            .is_none());
+
+        let mut retired = shader_attachment_program();
+        retired.resume().unwrap();
+        let before = retired.session().publication_context();
+        retired.retire_execution_source().unwrap();
+        assert!(retired.pending_effect_programs().is_none());
+        assert!(retired.publish_prepared_effects().is_err());
+        assert_eq!(retired.session().publication_context(), before);
+    }
+
     struct AnimatedContinuation {
         source: crate::Mobject,
         target: crate::Mobject,
@@ -605,12 +976,15 @@ mod tests {
     impl LiveContinuation for AnimatedContinuation {
         type Error = crate::LiveSessionError;
 
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
             *self.resumes.borrow_mut() += 1;
             match self.stage {
                 0 => {
                     self.stage = 1;
-                    let segment = live.declare_and_activate_transform_to(
+                    let segment = scene.live().declare_and_activate_transform_to(
                         &self.source,
                         &self.target,
                         AnimationOptions::new()
@@ -621,9 +995,9 @@ mod tests {
                 }
                 1 => {
                     self.stage = 2;
-                    live.set_translation(&self.source, 3.0, -1.0)?;
+                    scene.set_translation(&self.source, 3.0, -1.0)?;
                     assert_eq!(
-                        live.effective(&self.source)?.transform.translation,
+                        scene.effective(&self.source)?.transform.translation,
                         Vec2::new(3.0, -1.0)
                     );
                     Ok(ContinuationStep::Finished)
@@ -742,7 +1116,10 @@ mod tests {
     impl LiveContinuation for ReturnSegment {
         type Error = Infallible;
 
-        fn resume(&mut self, _live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            _scene: &mut ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
             Ok(ContinuationStep::Await(self.0))
         }
     }
@@ -795,9 +1172,10 @@ mod tests {
             ));
         scene.install_execution(session);
         let mut stale_program = LiveProgram {
-            scene,
+            scene: ContinuationScene::new(scene),
             continuation: ReturnSegment(stale),
             phase: LiveProgramPhase::ReadyToResume,
+            pending_effects: None,
         };
         assert!(matches!(
             stale_program.resume(),
@@ -811,7 +1189,11 @@ mod tests {
     impl LiveContinuation for WaitContinuation {
         type Error = Infallible;
 
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             *self.resumes.borrow_mut() += 1;
             if self.stage == 0 {
                 self.stage = 1;
@@ -868,8 +1250,9 @@ mod tests {
 
             fn resume(
                 &mut self,
-                live: &mut LiveSession<'_>,
+                scene: &mut ContinuationScene,
             ) -> Result<ContinuationStep, Self::Error> {
+                let live = &mut scene.live();
                 *self.resumes.borrow_mut() += 1;
                 if self.stage == 0 {
                     self.stage = 1;

@@ -142,20 +142,22 @@ mod replacement_tests {
         for individual in [false, true] {
             let mut state = frame(1.0);
             let mut retained = preparer(individual);
-            assert!(retained.prepare(&state).lines.is_empty());
+            assert!(retained.prepare(&state).unwrap().lines.is_empty());
             for reveal in [0.4, 0.65, 1.0, 0.0, 0.25, 0.4] {
                 state.reveals[0] = reveal;
                 let changed = FrameChanges::objects(vec![0]);
-                let prepared = retained.prepare_incremental(&state, &changed);
+                let prepared = retained.prepare_incremental(&state, &changed).unwrap();
                 let mut fresh = preparer(individual);
-                let reference = fresh.prepare(&state);
+                let reference = fresh.prepare(&state).unwrap();
                 assert_eq!(active_heads(&prepared), active_heads(&reference));
                 assert_eq!(prepared.lines.len(), 1, "reuse one head record");
                 assert_eq!(prepared.stats.full_rebuilds, 0);
                 assert_eq!(prepared.stats.geometry_cache_misses, 0);
                 assert!(prepared.rectangle_dirty_ranges.is_empty());
             }
-            let prepared = retained.prepare_incremental(&state, &FrameChanges::default());
+            let prepared = retained
+                .prepare_incremental(&state, &FrameChanges::default())
+                .unwrap();
             assert!(!prepared.path_geometry_dirty);
             assert!(prepared.line_dirty_ranges.is_empty());
             assert!(prepared.path_dirty_ranges.is_empty());
@@ -168,7 +170,7 @@ mod replacement_tests {
         for individual in [false, true] {
             let mut state = frame(0.4);
             let mut retained = preparer(individual);
-            assert_eq!(retained.prepare(&state).lines.len(), 1);
+            assert_eq!(retained.prepare(&state).unwrap().lines.len(), 1);
             for index in 0..32 {
                 state.objects[0].content = ObjectContentRef::Geometry(path(index as f32 * 0.01));
                 state.objects[0].style.stroke_width = 0.02 + (index % 3) as f32 * 0.01;
@@ -178,9 +180,9 @@ mod replacement_tests {
                     _ => StrokeCap::Square,
                 };
                 let changed = FrameChanges::objects(vec![0]);
-                let prepared = retained.prepare_incremental(&state, &changed);
+                let prepared = retained.prepare_incremental(&state, &changed).unwrap();
                 let mut fresh = preparer(individual);
-                let reference = fresh.prepare(&state);
+                let reference = fresh.prepare(&state).unwrap();
                 assert_eq!(active_heads(&prepared), active_heads(&reference));
                 assert_eq!(
                     prepared.lines.len(),
@@ -198,7 +200,7 @@ mod replacement_tests {
         for individual in [false, true] {
             let mut state = frame(0.4);
             let mut retained = preparer(individual);
-            assert_eq!(retained.prepare(&state).lines.len(), 1);
+            assert_eq!(retained.prepare(&state).unwrap().lines.len(), 1);
             for index in 0..8 {
                 let geometry = if index % 2 == 0 {
                     GeometryRef::rectangle(1.4, 1.0)
@@ -207,9 +209,9 @@ mod replacement_tests {
                 };
                 state.objects[0].content = ObjectContentRef::Geometry(geometry);
                 let changed = FrameChanges::objects(vec![0]);
-                let prepared = retained.prepare_incremental(&state, &changed);
+                let prepared = retained.prepare_incremental(&state, &changed).unwrap();
                 let mut fresh = preparer(individual);
-                let reference = fresh.prepare(&state);
+                let reference = fresh.prepare(&state).unwrap();
                 assert_eq!(active_heads(&prepared), active_heads(&reference));
                 assert_eq!(prepared.lines.len(), 1);
                 assert_eq!(prepared.stats.full_rebuilds, 0);

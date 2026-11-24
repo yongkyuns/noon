@@ -86,15 +86,17 @@ fn live_become_publishes_new_content_once_and_leaves_unrelated_objects_untouched
         .unwrap();
     let untouched = unrelated.state().unwrap();
     let revision = scene.revision();
-    let mut session = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut session);
-    live.become_mobject(&source, &target, options()).unwrap();
-    let layout = live.effective_layout(&source).unwrap();
+    let mut session = scene.into_execution().unwrap();
+    session
+        .scene_mut()
+        .become_mobject(&source, &target, options())
+        .unwrap();
+    let layout = session.scene().effective_layout(&source).unwrap();
     near((layout.width, layout.height), (4., 1.));
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
     assert_eq!(unrelated.state().unwrap(), untouched);
-    assert_eq!(session.frame().objects.len(), 2);
-    assert_eq!(session.last_patch_stats().full_seeks, 0);
+    assert_eq!(session.session().frame().objects.len(), 2);
+    assert_eq!(session.session().last_patch_stats().full_seeks, 0);
 }
 
 #[test]

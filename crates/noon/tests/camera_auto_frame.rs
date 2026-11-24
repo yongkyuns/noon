@@ -38,6 +38,39 @@ fn wide_content_expands_height_to_preserve_requested_aspect() {
 }
 
 #[test]
+fn running_auto_frame_publishes_one_detached_target_for_the_current_camera() {
+    let mut scene = Scene::new();
+    let frame = scene.camera_frame().unwrap();
+    let object = scene.square(2.0).unwrap();
+    scene.set_translation(&object, 3.0, 2.0).unwrap();
+    scene.add(&object).unwrap();
+    let mut running = scene.into_execution().unwrap();
+    let previous = running.session().publication_context();
+    let before = frame.state().unwrap();
+
+    let target = running
+        .scene_mut()
+        .camera_auto_frame_target(&frame, &[&object], 1.0, 0.5)
+        .unwrap();
+    let fit = target.state().unwrap().transform;
+
+    assert_eq!((fit.translation.x, fit.translation.y), (3.0, 2.0));
+    assert_eq!(fit.scale.x, 3.0 / f64::from(DEFAULT_FRAME_HEIGHT));
+    assert_eq!(fit.scale.x, fit.scale.y);
+    assert_eq!(frame.state().unwrap(), before);
+    assert_eq!(
+        running.session().execution_object_id(target.node_id()),
+        None
+    );
+    let publication = running.session().publication_context();
+    assert_eq!(publication.scene_revision(), running.scene().revision());
+    assert_eq!(
+        publication.scene_revision(),
+        previous.scene_revision().checked_next().unwrap()
+    );
+}
+
+#[test]
 fn auto_frame_observation_does_not_mutate_scene_or_sources() {
     let mut scene = Scene::new();
     let frame = scene.camera_frame().unwrap();

@@ -1,5 +1,7 @@
 // Paired pixels use the shared native/direct-Rust builder and the real Pyodide
 // authoring worker. No mock bridge, alternate renderer or serialized Rust scene.
+// Optional pythonFrameTimes reuse one source along a fixed forward schedule;
+// direct Rust references always start fresh.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -10,12 +12,25 @@ import { PNG } from "pngjs";
 import { serveRepository } from "./browser-test-server.mjs";
 import { browserArgs, rasterFixtureSource, resolveQualifiedBackend } from "./manim-raster-support.mjs";
 import { playgroundLaunchOptions } from "./playground-browser-support.mjs";
+
+async function evaluateFrame(page, evaluate, input) {
+  const { promise, reject } = Promise.withResolvers();
+  const timer = setTimeout(() => reject(new Error("paired frame evaluation timed out")), 90_000);
+  // A WASM trap can leave an asynchronous export unresolved after pageerror.
+  page.once("pageerror", reject);
+  try {
+    return await Promise.race([page.evaluate(evaluate, input), promise]);
+  } finally {
+    clearTimeout(timer);
+    page.off("pageerror", reject);
+  }
+}
 import { createPyodideResourceCache } from "./pyodide-resource-cache.mjs";
 
 export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 0, qualifyLifecycle, qualifyPixels, prepareContext,
   browserName = "chromium", contextOptions }) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const output = path.resolve(root, artifactDirectory);
+  const output = path.resolve(root, process.env.NOON_PAIRED_ARTIFACTS ?? artifactDirectory);
   assert.ok(["chromium", "webkit"].includes(browserName), `unknown camera browser: ${browserName}`);
   const selectedIds = process.env.NOON_PAIRED_CASES?.split(",").map(id => id.trim()).filter(Boolean);
   if (selectedIds) {
@@ -38,16 +53,29 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
   await mkdir(output, { recursive: true });
   const report = { fixtures: fixtures.map(({ id, sourceHash }) => ({ id, sourceHash })), backends: [] };
   const failures = [];
+  const pythonSequences = new WeakMap();
 
   async function capture(context, label, expectedBackend, fixture) {
-    const page = await context.newPage();
+    const sequence = label === "python" ? fixture.pythonFrameTimes : undefined;
+    if (sequence) assert.ok(fixture.duration > 0, "paired sequences require an animated source");
+    const sequenceKey = sequence && JSON.stringify([fixture.sourceHash, fixture.duration, fixture.canvasSize, sequence]);
+    let previous = sequence && pythonSequences.get(context);
+    if (previous && previous.key !== sequenceKey) {
+      await previous.page.close();
+      pythonSequences.delete(context);
+      previous = undefined;
+    }
+    const page = previous?.page ?? await context.newPage();
     page.setDefaultTimeout(90_000);
-    const errors = [];
-    page.on("pageerror", error => errors.push(String(error)));
+    const errors = previous?.errors ?? [];
+    if (!previous) page.on("pageerror", error => errors.push(String(error)));
+    let keepOpen = false;
     try {
-      await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
-      await page.waitForFunction(() => window.noonHostRaster);
-      if (fixture.canvasSize) {
+      if (!previous) {
+        await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
+        await page.waitForFunction(() => window.noonHostRaster);
+      }
+      if (!previous && fixture.canvasSize) {
         await page.evaluate(([width, height]) => {
           const canvas = document.querySelector("#scene");
           canvas.width = width;
@@ -56,9 +84,18 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
           canvas.style.height = `${height}px`;
         }, fixture.canvasSize);
       }
-      const metrics = await page.evaluate(async ({ label, source, factory, factoryArgs, preparation, duration, sampleTime, playback, boundaries, stopAtSourceCompletion }) => {
+      const metrics = await evaluateFrame(page, async ({ label, source, factory, factoryArgs, preparation, duration, sampleTime, playback, boundaries, stopAtSourceCompletion, pythonFrameTimes, sourceReused }) => {
         if (label === "python") {
           if (duration > 0) {
+            if (pythonFrameTimes) {
+              if (!sourceReused) {
+                const initial = await window.noonHostRaster.load(source, duration);
+                if (initial.time !== pythonFrameTimes[0]) throw new Error("paired sequence must start at the initial publication");
+              }
+              const frame = pythonFrameTimes.indexOf(sampleTime);
+              if (frame < 0) throw new Error("paired sequence omits the requested sample");
+              return window.noonHostRaster.renderThrough(frame, pythonFrameTimes, { stopAtSourceCompletion });
+            }
             const initial = await window.noonHostRaster.load(source, duration);
             if (!Number.isFinite(initial.time) || sampleTime < initial.time) {
               throw new Error(`paired sample ${sampleTime} precedes initial frame ${initial.time}`);
@@ -137,6 +174,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
       }, { label, source: fixture.source, factory: fixture.factory, factoryArgs: fixture.factoryArgs ?? [],
         preparation: fixture.preparation, playback: fixture.playback, boundaries: fixture.boundaries ?? [],
         duration: fixture.duration ?? 0, sampleTime: fixture.sampleTime ?? 0,
+        pythonFrameTimes: sequence, sourceReused: Boolean(previous),
         stopAtSourceCompletion: fixture.stopAtSourceCompletion === true });
       assert.deepEqual(errors, []);
       assert.equal(metrics.presented, true);
@@ -166,9 +204,17 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
       const pixels = await page.locator("#scene").screenshot({
         path: path.join(output, `${fixture.id}-${selectedBackend}-${label}.png`),
       });
-      return { metrics, png: PNG.sync.read(pixels), backend: selectedBackend };
+      const png = PNG.sync.read(pixels);
+      if (sequence) {
+        pythonSequences.set(context, { key: sequenceKey, page, errors });
+        keepOpen = true;
+      }
+      return { metrics, png, backend: selectedBackend, sourceReused: Boolean(previous) };
     } finally {
-      await page.close();
+      if (!keepOpen) {
+        await page.close();
+        if (previous) pythonSequences.delete(context);
+      }
     }
   }
 
@@ -209,6 +255,7 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
           }
           assert.ok(foregroundPixels > 1000, "blank images cannot qualify paired authoring");
           result.static[fixture.id] = { rust: rust.metrics, python: python.metrics, foregroundPixels, differingPixels };
+          if (fixture.pythonFrameTimes) result.static[fixture.id].pythonSourceReused = python.sourceReused;
           assert.equal(differingPixels, 0, "Rust/WASM and Python must produce identical pixels on the same backend");
           if (qualifyPixels) {
             result.static[fixture.id].pixelChecks = await qualifyPixels({
@@ -216,6 +263,15 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
             });
           }
           console.log(`[PASS] ${fixture.id}/${expectedBackend}: paired pixels identical`);
+        }
+
+        const sequence = fixtures.findLast(fixture => fixture.pythonFrameTimes);
+        if (sequence && sequence.sampleTime > sequence.pythonFrameTimes[0]) {
+          await assert.rejects(capture(context, "python", expectedBackend, {
+            ...sequence, id: `${sequence.id}-rewind-control`,
+            sampleTime: sequence.pythonFrameTimes[0], stopAtSourceCompletion: false,
+          }), /host raster playback cannot move backwards/);
+          result.pythonSequenceRewindRejected = true;
         }
 
         if (qualifyLifecycle) {

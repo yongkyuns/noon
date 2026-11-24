@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "24cc3b03c6399f69531a44900fa9734faa64f4dc",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "24cc3b03c6399f69531a44900fa9734faa64f4dc",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "16425b025bc6f79e25a9eb6b3b92bab63ca96cd1cd239099876d284125668e54"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "5eca848938c1a4551a02792a0ca0cc32325b9de37d203ed908820f22d0095b59"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "797d65b8e67f7eba276ce1210d0eb5077ebd1d22351ed9feca56f7d882c366a8"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "buildId": "9492052a48a6f9286943cb5e5198610eaf1e93584a2fa1350b663e86e1753550"
+  },
+  "posters": [
+    {
+      "id": "showcase-glass-lens",
+      "captureBuildId": "9492052a48a6f9286943cb5e5198610eaf1e93584a2fa1350b663e86e1753550",
+      "sourceSha256": "33103a1db643b62d5c14384046a5ea5f4e33e75052048b2c783c85a70ca10d52",
+      "thumbnailTime": 2.25,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 259200,
+        "pngSha256": "f704815354bf0468d7cb39fd9fb7db5833fe67fa27bd2288f906995fc7e8a1cf",
+        "pixelSha256": "2399566d53644a5d9059cfaddcf440e8460aca7e055c53264796e6b73f942dab"
+      },
+      "sample": {
+        "requestedTime": 2.25,
+        "publishedTime": 2.25,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}

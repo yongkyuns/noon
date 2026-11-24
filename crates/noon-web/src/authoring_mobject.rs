@@ -1,92 +1,7 @@
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn gradient_colors(
-    values: &[f64],
-) -> Result<Vec<noon::Color>, crate::authoring_error::AuthoringFailure> {
-    if !values.len().is_multiple_of(4) {
-        return Err(crate::authoring_error::AuthoringFailure::new(
-            "invalid_input",
-            "gradient.invalid_components",
-            "gradient colors require RGBA components",
-        ));
-    }
-    values
-        .chunks_exact(4)
-        .map(|c| {
-            family_color(true, c[0], c[1], c[2], c[3])
-                .map(|color| color.expect("enabled color"))
-                .map_err(|error| {
-                    crate::authoring_error::AuthoringFailure::new(
-                        "invalid_input",
-                        "gradient.invalid_color",
-                        error,
-                    )
-                })
-        })
-        .collect()
-}
-
+pub(crate) use noon::integration::family_color;
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn radial_gradient_colors(
-    values: &[f64],
-) -> Result<(noon::Color, noon::Color), crate::authoring_error::AuthoringFailure> {
-    let colors = gradient_colors(values)?;
-    match colors.as_slice() {
-        [inner, outer] => Ok((*inner, *outer)),
-        _ => Err(crate::authoring_error::AuthoringFailure::new(
-            "invalid_input",
-            "radial_gradient.color_count",
-            "radial gradients require exactly two RGBA colors",
-        )),
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn style_update(
-    fill_enabled: bool,
-    fill_red: f64,
-    fill_green: f64,
-    fill_blue: f64,
-    fill_alpha: f64,
-    fill_opacity: Option<f64>,
-    stroke_enabled: bool,
-    stroke_red: f64,
-    stroke_green: f64,
-    stroke_blue: f64,
-    stroke_alpha: f64,
-    stroke_width: Option<f64>,
-    stroke_opacity: Option<f64>,
-) -> Result<noon::StyleUpdate, String> {
-    Ok(noon::StyleUpdate {
-        fill_color: family_color(fill_enabled, fill_red, fill_green, fill_blue, fill_alpha)?,
-        fill_opacity,
-        stroke_color: family_color(
-            stroke_enabled,
-            stroke_red,
-            stroke_green,
-            stroke_blue,
-            stroke_alpha,
-        )?,
-        stroke_width,
-        stroke_opacity,
-        ..noon::StyleUpdate::default()
-    })
-}
-
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn style_update_with_background_stroke(
-    mut update: noon::StyleUpdate,
-    enabled: bool,
-    rgba: [f64; 4],
-    width: Option<f64>,
-    opacity: Option<f64>,
-) -> Result<noon::StyleUpdate, String> {
-    let [red, green, blue, alpha] = rgba;
-    update.background_stroke_color = family_color(enabled, red, green, blue, alpha)?;
-    update.background_stroke_width = width;
-    update.background_stroke_opacity = opacity;
-    Ok(update)
-}
+pub(crate) use noon::integration::{style_update, style_update_with_background_stroke};
 
 #[cfg(target_arch = "wasm32")]
 use noon::integration::authoring_render_f64 as render_f64;
@@ -130,31 +45,6 @@ pub(crate) fn point_reduction_tree_to_js(tree: noon::PointReductionTree) -> js_s
     }
     result.push(&wasm_bindgen::JsValue::from(children));
     result
-}
-
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn family_color(
-    enabled: bool,
-    red: f64,
-    green: f64,
-    blue: f64,
-    alpha: f64,
-) -> Result<Option<noon::Color>, String> {
-    if !enabled {
-        return Ok(None);
-    }
-    if ![red, green, blue, alpha]
-        .iter()
-        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-    {
-        return Err("family color components must be finite and between zero and one".into());
-    }
-    Ok(Some(noon::Color::rgba(
-        red as f32,
-        green as f32,
-        blue as f32,
-        alpha as f32,
-    )))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -231,7 +121,6 @@ mod wasm {
     use std::{cell::RefCell, rc::Rc};
 
     use noon::{FamilyLayout, FamilyLayoutTarget};
-    use noon_core::Bounds2D64;
     use wasm_bindgen::prelude::*;
 
     use super::{Mobject, SemanticNodeId, SemanticStore};
@@ -356,6 +245,10 @@ mod wasm {
     impl WasmDecimalNumberHandle {
         pub(crate) fn from_number(number: noon::DecimalNumber) -> Self {
             Self { number }
+        }
+
+        pub(crate) fn number(&self) -> &noon::DecimalNumber {
+            &self.number
         }
     }
 
@@ -1072,14 +965,6 @@ mod wasm {
         layout: FamilyLayout,
     }
 
-    impl WasmAuthoringFamilyLayout {
-        pub(crate) fn bounds(&self) -> Bounds2D64 {
-            self.layout
-                .bounds()
-                .unwrap_or_else(|| Bounds2D64::point(0.0, 0.0))
-        }
-    }
-
     #[wasm_bindgen]
     impl WasmAuthoringFamilyLayout {
         #[wasm_bindgen(getter, js_name = centerX)]
@@ -1292,13 +1177,24 @@ mod wasm {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = graphFor)]
+        pub fn graph_for(
+            &self,
+            source: &crate::authoring_graph::WasmGraphHandle,
+        ) -> Result<crate::authoring_graph::WasmGraphHandle, JsValue> {
+            source
+                .inner
+                .rebind_copy(&self.copied)
+                .map(|inner| crate::authoring_graph::WasmGraphHandle { inner })
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = arrowFor)]
         pub fn arrow_for(
             &self,
             source: &crate::WasmAuthoringArrowHandle,
-            vector_index: Option<u32>,
         ) -> Result<crate::WasmAuthoringArrowHandle, JsValue> {
-            source.rebind_from_family_copy(&self.copied, vector_index)
+            source.rebind_from_family_copy(&self.copied)
         }
     }
 
@@ -1831,7 +1727,7 @@ mod wasm {
 
         #[wasm_bindgen(js_name = setColorGradient)]
         pub fn set_color_gradient(&mut self, values: &[f64]) -> Result<(), JsValue> {
-            let colors = super::gradient_colors(values).map_err(js_error)?;
+            let colors = noon::integration::gradient_colors(values).map_err(js_error)?;
             self.semantic_family()?
                 .set_color_by_gradient(&colors)
                 .map_err(js_error)
@@ -1846,7 +1742,8 @@ mod wasm {
             radius: f64,
             values: &[f64],
         ) -> Result<(), JsValue> {
-            let (inner, outer) = super::radial_gradient_colors(values).map_err(typed_js_error)?;
+            let (inner, outer) =
+                noon::integration::radial_gradient_colors(values).map_err(typed_js_error)?;
             self.semantic_family()?
                 .set_color_by_radial_gradient((center_x, center_y, center_z), radius, inner, outer)
                 .map_err(js_error)
@@ -2046,52 +1943,6 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = setOwnFill)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn set_own_fill(
-            &self,
-            has_color: bool,
-            red: f64,
-            green: f64,
-            blue: f64,
-            alpha: f64,
-            opacity: Option<f64>,
-        ) -> Result<(), JsValue> {
-            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
-                .map_err(js_error)?;
-            self.semantic_family()?
-                .set_own_style(noon::StyleUpdate {
-                    fill_color: color,
-                    fill_opacity: opacity,
-                    ..noon::StyleUpdate::default()
-                })
-                .map_err(js_error)
-        }
-
-        #[wasm_bindgen(js_name = setOwnStroke)]
-        #[allow(clippy::too_many_arguments)]
-        pub fn set_own_stroke(
-            &self,
-            has_color: bool,
-            red: f64,
-            green: f64,
-            blue: f64,
-            alpha: f64,
-            width: Option<f64>,
-            opacity: Option<f64>,
-        ) -> Result<(), JsValue> {
-            let color = crate::authoring_mobject::family_color(has_color, red, green, blue, alpha)
-                .map_err(js_error)?;
-            self.semantic_family()?
-                .set_own_style(noon::StyleUpdate {
-                    stroke_color: color,
-                    stroke_width: width,
-                    stroke_opacity: opacity,
-                    ..noon::StyleUpdate::default()
-                })
-                .map_err(js_error)
-        }
-
         #[wasm_bindgen(js_name = ownFillColor)]
         pub fn own_fill_color(&self) -> Result<Option<WasmManimColor>, JsValue> {
             self.semantic_family()?
@@ -2160,13 +2011,6 @@ mod wasm {
                 .map_err(js_error)
         }
 
-        #[wasm_bindgen(js_name = setOwnBackgroundStrokeOpacity)]
-        pub fn set_own_background_stroke_opacity(&self, opacity: f64) -> Result<(), JsValue> {
-            self.semantic_family()?
-                .set_own_background_stroke_opacity(opacity)
-                .map_err(js_error)
-        }
-
         #[wasm_bindgen(js_name = ownStrokeCap)]
         pub fn own_stroke_cap(&self) -> Result<String, JsValue> {
             self.semantic_family()?
@@ -2225,6 +2069,20 @@ mod wasm {
         pub fn set_own_opacity(&self, opacity: f64) -> Result<(), JsValue> {
             self.semantic_family()?
                 .set_own_opacity(opacity)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setEmission)]
+        pub fn set_emission(&self, strength: f64) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_emission(strength)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setObjectOpacity)]
+        pub fn set_object_opacity(&self, opacity: f64) -> Result<(), JsValue> {
+            self.semantic_family()?
+                .set_object_opacity(opacity)
                 .map_err(js_error)
         }
 
@@ -2961,6 +2819,15 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = recordSourceSite)]
+        pub fn record_source_site(&self, line: u32, caller_line: u32) -> Result<(), JsValue> {
+            self.handle
+                .integration_store()
+                .borrow_mut()
+                .record_source_site(self.handle.node_id(), line, caller_line)
+                .map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = interpolateManim)]
         pub fn interpolate_manim(
             &mut self,
@@ -3347,7 +3214,7 @@ mod wasm {
 
         #[wasm_bindgen(js_name = setColorGradient)]
         pub fn set_color_gradient(&mut self, values: &[f64]) -> Result<(), JsValue> {
-            let colors = super::gradient_colors(values).map_err(js_error)?;
+            let colors = noon::integration::gradient_colors(values).map_err(js_error)?;
             self.handle.set_color_by_gradient(&colors).map_err(js_error)
         }
 
@@ -3360,7 +3227,8 @@ mod wasm {
             radius: f64,
             values: &[f64],
         ) -> Result<(), JsValue> {
-            let (inner, outer) = super::radial_gradient_colors(values).map_err(typed_js_error)?;
+            let (inner, outer) =
+                noon::integration::radial_gradient_colors(values).map_err(typed_js_error)?;
             self.handle
                 .set_color_by_radial_gradient((center_x, center_y, center_z), radius, inner, outer)
                 .map_err(js_error)
@@ -4124,6 +3992,21 @@ mod wasm {
             self.handle.set_stroke_cap(cap).map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = setViewColorProfile)]
+        pub fn set_view_color_profile(&mut self, value: &str) -> Result<(), JsValue> {
+            self.handle
+                .set_view_color_profile(
+                    crate::canonical_authoring_scene::camera_profile::view_color_profile(value)
+                        .map_err(js_error)?,
+                )
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = setEmission)]
+        pub fn set_emission(&mut self, strength: f64) -> Result<(), JsValue> {
+            self.handle.set_emission(strength).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = setObjectOpacity)]
         pub fn set_object_opacity(&mut self, opacity: f64) -> Result<(), JsValue> {
             self.handle.set_object_opacity(opacity).map_err(js_error)
@@ -4884,7 +4767,7 @@ mod tests {
         handle.set_stroke_width(3.5).unwrap();
 
         scene.add(&handle).unwrap();
-        let session = scene.execution_session().unwrap();
+        let session = noon::integration::scene_execution::lower(&scene).unwrap();
         let effective = &session.frame().objects[0];
         assert_eq!(
             handle.wire_translation().unwrap(),

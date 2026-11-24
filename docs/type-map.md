@@ -22,7 +22,7 @@ The second map is the **internal Cargo dependency graph**. It is intentionally s
 
 A useful way to read the code is:
 
-1. `Scene`, `Mobject`, `MobjectFamily`, animation handles, signal handles, and `LiveSession` are ergonomic **authoring/orchestration handles** in `noon`. They should not become a second scene model.
+1. `Scene` owns construction and persistent edits. `Mobject`, `MobjectFamily`, animation handles, and signal handles identify authored values. `LiveSession` borrows execution controls for an already paired scene and runtime.
 2. `SemanticStore` in `noon-core` is the **authored Semantic Scene authority**. A `Mobject` is only a store pointer plus a generational `SemanticNodeId` into that store.
 3. `noon-compile` reads semantic state and derives an **Execution Plan**: execution identities/slots, compact values, tracks, reactive projections, painter order, and dependency-closed resources.
 4. `ExecutionSession` in `noon` owns the orchestration needed to keep that compiled projection coherent with one `SceneInstance`; it does not own a second copy of `SemanticStore`.
@@ -41,7 +41,7 @@ The most important rule for new code is: **do not move an authority upward just 
 | `noon-compile` | Semantic-to-execution lowering, stable execution objects/slots, tracks, painter order, resource closure, incremental execution patches | `SemanticExecutionIndex`, `SemanticExecutionProjection`, `SemanticExecutionObject`, `CompiledObject`, `CompiledScene`, `CompiledResources`, `ExecutionPatch` | `noon-core`, `noon-geometry` |
 | `noon-runtime` | Deterministic effective evaluation, scheduler/reactive state, current frame, sparse invalidation, renderer publication | `SceneInstance`, `FrameState`, `FrameObjectState`, `FrameChanges`, `RendererPublication`, `ExecutionSlotTable`, `RuntimeIdentity` | `noon-core`, `noon-compile` |
 | `noon-render-wgpu` | Renderer preparation, packed instances, mesh residency/caching, painter-order draw preparation, WGPU resources/pipelines | consumes `FrameState`/`RendererPublication`; owns `FramePreparer`, `PreparedFrame`, packed analytic/path records | `noon-core`, `noon-geometry`, `noon-runtime`, `noon-text` |
-| `noon` | Public Rust authoring API and typed execution-session orchestration; shared high-level operations used by frontends | `Scene`, `Mobject`, `MobjectFamily`, `LiveSession`, `ExecutionSession`, authoring options/errors | `noon-core`, `noon-geometry`, `noon-compile`, `noon-runtime`; optional `noon-text`, `noon-typst` |
+| `noon` | Public Rust authoring API and typed execution-session orchestration; shared high-level operations used by frontends | `Scene`, `ScriptScene`, `SceneScript`, `Mobject`, `MobjectFamily`, `AnimationRequest`, `LiveSession`, `ExecutionSession`, authoring options/errors | `noon-core`, `noon-geometry`, `noon-compile`, `noon-runtime`; optional `noon-text`, `noon-typst` |
 | `noon-text` | CPU text shaping and glyph raster services | shared text/font resource values from `noon-core`, shaped/rasterized glyph data for renderer consumers | `noon-core` |
 | `noon-typst` | Typst text/math layout provider | normalizes provider output into shared Noon resource/geometry types | `noon-core` |
 | `noon-native` | Native window/event-loop/surface lifecycle and typed host execution | consumes public `noon` session/API and `noon-render-wgpu` | `noon`, `noon-core`, `noon-render-wgpu` |
@@ -84,14 +84,16 @@ That definition has several consequences:
 - Object queries read the current `SemanticObjectState` from the store.
 - Object edits stage canonical semantic mutations; the handle never becomes an independent mutable mirror.
 
-`Scene` follows the same pattern. It stores the shared semantic arena, one family root ID, and an authoring cursor:
+`Scene` follows the same pattern. It owns the shared semantic arena, one family
+root ID, an authoring cursor, and the optional execution component lowered from
+that scene. The important ownership fields are:
 
-```text
-Scene
-├── store: Rc<RefCell<SemanticStore>>
-├── root: SemanticNodeId
-└── cursor: f64
-```
+| Field | Role |
+| --- | --- |
+| `store: Rc<RefCell<SemanticStore>>` | Shared authored semantic arena |
+| `root: SemanticNodeId` | Scene's family root in that arena |
+| `cursor: f64` | Authoring cursor |
+| `execution: Option<ExecutionSession>` | The scene's running execution component after bootstrap |
 
 See [`crates/noon/src/scene.rs`](../crates/noon/src/scene.rs). `Scene::circle`, `Scene::rectangle`, `Scene::line`, `Scene::path`, text constructors, etc. create detached semantic nodes in that shared store; `Scene::add` changes membership of the existing node rather than copying it into a second scene container.
 
@@ -102,24 +104,18 @@ For geometry authoring, `ManimGeometryOptions` is inert typed input. It carries 
 The important construction sequence is:
 
 ```text
-Scene constructor / ManimGeometryOptions
+Scene::geometry(ManimGeometryOptions)
         ↓
-Mobject::from_manim_geometry(...)
+Scene checks resource admission
         ↓
-ManimGeometryOptions::into_state(store)
+ManimGeometryOptions prepares geometry and semantic state
         ↓
-import_geometry(store, GeometryRef)
-        ↓
-SemanticObjectState
-        ↓
-SemanticMutationTransaction::add_node(...)
-        ↓
-SemanticStore allocates SemanticNodeId
+Scene publishes the add-node transaction and resolves its SemanticNodeId
         ↓
 Mobject { store, id }
 ```
 
-`Mobject::new` gets the permanent identity from the committed transaction result. That is why code should not invent IDs in facade/frontend layers.
+The handle gets its identity from the committed transaction result.
 
 ### Mutation path
 
@@ -132,7 +128,21 @@ Most persistent `Mobject` methods follow the same shape:
 5. `stage_state_changes` emits canonical transaction operations such as `replace_content`, `set_property`, or `replace_style`;
 6. the transaction applies atomically to `SemanticStore`.
 
-Before execution bootstrap, these are authored edits. After an `ExecutionSession` exists, use `Scene::live(&mut session)`/`LiveSession` for supported live changes so authored and effective publication stay coherent. Raw mutable store access is an integration escape hatch, not a live-edit API.
+Raw handle edits are authored operations. Ordinary persistent edits use
+`Scene::set_color`, `Scene::set_fill`, `Scene::set_fill_opacity`,
+`Scene::set_stroke_width`, and `Scene::shift`
+before and after Scene-owned execution bootstrap. These methods prepare the same
+shared semantic transaction and pass it through `Scene::apply_semantic_transaction`;
+running execution validates and publishes its derived changes atomically.
+`ScriptScene` delegates these edits to that Scene without choosing a cold or live
+feature API. Authored/base queries and coherent effective queries remain explicit.
+
+`Scene::add_family_members` and `Scene::remove_family_members` prepare the existing
+shared family membership transaction and use that same publication route. Family
+creation, linear/grid arrangement, and anchored placement also remain Scene-owned
+operations. `Scene::effective_layout` and `Scene::effective_family_layout` read
+bounds from the running Scene's coherent runtime publication. Raw mutable store
+access is reserved for integration.
 
 ## Semantic object representation
 
@@ -364,17 +374,54 @@ It does **not** lower through an SVG `d` string. SVG/debug/export representation
 
 ## Execution/session types around the object path
 
+### `SceneScript` and `ScriptScene`
+
+`Scene::script` adapts an ordinary compiled Rust future to sequential authoring.
+`SceneScript` owns that source and its host callback table. `ScriptScene` is a weak,
+scoped capability: each synchronous operation borrows the same Scene only while
+the source is being polled. It contains no independent semantic state and cannot
+retain a stopped source. Persistent edits delegate to Scene-owned operations.
+
+Family construction accepts borrowed object collections or mixed `MobjectTarget`
+collections. Scene attachment/detachment accepts either an object or a family;
+family membership, linear/grid arrangement, anchored placement, and effective
+layout queries delegate to the same shared operations. The capability does not
+copy family topology or perform its own layout traversal. The existing nested,
+aliased family-arrangement example runs as one sequential source on native and
+direct Rust/WASM hosts.
+
+`play` and `wait` yield the existing `LiveProgram` completion/publication boundary.
+An owned `AnimationRequest` retains handles and requested edits. Play captures
+effective state and publishes any needed identities atomically at admission.
+`Scene::declare_animation` publishes a persistent declaration in setup or
+between segments. Activating that declaration is a separate execution operation.
+
 ### `ExecutionSession`
 
-`ExecutionSession` is the typed orchestration bridge between the authored store and one runtime. Its fields are deliberately derived/runtime structures: store identity, `SemanticExecutionIndex`, reachability, execution slots, spatial index, reactive projection, signal timeline, one `SceneInstance`, callback/completion state, etc.
-
-It explicitly does **not** own or mirror `SemanticStore`. This matters for live mutation: semantic transactions remain the source of authored truth; execution publication updates the derived execution/runtime state only after preparation succeeds.
+`ExecutionSession` keeps one runtime coherent with its authored store. It owns
+the derived index, slots, reactive projection, signal timeline, `SceneInstance`,
+and callback and completion state. Semantic transactions remain the source of
+authored state, and execution publishes its derived changes after preparation
+succeeds. Hosts that manage a standalone runtime import it from
+`noon::integration::scene_execution`. Ordinary authoring uses `Scene` and
+`SceneExecution`.
 
 ### `LiveSession`
 
-`Scene::live(&mut ExecutionSession)` returns the public live-operation facade. Use it for supported persistent edits, membership changes, animation activation/completion, effective queries, and other operations that must publish semantic and execution changes coherently.
-
-The facade should not accumulate a parallel scene model. If a new live feature seems to require copying semantic state into `LiveSession`, look for a semantic transaction + lowering/publication solution first.
+`SceneExecution::live` and `ContinuationScene::live` borrow segment controls
+from the owning Scene. `LiveSession` handles activation, progression, completion,
+drag target configuration, and acknowledgment of prepared renderer resources.
+Hosts that configure a runtime before installation use `integration::scene_execution`.
+Sequential sources use `ScriptScene` for authoring and `play`/`wait`. Use the
+owning `Scene` to observe coordinates and effect parameters, including through
+`LiveProgram::scene()` while a segment is running.
+Host callback transport can borrow the installed runtime through the integration
+namespace. Segment completion and seek use the owning Scene to keep semantic
+publication and input cleanup with the runtime. Native preview hands off the
+installed Scene and runtime together. Source retirement interrupts pending
+callbacks before releasing input-owned state.
+Python's `Scene.live_execution()` drives explicit segments. Use the Python
+`Scene` for membership, content replacement, affine edits, and published translation.
 
 ### `SceneInstance`
 

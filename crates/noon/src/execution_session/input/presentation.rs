@@ -173,6 +173,15 @@ impl PointerFrameSnapshot {
         self.inspection_revision
     }
 
+    /// Viewer-only picking uses the old picture's camera. It may cross sampled
+    /// authored frames, but cannot cross surfaces, sessions or inspection views.
+    pub fn same_inspection_attachment(&self, other: &Self) -> bool {
+        self.runtime == other.runtime
+            && self.inspection_revision == other.inspection_revision
+            && self.view.revision == other.view.revision
+            && self.view.viewport == other.view.viewport
+    }
+
     pub const fn publication(&self) -> PublicationContext {
         self.publication
     }

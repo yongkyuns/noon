@@ -6,6 +6,8 @@ import vm from "node:vm";
 const source = await readFile(new URL("../scripts/playground-product-e2e.mjs", import.meta.url), "utf8");
 
 assert.match(source, /const measurement = productMeasurement\(exampleId\);/);
+assert.match(source, /releasePreload = await holdPlaygroundPreload\(page\);[\s\S]*await page\.goto\(/);
+assert.match(source, /await browser\?\.close\(\);[\s\S]*releasePreload\?\.\(\);/);
 assert.doesNotMatch(source, /executionMetrics\(/);
 assert.match(source, /probe\.requestMetrics\(\)/);
 assert.match(source, /class ObservedWorker extends NativeWorker/);
@@ -17,15 +19,38 @@ assert.match(source, /diagnosticRequestId = Number\.MAX_SAFE_INTEGER/);
 assert.match(source, /run_time=\$\{measurement\.windowEndSeconds\}/);
 assert.match(source, /sha256: createHash\("sha256"\)\.update\(authoredSource\)/);
 assert.match(source, /async function synchronizeFinalFrame\(page, seconds\)/);
-assert.match(source, /async function waitForRenderedEndpoint\(page, seconds\)/);
+assert.match(source, /async function waitForRenderedEndpoint\(page, seconds,/);
 assert.match(source, /Math\.abs\(rendered\.time - seconds\) <= 0\.001/);
 assert.match(source, /rendered\?\.ready === true/);
 assert.match(source, /rendered\.needsPresent === false/);
 assert.match(source, /rendered\.bufferedDeltas === 0/);
 assert.match(source, /await synchronizeFinalFrame\(page, measurement\.sourceEndSeconds\)/);
+assert.match(source, /authoredPassLifecycleReady\(lifecycle\)/);
+assert.match(source, /run\.sourceRunCompletedAtMs/);
+assert.match(source, /diagnostics == null\) return allowLegacyBaseline && controls\?\.busy === "false"/);
+assert.match(source, /firstPassEndpointSample\(warm\.frameSamples, fps, warm\.runGeneration\)/);
+assert.match(source, /sample\.runGeneration !== runGeneration/);
 assert.match(source, /const screenshotName = "frame-final\.png"/);
 assert.match(source, /authoredEndpointSeconds: measurement\.sourceEndSeconds/);
 assert.doesNotMatch(source, /frame-0\.5\.png/);
+
+test("legacy diagnostics are accepted only for the frozen Product Gate baseline role", () => {
+  const start = source.indexOf("function authoredPassLifecycleReady(");
+  const end = source.indexOf("\n}\n\nfunction firstPassEndpointSample", start) + 2;
+  assert.ok(start >= 0 && end > start, "Product Gate lifecycle validator must be present");
+  const state = { runInFlight: false, run: { exampleId: "showcase-first-scene",
+    sourceRunCompletedAtMs: 10 }, controls: { busy: "false", elapsedSeconds: "8" }, diagnostics: null };
+  const accepts = label => {
+    const validate = vm.runInNewContext(`(${source.slice(start, end)})`, {
+      allowLegacyBaseline: label === "baseline", exampleId: "showcase-first-scene",
+      measurement: { sourceEndSeconds: 8 }, completionExpectation: {}, Number,
+    });
+    return validate(state);
+  };
+  assert.equal(accepts("baseline"), true);
+  assert.equal(accepts("candidate"), false);
+});
+
 // Counter/clock reset behavior is exercised by playground-product-fps.test.mjs;
 // this contract only checks that the real browser harness uses that scorer.
 assert.match(source, /sampleRendererFps\(warm\.frameSamples, measurement\.windowEndSeconds/);
@@ -61,7 +86,7 @@ function probeHarness() {
   }
   const window = { Worker };
   const start = source.indexOf("await page.addInitScript(") + "await page.addInitScript(".length;
-  const end = source.indexOf("}, measurement.gapClock !== null);", start) + 1;
+  const end = source.indexOf("}, true);", start) + 1;
   assert.ok(end > start, "browser probe hook must be found");
   vm.runInNewContext(`(${source.slice(start, end)})(true)`, { window, performance: { now: () => 100 } });
   return { window, probe: window.__noonProductRenderProbe };

@@ -84,13 +84,17 @@ fn assert_steady_transform(stroke_mode: noon_core::StrokeWidthMode) {
     instance.seek(0.1).unwrap();
 
     let initial_changes = instance.take_frame_changes();
-    let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);
+    let initial = preparer
+        .prepare_incremental(instance.frame(), &initial_changes)
+        .unwrap();
     assert_eq!(initial.stats.geometry_cache_misses, 1);
     assert!(initial.path_geometry_dirty);
 
     instance.advance_to(0.5).unwrap();
     let changes = instance.take_frame_changes();
-    let steady = preparer.prepare_incremental(instance.frame(), &changes);
+    let steady = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
     assert_eq!(steady.stats.geometry_cache_misses, 0);
     assert!(!steady.path_geometry_dirty);
     assert_eq!(steady.stats.dirty_instance_count, 1);
@@ -99,7 +103,9 @@ fn assert_steady_transform(stroke_mode: noon_core::StrokeWidthMode) {
 
     instance.advance_to(1.0).unwrap();
     let changes = instance.take_frame_changes();
-    let steady = preparer.prepare_incremental(instance.frame(), &changes);
+    let steady = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
     assert_eq!(steady.stats.geometry_cache_misses, 0);
     assert!(!steady.path_geometry_dirty);
     assert_eq!(steady.stats.dirty_instance_count, 1);
@@ -142,25 +148,33 @@ fn sequential_path_pair_transition_prepares_new_geometry_once() {
         SceneInstance::new(CompiledScene::compile_objects(objects, &tracks).unwrap());
     let mut preparer = FramePreparer::new();
     let changes = instance.take_frame_changes();
-    let first = preparer.prepare_incremental(instance.frame(), &changes);
+    let first = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
     assert_eq!(first.stats.geometry_cache_misses, 1);
 
     instance.advance_to(0.5).unwrap();
     let changes = instance.take_frame_changes();
-    let first_steady = preparer.prepare_incremental(instance.frame(), &changes);
+    let first_steady = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
     assert_eq!(first_steady.stats.geometry_cache_misses, 0);
     assert!(!first_steady.path_geometry_dirty);
 
     instance.advance_to(1.0).unwrap();
     let changes = instance.take_frame_changes();
-    let transition = preparer.prepare_incremental(instance.frame(), &changes);
+    let transition = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
     assert_eq!(transition.stats.geometry_cache_misses, 1);
     assert!(transition.path_geometry_dirty);
     assert_eq!(preparer.cached_path_mesh_count(), 2);
 
     instance.advance_to(1.25).unwrap();
     let changes = instance.take_frame_changes();
-    let second_steady = preparer.prepare_incremental(instance.frame(), &changes);
+    let second_steady = preparer
+        .prepare_incremental(instance.frame(), &changes)
+        .unwrap();
     assert_eq!(second_steady.stats.geometry_cache_misses, 0);
     assert!(!second_steady.path_geometry_dirty);
 }

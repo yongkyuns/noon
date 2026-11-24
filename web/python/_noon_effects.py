@@ -1,7 +1,7 @@
 """Noon-native effect syntax over the shared Rust authoring handles.
 
 Definitions are immutable Rust values; attachments and targets live in Rust.
-The finite glow profile executes through the shared Rust scene and renderer.
+Finite ordered effects execute through the shared Rust scene and renderer.
 Shared execution/publication admission remains authoritative. No Python interpolation,
 attachment table, family traversal, or callback-local shadow state is provided.
 """
@@ -18,7 +18,7 @@ from _noon_errors import engine_call
 
 @dataclass(frozen=True, slots=True)
 class Pixels:
-    """Gaussian sigma in final output pixels, validated when used in an effect."""
+    """A length in final output pixels, validated when used in an effect."""
     value: float | tuple[float, float]
 
 
@@ -32,7 +32,7 @@ def _number(value, name):
 
 
 @contextmanager
-def _update(*, color=None, radius=None, intensity=None, source=None, offset=None):
+def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None):
     # Only language shape/coercion here. Defaults, bounds and nonfinite checks
     # are shared with Rust, including validation before f64-to-f32 narrowing.
     components = []
@@ -43,11 +43,14 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
     pixels = isinstance(radius, Pixels)
     radius = None if radius is None else _number(radius.value if pixels else radius, "radius")
     intensity = None if intensity is None else _number(intensity, "intensity")
+    progress = None if progress is None else _number(progress, "progress")
+    softness = None if softness is None else _number(softness, "softness")
+    seed = None if seed is None else _number(seed, "seed")
     if source is not None and not isinstance(source, str):
         raise TypeError("glow source must be a string")
     try:
-        from js import noonEffectUpdate
-        from pyodide.ffi import to_js
+        from _noon_host import noonEffectUpdate
+        from _noon_host import array_value as to_js
     except ImportError as error:
         raise RuntimeError("effects require the shared Rust authoring host") from error
     offset_pixels = isinstance(offset, Pixels)
@@ -55,8 +58,16 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
     packed_offset = [] if raw_offset is None else [_number(v, "offset coordinate") for v in raw_offset]
     if raw_offset is not None and len(packed_offset) != 2:
         raise ValueError("effect offset requires two coordinates")
-    request = engine_call(noonEffectUpdate, to_js(components), radius, pixels, intensity, source, to_js(packed_offset), offset_pixels)
+    request = engine_call(noonEffectUpdate, to_js(components), radius, pixels, intensity, source, to_js(packed_offset), offset_pixels, progress, softness, seed)
     try:
+        if size is not None:
+            size_pixels = isinstance(size, Pixels)
+            engine_call(request.setSize, _number(size.value if size_pixels else size, "size"), size_pixels)
+        if parameters is not None:
+            from _noon_shaders import _write_parameters
+            _write_parameters(request, parameters)
+        if threshold is not None:
+            engine_call(request.setThreshold, _number(threshold, "threshold"))
         yield request
     finally:
         request.free()
@@ -72,7 +83,7 @@ class Glow:
 
     def __init__(self, *, color=None, radius=None, intensity=None, source=None):
         with _update(color=color, radius=radius, intensity=intensity, source=source) as update:
-            from js import noonGlow
+            from _noon_host import noonGlow
             self._definition = engine_call(noonGlow, update)
 
     @classmethod
@@ -117,8 +128,64 @@ class Blur:
 
     def __init__(self, *, radius=None):
         with _update(radius=radius) as update:
-            from js import noonBlur
+            from _noon_host import noonBlur
             self._definition = engine_call(noonBlur, update)
+
+    @classmethod
+    def _from_definition(cls, definition):
+        result = object.__new__(cls)
+        result._definition = definition
+        return result
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    @property
+    def radius(self):
+        value = float(self._definition.radius)
+        return Pixels(value) if bool(self._definition.pixels) else value
+
+
+class Bloom(Blur):
+    """Camera-only bright-region spread in the explicit linear HDR view.
+
+    Threshold and intensity operate on scene radiance before SDR presentation.
+    Object emission controls radiance independently of the camera treatment.
+    """
+    __slots__ = ()
+
+    def __init__(self, *, radius=None, threshold=None, intensity=None):
+        with _update(radius=radius, threshold=threshold, intensity=intensity) as update:
+            from _noon_host import noonBloom
+            self._definition = engine_call(noonBloom, update)
+
+    @property
+    def threshold(self):
+        return float(self._definition.threshold)
+
+    @property
+    def intensity(self):
+        return float(self._definition.intensity)
+
+
+class BackdropBlur:
+    """Gaussian blur of the earlier painter content beneath this object/group.
+
+    The original object coverage masks the background treatment; its paint and
+    final opacity remain ordinary. Radius zero preserves the ordinary image.
+    Use one backdrop attachment per scope; nested backdrops and earlier spatial
+    content are outside the current portable profile and fail shared admission.
+    """
+    __slots__ = ("_definition",)
+
+    def __init__(self, *, radius=None):
+        with _update(radius=radius) as update:
+            from _noon_host import noonBackdropBlur
+            self._definition = engine_call(noonBackdropBlur, update)
 
     @classmethod
     def _from_definition(cls, definition):
@@ -150,7 +217,7 @@ class Shadow:
 
     def __init__(self, *, color=None, radius=None, offset=None):
         with _update(color=color, radius=radius, offset=offset) as update:
-            from js import noonShadow
+            from _noon_host import noonShadow
             self._definition = engine_call(noonShadow, update)
 
     @classmethod
@@ -180,6 +247,106 @@ class Shadow:
     def offset(self):
         value = (float(self._definition.offsetX), float(self._definition.offsetY))
         return Pixels(value) if bool(self._definition.offsetPixels) else value
+
+
+class Pixelate:
+    """Nearest-centre square cells over the painted object or composed group.
+
+    A plain size uses scene units; Pixels uses final output pixels. Cells follow
+    the original source bounds in screen axes. Sizes <= one pixel bypass exactly.
+    The portable renderer profile accepts at most 128 resolved output pixels.
+    """
+    __slots__ = ("_definition",)
+
+    @classmethod
+    def _from_definition(cls, definition):
+        result = object.__new__(cls)
+        result._definition = definition
+        return result
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    def __init__(self, *, size=None):
+        with _update(size=size) as update:
+            from _noon_host import noonPixelate
+            self._definition = engine_call(noonPixelate, update)
+
+    @property
+    def size(self):
+        value = float(self._definition.size)
+        return Pixels(value) if bool(self._definition.sizePixels) else value
+
+
+class NoiseDissolve:
+    """Immutable seeded alpha mask over normalized source bounds.
+
+    Progress zero preserves the input; one is transparent. Softness is the
+    threshold feather width. Rust validates values and owns parameter animation.
+    """
+    __slots__ = ("_definition",)
+
+    def __init__(self, *, seed=None, softness=None, progress=None):
+        with _update(seed=seed, softness=softness, progress=progress) as update:
+            from _noon_host import noonNoiseDissolve
+            self._definition = engine_call(noonNoiseDissolve, update)
+
+    @classmethod
+    def _from_definition(cls, definition):
+        result = object.__new__(cls)
+        result._definition = definition
+        return result
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        memo[id(self)] = self
+        return self
+
+    @property
+    def progress(self):
+        return float(self._definition.progress)
+
+    @property
+    def softness(self):
+        return float(self._definition.softness)
+
+    @property
+    def seed(self):
+        return int(self._definition.seed)
+
+
+class Dissolve:
+    """Animate an object or composed family's seeded visibility mask in Rust.
+
+    Construction is inert. Direction is ``"in"`` or ``"out"``; omitted style
+    fields preserve an existing visibility mask. Rust owns the clock, enrollment
+    and completion. ``remover=False`` keeps an out endpoint for a later reveal.
+    """
+    __slots__ = ("mobject", "direction", "seed", "softness", "introducer", "remover", "anim_args")
+
+    def __init__(self, mobject, *, direction="out", seed=None, softness=None,
+                 introducer=None, remover=None, **kwargs):
+        from _manim_semantic_handles import _is_shared_family
+        if not isinstance(mobject, _base.Mobject) and not _is_shared_family(mobject):
+            raise TypeError("Dissolve target must be a Mobject or Group")
+        if direction not in ("in", "out"):
+            raise ValueError('Dissolve direction must be "in" or "out"')
+        for name, value in (("introducer", introducer), ("remover", remover)):
+            if value is not None and not isinstance(value, bool):
+                raise TypeError(f"Dissolve {name} must be a boolean")
+        self.mobject = mobject
+        self.direction = direction
+        self.seed = None if seed is None else _number(seed, "seed")
+        self.softness = None if softness is None else _number(softness, "softness")
+        self.introducer = introducer
+        self.remover = remover
+        self.anim_args = dict(kwargs)
 
 
 class GlowPulse:
@@ -233,27 +400,43 @@ class EffectHandle:
     def authored_definition(self):
         """A checked authored snapshot, explicitly not a runtime-effective query."""
         definition = engine_call(self._handle.authoredDefinition)
-        return {"glow": Glow, "blur": Blur, "shadow": Shadow}[str(definition.kind)]._from_definition(definition)
+        from _noon_shaders import ShaderEffect
+        return {"shader": ShaderEffect, "bloom": Bloom, "glow": Glow, "blur": Blur, "backdrop_blur": BackdropBlur, "shadow": Shadow, "noise_dissolve": NoiseDissolve, "pixelate": Pixelate}[str(definition.kind)]._from_definition(definition)
 
 
 def _target(value, scope=None):
-    from _manim_semantic_handles import _handle_for, _is_shared_family, _live_mutation_context
+    from _manim_semantic_handles import (
+        _handle_for, _is_shared_family, _path_authoring_context,
+    )
     from _manim_updaters import _ACTIVE_CANONICAL_CONTEXT
     if _ACTIVE_CANONICAL_CONTEXT.get() is not None:
         raise NotImplementedError("effect edits in callbacks require shared staged effect publication")
-    if scope is not None or _is_shared_family(value):
-        raise NotImplementedError("this effect profile supports leaf declarations only; group/view execution is unavailable")
-    handle = _handle_for(value)
+    family = _is_shared_family(value)
+    if scope is not None and not (family and scope == "composed"):
+        raise NotImplementedError("explicit effect scope requires a composed family target")
+    handle = value._semantic_family_handle if family else _handle_for(value)
     if handle is None:
         raise RuntimeError("effects require a current shared Rust object handle")
-    return handle, _live_mutation_context(value)
+    return handle, _path_authoring_context(value), family
+
+
+_FAMILY_SCENE_METHODS = {
+    "setGlow": "setFamilyGlow",
+    "addEffect": "addFamilyEffect",
+    "setEffect": "setFamilyEffect",
+    "setEffectHandle": "setFamilyEffectHandle",
+    "removeEffect": "removeFamilyEffect",
+    "removeEffectHandle": "removeFamilyEffectHandle",
+    "removeGlow": "removeFamilyGlow",
+}
 
 
 def _call(value, method, *args, scope=None):
-    handle, context = _target(value, scope)
+    handle, context, family = _target(value, scope)
     if context is None:
         return engine_call(getattr(handle, method), *args)
-    return engine_call(getattr(context, "live" + method[0].upper() + method[1:]), handle, *args)
+    scene_method = _FAMILY_SCENE_METHODS[method] if family else method
+    return engine_call(getattr(context, scene_method), handle, *args)
 
 
 def _selector(selector):
@@ -271,10 +454,41 @@ def set_glow(value, *, color=None, radius=None, intensity=None, source=None, sco
 
 
 def add_effect(value, definition, *, name, scope=None):
-    if not isinstance(definition, (Glow, Blur, Shadow)):
-        raise TypeError("this effect profile supports Glow, Blur and Shadow definitions")
+    """Attach an effect; explicit async live source awaits shader additions."""
+    from _noon_shaders import ShaderEffect
+    if not isinstance(definition, (Glow, Blur, BackdropBlur, Shadow, NoiseDissolve, Pixelate, ShaderEffect)):
+        raise TypeError("expected a supported immutable Noon effect definition")
     if not isinstance(name, str):
         raise TypeError("effect name must be a string")
+    if isinstance(definition, ShaderEffect):
+        handle, context, family = _target(value, scope)
+        if context is not None and engine_call(context.requiresLiveMutationRouting):
+            from _manim_reactive import _current_authoring_scene
+            from _manim_scene import (
+                _async_continuation_active, _synchronous_continuation_active,
+                _SemanticContinuationAwaitable,
+            )
+            from _noon_host import noonPrepareSemanticEffects
+            scene = _current_authoring_scene()
+            if scene is None:
+                raise RuntimeError("live shader attachment requires its active authoring source")
+            if not (_async_continuation_active(scene) or _synchronous_continuation_active(scene)):
+                raise RuntimeError("live shader attachment requires a portable or async source barrier")
+
+            def prepare():
+                method = context.prepareFamilyEffectAddition if family else context.prepareEffectAddition
+                staged = engine_call(method, handle, definition._definition, name)
+                return noonPrepareSemanticEffects(context, staged)
+
+            async def publish():
+                from _noon_errors import engine_await
+                await engine_await(prepare(), operation="add_effect")
+
+            if _async_continuation_active(scene):
+                return _SemanticContinuationAwaitable(scene, operation=publish, result=value)
+            from _noon_host import wait_sync as run_sync
+            engine_call(run_sync, prepare(), operation="add_effect")
+            return value
     _call(value, "addEffect", definition._definition, name, scope=scope)
     return value
 
@@ -282,14 +496,14 @@ def add_effect(value, definition, *, name, scope=None):
 def get_effect(value, name):
     if not isinstance(name, str):
         raise TypeError("effect name must be a string")
-    handle, _context = _target(value)
+    handle, _context, _family = _target(value)
     # Explicit authored attachment lookup, not an effective frame read.
     return EffectHandle._from_handle(engine_call(handle.getEffect, name))
 
 
-def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None):
+def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None):
     suffix, selector = _selector(selector)
-    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset) as update:
+    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size, parameters=parameters, threshold=threshold) as update:
         _call(value, "setEffect" + suffix, selector, update)
     return value
 

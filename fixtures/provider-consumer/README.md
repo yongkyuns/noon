@@ -122,8 +122,7 @@ publications; its `Authoring` variant retains the membership or handle cause.
 
 This is a bounded R2 slice, not a claim that every authoring API is typed yet.
 Other geometry/animation APIs and the current language bridge may still expose
-strings. Public export/raw-store narrowing is retained from #1290. Ordinary
-post-bootstrap edits should use `scene.live(&mut session)`. Direct authored/raw
-store edits invalidate an existing execution revision; rejection is intentional,
-not a signal to bypass revision checks. Tests use raw access only to construct
-stale-generation and callback-precondition fixtures.
+strings. Use `Scene::into_execution` for playback and `execution.scene_mut()`
+for persistent edits. Direct store edits can invalidate the execution revision.
+Tests use raw access to construct stale-generation and callback-precondition
+fixtures.

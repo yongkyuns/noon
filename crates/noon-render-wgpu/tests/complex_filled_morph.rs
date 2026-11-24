@@ -129,7 +129,7 @@ fn concave_fill_deforms_at_intermediate_progress_without_disappearing() {
         } else {
             FrameChanges::objects(vec![0])
         };
-        let prepared = preparer.prepare_incremental(&frame, &changes);
+        let prepared = preparer.prepare_incremental(&frame, &changes).unwrap();
         assert_eq!(prepared.stats.unsupported_count, 0);
         assert_eq!(prepared.path_ids, &[ObjectId::new(0)]);
         assert_eq!(prepared.paths[0].style.fill[3], 1.0);
@@ -163,11 +163,15 @@ fn complex_fill_sampling_is_local_bounded_and_idle_is_clean() {
     let initial = frame(0.0, 1200);
     let order = (0..1201).rev().collect::<Vec<u32>>();
     preparer.set_painter_order(&initial, &order);
-    preparer.prepare_incremental(&initial, &FrameChanges::all());
+    preparer
+        .prepare_incremental(&initial, &FrameChanges::all())
+        .unwrap();
     let meshes = preparer.cached_path_mesh_count();
     for step in 1..=240 {
         let current = frame((step % 121) as f32 / 120.0, 1200);
-        let prepared = preparer.prepare_incremental(&current, &FrameChanges::objects(vec![0]));
+        let prepared = preparer
+            .prepare_incremental(&current, &FrameChanges::objects(vec![0]))
+            .unwrap();
         assert_eq!(prepared.stats.full_rebuilds, 0);
         assert_eq!(prepared.stats.instances_repacked, 1);
         assert_eq!(prepared.stats.unsupported_count, 0);
@@ -179,7 +183,9 @@ fn complex_fill_sampling_is_local_bounded_and_idle_is_clean() {
             meshes,
             "progress must not grow the cache"
         );
-        let idle = preparer.prepare_incremental(&current, &FrameChanges::objects(vec![0]));
+        let idle = preparer
+            .prepare_incremental(&current, &FrameChanges::objects(vec![0]))
+            .unwrap();
         assert_eq!(idle.stats.geometry_cache_misses, 0);
         assert_eq!(idle.stats.path_vertices_repacked, 0);
         assert_eq!(idle.stats.path_indices_repacked, 0);
@@ -189,12 +195,15 @@ fn complex_fill_sampling_is_local_bounded_and_idle_is_clean() {
 #[test]
 fn cold_seek_and_forward_playback_realize_identical_filled_geometry() {
     let mut warm = FramePreparer::new();
-    warm.prepare(&frame(0.0, 0));
-    warm.prepare_incremental(&frame(0.25, 0), &FrameChanges::objects(vec![0]));
+    warm.prepare(&frame(0.0, 0)).unwrap();
+    warm.prepare_incremental(&frame(0.25, 0), &FrameChanges::objects(vec![0]))
+        .unwrap();
     let middle = frame(0.5, 0);
-    let actual = warm.prepare_incremental(&middle, &FrameChanges::objects(vec![0]));
+    let actual = warm
+        .prepare_incremental(&middle, &FrameChanges::objects(vec![0]))
+        .unwrap();
     let mut cold = FramePreparer::new();
-    let expected = cold.prepare(&middle);
+    let expected = cold.prepare(&middle).unwrap();
     for y in 0..40 {
         for x in 0..40 {
             let point = [(x as f32 + 0.31) / 5.0, (y as f32 + 0.43) / 5.0];

@@ -79,6 +79,7 @@ for (const [name, mutate, expected] of [
   ["reversed window", input => { input.measurement.windowStartSeconds = 7; }, /measurement protocol changed/],
   ["invalid window", input => { input.measurement.windowEndSeconds = null; }, /measurement protocol changed/],
   ["intrusive sampler", input => { input.measurement.sampler = "aggregate-source-and-renderer"; }, /measurement protocol changed/],
+  ["legacy presentation-count capture", input => { input.measurement.version = 7; }, /measurement protocol changed/],
   ["changed source endpoint", input => { input.measurement.sourceEndSeconds = 6; }, /measurement protocol changed/],
   ["missing renderer endpoint", input => { input.fpsSamples.pop(); }, /no settled renderer epoch covered/],
   ["invented FPS", input => { input.fps.effectiveFps = 80; }, /does not match raw renderer observations/],

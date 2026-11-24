@@ -6,7 +6,55 @@ use noon_runtime::{
     apply_execution_slot_membership_changes, ReplayError, ReplayLimits, ReplayStats,
 };
 
+/// Shared engine reasons why the current source needs observed execution.
+/// These are capability metadata, not permission to speculate callback/input work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceExecutionRequirement {
+    /// The host continuation has no contract permitting execution ahead of presentation.
+    HostEffects,
+    HostCallbacks,
+    EffectiveDisplay,
+    NativeInput,
+    Signals,
+    /// The existing retained scope or new sparse suffix cannot supply playback.
+    ReplayUnavailable(ReplayError),
+    /// The original program must complete its existing rendering-host handshake.
+    ExternalResources,
+}
+
+#[cfg(test)]
+mod prefix_probe;
+
 impl ExecutionSession {
+    /// Classify before any headless advance. The original source/continuation
+    /// must keep executing through its ordinary callback/input protocol; a host
+    /// may not reconstruct it or treat an endpoint-only callback sample as history.
+    /// Numeric text with fixed driver declarations uses the retained scalar
+    /// schedule. Driver changes after the history starts invalidate that scope.
+    pub fn source_execution_requirement(&self) -> Option<SourceExecutionRequirement> {
+        if !self.callback_schedule.is_empty() {
+            Some(SourceExecutionRequirement::HostCallbacks)
+        } else if self.derived_display_plan.is_some() {
+            Some(SourceExecutionRequirement::EffectiveDisplay)
+        } else if self.translation_drag.has_targets()
+            || !self.interaction_bindings.is_empty()
+            || self.reactive_projection.has_native_input_routes()
+        {
+            Some(SourceExecutionRequirement::NativeInput)
+        } else if self.runtime.inset_2d_views().next().is_some() {
+            Some(SourceExecutionRequirement::ReplayUnavailable(
+                ReplayError::UnsupportedDomain,
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Read the original journal's status without sealing or advancing it.
+    pub fn replay_retention_status(&self) -> Result<(), ReplayError> {
+        self.runtime.replay_retention_status()
+    }
+
     /// Admit viewer transport over the initial complete immutable projection.
     /// Prior live execution edits retain their explicit history requirements;
     /// seeking to zero does not turn the latest projection into replayable history.
@@ -42,9 +90,10 @@ impl ExecutionSession {
     /// Begin finite history retention before driving a deterministic source program.
     /// Ordinary long-lived editable sessions do not retain history by default.
     pub fn begin_replay_retention(&mut self, limits: ReplayLimits) -> Result<(), ReplayError> {
-        // Immutable audio/control plans support direct seek. Live revision
-        // retention needs its own resource/binding history qualification (#2263).
-        if self.has_audio() || self.has_playback_controls() {
+        // Immutable audio schedules are retained with the original runtime;
+        // later audio schedule mutations still invalidate this history scope.
+        // Playback-control binding history remains outside this profile.
+        if self.has_playback_controls() {
             return Err(ReplayError::UnsupportedDomain);
         }
         if self.pending_segment_completion.is_some()
@@ -53,7 +102,10 @@ impl ExecutionSession {
         {
             return Err(ReplayError::Incomplete);
         }
-        self.runtime.begin_replay_retention(limits)?;
+        self.runtime.begin_replay_retention_with_initial_payloads(
+            limits,
+            self.signal_timeline.entry_count(),
+        )?;
         if !self.callback_schedule.is_empty()
             || self.derived_display_plan.is_some()
             || self.translation_drag.has_targets()
@@ -66,6 +118,24 @@ impl ExecutionSession {
     /// Admit backward playback only after all retained revisions and completion
     /// barriers are coherent. Failure never changes the current authored scene.
     pub fn seal_replay(&mut self) -> Result<(), ReplayError> {
+        self.ensure_replay_completion()?;
+        self.runtime.seal_replay()
+    }
+
+    /// Seal only when the viewer may safely take over the still-live owner.
+    /// Explicit callers may seal a snapshot with declared input routes; later
+    /// input is then rejected by the sealed history scope as usual.
+    pub fn seal_replay_for_viewer(&mut self) -> Result<(), ReplayError> {
+        if self.reactive_projection.has_native_input_routes() {
+            return Err(ReplayError::UnrecordedInput);
+        }
+        self.seal_replay()
+    }
+
+    // Inspect the original session before any ownership/snapshot operation:
+    // cloning intentionally retires pending continuation tokens. Runtime history
+    // validity and its budget are still checked by runtime.seal_replay().
+    fn ensure_replay_completion(&self) -> Result<(), ReplayError> {
         if self.has_playback_controls() {
             return Err(ReplayError::UnsupportedDomain);
         }
@@ -81,13 +151,17 @@ impl ExecutionSession {
         {
             return Err(ReplayError::UnsupportedDomain);
         }
-        self.runtime.seal_replay()
+        Ok(())
     }
     pub fn replay_scope_active(&self) -> bool {
         self.runtime.replay_scope_active()
     }
     pub fn replay_is_sealed(&self) -> bool {
         self.runtime.replay_is_sealed()
+    }
+    /// The original journal's endpoint, available only after successful sealing.
+    pub fn replay_end_time(&self) -> Option<f64> {
+        self.runtime.replay_end_time()
     }
     pub fn replay_stats(&self) -> ReplayStats {
         self.runtime.replay_stats()
@@ -101,6 +175,7 @@ impl ExecutionSession {
         }
         self.runtime.discard_replay_retention();
         self.pointer_selection.reset();
+        self.inspection.clear_indications();
         self.sync_spatial_index();
         self.release_replay_slots();
     }
@@ -150,5 +225,10 @@ impl ExecutionSession {
     }
 }
 
-#[cfg(test)]
+#[cfg(feature = "prepared-prefix")]
+mod prefix;
+
+#[cfg(feature = "prepared-prefix")]
+pub use prefix::PrefixReader;
+#[cfg(all(test, feature = "prepared-prefix"))]
 mod playback_tests;

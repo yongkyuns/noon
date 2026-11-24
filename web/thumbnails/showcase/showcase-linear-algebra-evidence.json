@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "1400ea86e2d69e6b9aa04c39383163f0ab9a7520",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "1400ea86e2d69e6b9aa04c39383163f0ab9a7520",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "79d6387757b36d8fbbbc38e11d9022f02c68474347655e1f9f8045d123bf941d"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "d61f72af1889a81fc8deb94e4a32db0ebf4667d05770961ed8502927e1340d7b"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "61b5818f6e664b13ce4243b0a31ff5568c655a6d1a05d3208f214a3341e4e8eb"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "62efb51bf977fb02f019851429c271f161400ffdb5f19064183847419f146869"
+      }
+    },
+    "buildId": "e7786578dc25cc31026602963913fedd29ab530fa02b4a24c34f29f2227ff30a"
+  },
+  "posters": [
+    {
+      "id": "showcase-linear-algebra",
+      "captureBuildId": "e7786578dc25cc31026602963913fedd29ab530fa02b4a24c34f29f2227ff30a",
+      "sourceSha256": "259aa762117cbd89f4cd9933a47c1c198d4447ac368ff05669e309f7a7c16b83",
+      "thumbnailTime": 8.25,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 506630,
+        "pngSha256": "08a97ef9f9ae4fed4eef9c505f27316789a84831950d3201b226e2cd824a444e",
+        "pixelSha256": "a1c9cff4e4336e6890409a2278172911fadbe268bb2ff1f06dfac9c5874b5223"
+      },
+      "sample": {
+        "requestedTime": 8.25,
+        "publishedTime": 8.25,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}

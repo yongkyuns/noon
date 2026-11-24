@@ -239,7 +239,7 @@ test("recovery preserves the Rust anchor arguments and original rejection", asyn
   await device.install(bundle);
   const rejection = new Error("stale or invalid worker audio anchor");
   state.startError = rejection;
-  const anchor = { session: 7, playing: true, time: 2.1, sampledEpochMs: 1_792_956_040_812 };
+  const anchor = { session: 7, playing: true, buffering: false, time: 2.1, sampledEpochMs: 1_792_956_040_812 };
   assert.throws(() => device.applyAnchor(anchor, 7), error => error === rejection);
   const [session, time, sampled, received] = state.outputs[0].starts[0];
   assert.deepEqual([session, time, sampled], [7, 2.1, 1_792_956_040_812]);

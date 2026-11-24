@@ -1,4 +1,5 @@
 export const PYTHON_COMPAT_MODULES = Object.freeze([
+  { sourcePath: "python/_noon_host.py", runtimePath: "/tmp/_noon_host.py", label: "Noon language host binding" },
   { sourcePath: "python/_manim_typing.py", runtimePath: "/tmp/_manim_typing.py", label: "Noon lazy Python type namespace" },
   { sourcePath: "python/_manim_typing_values.py", runtimePath: "/tmp/_manim_typing_values.py", label: "Noon Python type aliases" },
   { sourcePath: "python/_manim_user_vector_bases.py", runtimePath: "/tmp/_manim_user_vector_bases.py", label: "Noon explicit Python vector basis helpers" },
@@ -12,6 +13,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_noon_errors.py", runtimePath: "/tmp/_noon_errors.py", label: "Noon shared error projection" },
   { sourcePath: "python/_noon_diagnostics.py", runtimePath: "/tmp/_noon_diagnostics.py", label: "Noon Python source diagnostics" },
   { sourcePath: "python/_noon_effects.py", runtimePath: "/tmp/_noon_effects.py", label: "Noon effect declaration adapter" },
+  { sourcePath: "python/_noon_shaders.py", runtimePath: "/tmp/_noon_shaders.py", label: "Noon typed shader values" },
   { sourcePath: "python/_noon_paints.py", runtimePath: "/tmp/_noon_paints.py", label: "Noon immutable paint adapter" },
   { sourcePath: "python/_noon_audio.py", runtimePath: "/tmp/_noon_audio.py", label: "Noon finite audio authoring" },
   { sourcePath: "python/noon.py", runtimePath: "/tmp/noon.py", label: "Noon Python API" },
@@ -41,6 +43,7 @@ export const PYTHON_COMPAT_MODULES = Object.freeze([
   { sourcePath: "python/_manim_table.py", runtimePath: "/tmp/_manim_table.py", label: "Noon retained Table adapter" },
   { sourcePath: "python/_manim_code.py", runtimePath: "/tmp/_manim_code.py", label: "Noon native code block adapter" },
   { sourcePath: "python/_manim_typst.py", runtimePath: "/tmp/_manim_typst.py", label: "Noon retained Typst compatibility layer" },
+  { sourcePath: "python/_noon_video.py", runtimePath: "/tmp/_noon_video.py", label: "Noon video source binding" },
   { sourcePath: "python/_manim_image.py", runtimePath: "/tmp/_manim_image.py", label: "Noon retained image compatibility layer" },
   { sourcePath: "python/_manim_svg.py", runtimePath: "/tmp/_manim_svg.py", label: "Noon retained SVG compatibility layer" },
   { sourcePath: "python/_manim_family_creation.py", runtimePath: "/tmp/_manim_family_creation.py", label: "Noon Write/Unwrite syntax layer" },

@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::{
     AnimationOptions, Color, ContinuationStep, FadeEndpoint, FadeTranslation, LiveContinuation,
-    LiveProgram, LiveSession, Mobject, RateFunction, Scene, SemanticFadeDirection, SemanticVec3,
+    LiveProgram, Mobject, RateFunction, Scene, SemanticFadeDirection, SemanticVec3,
 };
 
 pub struct AffineFade {
@@ -15,48 +15,52 @@ pub struct AffineFade {
 impl LiveContinuation for AffineFade {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         let options = AnimationOptions::new()
             .run_time(1.0)
             .rate_func(RateFunction::Linear);
         match self.stage {
             0 => {
                 self.stage = 1;
-                live.declare_and_activate_fade_with_endpoint(
-                    &self.circle,
-                    SemanticFadeDirection::In,
-                    FadeEndpoint::new(
-                        0.25,
-                        FadeTranslation::Shift(SemanticVec3::new(2.0, 0.0, 0.0)),
-                    ),
-                    options,
-                )
-                .map(ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_fade_with_endpoint(
+                        &self.circle,
+                        SemanticFadeDirection::In,
+                        FadeEndpoint::new(
+                            0.25,
+                            FadeTranslation::Shift(SemanticVec3::new(2.0, 0.0, 0.0)),
+                        ),
+                        options,
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             1 => {
-                let state = live
+                let state = scene
                     .effective(&self.circle)
                     .map_err(|error| error.to_string())?;
                 if state.transform != noon_core::Transform2D::IDENTITY {
                     return Err("FadeIn did not publish the canonical endpoint".into());
                 }
                 self.stage = 2;
-                live.declare_and_activate_fade_with_endpoint(
-                    &self.circle,
-                    SemanticFadeDirection::Out,
-                    FadeEndpoint::new(
-                        0.15,
-                        FadeTranslation::Point(SemanticVec3::new(2.0, 0.0, 0.0)),
-                    ),
-                    options,
-                )
-                .map(ContinuationStep::Await)
-                .map_err(|error| error.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_fade_with_endpoint(
+                        &self.circle,
+                        SemanticFadeDirection::Out,
+                        FadeEndpoint::new(
+                            0.15,
+                            FadeTranslation::Point(SemanticVec3::new(2.0, 0.0, 0.0)),
+                        ),
+                        options,
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(|error| error.to_string())
             }
             2 => {
-                if live
-                    .contains(&self.circle)
+                if scene
+                    .contains_direct(&self.circle)
                     .map_err(|error| error.to_string())?
                 {
                     return Err("FadeOut did not remove its semantic target".into());

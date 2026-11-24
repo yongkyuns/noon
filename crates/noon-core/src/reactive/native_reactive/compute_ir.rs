@@ -9,7 +9,8 @@ use crate::{SignalId, ValueKind, Vec2};
 
 use super::{
     validate_reactive_value, ReactiveError, ReactiveEvaluationStats, ReactiveExpr, ReactiveProgram,
-    ReactivePropertyChange, ReactiveUpdate, ReactiveValue, SignalChange, SignalSource,
+    ReactivePropertyChange, ReactiveUpdate, ReactiveValue, SignalChange, SignalSamples,
+    SignalSource,
 };
 
 /// Compact value types understood by the native reactive compute IR.
@@ -142,6 +143,11 @@ pub enum ComputeInstruction {
         dst: ComputeRegister,
         value: ComputeRegister,
     },
+    Sample {
+        dst: ComputeRegister,
+        input: ComputeRegister,
+        table: u32,
+    },
 }
 
 impl ComputeInstruction {
@@ -161,6 +167,7 @@ impl ComputeInstruction {
 pub struct ComputeKernel {
     owner: SignalId,
     instructions: Vec<ComputeInstruction>,
+    samples: Vec<SignalSamples>,
     register_kinds: Vec<ComputeValueKind>,
     output: ComputeRegister,
 }
@@ -197,7 +204,7 @@ impl ComputeKernel {
     ) -> Result<ReactiveValue, ReactiveError> {
         debug_assert!(scratch.len() >= self.register_count());
         for instruction in &self.instructions {
-            execute_instruction(instruction, signals, scratch, self.owner)?;
+            execute_instruction(instruction, &self.samples, signals, scratch, self.owner)?;
         }
         Ok(scratch[self.output.index()].clone())
     }
@@ -412,6 +419,11 @@ impl std::fmt::Display for PreparedComputeCommitError {
 impl std::error::Error for PreparedComputeCommitError {}
 
 impl ComputeState {
+    /// Current instantiated signal count, including inputs enrolled after lowering.
+    pub fn signal_count(&self) -> usize {
+        self.values.len()
+    }
+
     pub fn value(&self, signal: SignalId) -> Option<&ReactiveValue> {
         let index = self.program.reference.signal_indices.get(&signal)?;
         self.values.get(*index)
@@ -787,6 +799,7 @@ struct Lowerer<'a> {
     signal_indices: &'a BTreeMap<SignalId, usize>,
     signal_kinds: &'a [Option<ComputeValueKind>],
     instructions: Vec<ComputeInstruction>,
+    samples: Vec<SignalSamples>,
     register_kinds: Vec<ComputeValueKind>,
 }
 
@@ -801,6 +814,7 @@ impl<'a> Lowerer<'a> {
             signal_indices,
             signal_kinds,
             instructions: Vec::new(),
+            samples: Vec::new(),
             register_kinds: Vec::new(),
         }
     }
@@ -948,6 +962,24 @@ impl<'a> Lowerer<'a> {
             ReactiveExpr::Cos(value) => self.lower_scalar_unary(value, "cos", |dst, value| {
                 ComputeInstruction::CosScalar { dst, value }
             }),
+            ReactiveExpr::Sample(value, samples) => {
+                let input = self.lower(value)?;
+                if self.register_kinds[input.index()] != ComputeValueKind::Scalar {
+                    return Err(self.invalid("sample"));
+                }
+                let kind = match samples.value_kind() {
+                    ValueKind::Scalar => ComputeValueKind::Scalar,
+                    ValueKind::Vec2 => ComputeValueKind::Vec2,
+                    _ => unreachable!("validated sample table"),
+                };
+                let dst = self.register(kind);
+                let table =
+                    u32::try_from(self.samples.len()).map_err(|_| self.invalid("sample"))?;
+                self.samples.push(samples.clone());
+                self.instructions
+                    .push(ComputeInstruction::Sample { dst, input, table });
+                Ok(dst)
+            }
         }
     }
 
@@ -985,6 +1017,7 @@ fn lower_reactive_expression(
     Ok(ComputeKernel {
         owner,
         instructions: lowerer.instructions,
+        samples: lowerer.samples,
         register_kinds: lowerer.register_kinds,
         output,
     })
@@ -992,6 +1025,7 @@ fn lower_reactive_expression(
 
 fn execute_instruction(
     instruction: &ComputeInstruction,
+    samples: &[SignalSamples],
     signals: &[ReactiveValue],
     scratch: &mut [ReactiveValue],
     owner: SignalId,
@@ -1080,6 +1114,13 @@ fn execute_instruction(
         ComputeInstruction::CosScalar { dst, value } => {
             scratch[dst.index()] =
                 ReactiveValue::Scalar(scalar(scratch, value, owner, "cos")?.cos());
+        }
+        ComputeInstruction::Sample { dst, input, table } => {
+            let value = scalar(scratch, input, owner, "sample")?;
+            if !value.is_finite() {
+                return Err(ReactiveError::NonFiniteValue(owner));
+            }
+            scratch[dst.index()] = samples[table as usize].sample(value);
         }
     }
     Ok(())

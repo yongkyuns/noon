@@ -8,8 +8,8 @@ use noon::integration::{
     ExportFrameOptions, ExportStop, FrameRate, HostCallbackId, SemanticMutationTransaction,
 };
 use noon::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession,
-    LiveSessionError, Mobject, RateFunction, RustHostCallbackTable, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSessionError, Mobject,
+    RateFunction, RustHostCallbackTable, Scene,
 };
 use noon_export::{capture_frames, Backends, CaptureOptions, CaptureRunError, CaptureSummary};
 
@@ -24,12 +24,15 @@ struct Source {
 impl LiveContinuation for Source {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
         let stage = self.stage;
         self.stage += 1;
         match stage {
             0 if !self.callback => Ok(ContinuationStep::Await(
-                live.declare_and_activate_transform_to(
+                scene.live().declare_and_activate_transform_to(
                     &self.object,
                     &self.target,
                     AnimationOptions::new()
@@ -37,13 +40,13 @@ impl LiveContinuation for Source {
                         .rate_func(RateFunction::Linear),
                 )?,
             )),
-            0 => Ok(ContinuationStep::Await(live.wait_segment(0.105)?)),
+            0 => Ok(ContinuationStep::Await(scene.live().wait_segment(0.105)?)),
             1 => {
-                live.set_translation(&self.camera, 1.0, 0.5)?;
-                Ok(ContinuationStep::Await(live.wait_segment(0.207)?))
+                scene.set_translation(&self.camera, 1.0, 0.5)?;
+                Ok(ContinuationStep::Await(scene.live().wait_segment(0.207)?))
             }
             _ => {
-                live.set_translation(&self.object, 2.0, -1.0)?;
+                scene.set_translation(&self.object, 2.0, -1.0)?;
                 Ok(ContinuationStep::Finished)
             }
         }

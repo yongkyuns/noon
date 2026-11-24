@@ -1,10 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
-
 use noon::{Mobject, Scene, Text};
 use noon_core::{
     AnimationOptions, Camera2DState, NativeEventSource, NativeInputValue, NativeStateSource,
-    RateFunction, SemanticObjectProperty, SemanticObjectRole, SemanticObjectState, SemanticStore,
-    SemanticVec3, StoredGeometry, Vec2,
+    RateFunction, Vec2, DEFAULT_FRAME_HEIGHT, DEFAULT_FRAME_WIDTH,
 };
 use wasm_bindgen::prelude::*;
 use web_sys::OffscreenCanvas;
@@ -24,8 +21,9 @@ impl noon::LiveContinuation for OverdueShortAnimation {
 
     fn resume(
         &mut self,
-        live: &mut noon::LiveSession<'_>,
+        scene: &mut noon::ContinuationScene,
     ) -> Result<noon::ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         let Some(target) = self.targets.get(self.next) else {
             return Ok(noon::ContinuationStep::Finished);
         };
@@ -75,7 +73,7 @@ impl noon::LiveContinuation for FinishedNativeDragSmoke {
 
     fn resume(
         &mut self,
-        _live: &mut noon::LiveSession<'_>,
+        _scene: &mut noon::ContinuationScene,
     ) -> Result<noon::ContinuationStep, Self::Error> {
         Ok(noon::ContinuationStep::Finished)
     }
@@ -97,14 +95,38 @@ pub async fn create_direct_analytic_profile_renderer(
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
 }
 
+/// G4 authored glow workload shared with native Rust and the Python example.
+#[wasm_bindgen(js_name = createDirectGlowProfileRenderer)]
+pub async fn create_direct_glow_profile_renderer(
+    canvas: OffscreenCanvas,
+    active: u32,
+    property: &str,
+    duration: f64,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let property = property.parse().map_err(js_error)?;
+    let session = noon::example_scenes::glow_profile::session(active as usize, property, duration)
+        .map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
+}
+
+/// Ordinary forward source for the paired 1,000-cycle Glow lifecycle fixture.
+#[wasm_bindgen(js_name = createDirectGlowChurnRenderer)]
+pub async fn create_direct_glow_churn_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::glow_churn::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct-WASM real-GPU qualification for a local change in a sparse 100k scene.
 #[wasm_bindgen(js_name = createDirectRetainedLocalityRenderer)]
 pub async fn create_direct_retained_locality_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-    let (scene, objects) = noon::example_scenes::retained_locality::scene().map_err(js_error)?;
+    let (mut scene, objects) =
+        noon::example_scenes::retained_locality::scene().map_err(js_error)?;
     let animation = noon::example_scenes::retained_locality::target_animation_with_duration(
-        &scene,
+        &mut scene,
         &objects[noon::example_scenes::retained_locality::TARGET_INDEX],
         10.0,
     )
@@ -491,57 +513,45 @@ pub async fn create_direct_single_typst_canvas_renderer(
 pub async fn create_direct_execution_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-    let store = Rc::new(RefCell::new(SemanticStore::new()));
-    let scene = noon::Scene::with_integration_store(Rc::clone(&store));
-    let root = scene.root();
-    let animation = {
-        let mut store = store.borrow_mut();
-        let opacity = store
-            .insert_semantic_input_signal(0.65_f64)
-            .map_err(js_error)?;
-        let object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.5,
-            }));
-        store
-            .add_semantic_family_member(root, object)
-            .map_err(js_error)?;
-        store
-            .bind_semantic_signal(opacity, object, SemanticObjectProperty::ObjectOpacity)
-            .map_err(js_error)?;
-
-        let mut target_state = store
-            .semantic_object_state_checked(object)
-            .map_err(js_error)?
-            .clone();
-        target_state.transform.translation = SemanticVec3::new(2.0, 0.0, 0.0);
-        let target = store.insert_semantic_object(target_state);
-        let animation = store
-            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
-            .map_err(js_error)?;
-
-        let mut camera_state = SemanticObjectState::new(StoredGeometry::Rectangle {
-            size: Vec2::new(12.0, 6.0),
-        });
-        camera_state.transform.translation = SemanticVec3::new(2.0, -1.0, 0.0);
-        camera_state.set_role(SemanticObjectRole::Camera2D);
-        let camera = store.insert_semantic_object(camera_state);
-        store
-            .add_semantic_family_member(root, camera)
-            .map_err(js_error)?;
-        animation
-    };
-
-    let mut label = Mobject::from_text(Rc::clone(&store), Text::new("Noon").with_font_size(48.0))
+    let mut scene = Scene::new();
+    let camera = scene.camera_frame().map_err(js_error)?;
+    scene
+        .set_scale(
+            &camera,
+            12.0 / f64::from(DEFAULT_FRAME_WIDTH),
+            6.0 / f64::from(DEFAULT_FRAME_HEIGHT),
+        )
         .map_err(js_error)?;
-    label.shift(1.0, 0.0).map_err(js_error)?;
-    store
-        .borrow_mut()
-        .add_semantic_family_member(root, label.node_id())
+    scene
+        .set_translation(&camera, 2.0, -1.0)
         .map_err(js_error)?;
 
-    let mut session = scene.execution_session().map_err(js_error)?;
-    let resolved_camera = session.camera().map_err(js_error)?;
+    let mut circle = scene.circle(1.5).map_err(js_error)?;
+    circle.set_fill(1.0, 1.0, 1.0, 1.0).map_err(js_error)?;
+    circle.disable_stroke().map_err(js_error)?;
+    scene.add(&circle).map_err(js_error)?;
+    let opacity = scene.value_tracker(0.65).map_err(js_error)?;
+    scene.bind_opacity(&circle, &opacity).map_err(js_error)?;
+    let target = scene.target_editor(&circle).map_err(js_error)?;
+    scene.set_translation(&target, 2.0, 0.0).map_err(js_error)?;
+    let animation = scene
+        .declare_transform_to(
+            &circle,
+            &target,
+            AnimationOptions::new()
+                .run_time(0.1)
+                .rate_func(RateFunction::Linear),
+        )
+        .map_err(js_error)?;
+
+    let label = scene
+        .text(Text::new("Noon").with_font_size(48.0))
+        .map_err(js_error)?;
+    scene.set_translation(&label, 1.0, 0.0).map_err(js_error)?;
+    scene.add(&label).map_err(js_error)?;
+
+    let mut execution = scene.into_execution().map_err(js_error)?;
+    let resolved_camera = execution.session().camera().map_err(js_error)?;
     if resolved_camera
         != (Camera2DState {
             center: Vec2::new(2.0, -1.0),
@@ -552,17 +562,9 @@ pub async fn create_direct_execution_smoke_renderer(
             "direct Rust/WASM smoke did not resolve its authored semantic camera",
         ));
     }
-    session
-        .activate_animation(
-            &mut store.borrow_mut(),
-            animation,
-            AnimationOptions::new()
-                .run_time(0.1)
-                .rate_func(RateFunction::Linear),
-        )
-        .map_err(js_error)?;
-    let execution = scene
-        .into_execution_with_session(session)
+    execution
+        .live()
+        .play_animation(&animation)
         .map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, execution).await
 }
@@ -806,6 +808,86 @@ pub async fn create_direct_ordered_effects_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Visibility lifecycle through native's shared live Rust program.
+#[wasm_bindgen(js_name = createDirectDissolveSmokeRenderer)]
+pub async fn create_direct_dissolve_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::dissolve::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Pixel detail through the same typed live programme as native export.
+#[wasm_bindgen(js_name = createDirectPixelateSmokeRenderer)]
+pub async fn create_direct_pixelate_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::pixelate::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Moving glass card through the same typed Rust live program as native.
+#[wasm_bindgen(js_name = createDirectGlassLensSmokeRenderer)]
+pub async fn create_direct_glass_lens_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::glass_lens::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Save/restore uses the same live Rust programme as native export.
+#[wasm_bindgen(js_name = createDirectEffectRestoreSmokeRenderer)]
+pub async fn create_direct_effect_restore_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::effect_restore::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[wasm_bindgen(js_name = createDirectScopeOpacitySmokeRenderer)]
+pub async fn create_direct_scope_opacity_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::scope_opacity::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[wasm_bindgen(js_name = createDirectGroupOpacitySmokeRenderer)]
+pub async fn create_direct_group_opacity_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::scope_opacity::comparison_program()
+        .map_err(|error| js_error(error.to_string()))?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Persistent composed masks through native's shared live Rust program.
+#[wasm_bindgen(js_name = createDirectNoiseDissolveSmokeRenderer)]
+pub async fn create_direct_noise_dissolve_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::noise_dissolve::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Nested composed families through the same live Rust program as native.
+#[wasm_bindgen(js_name = createDirectComposedEffectsSmokeRenderer)]
+pub async fn create_direct_composed_effects_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::composed_effects::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Animated nested family effects, paired with ordinary Python method targets.
+#[wasm_bindgen(js_name = createDirectComposedEffectsAnimatedSmokeRenderer)]
+pub async fn create_direct_composed_effects_animated_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::composed_effects::animated_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Direct shared Rust/WASM shadow program, paired with the ordinary Python scene.
 #[wasm_bindgen(js_name = createDirectShadowSmokeRenderer)]
 pub async fn create_direct_shadow_smoke_renderer(
@@ -929,6 +1011,24 @@ pub async fn create_direct_family_arrangement_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let program = noon::example_scenes::family_arrangement::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Direct Rust/WASM host for the paired group-animation tutorial.
+#[wasm_bindgen(js_name = createDirectGroupAnimationSmokeRenderer)]
+pub async fn create_direct_group_animation_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::group_animation::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Direct Rust/WASM host for the paired mounted callout.
+#[wasm_bindgen(js_name = createDirectMountedCalloutSmokeRenderer)]
+pub async fn create_direct_mounted_callout_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::mounted_callout::program().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
@@ -1198,15 +1298,22 @@ pub async fn create_direct_scale_in_place_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Sequential method animations authored through the ordinary Rust scene API.
+#[wasm_bindgen(js_name = createDirectMovingAroundSmokeRenderer)]
+pub async fn create_direct_moving_around_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::moving_around::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Sequential updater removal/replacement through the shared native/WASM session.
 #[wasm_bindgen(js_name = createDirectLiveUpdaterLifecycleSmokeRenderer)]
 pub async fn create_direct_live_updater_lifecycle_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-    let (program, callbacks) =
-        noon::example_scenes::live_updater_lifecycle::program().map_err(js_error)?;
-    WasmExecutionCanvasRenderer::create_from_live_program_with_callbacks(canvas, program, callbacks)
-        .await
+    let program = noon::example_scenes::live_updater_lifecycle::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
 /// Shared dimension fitting uses the same typed native and Rust/WASM session.
@@ -1358,8 +1465,8 @@ pub async fn create_direct_canonical_curve_layout_smoke_renderer(
 pub async fn create_direct_graph_smoke_renderer(
     canvas: OffscreenCanvas,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
-    let session = noon::example_scenes::graph::session().map_err(js_error)?;
-    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
+    let program = noon::example_scenes::graph::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
 #[wasm_bindgen(js_name = createDirectPointMatchingSmokeRenderer)]
@@ -1588,4 +1695,59 @@ pub async fn create_direct_lingering_renderer(
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let session = noon::example_scenes::polynomial_rates::lingering_session().map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
+}
+
+/// The same checked custom-material lesson as the native Rust example.
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderSweepSmokeRenderer)]
+pub async fn create_direct_shader_sweep_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderSweepLateSmokeRenderer)]
+pub async fn create_direct_shader_sweep_late_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::late_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderFadeSmokeRenderer)]
+pub async fn create_direct_shader_fade_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::shader_sweep::fade_in_program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[cfg(feature = "wgsl-effects")]
+#[wasm_bindgen(js_name = createDirectShaderTimeSmokeRenderer)]
+pub async fn create_direct_shader_time_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let session = noon::example_scenes::shader_sweep::authored_time_session().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, session).await
+}
+
+/// Same ordinary Rust material/view program as the native camera_bloom example.
+#[wasm_bindgen(js_name = createDirectCameraBloomRenderer)]
+pub async fn create_direct_camera_bloom_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::camera_bloom::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// The same finite authored steps through the ordinary seekable session host.
+#[wasm_bindgen(js_name = createDirectCameraBloomSessionRenderer)]
+pub async fn create_direct_camera_bloom_session_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let execution = noon::example_scenes::camera_bloom::execution().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_scene_execution(canvas, execution).await
 }

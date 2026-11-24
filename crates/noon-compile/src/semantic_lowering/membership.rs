@@ -13,6 +13,16 @@ pub const fn semantic_execution_object_id(id: SemanticNodeId) -> ObjectId {
     ObjectId::new(raw)
 }
 
+/// Decode a key produced by canonical semantic execution lowering.
+///
+/// This is the inverse of [`semantic_execution_object_id`], not an existence or
+/// provenance check. The caller must establish that the key belongs to its
+/// semantic-derived execution projection and validate membership in the selected
+/// revision. A decoded identity does not revive a deleted semantic object.
+pub const fn semantic_execution_node_id(object: ObjectId) -> SemanticNodeId {
+    SemanticNodeId::new(object.get() as u32, (object.get() >> 32) as u32)
+}
+
 impl SemanticExecutionReachabilityUpdate {
     /// Execution-key view of objects whose net rooted membership changed 0 -> 1.
     ///
@@ -47,6 +57,19 @@ mod tests {
 
     fn circle(radius: f32) -> SemanticObjectState {
         SemanticObjectState::new(StoredGeometry::Circle { radius })
+    }
+
+    #[test]
+    fn execution_key_round_trip_preserves_all_slot_and_generation_bits() {
+        for slot in [0, 1, u32::MAX - 1, u32::MAX] {
+            for generation in [0, 1, u32::MAX - 1, u32::MAX] {
+                let node = SemanticNodeId::new(slot, generation);
+                assert_eq!(
+                    semantic_execution_node_id(semantic_execution_object_id(node)),
+                    node
+                );
+            }
+        }
     }
 
     #[test]

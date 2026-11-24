@@ -15,6 +15,12 @@ const BACKPRESSURE_COUNTER = 5;
 // Two slots reserve 4 MiB per isolated execution. This covers the gallery's
 // 600-object morph deltas without the 32 MiB slots used by stress experiments.
 export const DEFAULT_SHARED_SLOT_CAPACITY = 2 * 1024 * 1024;
+// Bound the encoded size of one shared packet. This is not a bound on source
+// JSON, decoder/encoder temporaries, renderer or total process memory.
+export const MAX_SHARED_EXECUTION_DELTA_BYTES = 64 * 1024 * 1024;
+const CHUNK_MAGIC = 0xffffffff;
+const CHUNK_VERSION = 1;
+const CHUNK_HEADER_BYTES = 32;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const validatedDeltaJson = new WeakMap();
@@ -34,26 +40,17 @@ export function executionDeltaMetadata(json) {
 // skip a second producer parse. Send consumes the association immediately.
 export function prepareExecutionDeltaMetadataForSend(json) {
   const metadata = parseExecutionDeltaMetadata(json);
-  validatedDeltaJson.set(metadata, json);
+  validatedDeltaJson.set(metadata, { json, packet: encodeWorkerCarrier(json, metadata) });
   return metadata;
 }
 
 // Only accepts the atomic header/body carrier from drainDeltaTransportJson.
-// The body remains the ordinary worker delta; both receiving transports still
-// parse/validate it before admission. Generic/untrusted JSON uses the reader
-// above, which never treats a supplied header as proof of its body.
+// Rust validates the duplicated bounded header against the full typed body
+// before admission. Generic/untrusted JSON uses the full-body reader above.
 export function prepareExecutionDeltaTransportForSend(packet) {
-  if (typeof packet !== "string") {
-    throw new TypeError("worker publication must be a header/body string");
-  }
-  const separator = packet.indexOf("\n");
-  if (separator < 1 || separator > 512 || separator === packet.length - 1) {
-    throw new Error("worker publication has an invalid bounded metadata header");
-  }
-  const metadata = parseExecutionDeltaMetadata(packet.slice(0, separator));
-  const json = packet.slice(separator + 1);
-  validatedDeltaJson.set(metadata, json);
-  return { json, metadata };
+  const decoded = decodeWorkerCarrier(packet);
+  validatedDeltaJson.set(decoded.metadata, { json: packet, packet });
+  return { packet, metadata: decoded.metadata };
 }
 
 function parseExecutionDeltaMetadata(json) {
@@ -66,6 +63,10 @@ function parseExecutionDeltaMetadata(json) {
   } catch (error) {
     throw new Error(`execution delta is invalid JSON: ${error.message}`);
   }
+  return metadataFromDelta(delta);
+}
+
+function metadataFromDelta(delta) {
   if (!isRecord(delta) || delta.channel !== RETAINED_EXECUTION_TRANSPORT_CHANNEL) {
     throw new Error("execution delta has an invalid channel");
   }
@@ -94,17 +95,57 @@ function parseExecutionDeltaMetadata(json) {
   return metadata;
 }
 
+function parseWorkerCarrierHeader(header) {
+  let parsed;
+  try { parsed = JSON.parse(header); }
+  catch (error) { throw new Error(`worker publication metadata is invalid: ${error.message}`); }
+  return metadataFromDelta(parsed);
+}
+
+function decodeWorkerCarrier(packet) {
+  if (typeof packet !== "string") {
+    throw new TypeError("worker publication must be a header/body string");
+  }
+  const separator = packet.indexOf("\n");
+  if (separator < 1 || separator === packet.length - 1 ||
+      encoder.encode(packet.slice(0, separator)).byteLength > 512) {
+    throw new Error("worker publication has an invalid bounded metadata header");
+  }
+  return {
+    packet,
+    bodyOffset: separator + 1,
+    metadata: parseWorkerCarrierHeader(packet.slice(0, separator)),
+  };
+}
+
+function encodeWorkerCarrier(json, metadata) {
+  const header = JSON.stringify({
+    channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL,
+    session: metadata.session,
+    sequence: metadata.sequence,
+    snapshot: metadata.snapshot,
+    ...(metadata.pointerView === undefined ? {} : { pointer_view: metadata.pointerView }),
+  });
+  if (encoder.encode(header).byteLength > 512) {
+    throw new Error("worker publication metadata exceeds its bounded header");
+  }
+  return `${header}\n${json}`;
+}
+
 function metadataForSend(json, validatedMetadata) {
   // Consume the temporary exact-string association even when it mismatches,
   // so a retained or misused handoff cannot pin a large delta indefinitely.
   if (validatedMetadata !== null && typeof validatedMetadata === "object") {
-    const validatedJson = validatedDeltaJson.get(validatedMetadata);
-    if (validatedJson !== undefined) {
+    const validated = validatedDeltaJson.get(validatedMetadata);
+    if (validated !== undefined) {
       validatedDeltaJson.delete(validatedMetadata);
-      if (typeof json === "string" && validatedJson === json) return validatedMetadata;
+      if (typeof json === "string" && validated.json === json) {
+        return { metadata: validatedMetadata, packet: validated.packet };
+      }
     }
   }
-  return executionDeltaMetadata(json);
+  const metadata = executionDeltaMetadata(json);
+  return { metadata, packet: encodeWorkerCarrier(json, metadata) };
 }
 
 export function decodeTransferableExecutionDelta(message) {
@@ -115,11 +156,12 @@ export function decodeTransferableExecutionDelta(message) {
     throw new Error("transferable execution delta payload must be an ArrayBuffer");
   }
   const json = decoder.decode(new Uint8Array(message.buffer));
-  const metadata = executionDeltaMetadata(json);
+  const decoded = decodeWorkerCarrier(json);
+  const metadata = decoded.metadata;
   if (metadata.session !== message.session || metadata.sequence !== message.sequence) {
     throw new Error("transferable execution delta metadata does not match its envelope");
   }
-  return { json, metadata };
+  return { json: json.slice(decoded.bodyOffset), packet: decoded.packet, metadata };
 }
 
 export function createSharedExecutionMailbox(slotCapacity = DEFAULT_SHARED_SLOT_CAPACITY) {
@@ -138,122 +180,207 @@ export class SharedExecutionDeltaWriter {
   #header;
   #bytes;
   #slotCapacity;
+  #pending = null;
+  #closed = false;
 
   constructor(mailbox) {
     validateSharedMailbox(mailbox);
     this.#slotCapacity = mailbox.slotCapacity;
     this.#header = new Int32Array(mailbox.buffer, 0, HEADER_WORDS);
-    this.#bytes = new Uint8Array(
-      mailbox.buffer,
-      HEADER_WORDS * Int32Array.BYTES_PER_ELEMENT,
-    );
+    this.#bytes = new Uint8Array(mailbox.buffer, HEADER_WORDS * Int32Array.BYTES_PER_ELEMENT);
   }
 
   canSend() {
-    return (
+    return !this.#closed && this.#pending === null && (
       Atomics.load(this.#header, SLOT_STATE_0) === SLOT_FREE ||
       Atomics.load(this.#header, SLOT_STATE_1) === SLOT_FREE
     );
   }
 
   send(json, validatedMetadata = null) {
-    metadataForSend(json, validatedMetadata);
-    const payload = encoder.encode(json);
-    if (payload.byteLength > this.#slotCapacity) {
-      throw new Error(
-        `execution delta ${payload.byteLength} bytes exceeds shared slot capacity ${this.#slotCapacity}`,
-      );
+    if (this.#closed) {
+      validatedDeltaJson.delete(validatedMetadata);
+      throw new Error("shared execution writer is closed");
     }
-    for (let slot = 0; slot < 2; slot += 1) {
+    if (typeof json === "string" && json.length > MAX_SHARED_EXECUTION_DELTA_BYTES) {
+      validatedDeltaJson.delete(validatedMetadata);
+      throw new Error("shared execution delta exceeds packet byte limit");
+    }
+    const { metadata, packet } = metadataForSend(json, validatedMetadata);
+    if (!this.canSend()) {
+      Atomics.add(this.#header, BACKPRESSURE_COUNTER, 1);
+      return false;
+    }
+    const payload = encoder.encode(packet);
+    if (payload.byteLength > MAX_SHARED_EXECUTION_DELTA_BYTES) {
+      throw new Error("shared execution delta exceeds packet byte limit");
+    }
+    if (payload.byteLength <= this.#slotCapacity) return this.#write(payload);
+    if (this.#slotCapacity <= CHUNK_HEADER_BYTES) {
+      throw new Error("shared execution slot is too small for chunk framing");
+    }
+    // Keep exactly this encoded packet, never regenerate a drained Rust delta.
+    // Partial chunks release physical slots, not publication/presentation receipts.
+    this.#pending = { payload, metadata, offset: 0 };
+    this.flush();
+    return true;
+  }
+
+  // Called by the existing renderer transport-credit event. No polling task or
+  // source/semantic work is scheduled while both physical slots remain owned.
+  flush() {
+    let written = 0;
+    while (!this.#closed && this.#pending !== null) {
+      const pending = this.#pending;
+      const end = Math.min(pending.payload.byteLength, pending.offset + this.#slotCapacity - CHUNK_HEADER_BYTES);
+      if (!this.#write(pending.payload.subarray(pending.offset, end), pending)) break;
+      pending.offset = end;
+      written++;
+      if (end === pending.payload.byteLength) this.#pending = null;
+    }
+    return written;
+  }
+
+  #write(payload, chunk = null) {
+    for (let slot = 0; slot < 2; slot++) {
       const stateIndex = slot === 0 ? SLOT_STATE_0 : SLOT_STATE_1;
-      if (Atomics.compareExchange(this.#header, stateIndex, SLOT_FREE, SLOT_WRITING) !== SLOT_FREE) {
-        continue;
-      }
+      if (Atomics.compareExchange(this.#header, stateIndex, SLOT_FREE, SLOT_WRITING) !== SLOT_FREE) continue;
       const offset = slot * this.#slotCapacity;
-      this.#bytes.set(payload, offset);
-      Atomics.store(
-        this.#header,
-        slot === 0 ? SLOT_LENGTH_0 : SLOT_LENGTH_1,
-        payload.byteLength,
-      );
+      if (chunk !== null) {
+        const view = new DataView(this.#bytes.buffer, this.#bytes.byteOffset + offset, CHUNK_HEADER_BYTES);
+        view.setUint32(0, CHUNK_MAGIC, true);
+        view.setUint32(4, chunk.payload.byteLength, true);
+        view.setUint32(8, chunk.offset, true);
+        view.setUint32(12, CHUNK_VERSION, true);
+        view.setFloat64(16, chunk.metadata.session, true);
+        view.setFloat64(24, chunk.metadata.sequence, true);
+      }
+      const headerBytes = chunk === null ? 0 : CHUNK_HEADER_BYTES;
+      this.#bytes.set(payload, offset + headerBytes);
+      Atomics.store(this.#header, slot === 0 ? SLOT_LENGTH_0 : SLOT_LENGTH_1, headerBytes + payload.byteLength);
       Atomics.store(this.#header, stateIndex, SLOT_READY);
       Atomics.add(this.#header, WAKE_COUNTER, 1);
       Atomics.notify(this.#header, WAKE_COUNTER);
       return true;
     }
-    Atomics.add(this.#header, BACKPRESSURE_COUNTER, 1);
     return false;
   }
 
-  backpressureCount() {
-    return Atomics.load(this.#header, BACKPRESSURE_COUNTER);
+  close() {
+    this.#closed = true;
+    this.#pending = null;
   }
+
+  backpressureCount() { return Atomics.load(this.#header, BACKPRESSURE_COUNTER); }
 }
 
 export class SharedExecutionDeltaReader {
   #header;
   #bytes;
   #slotCapacity;
+  #pending = null;
+  #closed = false;
 
   constructor(mailbox) {
     validateSharedMailbox(mailbox);
     this.#slotCapacity = mailbox.slotCapacity;
     this.#header = new Int32Array(mailbox.buffer, 0, HEADER_WORDS);
-    this.#bytes = new Uint8Array(
-      mailbox.buffer,
-      HEADER_WORDS * Int32Array.BYTES_PER_ELEMENT,
-    );
+    this.#bytes = new Uint8Array(mailbox.buffer, HEADER_WORDS * Int32Array.BYTES_PER_ELEMENT);
   }
 
   drain(apply) {
-    if (typeof apply !== "function") {
-      throw new TypeError("shared execution mailbox drain requires an apply callback");
-    }
+    if (typeof apply !== "function") throw new TypeError("shared execution mailbox drain requires an apply callback");
+    if (this.#closed) return 0;
     const ready = [];
-    for (let slot = 0; slot < 2; slot += 1) {
+    for (let slot = 0; slot < 2; slot++) {
       const stateIndex = slot === 0 ? SLOT_STATE_0 : SLOT_STATE_1;
-      if (Atomics.load(this.#header, stateIndex) !== SLOT_READY) {
-        continue;
-      }
-      const length = Atomics.load(
-        this.#header,
-        slot === 0 ? SLOT_LENGTH_0 : SLOT_LENGTH_1,
-      );
-      if (length < 0 || length > this.#slotCapacity) {
-        this.#release(slot, stateIndex);
-        throw new Error(`shared execution mailbox slot ${slot} has invalid length ${length}`);
-      }
-      const offset = slot * this.#slotCapacity;
-      // TextDecoder cannot consume a SharedArrayBuffer-backed view in browsers.
-      const json = decoder.decode(this.#bytes.slice(offset, offset + length));
-      ready.push({ slot, stateIndex, json, metadata: executionDeltaMetadata(json) });
+      if (Atomics.load(this.#header, stateIndex) !== SLOT_READY) continue;
+      try { ready.push(this.#read(slot, stateIndex)); }
+      catch (error) { this.#pending = null; this.#release(slot, stateIndex); throw error; }
     }
-    ready.sort((left, right) => left.metadata.sequence - right.metadata.sequence);
-
+    ready.sort((left, right) => left.metadata.sequence - right.metadata.sequence ||
+      (left.chunk?.offset ?? 0) - (right.chunk?.offset ?? 0));
     let consumed = 0;
     for (const item of ready) {
-      let accepted;
       try {
-        accepted = apply(item.json, item.metadata) !== false;
+        if (item.chunk) {
+          const { total, offset } = item.chunk;
+          if (this.#pending === null) {
+            if (offset !== 0) throw new Error("shared execution chunk has no initial packet");
+            this.#pending = { total, received: 0, ...item.metadata,
+              bytes: new Uint8Array(total), json: null, metadata: null, finalOffset: null };
+          }
+          const pending = this.#pending;
+          if (pending.total !== total || pending.session !== item.metadata.session || pending.sequence !== item.metadata.sequence) {
+            throw new Error("shared execution chunk belongs to another packet");
+          }
+          if (pending.json === null) {
+            if (offset !== pending.received) throw new Error("shared execution chunk is out of order");
+            pending.bytes.set(item.payload, offset);
+            pending.received += item.payload.byteLength;
+            if (pending.received === total) {
+              pending.json = decoder.decode(pending.bytes);
+              pending.bytes = null;
+              const decoded = decodeWorkerCarrier(pending.json);
+              pending.metadata = decoded.metadata;
+              pending.bodyOffset = decoded.bodyOffset;
+              pending.finalOffset = offset;
+              if (pending.metadata.session !== pending.session || pending.metadata.sequence !== pending.sequence) {
+                throw new Error("shared execution chunk metadata does not match its packet");
+              }
+            }
+          } else if (offset !== pending.finalOffset) {
+            throw new Error("shared execution chunk repeats a completed packet");
+          }
+          if (pending.json !== null) {
+            if (apply(pending.json.slice(pending.bodyOffset), pending.metadata, pending.json) === false) break;
+            this.#pending = null;
+          }
+        } else {
+          if (this.#pending !== null) throw new Error("shared execution packet interrupted an incomplete chunk sequence");
+          if (apply(item.body, item.metadata, item.json) === false) break;
+        }
       } catch (error) {
+        this.#pending = null;
         this.#release(item.slot, item.stateIndex);
         throw error;
       }
-      if (!accepted) {
-        break;
-      }
       this.#release(item.slot, item.stateIndex);
-      consumed += 1;
+      consumed++;
     }
+    // This counts freed physical slots, including partial chunks. A partial
+    // packet has never reached apply(), let alone produced a displayed receipt.
     return consumed;
   }
 
+  #read(slot, stateIndex) {
+    const length = Atomics.load(this.#header, slot === 0 ? SLOT_LENGTH_0 : SLOT_LENGTH_1);
+    if (length <= 0 || length > this.#slotCapacity) throw new Error(`shared execution mailbox slot ${slot} has invalid length ${length}`);
+    const offset = slot * this.#slotCapacity;
+    if (length >= 4 && new DataView(this.#bytes.buffer, this.#bytes.byteOffset + offset, 4).getUint32(0, true) === CHUNK_MAGIC) {
+      if (length <= CHUNK_HEADER_BYTES) throw new Error("shared execution chunk has an invalid header length");
+      const view = new DataView(this.#bytes.buffer, this.#bytes.byteOffset + offset, CHUNK_HEADER_BYTES);
+      const total = view.getUint32(4, true), partOffset = view.getUint32(8, true);
+      const metadata = { session: view.getFloat64(16, true), sequence: view.getFloat64(24, true) };
+      const payload = this.#bytes.subarray(offset + CHUNK_HEADER_BYTES, offset + length);
+      if (view.getUint32(12, true) !== CHUNK_VERSION || total <= this.#slotCapacity ||
+          total > MAX_SHARED_EXECUTION_DELTA_BYTES || partOffset >= total || payload.byteLength > total - partOffset ||
+          !Number.isSafeInteger(metadata.session) || metadata.session < 0 ||
+          !Number.isSafeInteger(metadata.sequence) || metadata.sequence < 0) {
+        throw new Error("shared execution chunk has invalid framing");
+      }
+      return { slot, stateIndex, metadata, payload, chunk: { total, offset: partOffset } };
+    }
+    // Browsers cannot decode a SharedArrayBuffer-backed view directly.
+    const json = decoder.decode(this.#bytes.slice(offset, offset + length));
+    const decoded = decodeWorkerCarrier(json);
+    return { slot, stateIndex, json: decoded.packet, body: json.slice(decoded.bodyOffset), metadata: decoded.metadata };
+  }
+
+  close() { this.#closed = true; this.#pending = null; }
+
   #release(slot, stateIndex) {
-    Atomics.store(
-      this.#header,
-      slot === 0 ? SLOT_LENGTH_0 : SLOT_LENGTH_1,
-      0,
-    );
+    Atomics.store(this.#header, slot === 0 ? SLOT_LENGTH_0 : SLOT_LENGTH_1, 0);
     Atomics.store(this.#header, stateIndex, SLOT_FREE);
   }
 }
@@ -284,12 +411,12 @@ export class TransferableExecutionDeltaSender {
   }
 
   send(json, validatedMetadata = null) {
-    const metadata = metadataForSend(json, validatedMetadata);
+    const { metadata, packet } = metadataForSend(json, validatedMetadata);
     if (this.#inFlight >= this.#maxInFlight) {
       this.#backpressure += 1;
       return false;
     }
-    const payload = encoder.encode(json);
+    const payload = encoder.encode(packet);
     // TextEncoder normally returns an exact, standalone buffer. Transfer that
     // allocation directly; retain the fallback for nonstandard typed-array views.
     const buffer = payload.byteOffset === 0 && payload.byteLength === payload.buffer.byteLength
@@ -361,7 +488,7 @@ export class TransferableExecutionDeltaReceiver {
     try {
       while (this.#pending.length > 0) {
         const item = this.#pending[0];
-        if (this.#apply(item.json, item.metadata) === false) {
+        if (this.#apply(item.json, item.metadata, item.packet) === false) {
           break;
         }
         this.#pending.shift();

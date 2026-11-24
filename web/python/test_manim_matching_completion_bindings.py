@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from _noon_errors import NoonPendingError, raise_engine_error
+from _noon_errors import NoonPendingError, is_effect_preparation_required, raise_engine_error
 
 
 @dataclass
@@ -127,9 +127,10 @@ class MatchingCompletionBindingTests(unittest.TestCase):
             '_commit_typed_binding', '_record_mobject_binding', '_semantic_wrapper_key',
             '_membership_registry', '_register_membership_wrappers',
             '_membership_wrapper_leaves', '_membership_leaf_bindings',
-            '_reconcile_completed_family_bindings', '_canonical_scene_mobjects',
+            '_associate_published_wrappers', '_canonical_scene_mobjects',
             '_play_canonical_composition', '_canonical_indicate_animation',
             '_build_canonical_composition_candidate',
+            '_build_canonical_composition_candidate_steps',
         }
         tree = ast.parse(Path(__file__).with_name('_manim_scene.py').read_text())
         selected = [node for node in tree.body if getattr(node, 'name', None) in names]
@@ -146,6 +147,7 @@ class MatchingCompletionBindingTests(unittest.TestCase):
             '_ir': SimpleNamespace(Object=ExportObject, _authoring_key=lambda label, key, default: default if key is None else key),
             'engine_call': lambda method, *args, operation=None: method(*args),
             'raise_engine_error': raise_engine_error,
+            'is_effect_preparation_required': is_effect_preparation_required,
             '_canonical_play_options': lambda options: None,
             '_start_default_synchronous_continuation': lambda scene: None,
             '_semantic_continuation_active': lambda scene: scene.mode != 'endpoint',
@@ -297,7 +299,7 @@ class MatchingCompletionBindingTests(unittest.TestCase):
     def test_absent_intermediate_target_does_not_gain_a_binding(self):
         intermediate = Group(103, Mobject(30))
         self.context.finish()
-        self.ns['_reconcile_completed_family_bindings'](self.scene, (self.source, intermediate, self.target, self.target))
+        self.ns['_associate_published_wrappers'](self.scene, (self.source, intermediate, self.target, self.target), operation="Scene.completion")
         self.assertIsNone(intermediate.submobjects[0]._scene)
         self.assertIsNone(intermediate.submobjects[0]._object)
         self.assert_completed()

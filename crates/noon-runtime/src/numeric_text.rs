@@ -8,8 +8,8 @@ use noon_compile::{
 };
 use noon_core::{
     compose_numeric_text_resource, numeric_text_layout, NumericTextResourceError, ObjectId,
-    ReactiveValue, SignalId, TextResource, TextResourceArena, TextResourceHandle,
-    TextResourceLookup,
+    ReactiveValue, SignalId, TextAffineTransform, TextResource, TextResourceArena,
+    TextResourceHandle, TextResourceLookup,
 };
 
 use crate::{PreparedReactiveRuntimeUpdate, SceneInstance};
@@ -110,8 +110,8 @@ impl NumericTextRuntime {
         self.driver_by_object.values().copied()
     }
 
-    pub(crate) fn object_indices(&self) -> impl Iterator<Item = usize> + '_ {
-        self.driver_by_object.keys().copied()
+    pub(crate) fn is_empty(&self) -> bool {
+        self.driver_by_object.is_empty()
     }
 
     pub(crate) fn has_object_driver(&self, object_index: usize) -> bool {
@@ -301,8 +301,20 @@ impl SceneInstance {
         revision: PreparedNumericTextDriverRevision,
     ) {
         for entry in revision.entries {
+            let previous = self
+                .numeric_text
+                .driver_by_object
+                .get(&entry.object_index)
+                .map(|&index| &self.numeric_text.driver(index).declaration);
+            if previous == entry.declaration.as_ref() {
+                continue;
+            }
+            // Numeric driver declarations are fixed for the recorded interval.
+            // Scalar tracks can change their values without changing that topology.
+            if self.replay_scope_active() && !self.replay_starts_at_current_frame() {
+                self.invalidate_replay_domain();
+            }
             self.numeric_text.remove_for_object(entry.object_index);
-            self.effective_driver_rows.remove(&entry.object_index);
             let Some(declaration) = entry.declaration else {
                 continue;
             };
@@ -367,7 +379,8 @@ impl SceneInstance {
         &mut self,
         updates: Vec<PreparedNumericTextUpdate>,
         mark_changes: bool,
-    ) {
+    ) -> bool {
+        let mut any_changed = false;
         for update in updates {
             let object_index = update.object_index;
             let bounds = update
@@ -383,11 +396,12 @@ impl SceneInstance {
                 || self.frame.objects[object_index].text_bounds != Some(bounds);
             self.frame.objects[object_index].content = handle.into();
             self.frame.objects[object_index].text_bounds = Some(bounds);
-            self.effective_driver_rows.insert(object_index);
+            any_changed |= changed;
             if mark_changes && changed {
                 self.mark_changed(object_index);
             }
         }
+        any_changed
     }
 
     pub(crate) fn reapply_numeric_text(&mut self) {
@@ -413,13 +427,11 @@ impl SceneInstance {
                 .expect("prepared numeric bounds were validated");
             self.frame.objects[object_index].content = handle.into();
             self.frame.objects[object_index].text_bounds = Some(bounds);
-            self.effective_driver_rows.insert(object_index);
         }
     }
 
     pub(crate) fn reapply_numeric_text_for_object(&mut self, object_index: usize) {
         if !self.object_slot_is_live(object_index) {
-            self.effective_driver_rows.remove(&object_index);
             return;
         }
         let Some(handle) = self.numeric_text.current_for_object(object_index) else {
@@ -435,7 +447,6 @@ impl SceneInstance {
             .expect("prepared numeric bounds were validated");
         self.frame.objects[object_index].content = handle.into();
         self.frame.objects[object_index].text_bounds = Some(bounds);
-        self.effective_driver_rows.insert(object_index);
     }
 }
 
@@ -484,13 +495,24 @@ fn prepare_driver_resource(
                 .ok_or(NumericTextResourceError::TokenCountMismatch)?,
         );
     }
-    let resource = compose_numeric_text_resource(
+    let mut resource = compose_numeric_text_resource(
         source,
         &layout,
         &children,
         f64::from(driver.declaration.font_size),
         driver.declaration.point_to_scene_scale,
     )?;
+    let offset = TextAffineTransform::translation(
+        driver.declaration.anchor_left - resource.bounds.min.x,
+        0.0,
+    );
+    resource.bounds = offset.transform_bounds(resource.bounds);
+    for run in Arc::make_mut(&mut resource.runs) {
+        run.transform = run.transform.then(offset);
+    }
+    for item in Arc::make_mut(&mut resource.vector_items) {
+        item.transform = item.transform.then(offset);
+    }
     resource
         .bounds
         .lower_f32()

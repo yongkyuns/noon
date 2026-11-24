@@ -30,6 +30,7 @@ pub struct OrderedRenderBatch {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VisibleRenderError {
+    ColorProfile(crate::ColorProfileError),
     ObjectIndexOutOfRange { index: usize, objects: usize },
     DuplicateObjectIndex(usize),
 }
@@ -55,6 +56,7 @@ impl VisibleRenderProjectionStats {
 impl std::fmt::Display for VisibleRenderError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ColorProfile(error) => error.fmt(formatter),
             Self::ObjectIndexOutOfRange { index, objects } => write!(
                 formatter,
                 "visible render object index {index} is outside frame object count {objects}"
@@ -140,6 +142,28 @@ impl FramePreparer {
         changes: &FrameChanges,
         visible_object_indices: &[usize],
     ) -> Result<PreparedFrame<'a>, VisibleRenderError> {
+        crate::validate_color_profile(
+            frame,
+            changes,
+            noon_core::ViewColorProfile::Compatibility,
+            !self.initialized || self.color_profile != noon_core::ViewColorProfile::Compatibility,
+        )
+        .map_err(VisibleRenderError::ColorProfile)?;
+        self.prepare_incremental_visible_with_color_profile(
+            frame,
+            changes,
+            visible_object_indices,
+            noon_core::ViewColorProfile::Compatibility,
+        )
+    }
+
+    pub(crate) fn prepare_incremental_visible_with_color_profile<'a>(
+        &'a mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        visible_object_indices: &[usize],
+        profile: noon_core::ViewColorProfile,
+    ) -> Result<PreparedFrame<'a>, VisibleRenderError> {
         let mut seen = HashSet::with_capacity(visible_object_indices.len());
         for &object_index in visible_object_indices {
             if object_index >= frame.objects.len() {
@@ -154,7 +178,9 @@ impl FramePreparer {
         }
 
         self.visible_submission_slots = seen;
-        let mut stats = self.prepare_incremental(frame, changes).stats;
+        let mut stats = self
+            .prepare_with_color_profile(frame, changes, profile)
+            .stats;
 
         if !self.visible_projection_matches(visible_object_indices) {
             self.visible_projection_key.clear();
@@ -523,6 +549,7 @@ fn projected_frame<'a>(
     stats: RenderStats,
 ) -> PreparedFrame<'a> {
     PreparedFrame {
+        color_profile: preparer.color_profile,
         fill_paints: &preparer.fill_paints,
         paint_changes: &preparer.paint_changes,
         paint_indices: &preparer.paint_indices,
@@ -691,7 +718,7 @@ impl FramePreparer {
             for index in range.clone() {
                 self.zero_contribution[3].set(
                     packed_row_span(index),
-                    !self.paths[index].style.may_contribute_color(),
+                    !self.paths[index].may_contribute_color(),
                 );
             }
         }
@@ -700,9 +727,9 @@ impl FramePreparer {
     pub(crate) fn set_mega_zero_contribution(
         &mut self,
         range: Range<u32>,
-        style: crate::PackedStyle,
+        path: crate::PathInstance,
     ) {
-        self.zero_contribution[4].set(range, !style.may_contribute_color());
+        self.zero_contribution[4].set(range, !path.may_contribute_color());
     }
 }
 
@@ -821,7 +848,7 @@ mod tests {
         let camera = 4096;
         frame.objects[camera].style.opacity = 0.0;
         let mut preparer = FramePreparer::new();
-        let cold = preparer.prepare(&frame);
+        let cold = preparer.prepare(&frame).unwrap();
         assert_eq!(cold.rectangles.len(), 8192);
         assert_eq!(
             cold.observe_object(camera).unwrap().submission_membership,
@@ -837,8 +864,9 @@ mod tests {
         for opacity in [0.25, 1.0, 0.0, f32::MIN_POSITIVE, 0.0] {
             frame.objects[camera].style.opacity = opacity;
             frame.objects[camera].transform.translation.x += 0.125;
-            let prepared =
-                preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![camera]));
+            let prepared = preparer
+                .prepare_incremental(&frame, &FrameChanges::objects(vec![camera]))
+                .unwrap();
             assert_eq!(prepared.stats.full_rebuilds, 0);
             assert_eq!(prepared.stats.instances_repacked, 1);
             assert_eq!(prepared.stats.geometry_cache_misses, 0);
@@ -866,7 +894,9 @@ mod tests {
                 usize::from(opacity == 0.0)
             );
         }
-        let clean = preparer.prepare_incremental(&frame, &FrameChanges::default());
+        let clean = preparer
+            .prepare_incremental(&frame, &FrameChanges::default())
+            .unwrap();
         assert_eq!(clean.stats.instances_repacked, 0);
         assert_eq!(clean.stats.render_order_positions_visited, 0);
         assert_eq!(clean.stats.render_order_chunks_rebuilt, 0);
@@ -906,13 +936,52 @@ mod tests {
             state.style.opacity = opacity;
             state.style.stroke_width = 0.1;
             state.style.stroke_width_mode = StrokeWidthMode::ScreenSpace;
-            let prepared = preparer.prepare(&frame(vec![state.clone()]));
+            let prepared = preparer.prepare(&frame(vec![state.clone()])).unwrap();
             assert_eq!(
                 eligible_geometry_count(&prepared) != 0,
                 expected,
                 "style: {:?}",
                 state.style
             );
+        }
+    }
+
+    #[test]
+    fn background_only_path_eligibility_is_exact_local_and_shared_with_mega_paths() {
+        use noon_core::{Color, Vec2, VectorPath};
+        for individual in [false, true] {
+            let mut state = object(
+                0,
+                GeometryRef::path(
+                    VectorPath::new()
+                        .move_to(Vec2::new(-0.5, 0.0))
+                        .line_to(Vec2::new(0.5, 0.0)),
+                ),
+            );
+            state.style.fill = None;
+            state.style.stroke = None;
+            state.style.stroke_width = 0.0;
+            state.style.background_stroke = Some(Color::WHITE);
+            state.style.background_stroke_width = 0.2;
+            let mut frame = frame(vec![state]);
+            let mut preparer = FramePreparer::new();
+            preparer.individual_path_draws = individual;
+            let prepared = preparer.prepare(&frame).unwrap();
+            assert!(eligible_geometry_count(&prepared) > 0);
+            let vertices = prepared.path_vertices.to_vec();
+            let indices = prepared.mega_path_indices.to_vec();
+            for opacity in [0.0, f32::MIN_POSITIVE, 0.3, 1.0, 0.0] {
+                frame.objects[0].style.opacity = opacity;
+                let prepared = preparer
+                    .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+                    .unwrap();
+                assert_eq!(eligible_geometry_count(&prepared) > 0, opacity != 0.0);
+                assert_eq!(prepared.stats.full_rebuilds, 0);
+                assert_eq!(prepared.stats.geometry_cache_misses, 0);
+                assert_eq!(prepared.stats.render_order_positions_visited, 0);
+                assert_eq!(prepared.path_vertices, vertices);
+                assert_eq!(prepared.mega_path_indices, indices);
+            }
         }
     }
 
@@ -948,7 +1017,7 @@ mod tests {
         frame.objects[1].style.opacity = 0.0;
         frame.objects[3].style.opacity = 0.0;
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         assert_eq!(prepared.render_batches[0].instance_range, 0..5);
         assert_eq!(
             prepared
@@ -957,7 +1026,7 @@ mod tests {
             vec![0..1, 2..3, 4..5]
         );
         preparer.set_painter_order(&frame, &[4, 3, 2, 1, 0]);
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         assert_eq!(prepared.ordered_render_batches().count(), 5);
         let ranges = prepared
             .ordered_render_batches()
@@ -984,9 +1053,11 @@ mod tests {
         ] {
             frame.reveals[0] = reveal;
             frame.objects[0].style.opacity = opacity;
-            let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![0]));
+            let prepared = preparer
+                .prepare_incremental(&frame, &FrameChanges::objects(vec![0]))
+                .unwrap();
             let mut fresh = FramePreparer::new();
-            let reference = fresh.prepare(&frame);
+            let reference = fresh.prepare(&frame).unwrap();
             assert_eq!(
                 prepared.observe_object(0).unwrap().primitive,
                 reference.observe_object(0).unwrap().primitive
@@ -1072,14 +1143,16 @@ mod tests {
         frame.objects[1].style.opacity = 0.0;
         frame.objects[3].style.opacity = 0.0;
         let mut preparer = FramePreparer::new();
-        let cold = preparer.prepare(&frame);
+        let cold = preparer.prepare(&frame).unwrap();
         assert_eq!(cold.stats.mega_path_count, 5);
         assert_eq!(eligible_geometry_count(&cold), 3);
         let vertices = cold.path_vertices.to_vec();
         let indices = cold.mega_path_indices.to_vec();
         for opacity in [1.0, 0.0, 0.5] {
             frame.objects[1].style.opacity = opacity;
-            let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![1]));
+            let prepared = preparer
+                .prepare_incremental(&frame, &FrameChanges::objects(vec![1]))
+                .unwrap();
             assert_eq!(prepared.stats.full_rebuilds, 0);
             assert_eq!(prepared.stats.render_order_positions_visited, 0);
             assert_eq!(prepared.stats.geometry_cache_misses, 0);
@@ -1099,22 +1172,28 @@ mod tests {
         frame.morphs.push(0.0);
         frame.render_geometries.push(None);
         frame.render_transforms.push(None);
-        let prepared =
-            preparer.prepare_incremental(&frame, &FrameChanges::structural(vec![5], Vec::new()));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::structural(vec![5], Vec::new()))
+            .unwrap();
         assert_eq!(prepared.stats.full_rebuilds, 0);
         assert_eq!(eligible_geometry_count(&prepared), 4);
         assert_eq!(prepared.mega_path_offsets.len(), 6);
         frame.objects[5].style.opacity = 1.0;
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::objects(vec![5]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::objects(vec![5]))
+            .unwrap();
         assert_eq!(eligible_geometry_count(&prepared), 5);
         assert!(prepared.mega_path_index_dirty_ranges.is_empty());
         preparer.set_painter_order(&frame, &[5, 4, 3, 2, 1, 0]);
-        let prepared = preparer.prepare_incremental(&frame, &FrameChanges::painter_order(0..6));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::painter_order(0..6))
+            .unwrap();
         assert_eq!(eligible_geometry_count(&prepared), 5);
         assert!(prepared.mega_path_index_dirty_ranges.is_empty());
         frame.presences[2] = false;
-        let prepared =
-            preparer.prepare_incremental(&frame, &FrameChanges::structural(Vec::new(), vec![2]));
+        let prepared = preparer
+            .prepare_incremental(&frame, &FrameChanges::structural(Vec::new(), vec![2]))
+            .unwrap();
         assert_eq!(eligible_geometry_count(&prepared), 4);
     }
 
@@ -1162,7 +1241,7 @@ mod tests {
             object(2, GeometryRef::circle(0.5)),
         ]);
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         assert_eq!(
             prepared.render_batches,
             &[
@@ -1190,7 +1269,7 @@ mod tests {
             object(2, GeometryRef::circle(0.6)),
         ]);
         let mut preparer = FramePreparer::new();
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         assert_eq!(prepared.render_batches.len(), 1);
         assert_eq!(prepared.render_batches[0].instance_range, 0..3);
     }
@@ -1204,7 +1283,7 @@ mod tests {
         ]);
         let mut preparer = FramePreparer::new();
         preparer.set_painter_order(&frame, &[1, 0, 2]);
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         assert_eq!(
             prepared.render_batches[0].primitive,
             RenderPrimitive::Rectangle
@@ -1314,7 +1393,9 @@ mod tests {
         assert_eq!(visible.render_batches.len(), 1);
         assert_eq!(visible.stats.batch_count, 1);
 
-        let full = preparer.prepare_incremental(&frame, &FrameChanges::default());
+        let full = preparer
+            .prepare_incremental(&frame, &FrameChanges::default())
+            .unwrap();
         assert_eq!(full.render_batches.len(), 3);
         assert_eq!(full.stats.batch_count, 3);
         assert_eq!(full.render_batches[0].primitive, RenderPrimitive::Circle);
@@ -1986,7 +2067,7 @@ mod derived_display_tests {
         assert_eq!(preparer.path_mesh_cache_len(), 1);
         preparer.set_painter_order(publication.frame(), publication.painter_order());
         {
-            let stable = preparer.prepare(publication.frame());
+            let stable = preparer.prepare(publication.frame()).unwrap();
             assert_eq!(stable.stats.full_rebuilds, 1);
         }
 
@@ -2014,7 +2095,8 @@ mod derived_display_tests {
         assert_eq!(preparer.path_mesh_cache_len(), 1);
 
         let stable = preparer
-            .prepare_incremental(publication.frame(), &noon_runtime::FrameChanges::default());
+            .prepare_incremental(publication.frame(), &noon_runtime::FrameChanges::default())
+            .unwrap();
         assert_eq!(stable.stats.full_rebuilds, 0);
         assert_eq!(stable.stats.instances_repacked, 0);
         assert_eq!(stable.stats.geometry_cache_misses, 0);
@@ -2046,7 +2128,7 @@ mod derived_display_tests {
 
         let mut preparer = crate::FramePreparer::new();
         preparer.set_painter_order(publication.frame(), publication.painter_order());
-        preparer.prepare(publication.frame());
+        preparer.prepare(publication.frame()).unwrap();
         let cached =
             prepare_derived_display_visible_cached(&publication, &[anchor as usize], &mut preparer)
                 .unwrap();

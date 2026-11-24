@@ -7,10 +7,10 @@ use noon::integration::{
     SemanticSignalError,
 };
 use noon::{
-    AnimationOptions, AuthoringError, ExecutionSession, ExecutionSessionCallbackError,
-    LayoutAnchor, LiveSessionError, Mobject, MobjectTarget, RateFunction, Scene, SceneRevision,
-    SemanticNodeId, SemanticObjectProperty, SemanticObjectState, SemanticVec3, StoredGeometry,
-    UnsupportedAuthoringOperation, Vec2, VectorPath,
+    AnimationOptions, AuthoringError, ExecutionSessionCallbackError, LayoutAnchor, Mobject,
+    MobjectTarget, RateFunction, Scene, SceneRevision, SemanticNodeId, SemanticObjectProperty,
+    SemanticObjectState, SemanticVec3, StoredGeometry, UnsupportedAuthoringOperation, Vec2,
+    VectorPath,
 };
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -41,20 +41,6 @@ fn snapshot(scene: &Scene, objects: &[&Mobject]) -> AuthoredSnapshot {
             .map(|object| object.state().unwrap())
             .collect(),
     }
-}
-
-fn assert_live_unchanged(
-    scene: &Scene,
-    session: &mut ExecutionSession,
-    objects: &[&Mobject],
-    before: AuthoredSnapshot,
-    frame: noon::integration::FrameState,
-    publication: noon::PublicationContext,
-) {
-    assert_eq!(snapshot(scene, objects), before);
-    assert_eq!(session.frame(), &frame);
-    assert_eq!(session.publication_context(), publication);
-    assert!(session.take_frame_changes().is_empty());
 }
 
 #[test]
@@ -308,34 +294,42 @@ fn pending_callback_capture_keeps_token_and_recovers_without_rebuilding() -> Tes
     let mut callbacks = SemanticMutationTransaction::new();
     callbacks.add_updater(object.node_id(), HostCallbackId::new(9), 0.0, None);
     callbacks.apply(&mut scene.integration_store().borrow_mut())?;
-    let mut session = scene.execution_session()?;
-    let overlay = match session.advance_to_callback_barrier(0.0)? {
+    let mut running = scene.into_execution()?;
+    let overlay = match running.session_mut().advance_to_callback_barrier(0.0)? {
         CallbackAdvance::HostRequired { overlay, .. } => overlay,
         CallbackAdvance::Ready(_) => panic!("expected callback barrier"),
     };
-    let token = session.pending_callback_token().unwrap();
-    session.take_frame_changes();
-    let before = snapshot(&scene, &[&object]);
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
-    let execution_id = session.execution_object_id(object.node_id());
+    let token = running.session().pending_callback_token().unwrap();
+    running.session_mut().take_frame_changes();
+    let before = snapshot(running.scene(), &[&object]);
+    let frame = running.session().frame().clone();
+    let publication = running.session().publication_context();
+    let execution_id = running.session().execution_object_id(object.node_id());
     for error in [
-        scene.live(&mut session).target_editor(&object).unwrap_err(),
-        scene.live(&mut session).copy_family(&family).unwrap_err(),
+        running.scene_mut().target_editor(&object).unwrap_err(),
+        running.scene_mut().copy_family(&family).unwrap_err(),
     ] {
         assert!(
-            matches!(&error, LiveSessionError::Callback(ExecutionSessionCallbackError::Pending(found)) if *found == token)
+            matches!(&error, AuthoringError::ExecutionCallback(ExecutionSessionCallbackError::Pending(found)) if *found == token)
         );
         assert!(error
             .source()
             .unwrap()
             .is::<ExecutionSessionCallbackError>());
     }
-    assert_live_unchanged(&scene, &mut session, &[&object], before, frame, publication);
-    session.commit_required_callback_phase(overlay.finish())?;
-    scene.live(&mut session).target_editor(&object)?;
-    scene.live(&mut session).copy_family(&family)?;
-    assert_eq!(session.execution_object_id(object.node_id()), execution_id);
+    assert_eq!(snapshot(running.scene(), &[&object]), before);
+    assert_eq!(running.session().frame(), &frame);
+    assert_eq!(running.session().publication_context(), publication);
+    assert!(running.session_mut().take_frame_changes().is_empty());
+    running
+        .session_mut()
+        .commit_required_callback_phase(overlay.finish())?;
+    running.scene_mut().target_editor(&object)?;
+    running.scene_mut().copy_family(&family)?;
+    assert_eq!(
+        running.session().execution_object_id(object.node_id()),
+        execution_id
+    );
     Ok(())
 }
 
@@ -356,16 +350,18 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
             .run_time(2.0)
             .rate_func(RateFunction::Linear),
     )?;
-    let mut session = scene.execution_session()?;
-    let segment = scene.live(&mut session).play_animation(&animation)?;
-    scene.live(&mut session).advance_segment_to(segment, 1.0)?;
-    session.take_frame_changes();
-    let before = snapshot(&scene, &[&object, &unaffected]);
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
-    let unaffected_id = session.execution_object_id(unaffected.node_id());
-    let error = scene
-        .live(&mut session)
+    let mut execution = scene.into_execution()?;
+    let segment = execution.live().play_animation(&animation)?;
+    execution.live().advance_segment_to(segment, 1.0)?;
+    execution.session_mut().take_frame_changes();
+    let before = snapshot(execution.scene(), &[&object, &unaffected]);
+    let frame = execution.session().frame().clone();
+    let publication = execution.session().publication_context();
+    let unaffected_id = execution
+        .session()
+        .execution_object_id(unaffected.node_id());
+    let error = execution
+        .scene_mut()
         .arrange_family_with_options(
             &family,
             &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.1, true),
@@ -373,51 +369,31 @@ fn live_family_callback_failure_preserves_effective_and_authored_separation() ->
         .unwrap_err();
     assert!(matches!(
         error,
-        LiveSessionError::Authoring(AuthoringError::Unsupported(
-            UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver
-        ))
+        AuthoringError::Unsupported(UnsupportedAuthoringOperation::PlacementEffectiveAffineDriver)
     ));
     assert!(error
         .source()
         .unwrap()
-        .source()
-        .unwrap()
         .is::<UnsupportedAuthoringOperation>());
-    assert_live_unchanged(
-        &scene,
-        &mut session,
-        &[&object, &unaffected],
-        before,
-        frame,
-        publication,
-    );
-    assert_eq!(
-        scene
-            .live(&mut session)
-            .authored(&object)?
-            .transform
-            .translation
-            .x,
-        0.0
-    );
-    assert_eq!(
-        scene
-            .live(&mut session)
-            .effective(&object)?
-            .transform
-            .translation
-            .x,
-        2.0
-    );
-    let mut live = scene.live(&mut session);
+    assert_eq!(snapshot(execution.scene(), &[&object, &unaffected]), before);
+    assert_eq!(execution.session().frame(), &frame);
+    assert_eq!(execution.session().publication_context(), publication);
+    assert!(execution.session_mut().take_frame_changes().is_empty());
+    let authored = execution.scene().authored(&object)?;
+    let effective = execution.scene().effective(&object)?;
+    assert_eq!(authored.transform.translation.x, 0.0);
+    assert_eq!(effective.transform.translation.x, 2.0);
+    let mut live = execution.live();
     live.advance_segment_to(segment, segment.end_time())?;
     live.complete_segment(segment)?;
-    live.arrange_family_with_options(
+    execution.scene_mut().arrange_family_with_options(
         &family,
         &noon::FamilyArrangeOptions::new(1.0, 0.0, 0.1, true),
     )?;
     assert_eq!(
-        session.execution_object_id(unaffected.node_id()),
+        execution
+            .session()
+            .execution_object_id(unaffected.node_id()),
         unaffected_id
     );
     Ok(())
@@ -437,7 +413,7 @@ fn camera_rejection_does_not_change_the_root_and_recovers_after_clear() -> TestR
     scene.clear()?;
     scene.camera_frame()?;
     scene.add(&object)?;
-    scene.execution_session()?;
+    noon::integration::scene_execution::lower(&scene)?;
     Ok(())
 }
 
@@ -448,26 +424,32 @@ fn rejection_retains_previously_queued_changes_and_local_recovery() -> TestResul
     let second = scene.square(1.0)?;
     scene.add(&first)?;
     scene.add(&second)?;
-    let mut session = scene.execution_session()?;
-    session.take_frame_changes();
-    scene.live(&mut session).shift(&first, 1.0, 0.0)?;
-    let before = snapshot(&scene, &[&first, &second]);
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
+    let mut running = scene.into_execution()?;
+    running.session_mut().take_frame_changes();
+    running
+        .scene_mut()
+        .shift_3d(&first, noon::SemanticVec3::new(1.0, 0.0, 0.0))?;
+    let before = snapshot(running.scene(), &[&first, &second]);
+    let frame = running.session().frame().clone();
+    let publication = running.session().publication_context();
     assert!(matches!(
-        scene.live(&mut session).set_fill_opacity(&second, -1.0),
-        Err(LiveSessionError::Authoring(
-            AuthoringError::InvalidOpacity { .. }
-        ))
+        running.scene_mut().set_fill_opacity(&second, -1.0),
+        Err(AuthoringError::InvalidOpacity { .. })
     ));
-    assert_eq!(snapshot(&scene, &[&first, &second]), before);
-    assert_eq!(session.frame(), &frame);
-    assert_eq!(session.publication_context(), publication);
+    assert_eq!(snapshot(running.scene(), &[&first, &second]), before);
+    assert_eq!(running.session().frame(), &frame);
+    assert_eq!(running.session().publication_context(), publication);
     // The successful first edit must neither disappear nor be expanded to the
     // unrelated second row merely because the later operation was rejected.
-    assert_eq!(session.take_frame_changes().object_indices(), &[0]);
-    scene.live(&mut session).set_fill_opacity(&second, 0.5)?;
-    assert_eq!(session.take_frame_changes().object_indices(), &[1]);
+    assert_eq!(
+        running.session_mut().take_frame_changes().object_indices(),
+        &[0]
+    );
+    running.scene_mut().set_fill_opacity(&second, 0.5)?;
+    assert_eq!(
+        running.session_mut().take_frame_changes().object_indices(),
+        &[1]
+    );
     Ok(())
 }
 
@@ -613,25 +595,24 @@ fn frame_alignment_preserves_typed_rejection_and_live_recovery() -> TestResult {
         Err(AuthoringError::InvalidRenderNumber { .. })
     ));
     assert_eq!(snapshot(&scene, &[&object]), before);
-    let mut session = scene.execution_session()?;
-    session.take_frame_changes();
-    let frame = session.frame().clone();
-    let publication = session.publication_context();
-    let error = scene
-        .live(&mut session)
+    let mut session = scene.into_execution()?;
+    session.session_mut().take_frame_changes();
+    let frame = session.session().frame().clone();
+    let publication = session.session().publication_context();
+    let error = session
+        .scene_mut()
         .align_family_on_frame(&family, (1.0, 0.0), f64::NAN)
         .unwrap_err();
-    assert!(matches!(
-        error,
-        LiveSessionError::Authoring(AuthoringError::InvalidRenderNumber { .. })
-    ));
-    assert!(error.source().unwrap().is::<AuthoringError>());
-    assert_live_unchanged(&scene, &mut session, &[&object], before, frame, publication);
+    assert!(matches!(error, AuthoringError::InvalidRenderNumber { .. }));
+    assert_eq!(snapshot(session.scene(), &[&object]), before);
+    assert_eq!(session.session().frame(), &frame);
+    assert_eq!(session.session().publication_context(), publication);
+    assert!(session.session_mut().take_frame_changes().is_empty());
     let old = object.state()?.transform;
-    scene
-        .live(&mut session)
+    session
+        .scene_mut()
         .align_family_on_frame(&family, (2.0, 0.0), 0.25)?;
     assert_ne!(object.state()?.transform, old);
-    assert!(!session.take_frame_changes().is_empty());
+    assert!(!session.session_mut().take_frame_changes().is_empty());
     Ok(())
 }

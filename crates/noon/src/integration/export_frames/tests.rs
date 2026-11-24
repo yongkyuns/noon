@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use super::*;
 use crate::integration::{HostCallbackId, SemanticMutationTransaction};
-use crate::{ContinuationStep, LiveSession, LiveSessionError, Mobject, Scene};
+use crate::{ContinuationStep, LiveSessionError, Mobject, Scene};
 
 const CALLBACK: HostCallbackId = HostCallbackId::new(1_896);
 
@@ -15,16 +15,19 @@ struct Source {
 impl LiveContinuation for Source {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
         let stage = self.stage;
         self.stage += 1;
         if stage < self.durations.len() {
             Ok(ContinuationStep::Await(
-                live.wait_segment(self.durations[stage])?,
+                scene.live().wait_segment(self.durations[stage])?,
             ))
         } else {
-            let y = f64::from(live.effective(&self.object)?.transform.translation.y);
-            live.set_translation(&self.object, 7.0, y)?;
+            let y = f64::from(scene.effective(&self.object)?.transform.translation.y);
+            scene.set_translation(&self.object, 7.0, y)?;
             Ok(ContinuationStep::Finished)
         }
     }
@@ -107,6 +110,9 @@ fn drive(
     for _ in 0..20_000 {
         match export.advance()? {
             ExportFramesStatus::Progress => {}
+            ExportFramesStatus::ResourcePreparationPending => {
+                panic!("fixture contains no external effect resources")
+            }
             ExportFramesStatus::PublicationPending(context) => {
                 let publication = export.take_renderer_publication()?;
                 assert_eq!(publication.context(), context);

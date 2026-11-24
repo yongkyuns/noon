@@ -222,26 +222,19 @@ impl WasmAuthoringFamilyHandle {
 impl CanonicalAuthoringSceneContext {
     #[wasm_bindgen(js_name = queryNumberPlaneFrame)]
     pub fn query_number_plane_frame(
-        &mut self,
+        &self,
         handle: &WasmAuthoringFamilyHandle,
     ) -> Result<WasmAxesFrame, JsValue> {
         let plane = ManimNumberPlane::from_family(handle.semantic_family()?)
             .map_err(coordinate_failure)
             .map_err(js_error)?;
-        let x = plane
-            .x_axis()
+        self.inner
+            .coordinate_scene()
+            .map_err(js_error)?
+            .number_plane_frame(&plane)
+            .map(|frame| WasmAxesFrame { frame })
             .map_err(coordinate_failure)
-            .map_err(js_error)?;
-        let y = plane
-            .y_axis()
-            .map_err(coordinate_failure)
-            .map_err(js_error)?;
-        Ok(WasmAxesFrame {
-            frame: noon::AxesFrame::new(
-                self.coordinate_line_frame(&x)?,
-                self.coordinate_line_frame(&y)?,
-            ),
-        })
+            .map_err(js_error)
     }
 }
 

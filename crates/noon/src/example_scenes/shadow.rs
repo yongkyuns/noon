@@ -2,7 +2,7 @@
 use super::image_glow::image_options;
 use crate::{
     effects::{EffectOffset, EffectUpdate, Pixels, Shadow},
-    AnimationOptions, Color, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
+    AnimationOptions, Color, ContinuationStep, LiveContinuation, LiveProgram, Mobject,
     RateFunction, Scene,
 };
 
@@ -14,49 +14,61 @@ pub struct ImageShadow {
 impl LiveContinuation for ImageShadow {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         let motion = AnimationOptions::new()
             .run_time(1.5)
             .rate_func(RateFunction::Smooth);
         let segment = match self.stage {
-            0 | 2 | 4 => live.wait_segment(0.75),
+            0 | 2 | 4 => scene.live().wait_segment(0.75),
             1 => {
-                let target = live.target_editor(&self.image).map_err(message)?;
-                live.shift(&target, 0.0, 0.6).map_err(message)?;
-                live.rotate(&target, std::f64::consts::PI / 12.0)
+                let target = scene.target_editor(&self.image).map_err(message)?;
+                scene
+                    .shift_3d(&target, crate::SemanticVec3::new(0.0, 0.6, 0.0))
                     .map_err(message)?;
-                live.set_effect(
-                    &target,
-                    "depth",
-                    EffectUpdate::default()
-                        .radius(Pixels(10.0))
-                        .offset(EffectOffset::Pixels([-12.0, 12.0]))
-                        .color(Color::rgba(0.0, 0.0, 1.0, 0.8)),
-                )
-                .map_err(message)?;
-                live.declare_and_activate_transform_to(&self.image, &target, motion)
+                scene
+                    .rotate(&target, std::f64::consts::PI / 12.0)
+                    .map_err(message)?;
+                scene
+                    .set_effect(
+                        &target,
+                        "depth",
+                        EffectUpdate::default()
+                            .radius(Pixels(10.0))
+                            .offset(EffectOffset::Pixels([-12.0, 12.0]))
+                            .color(Color::rgba(0.0, 0.0, 1.0, 0.8)),
+                    )
+                    .map_err(message)?;
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(&self.image, &target, motion)
             }
             3 => {
                 // Return to the original pose while making the effect neutral.
-                let target = live.target_editor(&self.image).map_err(message)?;
-                live.shift(&target, 0.0, -0.6).map_err(message)?;
-                live.rotate(&target, -std::f64::consts::PI / 12.0)
+                let target = scene.target_editor(&self.image).map_err(message)?;
+                scene
+                    .shift_3d(&target, crate::SemanticVec3::new(0.0, -0.6, 0.0))
                     .map_err(message)?;
-                live.set_effect(
-                    &target,
-                    "depth",
-                    EffectUpdate::default()
-                        .radius(Pixels(4.0))
-                        .offset(EffectOffset::Pixels([12.0, -10.0]))
-                        .color(Color::rgba(0.0, 0.0, 0.0, 0.0)),
-                )
-                .map_err(message)?;
-                live.declare_and_activate_transform_to(&self.image, &target, motion)
+                scene
+                    .rotate(&target, -std::f64::consts::PI / 12.0)
+                    .map_err(message)?;
+                scene
+                    .set_effect(
+                        &target,
+                        "depth",
+                        EffectUpdate::default()
+                            .radius(Pixels(4.0))
+                            .offset(EffectOffset::Pixels([12.0, -10.0]))
+                            .color(Color::rgba(0.0, 0.0, 0.0, 0.0)),
+                    )
+                    .map_err(message)?;
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(&self.image, &target, motion)
             }
             5 => {
                 // Removing a neutral shadow preserves the same ordinary image.
-                live.remove_effect(&self.image, "depth").map_err(message)?;
-                live.wait_segment(0.75)
+                scene.remove_effect(&self.image, "depth").map_err(message)?;
+                scene.live().wait_segment(0.75)
             }
             6 => return Ok(ContinuationStep::Finished),
             _ => return Err("image shadow continuation resumed after completion".into()),

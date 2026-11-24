@@ -40,7 +40,9 @@ class AlignedGroup(Matching):
 
 
 class MatchingTex(Matching):
-    pass
+    def __init__(self, key_map=None, **kwargs):
+        super().__init__(**kwargs)
+        self.key_map = key_map or {}
 
 
 class MatchingTimingScopeTests(unittest.TestCase):
@@ -49,7 +51,7 @@ class MatchingTimingScopeTests(unittest.TestCase):
         path = Path(__file__).with_name("_manim_scene.py")
         tree = ast.parse(path.read_text())
         candidate = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
-                         and n.name == "_build_canonical_composition_candidate")
+                         and n.name == "_build_canonical_composition_candidate_steps")
         branch = next(n for n in ast.walk(candidate) if isinstance(n, ast.If)
                       and ast.unparse(n.test) == "family_transform is not None")
         params = "context builder family_transform child_kwargs completed_families".split()
@@ -72,7 +74,7 @@ class MatchingTimingScopeTests(unittest.TestCase):
                       rate_func=opts.get("rate_func", opts.get("easing", "smooth")),
                       lag_ratio=opts.get("lag_ratio", 0.0), path_arc=opts.get("path_arc", 0.0))
         namespace = {"_animate": NS(TransformMatchingShapes=Matching, TransformMatchingTex=MatchingTex, _AlignedGroupAnimationBuilder=AlignedGroup),
-                     "_canonical_transform_options": resolve, "math": math,
+                     "_canonical_transform_options": resolve, "math": math, "array_value": list,
                      "_rate_functions": NS(easing_from_rate_func=lambda value: value)}
         exec(compile(self.module, "_manim_scene.py:matching-transport", "exec"), namespace)
         context = NS(beginOrdinaryCompositionBuilder=lambda kind, duration, lag, play_duration:
@@ -80,7 +82,7 @@ class MatchingTimingScopeTests(unittest.TestCase):
         leaf = matching_class(**(constructor or {})) if matching else (AlignedGroup(**(constructor or {})) if method_target else NS(anim_args=constructor or {}))
         source, target = (NS(_semantic_family_handle=object()) for _ in range(2))
         parent, completed = Builder(), []
-        namespace["route"](context, parent, (source, target, leaf), play or {}, completed)
+        namespace["route"](context, parent, (source, target, leaf, None), play or {}, completed)
         return parent, completed
 
     def test_ordinary_and_method_family_targets_choose_distinct_completion_contracts(self):
@@ -88,6 +90,18 @@ class MatchingTimingScopeTests(unittest.TestCase):
             with self.subTest(method_target=method_target):
                 parent, completed = self.route(matching=False, method_target=method_target)
                 self.assertEqual(parent.children[0][0], expected)
+                self.assertEqual(completed, [])
+
+    def test_returning_family_rate_is_forwarded_to_shared_rust_for_both_target_kinds(self):
+        for method_target in (False, True):
+            with self.subTest(method_target=method_target):
+                parent, completed = self.route(
+                    play={"rate_func": "there_and_back", "run_time": 1},
+                    matching=False, method_target=method_target,
+                )
+                tag, args = parent.children[0]
+                self.assertEqual(tag, "method-target" if method_target else "structural")
+                self.assertEqual(args[2:4], (1, "there_and_back"))
                 self.assertEqual(completed, [])
 
     def test_constructor_child_and_play_group_keep_distinct_rates_and_durations(self):
@@ -111,12 +125,12 @@ class MatchingTimingScopeTests(unittest.TestCase):
 
     def test_tex_matching_keeps_constructor_and_play_timing_scopes(self):
         parent, completed = self.route(
-            {"rate_func": "smooth", "run_time": 3},
+            {"rate_func": "smooth", "run_time": 3, "key_map": {"x_i": "x"}},
             {"rate_func": "linear", "run_time": 2}, matching_class=MatchingTex)
         outer = parent.children[0]
         self.assertEqual((outer.duration, outer.rate), (2, "linear"))
         tag, args = outer.children[0]
-        self.assertEqual((tag, args[2], args[3]), ("tex", 3, "smooth"))
+        self.assertEqual((tag, args[2], args[3], args[6]), ("tex", 3, "smooth", ["x_i", "x"]))
         self.assertEqual(len(completed), 2)
 
     def test_constructor_family_lag_and_path_remain_child_options(self):

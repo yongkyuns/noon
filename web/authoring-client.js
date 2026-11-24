@@ -1,8 +1,11 @@
-import { validateRuntimeBuildIdentity } from "./runtime-build-verifier.js";
+import { loadEmbeddedRuntimeBuild, validateRuntimeBuildIdentity } from "./runtime-build-verifier.js";
 import { parseAuthoringDiagnostic } from "./authoring-diagnostic.js";
 
 export const AUTHORING_CHANNEL = "noon.authoring";
-export const AUTHORING_PROTOCOL_VERSION = 7;
+export const AUTHORING_PROTOCOL_VERSION = 8;
+export const MAX_EXECUTION_DIAGNOSTICS = 128;
+export const MAX_PREPARATION_TIMING_DIAGNOSTICS = 1024;
+let nextInterpreterGeneration = 0;
 
 export class PythonAuthoringClient {
   #worker;
@@ -15,8 +18,14 @@ export class PythonAuthoringClient {
   #ready = false;
   #terminated = false;
   #staleResponses = 0;
+  #interpreterGeneration = nextInterpreterGeneration++;
+  #libraryTrust = "unknown";
+  #executionDiagnostics = null;
+  #executionPreparationTimingDiagnostics = null;
 
-  constructor(worker = createAuthoringWorker()) {
+  constructor(worker = undefined) {
+    const sharedBuild = worker === undefined ? loadEmbeddedRuntimeBuild() : null;
+    worker ??= createAuthoringWorker(sharedBuild !== null);
     this.#worker = worker;
     this.#readyPromise = new Promise((resolve, reject) => {
       this.#resolveReady = resolve;
@@ -31,10 +40,35 @@ export class PythonAuthoringClient {
       ].filter(Boolean);
       this.#fail(new Error(details.join("\n") || "Python authoring worker crashed"));
     });
+    if (sharedBuild !== null) {
+      void sharedBuild.then(build => {
+        if (this.#terminated) return;
+        try {
+          worker.postMessage(envelope("embedded_runtime", { build }));
+        } catch (error) {
+          if (error.name !== "DataCloneError") throw error;
+          worker.postMessage(envelope("embedded_runtime", { build: null }));
+        }
+      }).catch(error => this.#fail(error));
+    }
   }
 
   get terminated() {
     return this.#terminated;
+  }
+
+  get interpreterGeneration() { return this.#interpreterGeneration; }
+  get libraryTrust() { return this.#libraryTrust; }
+  get executionDiagnostics() {
+    return this.#executionDiagnostics === null ? null : structuredClone({
+      ...this.#executionDiagnostics, libraryTrust: this.#libraryTrust,
+    });
+  }
+
+  get executionPreparationTimingDiagnostics() {
+    return this.#executionPreparationTimingDiagnostics === null ? null : structuredClone({
+      ...this.#executionPreparationTimingDiagnostics, libraryTrust: this.#libraryTrust,
+    });
   }
 
   get diagnostics() {
@@ -43,6 +77,8 @@ export class PythonAuthoringClient {
       pendingRequests: this.#pending.size,
       staleResponses: this.#staleResponses,
       terminated: this.#terminated,
+      interpreterGeneration: this.#interpreterGeneration,
+      libraryTrust: this.#libraryTrust,
     });
   }
 
@@ -50,10 +86,19 @@ export class PythonAuthoringClient {
     return this.#readyPromise;
   }
 
+  async sendRuntimeModule(port) {
+    // A module worker can yield during startup before its message handler exists.
+    await this.ready();
+    const requestId = this.#beginRequest();
+    this.#worker.postMessage(envelope("runtime_module", { requestId, port }), [port]);
+    return this.#resultFor(requestId);
+  }
+
   async run(
     source,
     context = {},
-    { onSemanticContinuation = null } = {},
+    { onSemanticContinuation = null, preparedPlayback = false, preparationLookaheadSeconds = 1,
+      diagnosticPreparationTiming = false, loopPlayback = true, videoFile = null, historyExportOptions = null } = {},
   ) {
     if (typeof source !== "string" || source.trim() === "") {
       throw new TypeError("Python authoring source must be a non-empty string");
@@ -64,14 +109,53 @@ export class PythonAuthoringClient {
     if (onSemanticContinuation !== null && typeof onSemanticContinuation !== "function") {
       throw new TypeError("onSemanticContinuation must be a function");
     }
+    if (typeof preparedPlayback !== "boolean") throw new TypeError("preparedPlayback must be a boolean");
+    if (typeof loopPlayback !== "boolean") throw new TypeError("loopPlayback must be a boolean");
+    if (typeof diagnosticPreparationTiming !== "boolean") {
+      throw new TypeError("diagnosticPreparationTiming must be a boolean");
+    }
+    if (diagnosticPreparationTiming && !preparedPlayback) {
+      throw new Error("preparation timing diagnostics require prepared playback");
+    }
+    if (preparationLookaheadSeconds !== null &&
+        (!Number.isFinite(preparationLookaheadSeconds) || preparationLookaheadSeconds <= 0)) {
+      throw new TypeError("preparationLookaheadSeconds must be null or positive and finite");
+    }
+    if (preparedPlayback && onSemanticContinuation === null) {
+      throw new Error("prepared playback requires a semantic continuation consumer");
+    }
+    if (historyExportOptions !== null && (!preparedPlayback || preparationLookaheadSeconds !== null ||
+        loopPlayback || !isRecord(historyExportOptions))) {
+      throw new Error("history export requires complete nonlooping source preparation");
+    }
+    if (videoFile !== null && !(videoFile instanceof Blob)) throw new TypeError("videoFile must be a Blob");
     await this.ready();
     const requestId = this.#beginRequest();
-    const result = this.#resultFor(requestId, { onSemanticContinuation });
+    const playground = context.playground ?? {};
+    const diagnosticContext = { exampleId: playground.example_id ?? null,
+      selectionGeneration: playground.selection_generation ?? null,
+      runGeneration: playground.run_generation ?? null };
+    this.#executionDiagnostics = {
+      schemaVersion: 1, interpreterGeneration: this.#interpreterGeneration, runRequestId: requestId,
+      context: diagnosticContext,
+      requestedProfile: preparedPlayback ? "incremental" : "observed",
+      events: [], droppedEvents: 0,
+    };
+    this.#executionPreparationTimingDiagnostics = diagnosticPreparationTiming ? {
+      schemaVersion: 1, interpreterGeneration: this.#interpreterGeneration, runRequestId: requestId,
+      context: diagnosticContext, events: [], droppedEvents: 0,
+    } : null;
+    const result = this.#resultFor(requestId, { onSemanticContinuation, preparedPlayback });
     this.#worker.postMessage(
       envelope("run", {
         requestId,
         source,
         context,
+        ...(videoFile === null ? {} : { videoFile }),
+        ...(preparedPlayback ? { preparedPlayback, preparationLookaheadSeconds } : {}),
+        ...(preparedPlayback && !loopPlayback ? { loopPlayback } : {}),
+        ...(historyExportOptions === null ? {} : { historyExportOptions }),
+        ...(diagnosticPreparationTiming ? { diagnosticPreparationTiming } : {}),
       }),
     );
     return result;
@@ -91,11 +175,13 @@ export class PythonAuthoringClient {
       initiallyPaused = false,
       pacing = "realtime",
       replaceExistingEndpoint = false,
+      sourceHandoff = false,
       initialPointerView = undefined,
     },
   ) {
     validateSemanticExecutionContextId(contextId);
     if (typeof replaceExistingEndpoint !== "boolean") throw new TypeError("replaceExistingEndpoint must be a boolean");
+    if (typeof sourceHandoff !== "boolean") throw new TypeError("sourceHandoff must be a boolean");
     if (!(controlPort instanceof MessagePort) || !(renderPort instanceof MessagePort)) {
       throw new TypeError("semantic execution attachment requires control and render MessagePorts");
     }
@@ -122,9 +208,6 @@ export class PythonAuthoringClient {
     if (typeof initiallyPaused !== "boolean") {
       throw new TypeError("initiallyPaused must be a boolean");
     }
-    if (initiallyPaused && continuationGeneration !== null) {
-      throw new Error("source-owned semantic continuations cannot start paused");
-    }
     if (pacing !== "realtime" && pacing !== "external_samples") {
       throw new TypeError(`unsupported semantic execution pacing ${pacing}`);
     }
@@ -134,6 +217,17 @@ export class PythonAuthoringClient {
     const continuation = continuationGeneration === null
       ? null
       : this.#matchingContinuation(contextId, continuationGeneration);
+    const preparedPlayback = continuation?.preparedPlayback === true;
+    if (preparedPlayback && replaceExistingEndpoint) {
+      throw new Error("prepared receiver replacement cannot restart source continuation attachment");
+    }
+    if (this.#continuations.get(contextId)?.preparedPlayback &&
+        continuation === null && !replaceExistingEndpoint) {
+      throw new Error("prepared playback cannot reattach or replace its endpoint");
+    }
+    if (preparedPlayback && pacing !== "realtime") {
+      throw new Error("prepared playback requires realtime pacing");
+    }
     await this.ready();
     const requestId = this.#beginRequest();
     const result = this.#resultFor(requestId);
@@ -149,6 +243,7 @@ export class PythonAuthoringClient {
       initiallyPaused,
       pacing,
       replaceExistingEndpoint,
+      ...(sourceHandoff ? { sourceHandoff: true } : {}),
     };
     if (initialPointerView !== undefined) payload.initialPointerView = initialPointerView;
     if (callbackSessionId !== null) payload.callbackSessionId = callbackSessionId;
@@ -168,8 +263,19 @@ export class PythonAuthoringClient {
   // The owner may retry it without reconstructing semantic state, or retire it with
   // this explicit release. A successful transition transfers that duty to the
   // execution client.
-  async releaseSemanticExecution(contextId) {
+  async releaseSemanticExecution(contextId, { cancelActiveSource = false } = {}) {
     validateSemanticExecutionContextId(contextId);
+    if (typeof cancelActiveSource !== "boolean") throw new TypeError("cancelActiveSource must be a boolean");
+    const continuation = this.#continuations.get(contextId);
+    if (cancelActiveSource && continuation && this.#pending.has(continuation.runRequestId)) {
+      try {
+        await this.cancelSemanticContinuation(contextId, continuation.generation, "execution owner retired");
+      } catch (error) {
+        // A source result can beat cancellation on the same ordered worker port.
+        // Only its terminal result permits falling through to ordinary release.
+        if (this.#pending.has(continuation.runRequestId)) throw error;
+      }
+    }
     await this.ready();
     const requestId = this.#beginRequest();
     const result = this.#resultFor(requestId);
@@ -237,6 +343,46 @@ export class PythonAuthoringClient {
         return;
       }
 
+      if (message.type === "runtime_module_sent") {
+        this.#settle(message.requestId, ({ resolve }) => resolve());
+        return;
+      }
+
+      if (message.type === "execution_diagnostic") {
+        // A completed run can still publish terminal/loop observations. Only
+        // this client's latest run owns the bounded diagnostic record.
+        if (!Number.isSafeInteger(message.requestId) || message.requestId < 0 || message.requestId >= this.#nextRequestId) {
+          throw new Error("execution diagnostic has an unissued run identity");
+        }
+        // Trust belongs to the interpreter, even if a newer submitted run owns
+        // the trace. An older opaque run still taints this same worker.
+        if (!this.#terminated && message.libraryTrust === "tainted") this.#observeLibraryTrust("tainted");
+        if (this.#terminated || message.requestId !== this.#executionDiagnostics?.runRequestId) {
+          this.#staleResponses += 1;
+          return;
+        }
+        const { event, libraryTrust } = message;
+        if (!isRecord(event) || typeof event.stage !== "string" || event.stage.length > 64 ||
+            JSON.stringify(event, (_, value) => typeof value === "bigint" ? String(value) : value).length > 4096) {
+          throw new Error("invalid execution diagnostic event");
+        }
+        if (libraryTrust !== undefined) this.#observeLibraryTrust(libraryTrust);
+        if (event.stage === "preparation-timing") {
+          const timings = this.#executionPreparationTimingDiagnostics;
+          if (timings?.runRequestId !== message.requestId) {
+            this.#staleResponses += 1;
+            return;
+          }
+          if (timings.events.length >= MAX_PREPARATION_TIMING_DIAGNOSTICS) timings.droppedEvents += 1;
+          else timings.events.push({ ...structuredClone(event), sequence: timings.events.length });
+          return;
+        }
+        const trace = this.#executionDiagnostics;
+        if (trace.events.length >= MAX_EXECUTION_DIAGNOSTICS) trace.droppedEvents += 1;
+        else trace.events.push({ ...structuredClone(event), sequence: trace.events.length });
+        return;
+      }
+
       if (message.type === "error") {
         const details = [
           message.message,
@@ -249,7 +395,21 @@ export class PythonAuthoringClient {
           this.#fail(error);
           return;
         }
-        this.#settle(message.requestId, ({ reject }) => reject(error));
+        const pending = this.#pendingFor(message.requestId);
+        if (pending === null) return;
+        const registrationCompletion = pending.preparedPlayback
+          ? pending.continuationRegistrationCompletion : undefined;
+        if (registrationCompletion === undefined) {
+          this.#settle(message.requestId, ({ reject }) => reject(error));
+        } else {
+          // Finish adopting the independent reader before reporting a failed
+          // producer. Late startup UI must not overwrite its failure state.
+          void registrationCompletion.then(() => {
+            if (this.#pending.get(message.requestId) === pending) {
+              this.#settle(message.requestId, ({ reject }) => reject(error));
+            }
+          }, () => {}); // The registration failure path owns its own rejection.
+        }
         return;
       }
 
@@ -257,6 +417,17 @@ export class PythonAuthoringClient {
         const pending = this.#pendingFor(message.requestId);
         if (pending === null) return;
         const result = parseAuthoringResult(message.resultJson);
+        const registered = pending.continuationDescriptor;
+        const matchingPreparedSource = registered === undefined
+          ? result.semanticExecution.continuationGeneration == null &&
+            (result.semanticExecution.preparedPlayback === false ||
+              (result.semanticExecution.preparedPlayback === true && result.duration === 0))
+          : result.semanticExecution.preparedPlayback === true &&
+            result.semanticExecution.contextId === registered.contextId &&
+            result.semanticExecution.continuationGeneration === registered.continuationGeneration;
+        if (pending.preparedPlayback && !matchingPreparedSource) {
+          throw new Error("prepared source result does not match its registered continuation");
+        }
         if (message.workerRunTiming !== undefined && message.workerRunTiming !== null) {
           result.workerRunTiming = validateWorkerRunTiming(message.workerRunTiming);
         }
@@ -317,6 +488,9 @@ export class PythonAuthoringClient {
     if (semanticExecution?.continuationGeneration !== message.generation) {
       throw new Error("Python semantic continuation registration generation does not match");
     }
+    if ((semanticExecution.preparedPlayback === true) !== pending.preparedPlayback) {
+      throw new Error("Python semantic continuation preparation mode does not match its source run");
+    }
     const registration = Object.freeze({
       semanticExecution,
       generation: message.generation,
@@ -326,9 +500,11 @@ export class PythonAuthoringClient {
       throw new Error("Python semantic continuation context is already registered");
     }
     pending.continuationRegistered = true;
+    pending.continuationDescriptor = semanticExecution;
     this.#continuations.set(semanticExecution.contextId, {
       generation: message.generation,
       runRequestId: message.requestId,
+      preparedPlayback: semanticExecution.preparedPlayback === true,
     });
     const registrationCompletion = Promise.resolve()
       .then(() => pending.onSemanticContinuation(registration));
@@ -386,11 +562,20 @@ export class PythonAuthoringClient {
       // canonical verifier to validate and freeze the received observation.
       const identity = await validateRuntimeBuildIdentity(message.buildIdentity);
       if (this.#terminated || this.#ready) return;
+      if (message.libraryTrust !== undefined) this.#observeLibraryTrust(message.libraryTrust);
       this.#ready = true;
       this.#resolveReady(identity);
     } catch (error) {
       this.#fail(error);
     }
+  }
+
+  #observeLibraryTrust(trust) {
+    if (!["pristine", "tainted"].includes(trust) ||
+        (this.#libraryTrust === "tainted" && trust !== "tainted")) {
+      throw new Error("interpreter trust cannot be restored within a worker generation");
+    }
+    this.#libraryTrust = trust;
   }
 
   #fail(error) {
@@ -456,6 +641,7 @@ export function validateSemanticExecutionDescriptor(descriptor) {
   validateSemanticExecutionContextId(descriptor.context_id);
   const callbackSessionId = descriptor.callback_session_id;
   const continuationGeneration = descriptor.continuation_generation;
+  const preparedPlayback = descriptor.prepared_playback;
   if (
     callbackSessionId !== null &&
     callbackSessionId !== undefined &&
@@ -467,10 +653,14 @@ export function validateSemanticExecutionDescriptor(descriptor) {
       (!Number.isSafeInteger(continuationGeneration) || continuationGeneration <= 0)) {
     throw new TypeError("semantic continuation generation must be a positive safe integer");
   }
+  if (preparedPlayback !== undefined && typeof preparedPlayback !== "boolean") {
+    throw new TypeError("semantic prepared playback mode must be a boolean");
+  }
   return Object.freeze({
     contextId: descriptor.context_id,
     ...(callbackSessionId == null ? {} : { callbackSessionId }),
     ...(continuationGeneration == null ? {} : { continuationGeneration }),
+    ...(preparedPlayback === undefined ? {} : { preparedPlayback }),
   });
 }
 
@@ -488,8 +678,10 @@ export function validateSceneDuration(duration) {
   return duration;
 }
 
-function createAuthoringWorker() {
-  return new Worker(new URL("./python-worker.js", import.meta.url), {
+function createAuthoringWorker(sharedRuntime) {
+  const url = new URL("./python-worker.js", import.meta.url);
+  if (sharedRuntime) url.searchParams.set("runtime", "embedded");
+  return new Worker(url, {
     name: "noon-python-authoring",
     type: "module",
   });

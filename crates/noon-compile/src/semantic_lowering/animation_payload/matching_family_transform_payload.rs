@@ -1,4 +1,4 @@
-use noon_core::{SemanticNodeId, SemanticTransactionNodeRef};
+use noon_core::{Property, SemanticNodeId, SemanticTransactionNodeRef, TrackValues, Vec2};
 
 use super::affine::SemanticAnimationCompletion;
 use super::family_transform_channels::{
@@ -68,6 +68,7 @@ impl PreparedMatchingFamilyTransformPayload {
 pub enum PreparedMatchingFamilyTransformPayloadError {
     Channels(PreparedMatchingFamilyTransformChannelError),
     Leftovers(PreparedMatchingShapeLeftoverFadeError),
+    InvalidTextBounds(SemanticNodeId),
     OccurrenceIndexExhausted(u32),
 }
 
@@ -76,6 +77,7 @@ impl std::fmt::Display for PreparedMatchingFamilyTransformPayloadError {
         match self {
             Self::Channels(error) => error.fmt(formatter),
             Self::Leftovers(error) => error.fmt(formatter),
+            Self::InvalidTextBounds(node) => write!(formatter, "cannot resolve retained TeX bounds for {node:?}"),
             Self::OccurrenceIndexExhausted(index) => write!(
                 formatter,
                 "matching-family transient occurrence index {index} cannot reserve a following target-leftover range"
@@ -89,7 +91,7 @@ impl std::error::Error for PreparedMatchingFamilyTransformPayloadError {
         match self {
             Self::Channels(error) => Some(error),
             Self::Leftovers(error) => Some(error),
-            Self::OccurrenceIndexExhausted(_) => None,
+            Self::OccurrenceIndexExhausted(_) | Self::InvalidTextBounds(_) => None,
         }
     }
 }
@@ -119,9 +121,9 @@ impl From<PreparedMatchingShapeLeftoverFadeError> for PreparedMatchingFamilyTran
 pub fn lower_prepared_matching_family_transform_payload(
     prepared: &noon_core::PreparedSemanticMutationTransaction<'_>,
     activation: &PreparedMatchingFamilyTransformActivation,
+    segment_start: f64,
 ) -> Result<PreparedMatchingFamilyTransformPayload, PreparedMatchingFamilyTransformPayloadError> {
     let matched = lower_prepared_matching_family_transform_channels(prepared, activation)?;
-    let leftovers = prepare_matching_shape_leftover_fades(prepared.store(), activation)?;
 
     let target_occurrence_index_start =
         next_transient_occurrence_index(matched.derived_occurrences())?;
@@ -135,18 +137,174 @@ pub fn lower_prepared_matching_family_transform_payload(
         stable.track.completion = SemanticAnimationCompletion::Release;
         stable.retain_effective = false;
     }
-    for source in leftovers.source_fades() {
-        stable_tracks.extend(source_leftover_tracks(activation.animation, source));
-    }
+    let target_leftovers = if matches!(
+        activation.mode,
+        noon_core::SemanticFamilyTransformMode::MatchingMappedSourceKeys(_)
+    ) {
+        stable_tracks.extend(mapped_text_tracks(
+            prepared.store(),
+            activation,
+            segment_start,
+        )?);
+        Vec::new()
+    } else {
+        let leftovers = prepare_matching_shape_leftover_fades(prepared.store(), activation)?;
+        for source in leftovers.source_fades() {
+            stable_tracks.extend(source_leftover_tracks(activation.animation, source));
+        }
+        leftovers.target_fades().to_vec()
+    };
 
     Ok(PreparedMatchingFamilyTransformPayload {
         source_root: activation.source_root,
         target_root: activation.target_root,
         stable_tracks,
         derived_occurrences: matched.derived_occurrences().to_vec(),
-        target_leftovers: leftovers.target_fades().to_vec(),
+        target_leftovers,
         target_occurrence_index_start,
     })
+}
+
+fn mapped_text_tracks(
+    store: &noon_core::SemanticStore,
+    activation: &PreparedMatchingFamilyTransformActivation,
+    segment_start: f64,
+) -> Result<Vec<PreparedFamilyTransformStableTrack>, PreparedMatchingFamilyTransformPayloadError> {
+    let matching = activation.matching();
+    let (start, _) =
+        noon_core::continuous_time_map_interval(activation.timing, &activation.time_map)
+            .expect("matching activation already validated its interval");
+    let mut tracks = Vec::new();
+    let mut push = |node: SemanticNodeId, property, values, timing, time_map| {
+        tracks.push(PreparedFamilyTransformStableTrack {
+            track: PreparedSemanticAnimationTrack {
+                animation: activation.animation,
+                target: node.into(),
+                execution_object_id: super::super::semantic_execution_object_id(node),
+                property,
+                completion: SemanticAnimationCompletion::Release,
+                values,
+                timing,
+                time_map,
+            },
+            retain_effective: false,
+        });
+    };
+    let position = |from, to| {
+        let arc_angle = activation.options.path_arc;
+        if arc_angle.abs() < noon_core::MANIM_STRAIGHT_PATH_ARC_THRESHOLD {
+            TrackValues::Vec2 { from, to }
+        } else {
+            TrackValues::ArcVec2 {
+                from,
+                to,
+                arc_angle,
+            }
+        }
+    };
+    let mut target_motion = vec![None; matching.target_members().len()];
+    for &(source_index, target_index) in matching.mapped_pairs() {
+        let source = &matching.source_members()[source_index];
+        let target = &matching.target_members()[target_index];
+        let source_center = source.effective.transform.transform_point(text_center(
+            store,
+            source.node,
+            source.content,
+        )?);
+        let target_center =
+            target
+                .transform
+                .transform_point(text_center(store, target.node, target.content)?);
+        let delta = target_center - source_center;
+        let from = source.effective.transform.translation;
+        target_motion[target_index] = Some(delta);
+        if delta != Vec2::ZERO {
+            push(
+                source.node,
+                Property::Position,
+                position(from, from + delta),
+                activation.timing,
+                activation.time_map.clone(),
+            );
+        }
+        push(
+            source.node,
+            Property::Appearance,
+            TrackValues::Scalar {
+                from: source.effective.appearance,
+                to: 0.0,
+            },
+            activation.timing,
+            activation.time_map.clone(),
+        );
+    }
+    for &index in &matching.correspondence().unmatched_source_indices {
+        let source = &matching.source_members()[index];
+        push(
+            source.node,
+            Property::Appearance,
+            TrackValues::Scalar {
+                from: source.effective.appearance,
+                to: 0.0,
+            },
+            activation.timing,
+            activation.time_map.clone(),
+        );
+    }
+    let mut fade_in = vec![true; matching.target_members().len()];
+    for group in &matching.correspondence().matched_groups {
+        for &index in &group.target_indices {
+            fade_in[index] = false;
+        }
+    }
+    for (index, target) in matching.target_members().iter().enumerate() {
+        if start > segment_start {
+            push(
+                target.node,
+                Property::Appearance,
+                TrackValues::Scalar { from: 0.0, to: 0.0 },
+                noon_core::TrackTiming::new(
+                    segment_start,
+                    start - segment_start,
+                    noon_core::RateFunction::Linear,
+                ),
+                noon_core::CompositionTimeMap::identity(),
+            );
+        }
+        push(
+            target.node,
+            Property::Appearance,
+            TrackValues::Scalar {
+                from: 0.0,
+                to: if fade_in[index] { 1.0 } else { 0.0 },
+            },
+            activation.timing,
+            activation.time_map.clone(),
+        );
+        if let Some(delta) = target_motion[index].filter(|&delta| delta != Vec2::ZERO) {
+            let to = target.transform.translation;
+            push(
+                target.node,
+                Property::Position,
+                position(to - delta, to),
+                activation.timing,
+                activation.time_map.clone(),
+            );
+        }
+    }
+    Ok(tracks)
+}
+
+pub(super) fn text_center(
+    store: &noon_core::SemanticStore,
+    node: SemanticNodeId,
+    content: noon_core::SemanticObjectContent,
+) -> Result<Vec2, PreparedMatchingFamilyTransformPayloadError> {
+    content
+        .text()
+        .and_then(|handle| store.text_resources().get(handle))
+        .and_then(|resource| resource.bounds.center().lower_f32().ok())
+        .ok_or(PreparedMatchingFamilyTransformPayloadError::InvalidTextBounds(node))
 }
 
 fn next_transient_occurrence_index(

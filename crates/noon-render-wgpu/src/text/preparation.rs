@@ -100,9 +100,12 @@ pub struct GlyphQuadInstance {
     pub axis_y: [f32; 2],
     pub uv_min: [f32; 2],
     pub uv_max: [f32; 2],
-    /// Alpha-mask glyphs use this as their tint. Color glyphs use RGB=1 and the
-    /// alpha component as the owning object's opacity multiplier.
+    /// Alpha-mask glyphs use authored sRGB RGB as their tint; a linear working
+    /// target decodes it once. Alpha remains linear. Color glyphs use RGB=1 and
+    /// the alpha component as the owning object's opacity multiplier.
     pub color: [f32; 4],
+    /// Additional linear material radiance; alpha is independent.
+    pub emission: f32,
 }
 
 /// Painter-ordered retained text item prepared for renderer integration.
@@ -119,6 +122,9 @@ pub enum PreparedTextItem {
         plane: GlyphAtlasPlane,
         page: u32,
         instance_range: Range<u32>,
+        /// Effective object opacity before paint alpha, for isolated original
+        /// coverage. Ordinary glyph shading continues using the packed color.
+        object_opacity: f32,
     },
     Vector {
         object_index: u32,
@@ -270,6 +276,8 @@ pub struct RetainedTextQuadPreparer {
     stats: RetainedTextPrepareStats,
     incremental_stats: RetainedTextIncrementalStats,
     last_metrics: Option<TextDeviceMetrics>,
+    raster_size_limit: f32,
+    largest_raster_size: f32,
     prepared_once: bool,
 }
 
@@ -299,6 +307,8 @@ impl RetainedTextQuadPreparer {
             stats: RetainedTextPrepareStats::default(),
             incremental_stats: RetainedTextIncrementalStats::default(),
             last_metrics: None,
+            raster_size_limit: atlas_extent as f32 * 2.0,
+            largest_raster_size: 0.0,
             prepared_once: false,
         })
     }
@@ -374,6 +384,34 @@ impl RetainedTextQuadPreparer {
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedTextFrame<'a>, TextPrepareError> {
         metrics.validate()?;
+        if changes.is_structural()
+            || self.last_metrics.is_some_and(|previous| {
+                metrics.pixels_per_world.x <= previous.pixels_per_world.x * 0.5
+                    && metrics.pixels_per_world.y <= previous.pixels_per_world.y * 0.5
+            })
+        {
+            self.raster_size_limit = self.atlas.extent() as f32 * 2.0;
+        }
+        // Once a coherent generation has no drawable text, view metrics cannot
+        // change its empty glyph arrays. Inspect only the submitted dirty rows
+        // for text admission; structural/full publications still rebuild.
+        if self.prepared_once
+            && self.stats.text_objects == 0
+            && !changes.is_all()
+            && !changes.is_structural()
+            && frame.objects.len() == self.object_states.len()
+            && changes.object_indices().iter().all(|&index| {
+                frame
+                    .objects
+                    .get(index)
+                    .is_some_and(|object| object.text().is_none() || !frame.is_drawable(index))
+            })
+        {
+            self.last_metrics = Some(metrics);
+            self.incremental_stats.reused_frames =
+                self.incremental_stats.reused_frames.saturating_add(1);
+            return Ok(self.prepared_frame(frame.time, false));
+        }
         if self.prepared_once && changes.is_empty() && self.last_metrics == Some(metrics) {
             self.incremental_stats.reused_frames =
                 self.incremental_stats.reused_frames.saturating_add(1);
@@ -406,7 +444,26 @@ impl RetainedTextQuadPreparer {
             self.incremental_stats.fallback_rebuilds =
                 self.incremental_stats.fallback_rebuilds.saturating_add(1);
         }
-        self.full_rebuild(device, frame, texts, fonts, metrics)?;
+        let mut repacked = false;
+        loop {
+            match self.full_rebuild(device, frame, texts, fonts, metrics) {
+                Ok(()) => break,
+                Err(TextPrepareError::Atlas(GlyphAtlasError::Full { .. })) if !repacked => {
+                    // A page pinned by a live glyph can still contain stale sizes.
+                    // Try an empty packing before reducing the raster resolution.
+                    self.atlas.recycle_all_pages()?;
+                    repacked = true;
+                }
+                Err(TextPrepareError::Atlas(
+                    GlyphAtlasError::Full { .. } | GlyphAtlasError::ImageTooLarge { .. },
+                )) if self.largest_raster_size > 1.0 => {
+                    self.raster_size_limit = (self.largest_raster_size * 0.5).max(1.0);
+                    self.atlas.recycle_all_pages()?;
+                    repacked = true;
+                }
+                Err(error) => return Err(error),
+            }
+        }
         Ok(self.prepared_frame(frame.time, true))
     }
 
@@ -505,7 +562,12 @@ impl RetainedTextQuadPreparer {
             let resource = texts
                 .get(state.text)
                 .expect("validated text resource must remain present during object-local update");
-            let phase_fingerprint = object_phase_fingerprint(resource, object.transform, metrics)?;
+            let phase_fingerprint = object_phase_fingerprint(
+                resource,
+                object.transform,
+                metrics,
+                self.raster_size_limit,
+            )?;
             let phase_changed = phase_fingerprint != state.phase_fingerprint;
             // Rebuild glyph quads from shaped-run coordinates whenever translation
             // changes. Repeatedly adding frame deltas accumulates f32 rounding and
@@ -535,16 +597,18 @@ impl RetainedTextQuadPreparer {
             let object_opacity = object.style.opacity * object.appearance;
 
             for &slot in &self.object_glyph_slots[index] {
-                let item = &self.items[slot];
+                let item = &mut self.items[slot];
                 let PreparedTextItem::GlyphBatch {
                     run_index,
                     plane,
                     instance_range,
+                    object_opacity: coverage_opacity,
                     ..
                 } = item
                 else {
                     continue;
                 };
+                *coverage_opacity = object_opacity;
                 let run = &resource.runs[*run_index as usize];
                 let paint =
                     super::resolve_text_paint(run.fill, object.style.fill).unwrap_or(Color::WHITE);
@@ -559,6 +623,7 @@ impl RetainedTextQuadPreparer {
                     quad.origin[0] += delta.x;
                     quad.origin[1] += delta.y;
                     quad.color = color;
+                    quad.emission = object.style.emission.strength() as f32;
                 }
             }
 
@@ -620,6 +685,7 @@ impl RetainedTextQuadPreparer {
                     object.transform,
                     object.style.fill,
                     object.style.opacity * object.appearance,
+                    object.style.emission,
                     run,
                     fonts,
                     metrics,
@@ -634,7 +700,9 @@ impl RetainedTextQuadPreparer {
             self.color_quads.truncate(color_start);
             self.stats = saved_stats;
             return match error {
-                TextPrepareError::Atlas(GlyphAtlasError::Full { .. }) => Ok(false),
+                TextPrepareError::Atlas(
+                    GlyphAtlasError::Full { .. } | GlyphAtlasError::ImageTooLarge { .. },
+                ) => Ok(false),
                 other => Err(other),
             };
         }
@@ -722,6 +790,7 @@ impl RetainedTextQuadPreparer {
         self.incremental_stats.rebuild_attempts =
             self.incremental_stats.rebuild_attempts.saturating_add(1);
         self.atlas.begin_generation();
+        self.largest_raster_size = 0.0;
         // A fallible rebuild must never leave an old successful generation reusable.
         // Clear validity before mutating any prepared arrays and restore it only after
         // the complete frame has been rebuilt successfully.
@@ -782,6 +851,7 @@ impl RetainedTextQuadPreparer {
                             object.transform,
                             object.style.fill,
                             object.style.opacity * object.appearance,
+                            object.style.emission,
                             run,
                             fonts,
                             metrics,
@@ -812,7 +882,12 @@ impl RetainedTextQuadPreparer {
                 mask_range,
                 color_range,
                 empty_glyphs: self.stats.empty_glyphs - empty_start,
-                phase_fingerprint: object_phase_fingerprint(resource, object.transform, metrics)?,
+                phase_fingerprint: object_phase_fingerprint(
+                    resource,
+                    object.transform,
+                    metrics,
+                    self.raster_size_limit,
+                )?,
             });
             self.object_glyph_slots[object_slot] = glyph_item_slots;
         }
@@ -833,6 +908,7 @@ impl RetainedTextQuadPreparer {
         object_transform: Transform2D,
         object_fill: Option<Color>,
         object_opacity: f32,
+        emission: noon_core::Emission,
         run: &GlyphRun,
         fonts: &(impl FontResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
@@ -841,7 +917,8 @@ impl RetainedTextQuadPreparer {
             lower_text_point(run.transform.transform_point(glyph.origin))?;
         }
         let requested_size = requested_raster_pixel_size(run, object_transform, metrics)?;
-        let pixel_size = raster_size_bucket(requested_size);
+        let pixel_size = raster_size_bucket(requested_size).min(self.raster_size_limit);
+        self.largest_raster_size = self.largest_raster_size.max(pixel_size);
         let pixels_to_local = run.font_size / f64::from(pixel_size);
         let paint = super::resolve_text_paint(run.fill, object_fill).unwrap_or(Color::WHITE);
 
@@ -904,6 +981,7 @@ impl RetainedTextQuadPreparer {
                 axis_y: [world_axis_y.x, world_axis_y.y],
                 uv_min: atlas_image.uv_min,
                 uv_max: atlas_image.uv_max,
+                emission: emission.strength() as f32,
                 color,
             };
             let instance_index = match atlas_image.plane {
@@ -927,11 +1005,13 @@ impl RetainedTextQuadPreparer {
                 atlas_image.plane,
                 atlas_image.page,
                 instance_index,
+                object_opacity,
             );
         }
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_glyph_batch(
         &mut self,
         object_index: u32,
@@ -940,6 +1020,7 @@ impl RetainedTextQuadPreparer {
         plane: GlyphAtlasPlane,
         page: u32,
         instance_index: usize,
+        object_opacity: f32,
     ) {
         let start = u32::try_from(instance_index).expect("text quad count exceeds u32 draw limits");
         let end = start
@@ -952,6 +1033,7 @@ impl RetainedTextQuadPreparer {
             plane: last_plane,
             page: last_page,
             instance_range,
+            ..
         }) = self.items.last_mut()
         {
             if *last_object == object_index
@@ -972,6 +1054,7 @@ impl RetainedTextQuadPreparer {
             plane,
             page,
             instance_range: start..end,
+            object_opacity,
         });
     }
 }
@@ -1196,6 +1279,7 @@ fn object_phase_fingerprint(
     resource: &noon_core::TextResource,
     object_transform: Transform2D,
     metrics: TextDeviceMetrics,
+    raster_size_limit: f32,
 ) -> Result<u64, TextPrepareError> {
     let mut hash = 0xcbf29ce484222325_u64;
     for run in resource.runs.iter() {
@@ -1203,7 +1287,7 @@ fn object_phase_fingerprint(
             continue;
         }
         let requested = requested_raster_pixel_size(run, object_transform, metrics)?;
-        let raster = raster_size_bucket(requested);
+        let raster = raster_size_bucket(requested).min(raster_size_limit);
         for glyph in run.glyphs.iter() {
             let phase = if requested <= GLYPH_RASTER_SIZE_BUCKET_START {
                 glyph_raster_phase(
@@ -1638,6 +1722,51 @@ mod tests {
     }
 
     #[test]
+    fn empty_text_metrics_reuse_keeps_admission_and_glyph_rasterization_correct() {
+        let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let absent = retained_frame(handle, false, scene_transform());
+        let (device, _queue) = wgpu::Device::noop(&Default::default());
+        let mut preparer = RetainedTextQuadPreparer::new(128).unwrap();
+        preparer
+            .prepare(&device, &absent, &texts, &artifact.fonts, metrics())
+            .unwrap();
+        let updated_metrics = TextDeviceMetrics::uniform(200.0).unwrap();
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &absent,
+                &FrameChanges::default(),
+                &texts,
+                &artifact.fonts,
+                updated_metrics,
+            )
+            .unwrap();
+        assert!(
+            !prepared.layout_rebuilt,
+            "empty glyph arrays do not depend on the view metrics"
+        );
+        assert_eq!(prepared.stats.text_objects, 0);
+        assert_eq!(preparer.raster_stats().entries, 0);
+        assert_eq!(preparer.atlas_stats().entries, 0);
+        let visible = retained_frame(handle, true, scene_transform());
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &visible,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &artifact.fonts,
+                updated_metrics,
+            )
+            .unwrap();
+        assert!(prepared.layout_rebuilt);
+        assert_eq!(prepared.stats.text_objects, 1);
+        assert!(!prepared.mask_quads.is_empty());
+    }
+
+    #[test]
     fn absent_text_objects_do_not_touch_raster_or_atlas_caches() {
         let artifact = compile_typst_resource("A", TypstMode::Markup).unwrap();
         let mut texts = TextResourceArena::new();
@@ -2003,6 +2132,56 @@ mod tests {
             assert_eq!(dense.axis_y, sparse.axis_y);
             assert_eq!(dense.color, sparse.color);
         }
+    }
+
+    #[test]
+    fn deep_zoom_repackages_live_glyphs_and_reuses_the_reduced_resolution() {
+        let artifact = compile_typst_resource("ABCDEFGH", TypstMode::Markup).unwrap();
+        let mut texts = TextResourceArena::new();
+        let handle = texts.insert(artifact.resource).unwrap();
+        let mut frame = retained_frame(handle, true, scene_transform());
+        let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+        let mut preparer = RetainedTextQuadPreparer::new(256).unwrap();
+        let zoomed = TextDeviceMetrics::uniform(4_320.0).unwrap();
+
+        let ordinary = preparer
+            .prepare(&device, &frame, &texts, &artifact.fonts, metrics())
+            .unwrap()
+            .mask_quads
+            .to_vec();
+        let zoomed_frame = preparer
+            .prepare(&device, &frame, &texts, &artifact.fonts, zoomed)
+            .unwrap();
+        assert_eq!(zoomed_frame.mask_quads.len(), ordinary.len());
+        for (zoomed_glyph, ordinary_glyph) in zoomed_frame.mask_quads.iter().zip(&ordinary) {
+            assert!((zoomed_glyph.origin[0] - ordinary_glyph.origin[0]).abs() < 0.03);
+            assert!((zoomed_glyph.axis_x[0] - ordinary_glyph.axis_x[0]).abs() < 0.03);
+        }
+        assert!(preparer.raster_size_limit < 512.0);
+        let attempts = preparer.incremental_stats().rebuild_attempts;
+
+        frame.objects[0].transform.translation = Vec2::new(2.0, -3.0);
+        let prepared = preparer
+            .prepare_with_changes(
+                &device,
+                &frame,
+                &FrameChanges::objects(vec![0]),
+                &texts,
+                &artifact.fonts,
+                zoomed,
+            )
+            .unwrap();
+        assert!(!prepared.layout_rebuilt);
+        assert_eq!(prepared.mask_quads.len(), ordinary.len());
+        assert_eq!(preparer.incremental_stats().rebuild_attempts, attempts);
+        assert!(
+            preparer.atlas().page_count(GlyphAtlasPlane::Mask)
+                <= DEFAULT_GLYPH_ATLAS_MAX_PAGES_PER_PLANE
+        );
+        assert!(preparer
+            .prepare(&device, &frame, &texts, &artifact.fonts, metrics())
+            .is_ok());
+        assert_eq!(preparer.raster_size_limit, 512.0);
     }
 
     #[test]

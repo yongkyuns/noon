@@ -1,9 +1,17 @@
 [package]
 name = "noon-core"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
 description = "Renderer-independent semantic core for Noon"
 
+[features]
+# Source preparation is optional; geometry-only consumers do not load Naga.
+wgsl-effects = ["dep:naga"]
+
 [dependencies]
+naga = { version = "=30.0.1", default-features = false, features = ["wgsl-in"], optional = true }
 serde = { version = "1", features = ["derive", "rc"] }

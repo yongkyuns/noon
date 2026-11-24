@@ -5,20 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from js import noonResolveAnimationOptions as _resolve_shared_animation_options
+from _noon_host import noonResolveAnimationOptions as _resolve_shared_animation_options
 
 try:
-    from js import noonResolveCreateAnimationOptions as _resolve_create_animation_options
+    from _noon_host import noonResolveCreateAnimationOptions as _resolve_create_animation_options
 except ImportError:
     _resolve_create_animation_options = None
 
 try:
-    from js import noonResolveGlowPulseAnimationOptions as _resolve_glow_pulse_animation_options
+    from _noon_host import noonResolveGlowPulseAnimationOptions as _resolve_glow_pulse_animation_options
 except ImportError:
     _resolve_glow_pulse_animation_options = None
 
 try:
-    from js import noonResolveTransformAnimationOptions as _resolve_transform_animation_options
+    from _noon_host import noonResolveTransformAnimationOptions as _resolve_transform_animation_options
 except ImportError:  # Test doubles predating the Transform-only bridge.
     _resolve_transform_animation_options = None
 

@@ -151,6 +151,7 @@ fn assign_expected(
             style.stroke_width = stroke_width
         }
         EffectivePropertyWrite::Opacity { opacity, .. } => style.opacity = opacity,
+        EffectivePropertyWrite::Emission { emission, .. } => style.emission = emission,
         EffectivePropertyWrite::EffectIntensity { .. } => {
             unreachable!("the affine/style reference fixture has no glow attachment")
         }
@@ -161,6 +162,10 @@ fn assign_expected(
 fn mixed_whole_and_component_writes_preserve_supplied_order() {
     let object = object();
     let pool = [
+        EffectivePropertyWrite::Emission {
+            object,
+            emission: noon_core::Emission::new(7.000000000000001).unwrap(),
+        },
         EffectivePropertyWrite::Presence {
             object,
             presence: false,
@@ -955,4 +960,51 @@ fn prepared_spatial_state_promotes_one_row_and_preserves_2d_payload() {
         instance.publication_context().execution_revision(),
         before.execution_revision().checked_next().unwrap()
     );
+}
+
+#[test]
+fn material_component_preserves_parallel_tracks_and_releases_to_authored_time() {
+    let mut instance = SceneInstance::new(scene(
+        2,
+        &[
+            track(
+                1,
+                Property::Emission,
+                TrackValues::Emission {
+                    from: noon_core::Emission::new(0.30000000000000004).unwrap(),
+                    to: noon_core::Emission::new(63.0).unwrap(),
+                },
+            ),
+            track(
+                2,
+                Property::Opacity,
+                TrackValues::Scalar { from: 0.8, to: 0.4 },
+            ),
+        ],
+    ));
+    instance.take_frame_changes();
+    let unrelated = instance.frame().objects[1].clone();
+    let emission = noon_core::Emission::new(7.000000000000001).unwrap();
+    commit(
+        &mut instance,
+        1.0,
+        &[EffectivePropertyWrite::Emission {
+            object: object(),
+            emission,
+        }],
+    );
+    assert_eq!(instance.frame().objects[0].style.emission, emission);
+    assert!((instance.frame().objects[0].style.opacity - 0.6).abs() < 1e-6);
+    assert_eq!(instance.frame().objects[1], unrelated);
+    assert_eq!(instance.take_frame_changes().object_indices(), &[0]);
+    commit(
+        &mut instance,
+        1.5,
+        &[EffectivePropertyWrite::Opacity {
+            object: object(),
+            opacity: 0.2,
+        }],
+    );
+    let expected = 0.30000000000000004 * 0.25 + 63.0 * 0.75;
+    assert!((instance.frame().objects[0].style.emission.strength() - expected).abs() < 1e-12);
 }

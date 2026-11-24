@@ -1,7 +1,7 @@
 //! Select existing point/content boundary operations from semantic content.
 use super::*;
 
-fn authored_content_requires_boundary(
+pub(crate) fn authored_content_requires_boundary(
     store: &SemanticStore,
     content: SemanticObjectContent,
 ) -> Result<bool, AuthoringError> {
@@ -69,6 +69,7 @@ pub fn effective_requires_content_boundary(
             return Ok(matches!(geometry, GeometryRef::External(_)));
         }
         Ok(match &observed.object.content {
+            noon_core::ObjectContentRef::Composed(_) => false,
             noon_core::ObjectContentRef::Text(_) | noon_core::ObjectContentRef::Image(_) => true,
             noon_core::ObjectContentRef::Geometry(geometry) => {
                 matches!(geometry, GeometryRef::External(_))

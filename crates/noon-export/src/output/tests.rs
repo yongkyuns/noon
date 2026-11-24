@@ -2,6 +2,7 @@ mod duration_media_conformance;
 
 use super::*;
 use crate::CaptureWork;
+use noon::integration::scene_execution;
 use noon::integration::{ExportFrame, FrameGrid, SampleObservation};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -128,11 +129,37 @@ fn nonexistent_ffmpeg_fails_and_cleans_staging_without_a_gpu() {
     assert_eq!(fs::read_dir(&root.0).unwrap().count(), 0);
 }
 
+#[test]
+#[ignore = "requires FFmpeg; selected by native output gate"]
+fn host_interrupt_after_encoder_finalization_does_not_publish() {
+    let root = Temp::new();
+    let path = root.0.join("existing.mp4");
+    fs::write(&path, b"previous user movie").unwrap();
+    let mut options = OutputOptions::mp4(&path);
+    options.overwrite = true;
+    let mut sink = FileSink::new(options, rate(), 4, 4, CaptureCancellation::default()).unwrap();
+    sink.write(frame(&[255_u8; 64], 4, 4, 0)).unwrap();
+    let mut interrupted = false;
+    let error = sink
+        .finish_with_source_end_and_interrupt(1, None, &mut || {
+            interrupted = true;
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Python signal pending at finalization",
+            ))
+        })
+        .unwrap_err();
+    assert!(interrupted);
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    assert_eq!(fs::read(&path).unwrap(), b"previous user movie");
+    assert_eq!(fs::read_dir(&root.0).unwrap().count(), 1);
+}
+
 fn frame<'a>(pixels: &'a [u8], width: u32, height: u32, index: u64) -> CapturedFrame<'a> {
     let mut scene = noon::Scene::new();
     let object = scene.square(1.0).unwrap();
     scene.add(&object).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let sample = FrameGrid::new(rate(), 0.0).unwrap().sample(index).unwrap();
     CapturedFrame {
         frame: ExportFrame {
@@ -237,7 +264,7 @@ fn one_frame_mp4_ends_exactly_at_shorter_authored_time() {
     let mut scene = noon::Scene::new();
     let square = scene.square(0.25).unwrap();
     scene.add(&square).unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let sample = FrameGrid::new(rate, 0.0).unwrap().sample(0).unwrap();
     let rgba = [255_u8; 64];
     sink.write(CapturedFrame {
@@ -331,7 +358,7 @@ fn png_sink_roundtrips_odd_size_bytes_and_records_fractional_timing() {
 #[ignore = "requires FFmpeg; selected by native output gate"]
 fn rejected_frames_poison_output_and_never_publish() {
     let root = Temp::new();
-    for bad in 0..12 {
+    for bad in 0..13 {
         let path = root.0.join(format!("bad-{bad}.mp4"));
         let mut sink = FileSink::new(
             OutputOptions::mp4(&path),
@@ -342,7 +369,7 @@ fn rejected_frames_poison_output_and_never_publish() {
         )
         .unwrap();
         let mut pixels = vec![255; 4 * 4 * 4];
-        if bad == 1 {
+        if bad == 1 || bad == 12 {
             pixels[3] = 128;
         }
         if bad == 2 {
@@ -350,6 +377,9 @@ fn rejected_frames_poison_output_and_never_publish() {
         }
         let index = if bad == 0 { 1 } else { 0 };
         let mut invalid = frame(&pixels, 4, 4, index);
+        if bad == 12 {
+            invalid.format = CapturePixelFormat::LinearHdrSdrRgba8Opaque;
+        }
         match bad {
             3 => invalid.observation.requested_time = 0.01,
             4 => invalid.observation.published_time = f64::NAN,

@@ -93,7 +93,6 @@ _EXCEPTION_TYPES = {
     "ownership": NoonOwnershipError,
 }
 
-
 def _diagnostic(value: object) -> NoonErrorCause | None:
     if getattr(value, "noonErrorVersion", None) != 1:
         return None
@@ -106,11 +105,20 @@ def _diagnostic(value: object) -> NoonErrorCause | None:
     return NoonErrorCause(category, code, message, _diagnostic(cause))
 
 
+def is_effect_preparation_required(error: Exception) -> bool:
+    diagnostic = map_engine_error(error)
+    while diagnostic is not None:
+        if getattr(diagnostic, "code", None) == "publication.effect_preparation_required":
+            return True
+        diagnostic = getattr(diagnostic, "rust_cause", None) or getattr(diagnostic, "cause", None)
+    return False
+
+
 def map_engine_error(error: Exception, *, operation: str | None = None) -> Exception:
     """Map only the typed Noon boundary. Unknown/ordinary Python errors pass through."""
     if isinstance(error, NoonError):
         return error
-    original = getattr(error, "js_error", None)
+    original = getattr(error, "js_error", error)
     diagnostic = _diagnostic(original)
     if diagnostic is None:
         return error
@@ -122,7 +130,7 @@ def raise_engine_error(error: Exception, *, operation: str | None = None) -> NoR
     original = getattr(error, "js_error", None)
     if original is not None:
         try:
-            from js import noonReportEngineTrap
+            from _noon_host import noonReportEngineTrap
         except ImportError:
             pass
         else:
@@ -137,9 +145,10 @@ def raise_engine_error(error: Exception, *, operation: str | None = None) -> NoR
 def engine_call(function, *args, operation: str | None = None):
     """Explicit callsite adapter; successful calls and their return values are unchanged."""
     try:
-        return function(*args)
+        result = function(*args)
     except Exception as error:
         raise_engine_error(error, operation=operation)
+    return result
 
 
 async def engine_await(awaitable, *, operation: str | None = None):

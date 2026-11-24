@@ -100,7 +100,32 @@ impl MobjectTarget<'_> {
     }
 }
 
-pub fn effective_point_array(
+impl crate::Scene {
+    /// Capture the current shaped array, preserving recursive family
+    /// occurrences. A running Scene observes one coherent publication.
+    pub fn point_array(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<PointArrayObservation, AuthoringError> {
+        let store = self.integration_store();
+        if let Some(execution) = self.running_execution() {
+            return effective_point_array(store, execution, target);
+        }
+        target.require_store(store)?;
+        target.point_array()
+    }
+
+    /// Observe the effective array, including its dimensions and family occurrences.
+    pub fn effective_point_array(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<PointArrayObservation, AuthoringError> {
+        let execution = self.execution_for_observation()?;
+        effective_point_array(self.integration_store(), execution, target)
+    }
+}
+
+pub(crate) fn effective_point_array(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     target: MobjectTarget<'_>,
@@ -114,6 +139,7 @@ pub fn effective_point_array(
         .map_err(AuthoringError::from)?;
     let semantics = store.borrow();
     from_node(&semantics, target.node_id(), &mut |id| {
-        family_point_path_query(store, execution, id)
+        let object = Mobject::from_node(Rc::clone(store), id)?;
+        captured_path_query(store, Some(execution), &object)
     })
 }

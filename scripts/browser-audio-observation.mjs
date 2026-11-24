@@ -1,6 +1,14 @@
 // Installed only by this harness, before the unmodified product page loads.
-export function observeAudio() {
+export function observeAudio({ sampleRate } = {}) {
   const NativeAudioContext = window.AudioContext;
+  let currentTimeDescriptor;
+  for (let prototype = NativeAudioContext.prototype; prototype && !currentTimeDescriptor;
+       prototype = Object.getPrototypeOf(prototype)) {
+    currentTimeDescriptor = Object.getOwnPropertyDescriptor(prototype, "currentTime");
+  }
+  if (typeof currentTimeDescriptor?.get !== "function") throw new Error("native AudioContext clock is unavailable");
+  const clockBias = new WeakMap();
+  let eventOrder = 0;
   const contexts = [], starts = [], stops = [], buffers = [], parameters = [];
   const nodes = [], connections = [], disconnects = [], ended = [], parameterRefs = [];
   const contextIds = new WeakMap(), sourceIds = new WeakMap(), bufferIds = new WeakMap();
@@ -32,7 +40,7 @@ export function observeAudio() {
   };
   const parameterEvent = (parameter, method, args) =>
     parameters[parameterId(parameter)].events.push({ method, args: Array.from(args),
-      observedAt: parameterContexts.get(parameter)?.currentTime });
+      observedAt: parameterContexts.get(parameter)?.currentTime, order: eventOrder++ });
   for (const method of ["setValueAtTime", "linearRampToValueAtTime", "cancelScheduledValues", "cancelAndHoldAtTime"]) {
     const native = AudioParam.prototype[method];
     AudioParam.prototype[method] = function (...args) {
@@ -68,7 +76,8 @@ export function observeAudio() {
   };
   AudioNode.prototype.disconnect = function (...args) {
     const value = disconnect.apply(this, args);
-    disconnects.push({ node: nodeId(this), observedAt: this.context.currentTime });
+    disconnects.push({ node: nodeId(this), context: contextId(this.context),
+      observedAt: this.context.currentTime, order: eventOrder++ });
     return value;
   };
   AudioBufferSourceNode.prototype.start = function (...args) {
@@ -89,12 +98,12 @@ export function observeAudio() {
   AudioBufferSourceNode.prototype.stop = function (...args) {
     const value = stop.apply(this, args);
     stops.push({ context: contextId(this.context), source: sourceIds.get(this),
-      node: nodeId(this), args, observedAt: this.context.currentTime });
+      node: nodeId(this), args, observedAt: this.context.currentTime, order: eventOrder++ });
     return value;
   };
   class ObservedAudioContext extends NativeAudioContext {
     constructor(...args) {
-      super(...args);
+      super(...(sampleRate === undefined ? args : [{ ...args[0], sampleRate }]));
       const id = contexts.length;
       contextIds.set(this, id);
       const analyser = this.createAnalyser();
@@ -103,6 +112,9 @@ export function observeAudio() {
       const record = { context: this, analyser, connected: false, states: [this.state] };
       contexts.push(record);
       this.addEventListener("statechange", () => record.states.push(this.state));
+    }
+    get currentTime() {
+      return currentTimeDescriptor.get.call(this) + (clockBias.get(this) ?? 0);
     }
     createBuffer(...args) {
       const buffer = super.createBuffer(...args);
@@ -114,8 +126,9 @@ export function observeAudio() {
     createBufferSource(...args) {
       const source = super.createBufferSource(...args);
       sourceIds.set(source, this.nextObservedSource = (this.nextObservedSource ?? 0) + 1);
-      source.addEventListener("ended", () => ended.push({ context: contextId(this),
-        source: sourceIds.get(source), node: nodeId(source), observedAt: this.currentTime }));
+      source.addEventListener("ended", event => ended.push({ context: contextId(this),
+        source: sourceIds.get(source), node: nodeId(source), observedAt: this.currentTime,
+        trusted: event.isTrusted, order: eventOrder++ }));
       return source;
     }
     createGain(...args) {
@@ -137,6 +150,10 @@ export function observeAudio() {
     contexts, starts, stops, buffers, parameters, pendingResumes,
     nodes, connections, disconnects, ended,
     holdNextResume: false, renderer: null,
+    ageContextsBy(seconds) {
+      if (!Number.isFinite(seconds) || seconds < 0) throw new TypeError("invalid test clock offset");
+      for (const { context } of contexts) clockBias.set(context, seconds);
+    },
     parameterValue(id) { return parameterRefs[id].value; },
     sample() {
       return contexts.map(({ context, analyser, states }) => {
@@ -144,7 +161,7 @@ export function observeAudio() {
         analyser.getFloatTimeDomainData(samples);
         let sum = 0, peak = 0;
         for (const value of samples) { sum += value * value; peak = Math.max(peak, Math.abs(value)); }
-        return { state: context.state, deviceTime: context.currentTime, states,
+        return { state: context.state, deviceTime: context.currentTime, sampleRate: context.sampleRate, states,
           rms: Math.sqrt(sum / samples.length), peak };
       });
     },

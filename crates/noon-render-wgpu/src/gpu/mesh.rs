@@ -206,6 +206,7 @@ impl SpatialGpuState {
             publication.context(),
             publication.frame(),
             publication.changes(),
+            publication.viewer_rows_changed(),
             publication.geometry_resources(),
             publication.text_resources(),
             publication.font_resources(),
@@ -224,6 +225,7 @@ impl SpatialGpuState {
         context: noon_core::PublicationContext,
         frame: &FrameState,
         changes: &FrameChanges,
+        viewer_rows_changed: bool,
         geometry_resources: &dyn GeometryResourceLookup,
         text_resources: &dyn noon_core::TextResourceLookup,
         font_resources: &dyn noon_core::FontResourceLookup,
@@ -236,7 +238,9 @@ impl SpatialGpuState {
         {
             return Err(SpatialPrepareError::StalePublication);
         }
-        let retry = self.last_publication == Some(context);
+        // Native viewer samples can change with authored playback paused.
+        // Transport retries continue to ignore already consumed row changes.
+        let retry = self.last_publication == Some(context) && !viewer_rows_changed;
         if retry && self.viewport == viewport && self.planar_camera == Some(camera) {
             return Ok(SpatialUploadStats {
                 resident_meshes: self.meshes.len(),
@@ -661,7 +665,8 @@ impl SpatialGpuState {
         // All path and mesh validation has succeeded. Publish shared painter
         // ranks even for mesh-only frames before deriving depth ties.
         self.paths.commit_painter_ranks(&mut path_plan);
-        if self.gpu.is_none() && (remaining_draws > 0 || remaining_paths > 0) {
+        let initialize_gpu = self.gpu.is_none() && (remaining_draws > 0 || remaining_paths > 0);
+        if initialize_gpu {
             self.gpu = Some(GpuState::new(device, queue, format, viewport));
             self.viewport = viewport;
         }
@@ -903,7 +908,8 @@ impl SpatialGpuState {
             if self.viewport != viewport {
                 gpu.resize(device, viewport);
             }
-            if matrix != self.camera_matrix {
+            // A camera-only frame may have cached the matrix before the GPU buffer existed.
+            if initialize_gpu || matrix != self.camera_matrix {
                 if let Some(matrix) = matrix {
                     queue.write_buffer(&gpu.camera, 0, bytemuck::cast_slice(&matrix));
                     stats.camera_bytes += size_of_val(&matrix);
@@ -1848,7 +1854,7 @@ mod tests {
         assert!(!state.paths.is_active());
     }
     #[test]
-    fn full_spatial_publication_reorders_equal_depth_faces_without_uploads() {
+    fn spatial_admission_uploads_the_camera_and_keeps_depth_order_current() {
         use super::{DepthDraw, FrameChanges, FrameState, SpatialGpuState};
         use noon_core::{
             Color, SemanticObjectRole, SemanticObjectState, SemanticPaint, SemanticProjection3D,
@@ -1932,7 +1938,21 @@ mod tests {
                 camera,
             )
         };
-        prepare(&mut state, scene.frame(), &FrameChanges::all(), &order).unwrap();
+        let mut camera_only = scene.frame().clone();
+        let face_rows: Vec<_> = expected.iter().map(|draw| draw.order_key().0).collect();
+        for &row in &face_rows {
+            camera_only.presences[row] = false;
+        }
+        prepare(&mut state, &camera_only, &FrameChanges::all(), &order).unwrap();
+        assert!(state.gpu.is_none());
+        let stats = prepare(
+            &mut state,
+            scene.frame(),
+            &FrameChanges::objects(face_rows),
+            &order,
+        )
+        .unwrap();
+        assert_eq!(stats.camera_bytes, size_of::<[f32; 16]>());
         let observed_order = |state: &SpatialGpuState| {
             state
                 .depth_order

@@ -26,7 +26,10 @@ fn press(token: &NativePointerInputToken, sequence: u64) -> NativePointerInput {
 struct Finish;
 impl LiveContinuation for Finish {
     type Error = std::convert::Infallible;
-    fn resume(&mut self, _: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        _scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
         Ok(ContinuationStep::Finished)
     }
 }
@@ -71,6 +74,13 @@ fn finished_program_routes_typed_drag_input_without_frontend_target_selection() 
     scene.add(&circle).unwrap();
     let mut program = scene.into_live_program(Finish).unwrap();
     program.set_translation_drag_targets([&circle]).unwrap();
+    let foreign = Scene::new().circle(0.5).unwrap();
+    assert!(matches!(
+        program.set_translation_drag_targets([&circle, &foreign]),
+        Err(LiveProgramError::TranslationDrag(
+            TranslationDragError::ForeignStore
+        ))
+    ));
     program.resume().unwrap();
 
     let token = program.configure_native_pointer_input(POINTER, 0).unwrap();
@@ -117,7 +127,11 @@ struct Animate {
 }
 impl LiveContinuation for Animate {
     type Error = crate::LiveSessionError;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         Ok(ContinuationStep::Await(
             live.declare_and_activate_transform_to(
                 &self.source,
@@ -181,7 +195,10 @@ fn pointer_publication_refreshes_the_live_endpoint_fence_without_bypassing_it() 
 struct Fail;
 impl LiveContinuation for Fail {
     type Error = &'static str;
-    fn resume(&mut self, _: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        _scene: &mut crate::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
         Err("intentional terminal continuation")
     }
 }

@@ -1,18 +1,22 @@
 // DOM mechanics for one selected primary pointer. Selection here chooses an
 // input source, never a scene target. Runtime signals remain owned by Rust.
 // Additional contacts are ignored while the selected pointer has buttons down.
-// No OS/DOM capture is requested; leaving the content viewport cancels.
+// Hold DOM capture across canvas boundaries so Rust still receives the release.
 import { wheelLinePixels, wheelDeltaCssPixels } from "./browser-wheel-units.js";
 
+export const MAX_BROWSER_POINTER_SAMPLES = 256;
+
 const BUTTON_BITS = [1, 4, 2, 8, 16, 32];
+const RELEASE_AFTER_CAPTURE_LOSS_MS = 40;
 
 export function attachBrowserPointerInput(canvas, {
-  signal, isCurrent, send, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, onWheel, asynchronousWheel = false, windowTarget = window, registeredView = null,
+  signal, isCurrent, send, sendMotionBatch, allocateSource, viewRevision, advanceView, onError, maxSamples, onView, onWheel, asynchronousWheel = false, windowTarget = window, registeredView = null, collectHover = () => true,
 }) {
   if (!Number.isSafeInteger(maxSamples) || maxSamples < 1) {
     throw new RangeError("browser pointer sample capacity must be a positive safe integer");
   }
   let selected = null;
+  let releaseTimer = null;
   // This DOM snapshot was registered before the initial renderer publication.
   // Seed only mapping-change detection; the engine still owns input admission.
   let view = registeredView === null ? null : [
@@ -21,10 +25,23 @@ export function attachBrowserPointerInput(canvas, {
   ];
   let unavailableViewReported = false;
   const active = () => !signal.aborted && isCurrent();
-  const cancel = (kind = "cancel") => {
-    if (selected === null) return;
-    const previous = selected;
+  const clearReleaseTimer = () => {
+    if (releaseTimer === null) return;
+    clearTimeout(releaseTimer);
+    releaseTimer = null;
+  };
+  const retire = () => {
+    const contact = selected;
     selected = null;
+    clearReleaseTimer();
+    if (contact !== null && canvas.hasPointerCapture?.(contact.id)) {
+      canvas.releasePointerCapture(contact.id);
+    }
+    return contact;
+  };
+  const cancel = (kind = "cancel") => {
+    const previous = retire();
+    if (previous === null) return;
     send({
       kind, source_id: previous.source, pointer_id: previous.id,
       view_revision: previous.viewRevision,
@@ -61,7 +78,7 @@ export function attachBrowserPointerInput(canvas, {
     if (changed) onView?.(viewRevision(), rect.width, rect.height);
     return rect;
   };
-  const receive = (type, event, receiptRect = null) => {
+  const receive = (type, event, receiptRect = null, deliver = send) => {
     if (!active()) return;
     // -1 is the non-pointing-device ID, not a source for pointer gestures.
     if (event.isPrimary !== true || event.pointerId === -1) return;
@@ -72,7 +89,16 @@ export function attachBrowserPointerInput(canvas, {
       // A foreign contact must never release/cancel the selected pointer. After
       // a successful release, implicit capture loss adds no cancellation edge.
       if (matches && (type !== "lostpointercapture" || selected.buttons !== 0)) {
-        cancel(type === "lostpointercapture" ? "capture_lost" : "cancel");
+        if (type === "lostpointercapture" && event.pointerType === "mouse" &&
+            selected.buttons === 1 && event.buttons === 0 && event.button === -1) {
+          // Chrome can clear the button mask and retarget the pointer before
+          // dispatching pointerup. Only that real release can commit a drop.
+          releaseTimer = setTimeout(guard(() => {
+            if (active()) cancel("capture_lost");
+          }), RELEASE_AFTER_CAPTURE_LOSS_MS);
+        } else {
+          cancel(type === "lostpointercapture" ? "capture_lost" : "cancel");
+        }
       }
       return;
     }
@@ -124,7 +150,7 @@ export function attachBrowserPointerInput(canvas, {
       selected = { id: event.pointerId, source: allocateSource(), buttons: 0, viewRevision: viewRevision() };
     }
     const contact = selected;
-    const admitted = send({
+    const admitted = deliver({
       kind, source_id: contact.source, pointer_id: contact.id,
       surface_x: event.clientX - rect.left, surface_y: event.clientY - rect.top,
       viewport_width: rect.width, viewport_height: rect.height,
@@ -136,21 +162,33 @@ export function attachBrowserPointerInput(canvas, {
     // already cancelled its contact. Retire this DOM source without another
     // cancellation, edge reconstruction, queued replay, or fatal detachment.
     if (admitted === false) {
-      if (selected === contact) selected = null;
+      if (selected === contact) retire();
       return false;
     }
     // Delivery can synchronously retire the attachment/contact (for example,
     // when a presentation notification fails after Rust admitted the press).
     // Do not mutate a cancelled or replacement contact on return from send.
     if (!active() || selected !== contact) return;
+    if (kind === "release") clearReleaseTimer();
     contact.buttons = event.buttons;
+    // Capture synchronously while the physical press is active, before a
+    // worker acknowledgement could arrive after the pointer exits the canvas.
+    if (type === "pointerdown" && button === 0 && event.isTrusted &&
+        !canvas.hasPointerCapture?.(contact.id)) {
+      canvas.setPointerCapture?.(contact.id);
+    }
     // Touch IDs may be recycled; the next contact must receive a new source.
     if (kind === "release" && selected.buttons === 0 && event.pointerType !== "mouse") selected = null;
     return true;
   };
   const collect = (type, event) => {
     if (!active() || event.isPrimary !== true || event.pointerId === -1) return;
+    if (type === "pointermove" && event.buttons === 0 && !selected?.buttons && !collectHover()) return;
     if (selected !== null && selected.id !== event.pointerId && selected.buttons !== 0) return;
+    if (releaseTimer !== null) {
+      if (type === "pointermove" || type === "pointerleave" || type === "lostpointercapture") return;
+      if (type === "pointerdown") cancel("capture_lost");
+    }
     // A held contact without an admitted press cannot resume after cancellation
     // or enter from outside. Keep ordinary parent validation/ignore semantics;
     // do not interpret its coalesced button mask as a new press transition.
@@ -166,6 +204,8 @@ export function attachBrowserPointerInput(canvas, {
     const initialButtons = selected?.id === event.pointerId ? selected.buttons : 0;
     const samples = coalescedSamples(event, initialButtons, maxSamples);
     if (samples.length === 0) {
+      // The dispatched event can still be used when the sample list cannot
+      // establish an ordered button history. Ordinary admission validates it.
       receive(type, event);
       return;
     }
@@ -174,9 +214,15 @@ export function attachBrowserPointerInput(canvas, {
     // This is receipt-time mapping, not historical displayed-frame association.
     const rect = currentView();
     if (rect === null || (initialButtons !== 0 && selected === null)) return;
+    // Hold one worker reservation for an entire motion packet. Button
+    // transitions keep the ordinary occurrence path and its ordering.
+    const motions = sendMotionBatch && samples.length > 1 && samples.every(sample => sample.button === -1)
+      ? [] : null;
+    const deliver = motions === null ? send : input => { motions.push(input); };
     for (const sample of samples) {
-      if (!active() || !receive(type, sample, rect)) break;
+      if (!active() || !receive(type, sample, rect, deliver)) break;
     }
+    if (active() && motions?.length) sendMotionBatch(motions);
   };
   const guard = operation => event => {
     try { operation(event); } catch (error) { onError(error); }
@@ -204,7 +250,7 @@ export function attachBrowserPointerInput(canvas, {
           if (value !== undefined && typeof value !== "boolean") {
             throw new TypeError("worker inspection admission must resolve to a boolean or undefined");
           }
-          if (active() && value === true && selected === contact) selected = null;
+          if (active() && value === true && selected === contact) retire();
         }).catch(error => { if (active()) onError(error); });
         return;
       }
@@ -213,14 +259,21 @@ export function attachBrowserPointerInput(canvas, {
       }
       // Shared Rust already cancelled a changed view's semantic gesture. Retire
       // only its DOM contact; sending another cancellation would use a dead token.
-      if (changed === true) selected = null;
+      if (changed === true) retire();
       if (changed !== undefined) event.preventDefault();
     }), { passive: false, signal });
   }
   for (const type of ["pointermove", "pointerdown", "pointerup", "pointercancel", "pointerleave", "lostpointercapture"]) {
     canvas.addEventListener(type, guard(event => collect(type, event)), { signal });
   }
+  // After an early capture loss the real release may target another element.
+  for (const type of ["pointerup", "pointercancel"]) {
+    windowTarget.addEventListener(type, guard(event => {
+      if (releaseTimer !== null && event.target !== canvas) collect(type, event);
+    }), { capture: true, signal });
+  }
   windowTarget.addEventListener("blur", guard(() => { if (active()) cancel("focus_lost"); }), { signal });
+  signal.addEventListener("abort", retire, { once: true });
   if (onView) {
     // Reuse startup registration when available; collection never invents a receipt.
     // Scroll/resize/element resize can invalidate mapping without pointer motion.
@@ -235,14 +288,14 @@ export function attachBrowserPointerInput(canvas, {
     }
     refresh();
   }
-  return { invalidateView, retireSource(source) {
-    if (selected?.source === source) selected = null;
+  return { invalidateView, cancel, retireSource(source) {
+    if (selected?.source === source) retire();
   } };
 }
 
-// Validate and snapshot the complete bounded packet before any delivery. There
-// is no retained queue or frontend gesture policy here. Each sample still uses
-// the existing session-ordered producer reservation and acknowledgement path.
+// Validate and snapshot the complete bounded packet before any delivery. The
+// worker receives a pure motion packet in one request and applies its samples
+// in order. The direct host continues to admit individual occurrences.
 function coalescedSamples(event, initialButtons, capacity) {
   const events = event.getCoalescedEvents();
   if (!Array.isArray(events)) throw new TypeError("invalid DOM coalesced sample list");
@@ -257,6 +310,7 @@ function coalescedSamples(event, initialButtons, capacity) {
   const samples = [];
   let previousTime = 0;
   let buttons = initialButtons;
+  let reliableButtons = true;
   for (let i = 0; i < count; i += 1) {
     const value = events[i];
     if (!value || value.pointerId !== event.pointerId || value.pointerType !== event.pointerType ||
@@ -277,7 +331,7 @@ function coalescedSamples(event, initialButtons, capacity) {
     const changed = buttons ^ nextButtons;
     const button = changed === 0 ? -1 : BUTTON_BITS.indexOf(changed);
     if (changed !== 0 && (button === -1 || value.button !== button)) {
-      throw new TypeError("ambiguous DOM coalesced button transition");
+      reliableButtons = false;
     }
     samples.push({
       pointerId: event.pointerId, pointerType: event.pointerType, isPrimary: event.isPrimary,
@@ -288,6 +342,7 @@ function coalescedSamples(event, initialButtons, capacity) {
     buttons = nextButtons;
     previousTime = timeStamp;
   }
-  if (buttons !== event.buttons) throw new TypeError("DOM coalesced final button state differs from parent");
-  return samples;
+  // Deliver either the complete history or the dispatched event. If the
+  // history disagrees about buttons, no partial prefix or inferred edge escapes.
+  return reliableButtons && buttons === event.buttons ? samples : [];
 }

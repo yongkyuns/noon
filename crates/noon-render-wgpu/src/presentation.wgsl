@@ -44,3 +44,10 @@ fn fs_present(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> 
     // fill/stroke/alpha blending inside the scene render.
     return vec4<f32>(srgb_to_linear(encoded.rgb), encoded.a);
 }
+
+// HDR resolution has already produced encoded SDR bytes. Ordinary UNORM
+// attachments store them directly; channel swizzling belongs to the format.
+@fragment
+fn fs_copy(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    return textureLoad(scene_texture, vec2<i32>(position.xy), 0);
+}

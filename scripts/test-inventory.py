@@ -18,6 +18,16 @@ PY_SOURCE = "web/python/*.py"
 PY_TEST = "web/python/test_*.py"
 BROWSER_TEST = "scripts/*smoke.mjs"
 
+# CPython extension behavior is exercised through its real Python boundary,
+# rather than Rust-only unit tests. Only existing entry points count as evidence.
+HOST_INTEGRATION_TESTS = {
+    "noon-python": (
+        "scripts/test_native_python.py",
+        "scripts/test_native_python_export.py",
+        "scripts/python_host_conformance.py",
+    ),
+}
+
 GENERATED_OR_SUPPORT = {
     "web/browser-smoke.js",  # harness loaded by scripts/browser-smoke.mjs
 }
@@ -35,6 +45,8 @@ def crate_name(path: Path) -> str:
 def classify_test(path: Path) -> str:
     name = path.name.lower()
     text = rel(path)
+    if any(text in paths for paths in HOST_INTEGRATION_TESTS.values()):
+        return "native-host-integration"
     if "manim-differential" in text:
         return "differential"
     if "perf" in name or "profile" in name:
@@ -50,6 +62,9 @@ def classify_test(path: Path) -> str:
 
 def production_layer(path: Path) -> str:
     text = rel(path)
+    for crate, paths in HOST_INTEGRATION_TESTS.items():
+        if text in paths:
+            return crate
     if text.startswith("crates/"):
         return crate_name(path)
     if text.startswith("web/python/"):
@@ -65,6 +80,7 @@ def source_strategy(
     rust_inline_by_crate: set[str],
     js_tests: set[str],
     python_tests: list[str],
+    host_tests_by_crate: dict[str, list[str]],
 ) -> list[str]:
     text = rel(path)
     strategies: list[str] = []
@@ -77,6 +93,8 @@ def source_strategy(
             strategies.append("crate-unit")
         if rust_tests_by_crate.get(crate):
             strategies.append("crate-integration")
+        if host_tests_by_crate.get(crate):
+            strategies.append("native-host-integration")
     elif text.startswith("web/python/"):
         module = path.stem
         exact = f"web/python/test_{module.lstrip('_')}.py"
@@ -111,6 +129,13 @@ def collect() -> dict[str, object]:
         ROOT / "scripts/manim-differential.py",
         ROOT / "scripts/manim-api-coverage.py",
     ]
+    host_tests_by_crate = {
+        crate: [path for path in paths if (ROOT / path).is_file()]
+        for crate, paths in HOST_INTEGRATION_TESTS.items()
+    }
+    special_tests.extend(
+        ROOT / path for paths in host_tests_by_crate.values() for path in paths
+    )
     all_tests = [*rust_tests, *js_tests_paths, *python_tests_paths, *browser_tests]
     all_tests.extend(path for path in special_tests if path.exists())
 
@@ -135,12 +160,15 @@ def collect() -> dict[str, object]:
             rust_inline_by_crate,
             js_test_names,
             python_test_names,
+            host_tests_by_crate,
         )
         entry = {
             "path": rel(path),
             "layer": production_layer(path),
             "strategies": strategies,
         }
+        if path.suffix == ".rs" and host_tests_by_crate.get(crate_name(path)):
+            entry["host_test_entry_points"] = host_tests_by_crate[crate_name(path)]
         modules.append(entry)
         if not strategies:
             uncovered.append(entry["path"])
@@ -149,7 +177,7 @@ def collect() -> dict[str, object]:
         {
             "path": rel(path),
             "layer": production_layer(path)
-            if not rel(path).startswith("scripts/")
+            if production_layer(path) != "other"
             else "browser/compat",
             "type": classify_test(path),
         }

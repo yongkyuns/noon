@@ -1,3 +1,4 @@
+use noon::integration::scene_execution;
 use noon::{ManimArrow, ManimArrowOptions, Scene, StoredGeometry, Vec2};
 use noon_core::SemanticObjectContent;
 
@@ -63,9 +64,9 @@ fn arrow_vector_and_double_arrow_share_one_semantic_family_contract() {
             double.family().into(),
         ])
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     {
-        let mut live = scene.live(&mut session);
+        let mut live = scene_execution::borrow_uninstalled(&scene, &mut session);
         let wait = live.wait_segment(0.2).unwrap();
         live.advance_segment_to(wait, wait.end_time()).unwrap();
         live.complete_segment(wait).unwrap();

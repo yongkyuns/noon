@@ -68,18 +68,16 @@ async function captureDirect() {
   }
 }
 
-async function capturePython(targetContext = context) {
+async function capturePython(targetContext = context, sceneSource = source, frameTimes = samples) {
   const page = await targetContext.newPage();
   try {
     await page.goto(`${server.baseUrl}/web/manim-raster-host.html`);
     await page.waitForFunction(() => window.noonHostRaster);
-    const loaded = await page.evaluate(async ({ source }) => {
-      const result = await window.noonHostRaster.load(source, 1);
-      return result;
-    }, { source });
+    const duration = frameTimes.at(-1);
+    const loaded = await page.evaluate(({ sceneSource, duration }) =>
+      window.noonHostRaster.load(sceneSource, duration), { sceneSource, duration });
     assert.equal(loaded.rendererBackend, expectedBackend);
     const frames = [];
-    const frameTimes = [...samples];
     for (let frameIndex = 0; frameIndex < frameTimes.length; frameIndex += 1) {
       const time = frameTimes[frameIndex];
       const sample = await page.evaluate(({ frameIndex, frameTimes }) =>
@@ -88,7 +86,7 @@ async function capturePython(targetContext = context) {
         }), { frameIndex, frameTimes });
       assert.equal(sample.time, time);
       if (frameIndex === frameTimes.length - 1) {
-        assert.equal(sample.authoredDuration, 1);
+        assert.equal(sample.authoredDuration, duration);
         assert.equal(sample.sourceCompleted, true);
       }
       frames.push({ time, sample, png: await page.locator("#scene").screenshot() });
@@ -184,6 +182,15 @@ try {
     assert.equal(frame.uploads, 32, "light-only movement uploads only its compact uniform");
     assert.equal(frame.geometryCacheMisses, 0, "light-only movement retains geometry residency");
   }
+  const lateSource = source.replace(
+    "    async def construct(self):\n",
+    "    async def construct(self):\n        await self.wait(0.25)\n",
+  );
+  assert.notEqual(lateSource, source);
+  const late = await capturePython(context, lateSource, [0.125, 1.25]);
+  assert.deepEqual(PNG.sync.read(late.at(-1).png).data, PNG.sync.read(python.at(-1).png).data,
+    "a point light created during playback must render the same endpoint");
+  report.lateLightRendered = true;
   await assertMissingLightRejected();
   report.missingLightRejected = true;
   const freshContext = await browser.newContext({

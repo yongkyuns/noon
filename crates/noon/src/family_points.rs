@@ -3,53 +3,56 @@ mod append;
 mod empty_arrays;
 mod xyz;
 use crate::{AuthoringError, Mobject, MobjectFamily, PathQuery};
-pub use append::publish_append_family_points;
-pub use empty_arrays::publish_empty_family_point_array;
 use noon_core::{
     SemanticMutationTransaction, SemanticStore, SemanticTransform2_5D, StoredGeometry, Vec2,
     VectorPath,
 };
 use std::rc::Rc;
-pub use xyz::{publish_append_family_points_3d, publish_family_points_3d};
 
-/// Publish root point content through an integration-owned coherent execution.
-/// The existing family identity, presentation and member edges stay in place.
-pub fn publish_family_points(
-    store: &Rc<std::cell::RefCell<SemanticStore>>,
-    root: noon_core::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    family: &MobjectFamily,
-    points: &[(f64, f64)],
-) -> Result<(), AuthoringError> {
-    publish_family_points_3d(
-        store,
-        root,
-        execution,
-        family,
-        &crate::path_editing::promote_raw_points_3d(points),
-    )
-}
-
-/// Clearing an unmaterialized root validates coherence without creating a payload.
-pub fn publish_clear_family_points(
-    store: &Rc<std::cell::RefCell<SemanticStore>>,
-    root: noon_core::SemanticNodeId,
-    execution: &mut crate::ExecutionSession,
-    family: &MobjectFamily,
-) -> Result<(), AuthoringError> {
-    crate::MobjectTarget::from(family).require_store(store)?;
-    let object = family.own_object()?;
-    crate::path_editing::require_running_path_resource_admission(store, root, execution)?;
-    if object.is_none() {
-        return Ok(());
+impl crate::Scene {
+    /// Clear a family's own points while keeping its identity and members.
+    pub fn clear_family_points(&mut self, family: &MobjectFamily) -> Result<(), AuthoringError> {
+        crate::MobjectTarget::from(family).require_store(self.integration_store())?;
+        let object = family.own_object()?;
+        self.require_resource_admission()?;
+        match object {
+            Some(object) => self.clear_points(&object),
+            None => Ok(()),
+        }
     }
-    crate::path_editing::publish_running_object_edit(
-        store,
-        root,
-        execution,
-        &object.expect("owned root was checked"),
-        crate::path_editing::PathEdit::Clear,
-    )
+
+    fn set_initial_family_path(
+        &mut self,
+        family: &MobjectFamily,
+        path: VectorPath,
+    ) -> Result<(), AuthoringError> {
+        self.with_semantic_publication(|store, publish| {
+            publish_initial_family_path(store, family.node_id(), path, publish).map(|_| ())
+        })
+    }
+
+    /// Capture the family's own path, excluding descendants. A running
+    /// Scene validates the current publication, even for a detached root.
+    pub fn family_own_path_query(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<PathQuery, AuthoringError> {
+        crate::MobjectTarget::from(family).require_store(self.integration_store())?;
+        match self.running_execution() {
+            Some(execution) => family.effective_own_path_query(execution),
+            None => family.own_path_query(),
+        }
+    }
+
+    /// Read the root's own effective path, excluding all descendants.
+    pub fn effective_family_own_path_query(
+        &self,
+        family: &MobjectFamily,
+    ) -> Result<PathQuery, AuthoringError> {
+        crate::MobjectTarget::from(family).require_store(self.integration_store())?;
+        let execution = self.execution_for_observation()?;
+        family.effective_own_path_query(execution)
+    }
 }
 
 impl MobjectFamily {
@@ -86,7 +89,7 @@ impl MobjectFamily {
 
     /// Read only the root's own current path through a coherent execution.
     /// Empty roots validate the same store/publication contract as owned roots.
-    pub fn effective_own_path_query(
+    fn effective_own_path_query(
         &self,
         execution: &crate::ExecutionSession,
     ) -> Result<PathQuery, AuthoringError> {
@@ -110,7 +113,7 @@ impl MobjectFamily {
 
     /// Replace this root's owned cubic point array in authored state. The
     /// existing root style, presentation, identity and members are retained.
-    /// Use Scene/LiveSession publication for changes after execution bootstrap.
+    /// Use Scene publication for changes after execution bootstrap.
     pub fn set_points_f64(&self, points: &[(f64, f64)]) -> Result<(), AuthoringError> {
         self.set_points_3d(&crate::path_editing::promote_raw_points_3d(points))
     }
@@ -149,6 +152,7 @@ pub(crate) fn publish_initial_family_path<T>(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::{MobjectTarget, Scene};
 
     #[test]
@@ -198,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn integration_root_points_reuse_live_path_edits_and_rollback_resources() {
+    fn root_points_reuse_scene_path_edits_and_roll_back_resources() {
         for attached in [false, true] {
             for materialized in [false, true] {
                 let mut scene = Scene::new();
@@ -214,33 +218,21 @@ mod tests {
                 if attached {
                     scene.add_many(&[(&family).into()]).unwrap();
                 }
-                let mut execution = scene.execution_session().unwrap();
+                let execution = scene.execution_session().unwrap();
+                scene.install_execution(execution);
                 let store = std::rc::Rc::clone(scene.integration_store());
                 let nodes = store.borrow().len();
                 let points = [(0., 0.), (1., 1.), (2., 1.), (3., 0.), (4., 2.)];
                 let revision = scene.revision();
                 if !materialized {
-                    super::publish_clear_family_points(
-                        &store,
-                        scene.root(),
-                        &mut execution,
-                        &family,
-                    )
-                    .unwrap();
+                    scene.clear_family_points(&family).unwrap();
                     assert!(family.own_object().unwrap().is_none());
                     assert_eq!(scene.revision(), revision);
                 }
-                super::publish_family_points(
-                    &store,
-                    scene.root(),
-                    &mut execution,
-                    &family,
-                    &points,
-                )
-                .unwrap();
+                scene.set_family_points_f64(&family, &points).unwrap();
                 assert_eq!(
-                    family
-                        .effective_own_path_query(&execution)
+                    scene
+                        .effective_family_own_path_query(&family)
                         .unwrap()
                         .points()
                         .unwrap(),
@@ -253,56 +245,31 @@ mod tests {
                 assert_eq!(child.state().unwrap(), child_before);
                 let revision = scene.revision();
                 let resources = store.borrow().geometry_resources().len();
-                let publication = execution.publication_context();
-                assert!(super::publish_family_points(
-                    &store,
-                    scene.root(),
-                    &mut execution,
-                    &family,
-                    &[(f64::NAN, 0.)]
-                )
-                .is_err());
+                let publication = scene.owned_execution().publication_context();
+                assert!(scene
+                    .set_family_points_f64(&family, &[(f64::NAN, 0.)])
+                    .is_err());
                 let foreign = Scene::new().family(&[]).unwrap();
-                assert!(super::publish_family_points(
-                    &store,
-                    scene.root(),
-                    &mut execution,
-                    &foreign,
-                    &points
-                )
-                .is_err());
+                assert!(scene.set_family_points_f64(&foreign, &points).is_err());
                 assert_eq!(scene.revision(), revision);
                 assert_eq!(store.borrow().geometry_resources().len(), resources);
-                assert_eq!(execution.publication_context(), publication);
-                super::publish_clear_family_points(&store, scene.root(), &mut execution, &family)
-                    .unwrap();
+                assert_eq!(scene.owned_execution().publication_context(), publication);
+                scene.clear_family_points(&family).unwrap();
                 assert_eq!(
-                    family
-                        .effective_own_path_query(&execution)
+                    scene
+                        .effective_family_own_path_query(&family)
                         .unwrap()
                         .point_count(),
                     0
                 );
                 assert_eq!(store.borrow().len(), nodes);
                 assert_eq!(child.state().unwrap(), child_before);
-                // A stale external execution cannot admit even a first root payload.
-                let empty = scene.family(&[]).unwrap();
+                // A raw arena edit makes the running Scene's publication stale.
+                let empty =
+                    MobjectFamily::create(Rc::clone(scene.integration_store()), &[]).unwrap();
                 let resources = store.borrow().geometry_resources().len();
-                assert!(super::publish_family_points(
-                    &store,
-                    scene.root(),
-                    &mut execution,
-                    &empty,
-                    &points
-                )
-                .is_err());
-                assert!(super::publish_clear_family_points(
-                    &store,
-                    scene.root(),
-                    &mut execution,
-                    &empty
-                )
-                .is_err());
+                assert!(scene.set_family_points_f64(&empty, &points).is_err());
+                assert!(scene.clear_family_points(&empty).is_err());
                 assert!(empty.own_object().unwrap().is_none());
                 assert_eq!(store.borrow().geometry_resources().len(), resources);
             }
@@ -459,37 +426,92 @@ mod reference_tests;
 
 #[cfg(test)]
 mod effective_query_tests {
-    use crate::Scene;
+    use crate::{AnimationOptions, Color, RateFunction, Scene};
 
     #[test]
     fn own_root_query_validates_empty_publications_and_observes_live_content_only() {
         let mut scene = Scene::new();
         let child = scene.square(0.5).unwrap();
         let family = scene.family(&[(&child).into()]).unwrap();
+        let detached = scene.family(&[]).unwrap();
+        let points = [(0., 0.), (1., 1.), (2., 1.), (3., 0.)];
+        detached.set_points_f64(&points).unwrap();
         scene.add_many(&[(&family).into()]).unwrap();
-        let execution = scene.execution_session().unwrap();
-        assert!(family
-            .effective_own_path_query(&execution)
+        assert_eq!(scene.own_point_count((&family).into()).unwrap(), 0);
+        assert!(scene
+            .family_own_path_query(&family)
             .unwrap()
             .points()
             .unwrap()
             .is_empty());
-        let foreign = Scene::new().execution_session().unwrap();
-        assert!(family.effective_own_path_query(&foreign).is_err());
+        let foreign = Scene::new();
+        assert!(matches!(
+            foreign.family_own_path_query(&family),
+            Err(crate::AuthoringError::ForeignStore)
+        ));
+        let execution = scene.execution_session().unwrap();
         scene.install_execution(execution);
-        let points = [(0., 0.), (1., 1.), (2., 1.), (3., 0.)];
-        scene.set_family_points_f64(&family, &points).unwrap();
+        assert_eq!(scene.own_point_count((&family).into()).unwrap(), 0);
+        assert_eq!(scene.own_point_count((&detached).into()).unwrap(), 4);
         assert_eq!(
-            family
-                .effective_own_path_query(scene.owned_execution())
+            scene
+                .family_own_path_query(&detached)
+                .unwrap()
+                .points()
+                .unwrap(),
+            points
+        );
+        scene.set_family_points_f64(&family, &points).unwrap();
+        assert_eq!(scene.own_point_count((&family).into()).unwrap(), 4);
+        assert_eq!(
+            scene
+                .family_own_path_query(&family)
                 .unwrap()
                 .points()
                 .unwrap(),
             points
         );
         family.clear_points().unwrap();
-        assert!(family
-            .effective_own_path_query(scene.owned_execution())
-            .is_err());
+        assert!(scene.own_point_count((&family).into()).is_err());
+        assert!(scene.own_point_count((&detached).into()).is_err());
+        assert!(scene.family_own_path_query(&family).is_err());
+        assert!(scene.family_own_path_query(&detached).is_err());
+    }
+
+    #[test]
+    fn own_point_count_follows_family_root_reveal() {
+        let mut scene = Scene::new();
+        let family = scene
+            .family_with_presentation(&[], 0.0, Color::WHITE, true)
+            .unwrap();
+        family
+            .set_points_f64(&[
+                (0., 0.),
+                (1., 0.),
+                (2., 0.),
+                (3., 0.),
+                (3., 0.),
+                (4., 0.),
+                (5., 0.),
+                (6., 0.),
+            ])
+            .unwrap();
+        let object = family.own_object().unwrap().unwrap();
+        let mut execution = scene.into_execution().unwrap();
+        let segment = execution
+            .live()
+            .declare_and_activate_create(
+                &object,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
+            .unwrap();
+        execution.live().advance_segment_to(segment, 0.25).unwrap();
+        assert_eq!(family.get_num_points().unwrap(), 8);
+        assert_eq!(
+            execution.scene().own_point_count((&family).into()).unwrap(),
+            4
+        );
     }
 }

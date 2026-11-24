@@ -22,6 +22,7 @@ enum OverlayInstance {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverlayPrepareError {
     UnsupportedGeometry,
+    UnsupportedOutput,
     InvalidGeometry,
     InvalidTransform,
     InvalidColor,
@@ -154,6 +155,100 @@ impl GpuRenderer {
         view: &wgpu::TextureView,
         overlay: Option<&OverlayGpuState>,
     ) -> DrawStats {
+        self.encode_overlay_with_pipelines(
+            encoder,
+            self.presentation.scene_view(view),
+            overlay,
+            [
+                &self.circle_pipeline_single_sample,
+                &self.rectangle_pipeline_single_sample,
+            ],
+        )
+    }
+
+    /// Composite viewer-only highlighting onto encoded SDR AFTER HDR resolution
+    /// and BEFORE final presentation. It never enters the authored Bloom input.
+    /// Reuses this renderer's camera/quad/overlay instance; two lazy compatible
+    /// pipelines are the only additional resources. No second scene renderer.
+    pub fn encode_display_overlay(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::Texture,
+        overlay: &OverlayGpuState,
+    ) -> Result<DrawStats, OverlayPrepareError> {
+        if target.format() != wgpu::TextureFormat::Rgba8Unorm
+            || target.dimension() != wgpu::TextureDimension::D2
+            || target.sample_count() != 1
+            || target.mip_level_count() != 1
+            || target.depth_or_array_layers() != 1
+            || [target.width(), target.height()] != self.viewport_size
+            || !target
+                .usage()
+                .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+        {
+            return Err(OverlayPrepareError::UnsupportedOutput);
+        }
+        if overlay.current.is_none() {
+            return Ok(DrawStats::default());
+        }
+        if self.display_overlay_pipelines.is_none() {
+            let camera_layout = self.circle_pipeline_single_sample.get_bind_group_layout(0);
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Noon resolved display overlay layout"),
+                bind_group_layouts: &[Some(&camera_layout)],
+                immediate_size: 0,
+            });
+            let source = format!(
+                "{}\n{}\n{}",
+                include_str!("../analytic.wgsl"),
+                super::source_color_shader(wgpu::TextureFormat::Rgba8Unorm),
+                include_str!("../polygon_coverage.wgsl")
+            );
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Noon resolved display overlay shader"),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+            self.display_overlay_pipelines = Some(
+                [("vs_circle", "fs_circle"), ("vs_rectangle", "fs_rectangle")].map(
+                    |(vertex_entry, fragment_entry)| {
+                        super::create_pipeline(
+                            device,
+                            &layout,
+                            &shader,
+                            wgpu::TextureFormat::Rgba8Unorm,
+                            1,
+                            super::AnalyticPipelineDescriptor {
+                                vertex_entry,
+                                fragment_entry,
+                                label: "Noon resolved display overlay pipeline",
+                                instance_layout: super::analytic_instance_layout(),
+                            },
+                        )
+                    },
+                ),
+            );
+        }
+        let pipelines = self
+            .display_overlay_pipelines
+            .as_ref()
+            .expect("prepared display overlay");
+        let view = target.create_view(&Default::default());
+        Ok(self.encode_overlay_with_pipelines(
+            encoder,
+            &view,
+            Some(overlay),
+            [&pipelines[0], &pipelines[1]],
+        ))
+    }
+
+    fn encode_overlay_with_pipelines(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        overlay: Option<&OverlayGpuState>,
+        pipelines: [&wgpu::RenderPipeline; 2],
+    ) -> DrawStats {
         let Some(OverlayGpuState {
             current: Some(value),
             buffer: Some(buffer),
@@ -162,7 +257,7 @@ impl GpuRenderer {
             return DrawStats::default();
         };
         let attachments = [Some(wgpu::RenderPassColorAttachment {
-            view: self.presentation.scene_view(view),
+            view,
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
@@ -179,8 +274,8 @@ impl GpuRenderer {
             multiview_mask: None,
         });
         pass.set_pipeline(match value.instance {
-            OverlayInstance::Circle(_) => &self.circle_pipeline_single_sample,
-            OverlayInstance::Rectangle(_) => &self.rectangle_pipeline_single_sample,
+            OverlayInstance::Circle(_) => pipelines[0],
+            OverlayInstance::Rectangle(_) => pipelines[1],
         });
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_vertex_buffer(0, self.quad_buffer.slice(..));

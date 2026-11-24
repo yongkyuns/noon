@@ -15,3 +15,9 @@ It also owns deterministic lowering work such as semantic-derived mapping, dense
 Lowering is deterministic, renderer-independent work with a concrete reuse and test boundary: the public Rust facade and runtime/session integration consume its derived execution data, while `noon-runtime` owns mutable execution state. The crate must not grow a parallel authoring IR.
 
 This boundary follows `docs/architecture.md` and the Phase A5 normalization rules in #960.
+
+## Release candidates
+
+Registry names are still being selected in [#2433](https://github.com/yongkyuns/noon/issues/2433).
+The current 0.1.0 artifacts are local candidates; the existing crates.io/PyPI
+`noon` projects are unrelated. Rust builds require version 1.98.1 or newer.

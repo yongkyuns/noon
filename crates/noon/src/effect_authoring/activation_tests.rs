@@ -89,8 +89,73 @@ fn effective_glow(runtime: &SceneInstance, object: ObjectId) -> Glow {
 }
 
 #[test]
+fn unrendered_family_effect_declaration_shares_published_and_prepared_lowering() {
+    let mut scene = Scene::new();
+    let leaf = scene.circle(0.4).unwrap();
+    let mut family = scene.family(&[(&leaf).into()]).unwrap();
+    family
+        .set_glow(EffectUpdate::default().radius(Pixels(3.25)).intensity(0.5))
+        .unwrap();
+    scene.add_many(&[(&family).into()]).unwrap();
+    let target = family.copy_family().unwrap();
+    target
+        .root()
+        .clone()
+        .set_glow(EffectUpdate::default().intensity(1.5))
+        .unwrap();
+    let declaration = scene
+        .declare_animation(
+            SemanticAnimationIntent::EffectTargetTo {
+                target: family.node_id(),
+                target_state: target.root().node_id(),
+                method_target: true,
+            },
+            options(),
+        )
+        .unwrap();
+    let (runtime, index) = runtime(&scene);
+    let published = lower(&scene, &runtime, &index, &declaration).unwrap();
+    let [published] = published.tracks() else {
+        panic!("one exact effect channel")
+    };
+    assert_eq!(
+        published.execution_object_id,
+        index.execution_object_id(family.node_id()).unwrap()
+    );
+    assert!(matches!(
+        published.values,
+        TrackValues::Effect {
+            from: noon_core::EffectTrackValue::Intensity(0.5),
+            to: noon_core::EffectTrackValue::Intensity(1.5),
+            ..
+        }
+    ));
+    let mut store = scene.integration_store().borrow_mut();
+    let prepared = SemanticMutationTransaction::new()
+        .prepare(&mut store)
+        .unwrap();
+    let plan = lower_prepared_semantic_animation_composition(
+        &prepared,
+        &index,
+        declaration.node_id(),
+        0.0,
+        AnimationOptions::new(),
+        |id| Some(effective(&runtime, id)),
+    )
+    .unwrap();
+    let [prepared] = plan.tracks() else {
+        panic!("same prepared effect channel")
+    };
+    assert_eq!(prepared.values, published.values);
+    assert_eq!(prepared.timing, published.timing);
+    assert_eq!(prepared.time_map, published.time_map);
+    assert_eq!(prepared.completion, published.completion);
+    assert_eq!(prepared.execution_object_id, published.execution_object_id);
+}
+
+#[test]
 fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
-    let (scene, source) = fixture();
+    let (mut scene, source) = fixture();
     let pulse = scene
         .declare_glow_pulse(&source, 2.0, AnimationOptions::new())
         .unwrap();
@@ -98,7 +163,7 @@ fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
     let object = index.execution_object_id(source.node_id()).unwrap();
     let base = only_effect(&effective(&runtime, object).effects.unwrap());
     let [(property, values)] = base
-        .parameter_channels(EffectUpdate::default().intensity(1.2))
+        .parameter_channels(&EffectUpdate::default().intensity(1.2))
         .unwrap()
         .try_into()
         .unwrap();
@@ -147,7 +212,7 @@ fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
     assert_eq!(effective_glow(&runtime, object).intensity(), 2.0);
     assert_eq!(
         effective_glow(&runtime, object).radius(),
-        base.definition.radius()
+        base.definition.as_glow().unwrap().radius()
     );
     assert_eq!(
         effective_glow(&runtime, object).color(),
@@ -159,7 +224,7 @@ fn glow_pulse_declaration_captures_effective_intensity_at_activation() {
 
 #[test]
 fn declaration_activates_motion_and_glow_from_exact_effective_values() {
-    let (scene, source) = fixture();
+    let (mut scene, source) = fixture();
     let original = source.get_effect("glow").unwrap().node_id();
     let mut target = source.target_editor().unwrap();
     target.shift(2.0, 0.0).unwrap();
@@ -212,7 +277,7 @@ fn declaration_activates_motion_and_glow_from_exact_effective_values() {
 
 #[test]
 fn disjoint_glow_targets_share_ordinary_composition_and_conflicting_parameters_reject() {
-    let (scene, source) = fixture();
+    let (mut scene, source) = fixture();
     let mut intensity = source.target_editor().unwrap();
     intensity
         .set_glow(EffectUpdate::default().intensity(1.4))
@@ -274,7 +339,7 @@ fn disjoint_glow_targets_share_ordinary_composition_and_conflicting_parameters_r
 #[test]
 fn stale_source_or_target_generation_never_rebinds_by_name() {
     for replace_target in [false, true] {
-        let (scene, source) = fixture();
+        let (mut scene, source) = fixture();
         let mut target = source.target_editor().unwrap();
         target
             .set_glow(EffectUpdate::default().intensity(1.4))
@@ -308,7 +373,7 @@ fn stale_source_or_target_generation_never_rebinds_by_name() {
 
 #[test]
 fn prepared_sequence_captures_prior_parameter_endpoint_and_can_return_to_original() {
-    let (scene, source) = fixture();
+    let (mut scene, source) = fixture();
     let mut first = source.target_editor().unwrap();
     first
         .set_glow(EffectUpdate::default().intensity(1.4))
@@ -376,7 +441,7 @@ fn returning_and_reversed_completion_persist_the_actual_f64_endpoint() {
         (RateFunction::Linear, true, 0.4000000000000123),
         (RateFunction::ThereAndBack, true, 0.4000000000000123),
     ] {
-        let (scene, source) = fixture();
+        let (mut scene, source) = fixture();
         let mut target = source.target_editor().unwrap();
         target
             .set_glow(EffectUpdate::default().intensity(1.4))
@@ -474,7 +539,7 @@ fn pending_effect_target_is_inert_and_prepared_identity_matches_its_commit() {
 #[test]
 fn unsupported_target_schema_rejects_while_prepared_membership_retains_glow() {
     for discrete in [0, 1, 2] {
-        let (scene, source) = fixture();
+        let (mut scene, source) = fixture();
         let mut target = source.target_editor().unwrap();
         match discrete {
             0 => target

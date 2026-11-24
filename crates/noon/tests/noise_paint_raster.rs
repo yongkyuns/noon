@@ -1,5 +1,6 @@
 //! Public native authoring -> shared Fill -> retained GPU, compared with an
 //! independent integer/quadrature specification at physical pixel centers.
+use noon::integration::scene_execution;
 use noon::{
     AnimationOptions, Color, ManimGeometryOptions, Mobject, NoisePaint, RateFunction, Scene,
 };
@@ -22,7 +23,7 @@ fn noise_phase_period_roundoff_cannot_retarget_other_axis() {
             )
             .unwrap();
         scene.add(&source).unwrap();
-        let mut session = scene.execution_session().unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
         let mut raster = pollster::block_on(Raster::with_primary_dimensions(SIZE, SIZE));
         pictures.push(raster.capture(&session.take_renderer_publication()));
     }
@@ -125,12 +126,13 @@ fn noise_pixels_match_independent_seed_filter_pose_time_and_seek_reference() {
                             .rate_func(RateFunction::Linear),
                     )
                     .unwrap();
-                let mut session = scene.execution_session().unwrap();
-                let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+                let mut session = scene_execution::lower(&scene).unwrap();
+                let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
+                    .play_animation(&animation)
+                    .unwrap();
                 let mut quarter = None;
                 for time in [0.0, 0.25, 0.5, 0.75, 1.0] {
-                    scene
-                        .live(&mut session)
+                    scene_execution::borrow_uninstalled(&scene, &mut session)
                         .advance_segment_to(segment, time)
                         .unwrap();
                     let pixels = raster.capture(&session.take_renderer_publication());
@@ -204,7 +206,9 @@ fn noise_pixels_match_independent_seed_filter_pose_time_and_seek_reference() {
                     raster.capture(&session.take_renderer_publication())
                 );
                 session.seek(1.0).unwrap();
-                scene.live(&mut session).complete_segment(segment).unwrap();
+                scene_execution::borrow_uninstalled(&scene, &mut session)
+                    .complete_segment(segment)
+                    .unwrap();
             }
         }
     }

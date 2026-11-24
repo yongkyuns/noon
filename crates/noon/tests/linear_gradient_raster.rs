@@ -1,5 +1,6 @@
 //! Public typed Rust authoring/animation -> retained renderer -> native pixels.
 //! The reference below reads no Runtime paint, uniforms or production sampler.
+use noon::integration::scene_execution;
 use noon::{AnimationOptions, Color, GradientStop, LinearGradient, Mobject, RateFunction, Scene};
 mod raster_support;
 use raster_support::{Raster, SIZE};
@@ -55,11 +56,12 @@ fn authored_gradient_animation_matches_independent_native_pixel_oracle() {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let mut session = scene.execution_session().unwrap();
-        let segment = scene.live(&mut session).play_animation(&animation).unwrap();
+        let mut session = scene_execution::lower(&scene).unwrap();
+        let segment = scene_execution::borrow_uninstalled(&scene, &mut session)
+            .play_animation(&animation)
+            .unwrap();
         for time in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            scene
-                .live(&mut session)
+            scene_execution::borrow_uninstalled(&scene, &mut session)
                 .advance_segment_to(segment, time)
                 .unwrap();
             let pixels = raster.capture(&session.take_renderer_publication());

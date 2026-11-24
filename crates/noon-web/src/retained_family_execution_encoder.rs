@@ -1,3 +1,6 @@
+mod publication;
+mod shader_programs;
+
 use crate::retained_resource_transport::residency::{ResourceResidency, StagedResourceResidency};
 use noon_core::{
     Camera2DState, FontResourceLookup, GeometryRef, GeometryResource, GeometryResourceLookup,
@@ -6,6 +9,17 @@ use noon_core::{
 use noon_runtime::{FrameChanges, RetainedFamilyFrame, RetainedPlannedFamilyFrame};
 
 use std::{collections::HashMap, sync::Arc};
+
+/// An evaluated sample with no renderer changes still names the publication
+/// whose actual display receipt is required. This is not a display acknowledgment.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NoChangePresentation {
+    pub session: u32,
+    pub sequence: u64,
+    pub time: f64,
+    pub publication_context: noon_core::PublicationContext,
+}
 
 use crate::{
     RenderGeometryPreparation, RetainedExecutionDeltaEncoder, RetainedExecutionTransportError,
@@ -28,6 +42,7 @@ pub struct RetainedFamilyExecutionDeltaEncoder {
     observed_plan_count: usize,
     resources: RetainedResourceInventory,
     resource_roots: ResourceResidency,
+    shader_programs: Option<shader_programs::ShaderProgramInventory>,
     text_closures: HashMap<TransportTextResourceHandle, TextClosure>,
     geometry_references: HashMap<crate::TransportGeometryResourceHandle, usize>,
     font_references: HashMap<(String, u32), usize>,
@@ -35,6 +50,8 @@ pub struct RetainedFamilyExecutionDeltaEncoder {
     render_geometry_generations: Vec<u32>,
     free_render_geometry_resources: Vec<u32>,
     next_render_geometry_resource: u32,
+    planar_camera: Option<Camera2DState>,
+    viewer_indications: noon_runtime::ViewerPresentation,
     published_rows: HashMap<crate::TransportSlotId, crate::RetainedTransportObjectState>,
 }
 
@@ -230,10 +247,12 @@ impl RetainedFamilyExecutionDeltaEncoder {
             let previous = self.published_rows.get(&row.slot);
             let stable = previous.is_some_and(|previous| {
                 previous.order == row.order
+                    && previous.draw_enabled == row.draw_enabled
                     && previous.fill_paint == row.fill_paint
                     && previous.object == row.object
                     && previous.z_index == row.z_index
                     && previous.content == row.content
+                    && previous.effects == row.effects
                     && previous.spatial == row.spatial
                     && previous.appearance == row.appearance
                     && previous.text_bounds == row.text_bounds
@@ -297,6 +316,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
             observed_plan_count: 0,
             resources: RetainedResourceInventory::default(),
             resource_roots: ResourceResidency::default(),
+            shader_programs: None,
             text_closures: HashMap::new(),
             geometry_references: HashMap::new(),
             font_references: HashMap::new(),
@@ -304,6 +324,8 @@ impl RetainedFamilyExecutionDeltaEncoder {
             render_geometry_generations: Vec::new(),
             free_render_geometry_resources: Vec::new(),
             next_render_geometry_resource: 0,
+            planar_camera: None,
+            viewer_indications: noon_runtime::ViewerPresentation::default(),
             published_rows: HashMap::new(),
         }
     }
@@ -357,6 +379,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 }
             }
         }
+        let staged_programs = self.stage_shader_programs(envelope)?;
         let new_images = envelope
             .retained
             .objects
@@ -385,6 +408,27 @@ impl RetainedFamilyExecutionDeltaEncoder {
                 )
             })
             .collect::<std::collections::BTreeSet<_>>();
+        let new_sources = envelope
+            .retained
+            .objects
+            .iter()
+            .filter_map(|row| {
+                if let crate::TransportObjectContent::Composed { source } = row.content {
+                    (!self.resources.contains_composed_source(source)).then_some((row.slot, source))
+                } else {
+                    None
+                }
+            })
+            .map(|(slot, handle)| {
+                self.retained
+                    .published_composed_source(slot, handle)
+                    .map(|source| (handle, source))
+                    .ok_or_else(|| RetainedResourceTransportError::InvalidComposedSource {
+                        handle,
+                        reason: "published source cache is unavailable".into(),
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         // The retained encoder emits a changed immutable geometry inline. Convert
         // only those changes into generation-qualified reusable arena slots.
@@ -437,12 +481,15 @@ impl RetainedFamilyExecutionDeltaEncoder {
         let pending_render = staged.finish();
         let staged_roots = self.resource_roots.stage(&envelope.retained);
         let retirements = self.resource_roots.retirements(&staged_roots);
-        if new_texts.is_empty()
+        if !staged_programs.has_additions(&self.resources)
+            && new_texts.is_empty()
+            && new_sources.is_empty()
             && new_images.is_empty()
             && mesh_geometry_handles.is_empty()
             && updates.is_empty()
         {
             envelope.resource_retirements = retirements;
+            self.commit_shader_programs(staged_programs);
             self.commit_resource_roots(staged_roots, &envelope.resource_retirements);
             pending_render.commit(self);
             return Ok(());
@@ -456,6 +503,8 @@ impl RetainedFamilyExecutionDeltaEncoder {
             fonts,
             &self.resources,
         )?;
+        additions = additions.with_composed_sources(new_sources)?;
+        additions = staged_programs.capture(additions, &self.resources)?;
         additions.capture_images(new_images, images)?;
         let closures = additions.text_closures().collect::<Vec<_>>();
         additions.retain_additions(&mut self.resources);
@@ -475,6 +524,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         debug_assert!(!additions.is_empty());
         envelope.resource_additions = Some(additions);
         envelope.resource_retirements = retirements;
+        self.commit_shader_programs(staged_programs);
         self.commit_resource_roots(staged_roots, &envelope.resource_retirements);
         pending_render.commit(self);
         Ok(())
@@ -502,6 +552,7 @@ impl RetainedFamilyExecutionDeltaEncoder {
         retirements: &RetainedResourceRetirements,
     ) {
         self.resources.forget_root_retirements(retirements);
+        self.retire_shader_programs(&retirements.shader_programs);
         for geometry in &retirements.geometries {
             if !self.geometry_references.contains_key(geometry) {
                 self.resources.forget_geometry(*geometry);
@@ -851,7 +902,7 @@ fn resolve_external_geometry(
         .ok_or_else(|| RetainedResourceTransportError::UnknownGeometry(handle.into()))?;
     match resource {
         GeometryResource::VectorPath(path) => {
-            *geometry = GeometryRef::VectorPath(path.as_ref().clone());
+            *geometry = GeometryRef::VectorPath(path.clone());
             Ok(None)
         }
         GeometryResource::Mesh(_) => Ok(Some(handle)),
@@ -1575,7 +1626,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(encoder.resources.counts(), [0; 4]);
+        assert_eq!(encoder.resources.counts(), [0; 5]);
         assert!(encoder.text_closures.is_empty());
         assert!(encoder.geometry_references.is_empty());
         assert!(encoder.font_references.is_empty());
@@ -1606,7 +1657,7 @@ mod tests {
                     &images,
                 )
                 .is_err());
-            assert_eq!(encoder.resources.counts(), [0; 4]);
+            assert_eq!(encoder.resources.counts(), [0; 5]);
             assert!(encoder.resource_roots.is_empty());
             encoder
                 .attach_resource_additions(
@@ -1653,7 +1704,7 @@ mod tests {
                     &images,
                 )
                 .unwrap();
-            assert_eq!(encoder.resources.counts(), [0; 4]);
+            assert_eq!(encoder.resources.counts(), [0; 5]);
             assert!(encoder.text_closures.is_empty());
             assert!(encoder.geometry_references.is_empty());
             assert!(encoder.font_references.is_empty());

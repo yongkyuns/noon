@@ -4,8 +4,8 @@ use noon::integration::{
     ExportFrameOptions, ExportFrameSummary, ExportFrames, ExportFramesStatus, ExportStop, FrameRate,
 };
 use noon::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveSession, LiveSessionError, Mobject,
-    RateFunction, RustHostCallbackTable, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveSessionError, Mobject, RateFunction,
+    RustHostCallbackTable, Scene,
 };
 use std::time::Duration;
 
@@ -30,7 +30,11 @@ struct Source {
 impl LiveContinuation for Source {
     type Error = LiveSessionError;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+    fn resume(
+        &mut self,
+        scene: &mut noon::ContinuationScene,
+    ) -> Result<ContinuationStep, Self::Error> {
+        let live = &mut scene.live();
         if self.waits_left > 0 {
             self.waits_left -= 1;
             // Exactly representable, but off-grid at every integer FPS below.
@@ -112,6 +116,9 @@ fn sample(p: u32, q: u32, prefix: usize, delayed: bool) -> (Vec<Observed>, Expor
                 }
                 let _ = export.take_renderer_publication().unwrap();
                 export.acknowledge_sample(sample).unwrap();
+            }
+            ExportFramesStatus::ResourcePreparationPending => {
+                panic!("duration fixture has no external shaders")
             }
             ExportFramesStatus::Complete(summary) => return (observations, summary),
         }

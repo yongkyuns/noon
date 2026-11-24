@@ -2,9 +2,12 @@ import initNoonWeb, {
   WasmAuthoringStore,
   WasmAudioSource,
   WasmAudioClipOptions,
+  WasmVideoSource,
   WasmAuthoringFamilyHandle,
   WasmEffectDefinition,
   WasmEffectUpdate,
+  WasmShaderParameter,
+  WasmShaderSchema,
   WasmLinearGradient,
   WasmRadialGradient,
   WasmNoisePaint,
@@ -39,35 +42,60 @@ import initNoonWeb, {
   resolveCreateAnimationOptions,
   resolveGlowPulseAnimationOptions,
   resolveTransformAnimationOptions,
+  exportSourcePreparationLimitJson,
 } from "./pkg/noon_web.js";
 import { resolveAnimationOptionsPlain } from "./animation-options.js";
 import { attachSemanticEngine } from "./semantic-engine-endpoint.js";
+import { createPreparedInterpreterDriver } from "./prepared-interpreter-driver.js";
+import { decodeSoundtrack, loadMp4, videoImportError } from "./video-source.js";
+import { createWorkerTaskYield } from "./worker-task-yield.js";
 import { PYTHON_COMPAT_MODULES } from "./python-compat-modules.js";
+import { loadCompiledRuntimeBuild, validateRuntimeBuildIdentity } from "./runtime-build-verifier.js";
 import { withAuthoringDiagnostics, diagnosedHostCode, authoringDiagnosticPayload } from "./authoring-diagnostic-runtime.js";
 import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.5/full/pyodide.mjs";
 
 const AUTHORING_CHANNEL = "noon.authoring";
-const AUTHORING_PROTOCOL_VERSION = 7;
+const AUTHORING_PROTOCOL_VERSION = 8;
 const AUTHORING_STARTUP_METRICS_VERSION = 2;
 const moduleGraphReadyAt = performance.now();
+const yieldWorkerTask = createWorkerTaskYield();
 const authoringMilestones = {
   performanceTimeOriginMs: performance.timeOrigin,
   firstSceneContextCreatedAtMs: null,
   authoringWorkerReadyAtMs: null,
 };
 
+const embeddedRuntime = new URL(self.location.href).searchParams.get("runtime") === "embedded"
+  ? Promise.withResolvers() : null;
+const runtimeBuildPromise = (embeddedRuntime?.promise ?? Promise.resolve(null))
+  .then(async (build) => {
+    if (build === null) return loadCompiledRuntimeBuild();
+    if (!(build.wasmModule instanceof WebAssembly.Module)) {
+      throw new Error("Embedded Noon runtime is missing its compiled WebAssembly module");
+    }
+    return { identity: await validateRuntimeBuildIdentity(build.identity), wasmModule: build.wasmModule };
+  }).then(async (build) => {
+    await initNoonWeb({ module_or_path: build.wasmModule });
+    return build;
+  });
 const pyodidePromise = initializePyodide();
 let requestQueue = Promise.resolve();
 const semanticContexts = new Map();
 let nextSemanticContext = 0;
 let nextContinuationGeneration = 1;
 let activeAuthoringRun = null;
+let authoringStore = null;
+let latexCompiler = null;
+let latexPreparation = null;
+// Opaque source may modify imported modules/builtins. Never infer purity against
+// that environment on a later Run or retry/reconstruct the source to recover it.
+let authoringLibrariesPristine = true;
 let fatalAuthoringFailure = false;
 
-pyodidePromise
-  .then(() => {
+Promise.all([pyodidePromise, runtimeBuildPromise])
+  .then(([, { identity }]) => {
     authoringMilestones.authoringWorkerReadyAtMs = performance.now();
-    post("ready");
+    post("ready", { buildIdentity: identity, libraryTrust: "pristine" });
   })
   .catch(failAuthoringWorker);
 
@@ -93,6 +121,16 @@ self.noonReportEngineTrap = (error) => {
 
 self.addEventListener("message", (event) => {
   if (fatalAuthoringFailure) return;
+  if (embeddedRuntime !== null && event.data?.type === "embedded_runtime" &&
+      event.data.channel === AUTHORING_CHANNEL && event.data.protocolVersion === AUTHORING_PROTOCOL_VERSION) {
+    embeddedRuntime.resolve(event.data.build);
+    return;
+  }
+  // A renderer may need the module during an active source continuation.
+  if (event.data?.type === "runtime_module") {
+    void handleRequest(event.data);
+    return;
+  }
   if (isContinuationControl(event.data)) {
     void handleContinuationControl(event.data);
     return;
@@ -102,10 +140,14 @@ self.addEventListener("message", (event) => {
   });
 });
 
+if (embeddedRuntime !== null) {
+  self.addEventListener("messageerror", () => embeddedRuntime.resolve(null), { once: true });
+}
+
 async function initializePyodide() {
   const initializeStartedAt = performance.now();
   const resourceDurations = {};
-  const noonWebReady = measureStartupTask(resourceDurations, "noonWebInitMs", () => initNoonWeb());
+  const noonWebReady = measureStartupTask(resourceDurations, "noonWebInitMs", () => runtimeBuildPromise);
   const pyodideReady = measureStartupTask(resourceDurations, "pyodideInitMs", () => loadPyodide());
   const compatibilityBundleReady = measureStartupTask(
     resourceDurations,
@@ -119,8 +161,26 @@ async function initializePyodide() {
   ]);
   const [, pyodide, compatibilityModules] = await startupResourcesReady;
   const resourcesReadyAt = performance.now();
-  const authoringStore = new WasmAuthoringStore();
+  authoringStore = new WasmAuthoringStore();
   const authoringStoreCreatedAt = performance.now();
+  self.noonPreparedSourceYield = () => {
+    const run = activeAuthoringRun;
+    const continuation = run?.continuation;
+    const preparedPlayer = continuation?.preparedPlayer;
+    if (!run?.sourceSceneOnly || !run.preparedPlayback ||
+        !preparedPlayer || continuation.terminal || continuation.observedExecution ||
+        continuation.callbackRequest != null || run.preparedDriver?.state() !== "running") return false;
+    return awaitOutsidePreparedSourceTurn(run, "cooperative-yield", async () => {
+      await yieldWorkerTask();
+      if (activeAuthoringRun !== run || !run.sourceSceneOnly || !run.preparedPlayback ||
+          run.preparedDriver?.state() !== "running" ||
+          run.continuation !== continuation || continuation.preparedPlayer !== preparedPlayer ||
+          continuation.terminal || continuation.observedExecution ||
+          continuation.callbackRequest != null) {
+        throw new Error("prepared source continuation retired during cooperative yield");
+      }
+    });
+  };
   self.noonCreateCanonicalAuthoringSceneContext = () => {
     const context = authoringStore.createSceneContext();
     authoringMilestones.firstSceneContextCreatedAtMs ??= performance.now();
@@ -128,18 +188,21 @@ async function initializePyodide() {
   };
   self.noonCreateAuthoringValueTrackerHandle = (initial) =>
     authoringStore.createValueTracker(initial);
-  self.noonRegisterSemanticExecution = (context) => {
-    const continuation = activeAuthoringRun?.continuation;
-    if (continuation?.context === context) return continuation.contextId;
-    // Registration is the authoring-run publication boundary. It retains a
-    // returned runtime for renderer recovery, but invalidates one only when
-    // direct authored work changed since that runtime was published.
-    context.prepareExecutionRun();
-    const token = `semantic-${nextSemanticContext++}`;
-    semanticContexts.set(token, { context, endpoints: new Set(), released: false });
-    return token;
-  };
+  self.noonRegisterSemanticExecution = registerSemanticExecution;
   self.noonAwaitSemanticContinuation = (context) => awaitSemanticContinuation(context);
+  self.noonPrepareSemanticEffects = async (context, staged) => {
+    try {
+      const continuation = activeAuthoringRun?.continuation;
+      if (!continuation || continuation.context !== context || continuation.terminal ||
+          continuation.endpoint === null) {
+        throw new Error("shader resource preparation requires the active render endpoint");
+      }
+      return await prepareSemanticEffectRequest(continuation, context, staged);
+    } catch (error) {
+      if (error instanceof WebAssembly.RuntimeError) failAuthoringWorker(error);
+      throw error;
+    } finally { if (!fatalAuthoringFailure) staged.free(); }
+  };
   self.noonSetSemanticContinuationCallbackSession = (context, sessionId) => {
     if (!Number.isSafeInteger(sessionId) || sessionId < 0) {
       throw new TypeError("semantic continuation callback session must be a non-negative safe integer");
@@ -207,7 +270,14 @@ async function initializePyodide() {
   self.noonEffectUpdate = (...args) => new WasmEffectUpdate(...args);
   self.noonGlow = (update) => WasmEffectDefinition.glow(update);
   self.noonBlur = (update) => WasmEffectDefinition.blur(update);
+  self.noonBloom = (update) => WasmEffectDefinition.bloom(update);
+  self.noonBackdropBlur = (update) => WasmEffectDefinition.backdropBlur(update);
   self.noonShadow = (update) => WasmEffectDefinition.shadow(update);
+  self.noonNoiseDissolve = (update) => WasmEffectDefinition.noiseDissolve(update);
+  self.noonPixelate = (update) => WasmEffectDefinition.pixelate(update);
+  self.noonShaderParameter = WasmShaderParameter;
+  self.noonShaderSchema = (...args) => new WasmShaderSchema(...args);
+  self.noonShaderEffect = (program, update) => WasmEffectDefinition.shader(program, update);
   self.noonLinearGradient = (...args) => new WasmLinearGradient(...args);
   self.noonRadialGradient = (...args) => new WasmRadialGradient(...args);
   self.noonNoisePaint = (...args) => new WasmNoisePaint(...args);
@@ -221,6 +291,21 @@ async function initializePyodide() {
   self.noonSurfaceSamplingPlan = (...args) => new WasmSurfaceSamplingPlan(...args);
   self.noonCreateAuthoringMeshHandle = (options) => authoringStore.createMesh(options);
   self.noonCreateAuthoringMeshFamilyHandle = (options) => authoringStore.createMeshFamily(options);
+  self.noonLoadUploadedVideo = async () => {
+    const run = activeAuthoringRun;
+    if (!run?.videoFile) throw videoImportError("choose a file with Video file before running the scene");
+    run.videoPreparation ??= prepareUploadedVideo(run);
+    const source = await run.videoPreparation;
+    if (run !== activeAuthoringRun) throw new Error("video import belongs to a retired Run");
+    return source;
+  };
+  self.noonPlaceUploadedVideo = (context, source, ...timing) => {
+    const run = activeAuthoringRun;
+    if (!run || run.videoSource !== source) throw new Error("video belongs to a different Run");
+    const video = context.video(source, ...timing);
+    run.videoContexts.add(context);
+    return video;
+  };
   self.noonLoadImageUrl = async (url) => {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`image request failed: HTTP ${response.status}`);
@@ -256,6 +341,7 @@ async function initializePyodide() {
   self.noonAuthoringCoordinateOptions = WasmCoordinateOptions;
   self.noonAuthoringSampleSpaceOptions = WasmSampleSpaceOptions;
   self.noonCreateAuthoringSampleSpaceHandle = (options) => authoringStore.createSampleSpace(options);
+  const latexPreparationHint = "For dynamically selected TeX APIs, call await prepare_latex()";
   self.noonAuthoringBarChartOptions = (values, range, width, height) =>
     new WasmBarChartOptions(values, range, width, height);
   self.noonPlotSamplingPlan = WasmPlotSamplingPlan;
@@ -264,36 +350,47 @@ async function initializePyodide() {
   self.noonCreateAuthoringBarChart = (options, labels, context) => {
     if (!latexCompiler) {
       options.free(); labels.free();
-      throw new Error("Call await prepare_latex() before constructing BarChart");
+      throw new Error(`${latexPreparationHint} before constructing BarChart`);
     }
     return context == null ? authoringStore.createLabeledBarChart(options, labels, latexCompiler)
-      : context.liveCreateLabeledBarChart(options, labels, latexCompiler);
+      : context.createLabeledBarChart(options, labels, latexCompiler);
   };
   self.noonBarChartLabels = (chart, size, buff, math, rgba, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing chart labels");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing chart labels`);
     return context == null ? chart.labelFamily(size, buff, math, rgba, latexCompiler)
-      : context.liveBarLabelFamily(chart, size, buff, math, rgba, latexCompiler);
+      : context.barLabelFamily(chart, size, buff, math, rgba, latexCompiler);
   };
   self.noonNumberPlaneDecimalCoordinateLabelFamilies = (
     plane, xValues, automaticX, yValues, automaticY, xOptions, yOptions,
   ) => {
     if (!latexCompiler) {
       xOptions.free(); yOptions.free();
-      throw new Error("Call await prepare_latex() before constructing NumberPlane coordinates");
+      throw new Error(`${latexPreparationHint} before constructing NumberPlane coordinates`);
     }
     return plane.numberPlaneDecimalCoordinateLabelFamilies(
       xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
     );
   };
   self.noonNumberLineDecimalNumberLabelFamily = (
-    line, values, automatic, options, attach,
+    line, values, automatic, options, attach, context,
   ) => {
     if (!latexCompiler) {
       options.free();
-      throw new Error("Call await prepare_latex() before constructing NumberLine numbers");
+      throw new Error(`${latexPreparationHint} before constructing NumberLine numbers`);
     }
-    return line.numberLineDecimalNumberLabelFamily(
-      values, automatic, options, attach, latexCompiler,
+    return context == null
+      ? line.numberLineDecimalNumberLabelFamily(values, automatic, options, attach, latexCompiler)
+      : context.createNumberLineDecimalLabels(line, values, automatic, options, attach, latexCompiler);
+  };
+  self.noonSceneDecimalCoordinateLabelFamilies = (
+    context, xAxis, yAxis, xValues, automaticX, yValues, automaticY, xOptions, yOptions,
+  ) => {
+    if (!latexCompiler) {
+      xOptions.free(); yOptions.free();
+      throw new Error(`${latexPreparationHint} before constructing coordinates`);
+    }
+    return context.createCoordinateDecimalLabels(
+      xAxis, yAxis, xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
     );
   };
   self.noonAxesDecimalCoordinateLabelFamilies = (
@@ -301,7 +398,7 @@ async function initializePyodide() {
   ) => {
     if (!latexCompiler) {
       xOptions.free(); yOptions.free();
-      throw new Error("Call await prepare_latex() before constructing Axes coordinates");
+      throw new Error(`${latexPreparationHint} before constructing Axes coordinates`);
     }
     return axes.axesDecimalCoordinateLabelFamilies(
       xValues, automaticX, yValues, automaticY, xOptions, yOptions, latexCompiler,
@@ -324,54 +421,42 @@ async function initializePyodide() {
   self.noonCreateAuthoringMarkupTextHandle = (...args) => authoringStore.createManimMarkupText(...args);
   self.noonCreateAuthoringTypstHandle = (source, math, fontSize) =>
     authoringStore.createManimTypst(source, math, fontSize);
-  let latexCompiler = null;
-  let latexPreparation = null;
-  self.noonPrepareLatex = async () => {
-    if (!latexPreparation) {
-      latexPreparation = import("./latex/backend.js")
-        .then(({ prepareLatexBackend }) => prepareLatexBackend())
-        .then(backend => { latexCompiler = new WasmLatexCompiler(backend); })
-        .catch(error => { latexPreparation = null; throw error; });
-    }
-    await latexPreparation;
-  };
+  self.noonPrepareLatex = prepareLatex;
   self.noonCreateAuthoringLatexHandle = (source, math, fontSize, red, green, blue, alpha, opacity, isolates, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Tex or MathTex");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Tex or MathTex`);
     const options = new WasmLatexOptions(source, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
     options.isolateSubstrings(isolates);
     return context == null ? authoringStore.createLatex(options, latexCompiler)
-      : context.liveCreateLatex(options, latexCompiler);
+      : context.createLatex(options, latexCompiler);
   };
   self.noonCreateAuthoringLatexStringsHandle = (strings, math, fontSize, red, green, blue, alpha, opacity, isolates, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Tex or MathTex");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Tex or MathTex`);
     const options = WasmLatexOptions.fromStrings(strings, math, fontSize, new Float64Array([red, green, blue, alpha]), opacity);
     options.isolateSubstrings(isolates);
     return context == null ? authoringStore.createLatex(options, latexCompiler)
-      : context.liveCreateLatex(options, latexCompiler);
+      : context.createLatex(options, latexCompiler);
   };
   const numericHandle = (handle) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalNumber`);
     return {
-      // A detached number exposes its retained authored value. An attached
-      // number is queried through the current canonical execution session.
-      value: (context) => context == null ? handle.value : context.queryMobjectDecimalValue(handle.mobject()),
+      value: (context) => context == null ? handle.value : context.decimalValue(handle),
       text: () => handle.text,
-      fontSize: (context) => context == null ? handle.fontSize() : context.queryMobjectDecimalFontSize(handle.mobject()),
+      fontSize: (context) => context == null ? handle.fontSize() : context.decimalFontSize(handle),
       mobject: () => handle.mobject(),
-      integerValue: (context) => context == null ? handle.integerValue() : context.queryMobjectIntegerValue(handle.mobject()),
-      setValue: (value) => handle.setValue(latexCompiler, value),
-      incrementValue: (delta) => handle.incrementValue(latexCompiler, delta),
-      setValueLive: (context, value) => context.liveSetDecimalValue(handle.mobject(), latexCompiler, value),
-      incrementValueLive: (context, delta) => context.liveIncrementDecimalValue(handle.mobject(), latexCompiler, delta),
+      integerValue: (context) => context == null ? handle.integerValue() : context.integerValue(handle),
+      setValue: (value, context) => context == null ? handle.setValue(latexCompiler, value)
+        : context.setDecimalValue(handle, latexCompiler, value),
+      incrementValue: (delta, context) => context == null ? handle.incrementValue(latexCompiler, delta)
+        : context.incrementDecimalValue(handle, latexCompiler, delta),
     };
   };
   self.noonDecimalNumberLabelMembers = (family) =>
     Array.from(family.decimalNumberLabelMembers(), numericHandle);
   self.noonCreateAuthoringDecimalNumberHandle = (value, places, sign, commas, ellipsis, unit, fontSize, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalNumber");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalNumber`);
     const args = [value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler];
     return numericHandle(context == null ? authoringStore.createDecimalNumber(...args)
-      : context.liveCreateDecimalNumber(...args));
+      : context.createDecimalNumber(...args));
   };
   const isFamilyHandle = (handle) => handle instanceof WasmAuthoringFamilyHandle;
   self.noonIsAuthoringFamilyHandle = isFamilyHandle;
@@ -393,16 +478,16 @@ async function initializePyodide() {
   self.noonCodeLanguagesList = () => noonCodeLanguagesList();
   self.noonCreateAuthoringCodeHandle = (source, options, context) =>
     context == null ? authoringStore.createCode(source, options)
-      : context.liveCreateCode(source, options);
+      : context.createCode(source, options);
   self.noonTableFromFamily = (family) => family.asTable();
   self.noonHighlightTableCell = (context, selection, column, red, green, blue, alpha, opacity) =>
     context == null ? selection.highlightCell(column, red, green, blue, alpha, opacity)
-      : context.liveHighlightTableCell(selection, column, red, green, blue, alpha, opacity);
+      : context.highlightTableCell(selection, column, red, green, blue, alpha, opacity);
   self.noonGetHighlightedTableCell = (context, selection, column, red, green, blue, alpha, opacity) =>
     context == null ? selection.getHighlightedCell(column, red, green, blue, alpha, opacity)
-      : context.liveGetHighlightedTableCell(selection, column, red, green, blue, alpha, opacity);
+      : context.getHighlightedTableCell(selection, column, red, green, blue, alpha, opacity);
   self.noonTableCell = (context, selection, column) => context == null
-    ? selection.getCell(column) : context.liveTableCell(selection, column);
+    ? selection.getCell(column) : context.tableCell(selection, column);
   const tableOptions = (v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY) => {
     const options = new WasmTableOptions(v, h, outer);
     options.setIncludeInnerLines(inner);
@@ -416,7 +501,7 @@ async function initializePyodide() {
   };
   self.noonCreateAuthoringTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     const args = [Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY)];
-    return context == null ? authoringStore.createTable(...args) : context.liveCreateTable(...args);
+    return context == null ? authoringStore.createTable(...args) : context.createTable(...args);
   };
   self.noonCreateAuthoringTableWithLabelsHandle = (rows, rowLabels, columnLabels, topLeftEntry, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
     const args = [
@@ -426,20 +511,20 @@ async function initializePyodide() {
       compositeRows(topLeftEntry.length ? [topLeftEntry] : []),
       tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY)];
     return context == null ? authoringStore.createTableWithLabels(...args)
-      : context.liveCreateTableWithLabels(...args);
+      : context.createTableWithLabels(...args);
   };
   self.noonCreateAuthoringMathTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MathTable");
-    return context.liveCreateMathTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing MathTable`);
+    return context.createMathTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
   };
   self.noonCreateAuthoringIntegerTableHandle = (rows, v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerTable");
-    return context.liveCreateIntegerTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing IntegerTable`);
+    return context.createIntegerTable(Array.from(rows, row => Array.from(row)), tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
   };
   self.noonCreateAuthoringDecimalTableHandle = (rows, decimalPlaces, includeSign, groupWithCommas, showEllipsis, unit,
     v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalTable");
-    return context.liveCreateDecimalTable(
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalTable`);
+    return context.createDecimalTable(
       Array.from(rows, row => Array.from(row)), decimalPlaces, includeSign, groupWithCommas,
       showEllipsis, unit, tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY), latexCompiler);
   };
@@ -452,12 +537,12 @@ async function initializePyodide() {
       entries, rowLabelEntries, columnLabelEntries, topLeftEntryRows,
       tableOptions(v, h, outer, inner, red, green, blue, alpha, width, opacity, join, cap, alignX, alignY)];
     return context == null ? authoringStore.createMobjectTableWithLabels(...args)
-      : context.liveCreateMobjectTableWithLabels(...args);
+      : context.createMobjectTableWithLabels(...args);
   };
   self.noonCreateAuthoringVariableHandle = (label, value, places, sign, commas, ellipsis, unit, fontSize, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Variable");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Variable`);
     if (context == null) throw new Error("Variable requires a canonical Scene authoring context");
-    const handle = context.liveCreateVariable(label, value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler);
+    const handle = context.createVariable(label, value, places, sign, commas, ellipsis, unit, fontSize, latexCompiler);
     return {
       family: () => handle.family(),
       label: () => handle.label(),
@@ -470,21 +555,21 @@ async function initializePyodide() {
   self.noonLinearTransformationPathArc = noonLinearTransformationPathArc;
   self.noonMatrixFromFamily = (family) => family.asMatrix();
   self.noonCreateAuthoringMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing Matrix");
-    return context.liveCreateMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing Matrix`);
+    return context.createMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonCreateAuthoringIntegerMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing IntegerMatrix");
-    return context.liveCreateIntegerMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing IntegerMatrix`);
+    return context.createIntegerMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonCreateAuthoringDecimalMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing DecimalMatrix");
-    return context.liveCreateDecimalMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing DecimalMatrix`);
+    return context.createDecimalMatrix(Array.from(rows, row => Array.from(row)), new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonCreateAuthoringMobjectMatrixHandle = (rows, v, h, bh, bv, stretch, context) => {
-    if (!latexCompiler) throw new Error("Call await prepare_latex() before constructing MobjectMatrix");
+    if (!latexCompiler) throw new Error(`${latexPreparationHint} before constructing MobjectMatrix`);
     const entries = compositeRows(rows);
-    return context.liveCreateMobjectMatrix(entries, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
+    return context.createMobjectMatrix(entries, new WasmMatrixOptions(v, h, bh, bv, stretch), latexCompiler);
   };
   self.noonNumericFromMobject = (mobject) => numericHandle(authoringStore.numericFromMobject(mobject));
   self.noonAuthoringMembershipBatch = (kind) => new WasmSceneMembershipBatch(kind);
@@ -598,27 +683,218 @@ async function loadCompatibilityBundle() {
 }
 
 
+async function prepareUploadedVideo(run) {
+  const signal = run.videoAbort.signal;
+  const asset = await loadMp4(run.videoFile, signal);
+  const audio = await decodeSoundtrack(asset, signal);
+  signal.throwIfAborted();
+  const pcm = audio ? WasmAudioSource.fromInterleaved(audio.pcm, audio.sampleRate, audio.channels) : undefined;
+  run.videoSource = new WasmVideoSource(1, asset.width, asset.height, asset.timestamps,
+    asset.duration, pcm, audio?.offset ?? 0);
+  return run.videoSource;
+}
+
+function videoAssetsFor(run, context) {
+  return run?.videoContexts?.has(context) ? [{id: 1, blob: run.videoFile}] : undefined;
+}
+
+function registerSemanticExecution(context) {
+  const run = activeAuthoringRun;
+  const continuation = run?.continuation;
+  if (run?.preparedPlayback && continuation &&
+      (continuation.context !== context || continuation.terminal)) {
+    throw new Error("prepared source must return its original context after a readable play or wait barrier");
+  }
+  if (continuation?.context === context) return continuation.contextId;
+  if (run?.preparedPlayback &&
+      (run.completedPreparedContextId !== null ||
+       typeof context.prepareFinishedSource !== "function" ||
+       typeof context.createFinishedPreparedExecutionPlayer !== "function")) {
+    throw new Error("prepared source requires one original context and a prepared-prefix enabled engine");
+  }
+  // This remains the authoring-run boundary, including returned-player recovery.
+  if (run?.preparedPlayback) invokePreparedEngine(() => context.prepareExecutionRun());
+  else context.prepareExecutionRun();
+  const token = `semantic-${nextSemanticContext++}`;
+  semanticContexts.set(token, { context, endpoints: new Set(), released: false, runRequestId: run?.requestId,
+    videoAssets: videoAssetsFor(run, context),
+    ...(run?.preparedPlayback ? { preparedPlayback: true, preparedSourceFinished: false } : {}),
+  });
+  if (run?.preparedPlayback) run.completedPreparedContextId = token;
+  return token;
+}
+
+function executionDiagnostic(entry, event) {
+  if (entry?.runRequestId == null) return;
+  post("execution_diagnostic", { requestId: entry.runRequestId,
+    libraryTrust: authoringLibrariesPristine ? "pristine" : "tainted", event });
+}
+
+function preparationTimingEvent(run, owner, startedAtMs, completedAtMs, boundary = null) {
+  if (!run.diagnosticPreparationTiming) return;
+  const contextId = run.continuation?.contextId ?? run.completedPreparedContextId ?? null;
+  post("execution_diagnostic", { requestId: run.requestId,
+    libraryTrust: authoringLibrariesPristine ? "pristine" : "tainted", event: {
+    stage: "preparation-timing",
+    owner,
+    measurement: "wall-clock",
+    runRequestId: run.requestId,
+    contextId,
+    ordinal: run.preparationTimingOrdinal++,
+    startedAtEpochMs: performance.timeOrigin + startedAtMs,
+    completedAtEpochMs: performance.timeOrigin + completedAtMs,
+    durationMs: completedAtMs - startedAtMs,
+    ...(boundary === null ? {} : { boundary }),
+  } });
+}
+
+function measurePreparationOperation(run, owner, callback) {
+  if (!run.diagnosticPreparationTiming) return callback();
+  const startedAtMs = performance.now();
+  try { return callback(); }
+  finally { preparationTimingEvent(run, owner, startedAtMs, performance.now()); }
+}
+
+function startPreparedSourceTurn(run) {
+  if (run.diagnosticPreparationTiming && run.sourceTurnStartedAtMs === null) {
+    run.sourceTurnStartedAtMs = performance.now();
+  }
+}
+
+function endPreparedSourceTurn(run, boundary) {
+  if (!run.diagnosticPreparationTiming || run.sourceTurnStartedAtMs === null) return;
+  const startedAtMs = run.sourceTurnStartedAtMs;
+  run.sourceTurnStartedAtMs = null;
+  const completedAtMs = performance.now();
+  preparationTimingEvent(run, "source-turn", startedAtMs, completedAtMs, boundary);
+}
+
+async function awaitOutsidePreparedSourceTurn(run, owner, operation) {
+  endPreparedSourceTurn(run, owner);
+  const startedAtMs = performance.now();
+  try { return await operation(); }
+  finally {
+    preparationTimingEvent(run, owner, startedAtMs, performance.now());
+    startPreparedSourceTurn(run);
+  }
+}
+
+function sourceExecutionRequirement(json) {
+  const requirement = JSON.parse(json);
+  if (requirement !== null && (!isRecord(requirement) || ![
+    "host_effects", "host_callbacks", "effective_display", "native_input", "signals",
+    "replay_unavailable", "external_resources",
+  ].includes(requirement.code))) throw new TypeError("invalid source execution requirement");
+  return requirement;
+}
+
+function observeSemanticExecution(request, entry, prepared) {
+  const profile = prepared ? entry.continuationGeneration == null ? "immutable" : "incremental"
+    : entry.continuationGeneration != null || request.completedStaticSource ? "observed" : "immutable";
+  return event => {
+    if (entry.released) return;
+    if (event.stage === "attached") {
+      const stage = entry.diagnosticProfile == null ? "attached"
+        : entry.diagnosticProfile === profile ? "receiver-attached" : "profile-change";
+      entry.diagnosticProfile = profile;
+      event = { ...event, stage, ...(entry.sourceRequirement ? { reason: entry.sourceRequirement } : {}),
+        ...(entry.handoffBoundary ?? {}) };
+    } else if (event.stage === "terminal-adopted" || event.stage === "disposition") {
+      const key = event.stage === "terminal-adopted" ? "diagnosticTerminalAdopted" : "diagnosticDisposition";
+      if (entry[key]) return;
+      entry[key] = true;
+      if (event.disposition === "observed-complete" && entry.handoffBoundary && entry.sourceRequirement?.code === "native_input") {
+        event = { ...event, disposition: "input-handoff" };
+      }
+    }
+    executionDiagnostic(entry, { ...event, profile, contextId: request.contextId,
+      continuationGeneration: entry.continuationGeneration ?? null, session: request.session });
+  };
+}
+
+async function prepareSemanticEffectRequest(continuation, context, staged) {
+  if (continuation.preparedPlayback && !continuation.observedExecution) {
+    if (!continuation.preparedPlayer || continuation.endpoint === null) {
+      throw new Error("shader resource preparation requires the active prepared source");
+    }
+    const prepareEffects = () => continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
+    if (activeAuthoringRun?.diagnosticPreparationTiming) {
+      await awaitOutsidePreparedSourceTurn(activeAuthoringRun, "effect-resource-wait", prepareEffects);
+    } else await prepareEffects();
+    if (staged.startsSegment === true) {
+      return await continuation.preparedDriver.awaitSegment(context);
+    }
+    return;
+  }
+  if (staged.startsSegment === true) {
+    const prepareEffects = () => awaitSemanticContinuation(context, () =>
+      continuation.endpoint.prepareSourceEffects(continuation.generation, staged));
+    if (activeAuthoringRun?.diagnosticPreparationTiming) {
+      return await awaitOutsidePreparedSourceTurn(activeAuthoringRun, "continuation-presentation-wait", prepareEffects);
+    }
+    return await prepareEffects();
+  }
+  const prepareEffects = () => continuation.endpoint.prepareSourceEffects(continuation.generation, staged);
+  if (activeAuthoringRun?.diagnosticPreparationTiming) {
+    await awaitOutsidePreparedSourceTurn(activeAuthoringRun, "publication-presentation-wait", prepareEffects);
+  } else await prepareEffects();
+}
+
+function observeContinuationSourceRequirement(continuation) {
+  if (!continuation.observedExecution) return;
+  const entry = semanticContexts.get(continuation.contextId);
+  if (!entry || entry.released || entry.sourceRequirement?.code === "host_callbacks") return;
+  const requirement = sourceExecutionRequirement(invokePreparedEngine(
+    () => continuation.context.observedSourceExecutionRequirementJson(),
+  ));
+  if (requirement?.code !== "host_callbacks") return;
+  entry.sourceRequirement = requirement;
+  executionDiagnostic(entry, {
+    stage: "source-requirement",
+    reason: requirement,
+    profile: "observed",
+    contextId: continuation.contextId,
+    continuationGeneration: continuation.generation,
+  });
+}
+
 function registerContinuationContext(context) {
   if (activeAuthoringRun === null) {
     throw new Error("semantic continuation requires an active Python authoring run");
+  }
+  if (activeAuthoringRun.preparedPlayback &&
+      ["failed", "cancelled", "finished"].includes(activeAuthoringRun.preparedDriver.state())) {
+    throw new Error("prepared source invocation is retired");
+  }
+  if (activeAuthoringRun.preparedPlayback &&
+      (typeof context.prepareInitialSourceSegment !== "function" ||
+       typeof context.createPreparedExecutionPlayer !== "function")) {
+    throw new Error("prepared playback requires a prepared-prefix enabled engine build");
   }
   if (activeAuthoringRun.continuation !== null) {
     if (activeAuthoringRun.continuation.context !== context) {
       throw new Error("one Python authoring run cannot suspend multiple semantic contexts");
     }
+    observeContinuationSourceRequirement(activeAuthoringRun.continuation);
     return activeAuthoringRun.continuation;
   }
-  context.prepareExecutionRun();
+  if (activeAuthoringRun.preparedPlayback) invokePreparedEngine(() => context.prepareExecutionRun());
+  else context.prepareExecutionRun();
   const callbackSession = activeAuthoringRun.continuationCallbackSession;
   if (callbackSession !== null && callbackSession.context !== context) {
     throw new Error("semantic continuation callback session belongs to another context");
   }
   const contextId = `semantic-${nextSemanticContext++}`;
   const generation = nextContinuationGeneration++;
+  const preparedPlayback = activeAuthoringRun.preparedPlayback === true;
   const entry = {
     context,
+    videoAssets: videoAssetsFor(activeAuthoringRun, context),
+    runRequestId: activeAuthoringRun.requestId,
+    continuationGeneration: generation,
     endpoints: new Set(),
     released: false,
+    preparedPlayback,
     ...(callbackSession === null ? {} : { callbackSessionId: callbackSession.sessionId }),
   };
   const continuation = {
@@ -633,6 +909,15 @@ function registerContinuationContext(context) {
     callbackCommit: null,
     committedCallbackPlayer: null,
     terminal: false,
+    preparedPlayback,
+    preparedDriver: preparedPlayback ? activeAuthoringRun.preparedDriver : null,
+    preparedPlayer: null,
+    preparedAttachmentStarted: false,
+    preparedBootstrapObserved: false,
+    observedExecution: false,
+    initialSourceReady: preparedPlayback ? preparedEndpointReady() : null,
+    preparedSourceFinished: false,
+    preparedReady: preparedPlayback ? preparedEndpointReady() : null,
   };
   semanticContexts.set(contextId, entry);
   activeAuthoringRun.continuation = continuation;
@@ -642,30 +927,63 @@ function registerContinuationContext(context) {
     semanticExecution: {
       context_id: contextId,
       continuation_generation: generation,
+      ...(preparedPlayback ? { prepared_playback: true } : {}),
       ...(callbackSession === null ? {} : { callback_session_id: callbackSession.sessionId }),
     },
-    duration: Number(context.liveHandoffDuration()),
+    duration: Number(preparedPlayback
+      ? invokePreparedEngine(() => context.liveHandoffDuration()) : context.liveHandoffDuration()),
   });
   return continuation;
 }
 
-function awaitSemanticContinuation(context) {
+function checkHistoryExportSegment(run, context) {
+  if (run.historyExportLimit === null) return;
+  if (!run.sourceSceneOnly) {
+    throw new Error("history export requires deterministic source preparation");
+  }
+  if (invokePreparedEngine(() => context.pendingPreparedSegmentEnd()) > run.historyExportLimit) {
+    throw new Error("completed-history export source exceeds the --max-frames preparation limit");
+  }
+}
+
+function awaitSemanticContinuation(context, start = null) {
   let continuation;
   try {
+    if (activeAuthoringRun?.continuation === null) {
+      checkHistoryExportSegment(activeAuthoringRun, context);
+    }
     continuation = registerContinuationContext(context);
     if (continuation.terminal) {
       throw new Error("semantic continuation is terminal");
     }
-    if (continuation.pending !== null) {
-      throw new Error("semantic continuation already has a pending await");
+    if (continuation.preparedPlayback) {
+      if (start !== null && continuation.observedExecution) return awaitObservedContinuation(continuation, start);
+      return continuation.preparedDriver.awaitSegment(context);
     }
   } catch (error) {
     return Promise.reject(error);
   }
+  return awaitObservedContinuation(continuation, start);
+}
+
+function awaitObservedContinuation(continuation, start = null) {
+  if (continuation.pending !== null) {
+    return Promise.reject(new Error("semantic continuation already has a pending await"));
+  }
   const result = new Promise((resolve, reject) => {
     continuation.pending = { resolve, reject };
   });
-  if (continuation.endpoint !== null) {
+  if (start !== null) {
+    const pending = continuation.pending;
+    Promise.resolve().then(start).catch(error => {
+      if (continuation.pending === pending) {
+        continuation.pending = null;
+        pending.reject(error);
+      } else if (!continuation.terminal) {
+        failContinuation(continuation, error);
+      }
+    });
+  } else if (continuation.endpoint !== null) {
     try {
       continuation.endpoint.startContinuation(continuation.generation);
     } catch (error) {
@@ -673,6 +991,196 @@ function awaitSemanticContinuation(context) {
     }
   }
   return result;
+}
+
+function preparedEndpointReady() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  // Cancellation can arrive before the driver's first queued preparation task.
+  // Its rejection is still awaited there, without a worker-fatal orphan promise.
+  void promise.catch(() => {});
+  return { promise, resolve, reject };
+}
+
+function invokePreparedEngine(callback) {
+  if (fatalAuthoringFailure) throw new Error("prepared engine is retired after a fatal failure");
+  try { return callback(); }
+  catch (error) {
+    // These typed calls bypass the Python facade's trap reporter. A trapped
+    // WASM instance cannot be unwound, freed or reused by host recovery.
+    if (error instanceof WebAssembly.RuntimeError) failAuthoringWorker(error);
+    // Rust bindings may reject with a JsValue string. Pyodide's Promise bridge
+    // requires an Error; keep the original value as its cause, without retrying.
+    throw error instanceof Error ? error : new Error(String(error), { cause: error });
+  }
+}
+
+function requirePreparedContinuation(run, context, signal = null) {
+  signal?.throwIfAborted();
+  const continuation = run.continuation;
+  const entry = continuation && semanticContexts.get(continuation.contextId);
+  if (activeAuthoringRun !== run || !continuation?.preparedPlayback ||
+      continuation.context !== context || continuation.terminal || !entry || entry.released) {
+    throw new Error("prepared source context or invocation is retired");
+  }
+  return continuation;
+}
+
+function deliverPreparedSourcePrefix(run, continuation) {
+  const player = continuation.preparedPlayer;
+  if (!measurePreparationOperation(run, "reader-reserve", () =>
+    invokePreparedEngine(() => player.reserveSourcePrefixCapacity()))) return false;
+  if (!measurePreparationOperation(run, "reader-deliver", () =>
+    invokePreparedEngine(() => player.deliverSourcePrefix()))) throw new Error("prepared source lost its retained suffix");
+  // Future history is not a presentation. No transport/presentation await is
+  // needed to release this source barrier, even while the reader is paused.
+  continuation.endpoint.sourcePrefixDelivered();
+  return true;
+}
+
+function createPreparedSourceDriver(run) {
+  return createPreparedInterpreterDriver({
+    ...(run.diagnosticPreparationTiming ? {
+      onSourceTurnResumed: () => startPreparedSourceTurn(run),
+      onSourceTurnSuspended: () => endPreparedSourceTurn(run, "barrier"),
+    } : {}),
+    async prepareSegment(context, signal) {
+      const continuation = requirePreparedContinuation(run, context, signal);
+      if (continuation.observedExecution) return awaitObservedContinuation(continuation);
+      checkHistoryExportSegment(run, context);
+      if (!continuation.preparedBootstrapObserved) {
+        const requirement = sourceExecutionRequirement(invokePreparedEngine(() => context.beginObservedPreparedSource(run.sourceSceneOnly === true)));
+        if (requirement !== null) {
+          if (run.historyExportLimit !== null) {
+            throw new Error(`history export requires deterministic source preparation (${requirement.code})`);
+          }
+          semanticContexts.get(continuation.contextId).sourceRequirement = requirement;
+          continuation.observedExecution = true;
+          // Install the original stack's await before attachment can request its
+          // first callback. There is no reader or replacement source invocation.
+          const event = awaitObservedContinuation(continuation);
+          continuation.initialSourceReady.resolve();
+          return event;
+        }
+        // The interpreter has suspended before this queued worker turn. A zero
+        // barrier releases once; source resumes on another turn, never in a loop.
+        let readable;
+        try { readable = measurePreparationOperation(run, "segment-initial",
+          () => invokePreparedEngine(() => context.prepareInitialSourceSegment())); }
+        catch (error) { continuation.initialSourceReady.reject(error); throw error; }
+        if (!readable) return;
+        continuation.initialSourceReady.resolve();
+        await continuation.preparedReady.promise;
+        requirePreparedContinuation(run, context, signal);
+        continuation.preparedBootstrapObserved = true;
+        return;
+      }
+      const preparedPlayer = continuation.preparedPlayer;
+      let prepared;
+      for (;;) {
+        prepared = measurePreparationOperation(run, "segment-prepare",
+          () => invokePreparedEngine(() => preparedPlayer.prepareSourceSegmentStep(context)));
+        if (prepared !== undefined) break;
+        await yieldWorkerTask();
+        requirePreparedContinuation(run, context, signal);
+        if (run.continuation !== continuation || continuation.preparedPlayer !== preparedPlayer) {
+          throw new Error("prepared source segment changed while completion was suspended");
+        }
+      }
+      if (prepared === false) {
+        const requirement = sourceExecutionRequirement(
+          invokePreparedEngine(() => continuation.preparedPlayer.sourceExecutionRequirementJson));
+        if (run.historyExportLimit !== null) {
+          throw new Error(`history export requires deterministic source preparation (${requirement?.code})`);
+        }
+        semanticContexts.get(continuation.contextId).sourceRequirement = requirement;
+        // This is still the original suspended play/wait. Only a reader request
+        // at the required frontier may activate its normal callback protocol.
+        const event = awaitContinuationEvent(continuation);
+        continuation.endpoint.sourceExecutionRequired();
+        return event;
+      }
+      deliverPreparedSourcePrefix(run, continuation);
+    },
+    needsPreparation() {
+      const continuation = requirePreparedContinuation(run, run.continuation?.context);
+      if (!continuation.preparedPlayer) return true; // Continue initial zero barriers cooperatively.
+      return invokePreparedEngine(() => continuation.preparedPlayer.needsPreparation(run.preparationLookaheadSeconds ?? 1));
+    },
+    async finishSource(resultJson, signal) {
+      if (run.continuation === null) {
+        signal.throwIfAborted();
+        const result = JSON.parse(resultJson), descriptor = result?.semantic_execution;
+        const entry = semanticContexts.get(run.completedPreparedContextId);
+        if (activeAuthoringRun !== run || !entry || entry.released ||
+            !Number.isFinite(result.duration) || result.duration < 0 ||
+            descriptor?.context_id !== run.completedPreparedContextId ||
+            descriptor.continuation_generation != null) {
+          throw new Error("prepared source produced no readable play or wait interval or completed static scene");
+        }
+        // Completion includes construct/finally/tear_down and per-run cleanup.
+        // Rust retains the one lowered runtime and chooses its static reader or
+        // ordinary execution path, including fully declared finite audio.
+        const staticSource = invokePreparedEngine(() => entry.context.prepareFinishedSource());
+        if (typeof staticSource !== "boolean") throw new TypeError("invalid completed-source admission");
+        if (staticSource && descriptor.callback_session_id != null) {
+          throw new Error("historical static playback cannot discard Python callbacks");
+        }
+        entry.preparedPlayback = staticSource;
+        entry.preparedSourceFinished = staticSource;
+        return;
+      }
+      const continuation = requirePreparedContinuation(run, run.continuation?.context, signal);
+      const result = JSON.parse(resultJson), descriptor = result?.semantic_execution;
+      if (descriptor?.context_id !== continuation.contextId ||
+          descriptor.continuation_generation !== continuation.generation) {
+        throw new Error("prepared source must return its original context and continuation");
+      }
+      if (continuation.observedExecution) {
+        await continuation.endpoint.publishContinuationResult(continuation.generation);
+        requirePreparedContinuation(run, continuation.context, signal);
+        continuation.terminal = true;
+        return;
+      }
+      if (descriptor.callback_session_id != null) {
+        throw new Error("historical playback cannot discard Python callbacks");
+      }
+      if (!continuation.preparedBootstrapObserved) {
+        // All actual barriers were zero-duration. Only successful source cleanup
+        // authorizes Rust to seal the final same-time edits at the exact endpoint.
+        if (result.duration !== 0) throw new Error("prepared source produced no readable interval");
+        continuation.preparedSourceFinished = true;
+        continuation.initialSourceReady.resolve();
+        await continuation.preparedReady.promise;
+        requirePreparedContinuation(run, continuation.context, signal);
+        continuation.terminal = true;
+        return;
+      }
+      // runAuthoringSource includes the existing construct/finally/tear_down and
+      // per-run globals cleanup. Seal only after that entire operation succeeds.
+      if (measurePreparationOperation(run, "segment-finish", () =>
+        invokePreparedEngine(() => continuation.preparedPlayer.finishSourcePreparation(continuation.context))) === false) {
+        // Source and cleanup have returned. Retain their completed canonical
+        // player until actual reader demand reaches its final native state.
+        continuation.preparedSourceFinished = true;
+        const handedOff = awaitContinuationEvent(continuation);
+        continuation.endpoint.sourceExecutionRequired();
+        await handedOff;
+        requirePreparedContinuation(run, continuation.context, signal);
+        continuation.terminal = true;
+        return;
+      }
+      // The bootstrap attachment knows only the first source barrier. Install
+      // the host's loop policy with the completed authored range before Rust
+      // adopts terminal history; an open prefix never gains a guessed period.
+      invokePreparedEngine(() => continuation.preparedPlayer.setPreparedLoopDuration(
+        continuation.loopPlayback && result.duration > 0 ? result.duration : undefined));
+      if (!deliverPreparedSourcePrefix(run, continuation)) {
+        throw new Error("prepared source did not deliver its explicit final endpoint");
+      }
+      continuation.terminal = true;
+    },
+  });
 }
 
 function continuationEvent(kind, value = {}) {
@@ -945,6 +1453,12 @@ function completeContinuation(continuation, generation) {
 function failContinuation(continuation, error) {
   if (continuation.terminal) return;
   continuation.terminal = true;
+  if (continuation.preparedPlayback) {
+    continuation.preparedDriver.cancel(error);
+    continuation.initialSourceReady.reject(error);
+    continuation.preparedReady.reject(error);
+    if (!fatalAuthoringFailure) invokePreparedEngine(() => continuation.preparedPlayer?.stopSourcePreparation());
+  }
   continuation.committedCallbackPlayer = null;
   if (continuation.callbackCommit !== null) {
     continuation.callbackCommit.reject(error instanceof Error ? error : new Error(String(error)));
@@ -969,7 +1483,7 @@ function isContinuationControl(request) {
     (request.type === "release_semantic_execution" ||
       request.type === "cancel_semantic_continuation" ||
       (request.type === "attach_semantic_execution" &&
-       request.continuationGeneration !== undefined));
+       (request.continuationGeneration !== undefined || request.replaceExistingEndpoint === true)));
 }
 
 async function handleContinuationControl(request) {
@@ -979,7 +1493,7 @@ async function handleContinuationControl(request) {
     requestId = request.requestId;
     const pyodide = await pyodidePromise;
     if (request.type === "attach_semantic_execution") {
-      await attachSemanticExecutionRequest(request, true, pyodide);
+      await attachSemanticExecutionRequest(request, request.continuationGeneration !== undefined, pyodide);
       post("semantic_execution_attached", { requestId });
       return;
     }
@@ -1016,9 +1530,14 @@ async function handleContinuationControl(request) {
         activeAuthoringRun.requestId !== request.continuationRunRequestId) {
       throw new Error("stale semantic continuation cancellation");
     }
+    executionDiagnostic(entry, { stage: "cancelled", contextId: request.contextId,
+      continuationGeneration: continuation.generation });
     failContinuation(continuation, new Error(request.reason));
     entry.released = true;
-    continuation.endpoint?.stop();
+    for (const endpoint of [...entry.endpoints]) endpoint.stop();
+    if (continuation.preparedPlayback && continuation.endpoint === null) {
+      retireSemanticContext(request.contextId, entry);
+    }
     post("semantic_continuation_cancelled", { requestId });
   } catch (error) {
     if (request?.type === "attach_semantic_execution") {
@@ -1034,21 +1553,62 @@ async function handleRequest(request) {
   try {
     validateRequest(request);
     requestId = request.requestId;
+    if (request.type === "runtime_module") {
+      try {
+        const { wasmModule } = await runtimeBuildPromise;
+        try {
+          request.port.postMessage(wasmModule);
+        } catch (error) {
+          if (error.name !== "DataCloneError") throw error;
+          request.port.postMessage(null);
+        }
+      } finally {
+        request.port.close();
+      }
+      post("runtime_module_sent", { requestId });
+      return;
+    }
     const pyodide = await pyodidePromise;
     if (request.type === "run") {
-      const run = { requestId, continuation: null, continuationCallbackSession: null };
+      const run = {
+        requestId, continuation: null, continuationCallbackSession: null,
+        videoFile: request.videoFile, videoPreparation: null, videoSource: null,
+        videoAbort: request.videoFile ? new AbortController() : null,
+        videoContexts: request.videoFile ? new WeakSet() : null,
+        preparedPlayback: request.preparedPlayback === true,
+        loopPlayback: request.loopPlayback !== false,
+        diagnosticPreparationTiming: request.diagnosticPreparationTiming === true,
+        preparationTimingOrdinal: 0,
+        sourceTurnStartedAtMs: null,
+        sourceSceneOnly: false,
+        preparationLookaheadSeconds: request.preparationLookaheadSeconds === undefined ? 1 : request.preparationLookaheadSeconds,
+        historyExportLimit: request.historyExportOptions === undefined ? null :
+          exportSourcePreparationLimitJson(JSON.stringify(request.historyExportOptions)),
+        preparedDriver: null, completedPreparedContextId: null,
+      };
       activeAuthoringRun = run;
+      if (run.preparedPlayback) run.preparedDriver = createPreparedSourceDriver(run);
       let completed = false;
       try {
         const workerRunStartedAtMs = performance.now();
-        const resultJson = await runAuthoringSource(
-          pyodide,
-          request.source,
-          request.context,
-          requestId,
-        );
+        const execute = async () => {
+          try {
+            const resultJson = await runAuthoringSource(pyodide, request.source, request.context, requestId);
+            const contextId = JSON.parse(resultJson)?.semantic_execution?.context_id;
+            executionDiagnostic(semanticContexts.get(contextId), { stage: "source-complete", contextId });
+            return resultJson;
+          } finally {
+            endPreparedSourceTurn(run, "source-settled");
+          }
+        };
+        let resultJson = await (run.preparedDriver ? run.preparedDriver.run(execute) : execute());
         const workerRunCompletedAtMs = performance.now();
-        if (run.continuation !== null) {
+        if (run.preparedPlayback) {
+          const result = JSON.parse(resultJson);
+          result.semantic_execution.prepared_playback = run.continuation !== null ||
+            semanticContexts.get(run.completedPreparedContextId)?.preparedPlayback === true;
+          resultJson = JSON.stringify(result);
+        } else if (run.continuation !== null) {
           await run.continuation.endpoint.publishContinuationResult(run.continuation.generation);
         }
         post("result", {
@@ -1064,10 +1624,28 @@ async function handleRequest(request) {
       } finally {
         if (!completed && run.continuation !== null) {
           const entry = semanticContexts.get(run.continuation.contextId);
-          if (entry) entry.released = true;
           failContinuation(run.continuation, new Error("Python authoring continuation failed"));
-          run.continuation.endpoint?.stop();
+          if (fatalAuthoringFailure) {
+            // The fatal channel owns worker retirement. Never call back into
+            // a trapped WASM engine while the Python source unwinds.
+          } else if (!run.preparedPlayback || run.continuation.observedExecution) {
+            if (entry) entry.released = true;
+            run.continuation.endpoint?.stop();
+          } else if (entry && run.continuation.endpoint === null &&
+                     !run.continuation.preparedAttachmentStarted) {
+            entry.released = true;
+            retireSemanticContext(run.continuation.contextId, entry);
+          }
         }
+        if (!completed && !fatalAuthoringFailure && run.completedPreparedContextId !== null) {
+          const entry = semanticContexts.get(run.completedPreparedContextId);
+          if (entry) {
+            entry.released = true;
+            retireSemanticContext(run.completedPreparedContextId, entry);
+          }
+        }
+        run.videoAbort?.abort();
+        if (!fatalAuthoringFailure) run.videoSource?.free();
         if (activeAuthoringRun === run) activeAuthoringRun = null;
       }
       return;
@@ -1079,6 +1657,10 @@ async function handleRequest(request) {
     }
     throw new Error(`Unsupported Python authoring request: ${request.type}`);
   } catch (error) {
+    if (request?.type === "run" && requestId !== null) {
+      executionDiagnostic({ runRequestId: requestId }, { stage: "failed",
+        reason: { code: "authoring_failure", detail: String(error?.message ?? error).slice(0, 1024) } });
+    }
     if (request?.type === "attach_semantic_execution") {
       request.controlPort?.close?.();
       request.renderPort?.close?.();
@@ -1088,9 +1670,16 @@ async function handleRequest(request) {
 }
 
 async function attachSemanticExecutionRequest(request, continuationOnly, pyodide) {
+  if (request.sourceHandoff !== undefined && typeof request.sourceHandoff !== "boolean") {
+    throw new TypeError("sourceHandoff must be boolean");
+  }
   const entry = semanticContexts.get(request.contextId);
   if (!entry || entry.released) throw new Error("unknown or retired semantic execution context");
   const continuation = activeAuthoringRun?.continuation;
+  if (entry.preparedPlayback && request.replaceExistingEndpoint === true) {
+    if (continuationOnly || request.sourceHandoff === true) throw new Error("receiver replacement cannot restart source continuation attachment");
+    return replacePreparedSemanticReceiver(request, entry);
+  }
   if (continuationOnly) {
     if (!continuation || continuation.contextId !== request.contextId ||
         continuation.generation !== request.continuationGeneration ||
@@ -1099,10 +1688,67 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
         continuation.terminal) {
       throw new Error("stale semantic continuation attachment");
     }
-    if (continuation.endpoint !== null) {
+    if (continuation.endpoint !== null && request.sourceHandoff !== true) {
       throw new Error("semantic continuation endpoint is already attached");
     }
   }
+  if (request.sourceHandoff === true) {
+    if (!continuationOnly || !entry.preparedPlayback || !continuation?.preparedPlayer ||
+        continuation.observedExecution || request.replaceExistingEndpoint || request.pacing !== "realtime") {
+      throw new Error("source handoff requires its original prepared continuation");
+    }
+    const run = activeAuthoringRun, previousEndpoint = continuation.endpoint;
+    // Keep registry retirement behind the asynchronous lease attachment. A
+    // cancellation stops the old reader immediately; the candidate must return
+    // or discard its source lease before this reservation can be relinquished.
+    const pendingAttachment = { stop() {} };
+    entry.endpoints.add(pendingAttachment);
+    let endpoint;
+    try {
+      const observation = invokePreparedEngine(() => JSON.parse(
+        continuation.preparedPlayer.preparedPlaybackStateJson(performance.now()),
+      ));
+      const requirement = sourceExecutionRequirement(invokePreparedEngine(() => continuation.preparedPlayer.sourceExecutionRequirementJson));
+      const playing = invokePreparedEngine(() => continuation.preparedPlayer.beginSourceExecution(entry.context));
+      entry.sourceRequirement = requirement;
+      entry.handoffBoundary = { boundaryValidated: true, time: observation.time, preparedFrontier: observation.frontier };
+      continuation.observedExecution = true;
+      endpoint = await attachObservedSemanticExecution({ ...request, initiallyPaused: !playing,
+        loopDurationSeconds: Math.max(1, entry.context.liveHandoffDuration()) }, entry, continuation, true, pyodide);
+      requirePreparedContinuation(run, entry.context);
+      // This finishes only the host's join: the original source stack and its
+      // last logical segment already completed. No renderer receipt is forged.
+      if (continuation.preparedSourceFinished) completeContinuation(continuation, continuation.generation);
+      return endpoint;
+    } catch (error) {
+      entry.released = true;
+      failContinuation(continuation, error);
+      if (!fatalAuthoringFailure) { endpoint?.stop(); previousEndpoint.stop(); }
+      throw error;
+    } finally {
+      entry.endpoints.delete(pendingAttachment);
+      if (!fatalAuthoringFailure) retireSemanticContext(request.contextId, entry);
+    }
+  }
+  if (entry.preparedPlayback) {
+    if (entry.preparedSourceFinished === true && !continuationOnly && !request.replaceExistingEndpoint) {
+      if (request.callbackSessionId != null || request.pacing !== "realtime") {
+        throw new Error("prepared playback requires realtime pacing without Python callbacks");
+      }
+      return attachFinishedPreparedSemanticExecution(request, entry, pyodide);
+    }
+    if (!continuationOnly || !continuation?.preparedPlayback || request.replaceExistingEndpoint) {
+      throw new Error("prepared playback cannot reattach or replace its endpoint");
+    }
+    if (request.pacing !== "realtime") {
+      throw new Error("prepared playback requires realtime pacing");
+    }
+    return attachPreparedSemanticExecution(request, entry, continuation, pyodide);
+  }
+  return attachObservedSemanticExecution(request, entry, continuation, continuationOnly, pyodide);
+}
+
+async function attachObservedSemanticExecution(request, entry, continuation, continuationOnly, pyodide) {
   if (request.callbackSessionId !== null && request.callbackSessionId !== undefined) {
     if (entry.callbackSessionId !== undefined && entry.callbackSessionId !== request.callbackSessionId) {
       throw new Error("semantic callback session does not belong to this execution context");
@@ -1139,9 +1785,10 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
   let endpoint;
   endpoint = await attachSemanticEngine(
     entry.context,
-    request,
+    { ...request, videoAssets: entry.videoAssets },
     () => {
       entry.endpoints.delete(endpoint);
+      if (request.completedStaticSource === true) entry.released = true;
       if (continuationOnly && continuation !== undefined) {
         failContinuation(continuation, new Error("semantic continuation endpoint stopped"));
       }
@@ -1150,6 +1797,7 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
     runRequiredCallbackPhase,
     continuationOnly ? {
       generation: continuation.generation,
+      completed: continuation.preparedSourceFinished === true && continuation.observedExecution === true,
       onComplete: (generation) => completeContinuation(continuation, generation),
       onError: (_generation, error) => {
         entry.released = true;
@@ -1159,9 +1807,211 @@ async function attachSemanticExecutionRequest(request, continuationOnly, pyodide
     } : null,
     completeRequiredCallbackPhase,
     discardRequiredCallbackPhase,
+    null, null, observeSemanticExecution(request, entry, false),
   );
   entry.endpoints.add(endpoint);
   if (continuationOnly) continuation.endpoint = endpoint;
+  return endpoint;
+}
+
+function validatePreparedTransport(request) {
+  if (!Number.isInteger(request.session) || request.session < 0 || request.session > 0xffffffff ||
+      !["shared", "transferable"].includes(request.transportMode) ||
+      !Number.isSafeInteger(request.sharedSlotCapacity) || request.sharedSlotCapacity <= 0) {
+    throw new Error("prepared source attachment requires a valid transport and u32 session");
+  }
+}
+
+async function attachPreparedSemanticExecution(request, entry, continuation, pyodide) {
+  if (continuation.preparedAttachmentStarted) throw new Error("prepared source attachment is single-use");
+  validatePreparedTransport(request);
+  continuation.preparedAttachmentStarted = true;
+  const run = activeAuthoringRun;
+  continuation.loopPlayback = run?.loopPlayback !== false && request.loopDurationSeconds != null;
+  const pendingAttachment = { stop() {} };
+  entry.endpoints.add(pendingAttachment);
+  let endpoint;
+  try {
+    requirePreparedContinuation(run, entry.context);
+    await continuation.initialSourceReady.promise;
+    requirePreparedContinuation(run, entry.context);
+    if (continuation.observedExecution) {
+      endpoint = await attachObservedSemanticExecution(request, entry, continuation, true, pyodide);
+      requirePreparedContinuation(run, entry.context);
+      continuation.preparedReady.resolve();
+      return;
+    }
+    if (request.callbackSessionId != null || entry.callbackSessionId !== undefined) {
+      throw new Error("historical playback cannot discard Python callbacks");
+    }
+    continuation.preparedPlayer = invokePreparedEngine(() => continuation.preparedSourceFinished
+      ? entry.context.createFinishedPreparedExecutionPlayer(request.session)
+      : entry.context.createPreparedExecutionPlayer(request.session));
+    if (continuation.preparedSourceFinished && continuation.preparedPlayer === undefined) {
+      continuation.preparedPlayer = null;
+      continuation.observedExecution = true;
+      endpoint = await attachObservedSemanticExecution({ ...request, completedStaticSource: true }, entry, continuation, false, pyodide);
+      requirePreparedContinuation(run, entry.context);
+      continuation.endpoint = endpoint;
+      continuation.preparedReady.resolve();
+      return;
+    }
+    const receiver = createPreparedReceiver(request, entry, continuation, continuation.preparedPlayer);
+    // Source and playback share this WASM host. Finish deterministic preparation
+    // before its clock advances; ordinary frames then need no interpreter turns.
+    if (!continuation.preparedSourceFinished && run.preparationLookaheadSeconds === null) {
+      invokePreparedEngine(() => continuation.preparedPlayer.prepareSourceBeforePlayback());
+    }
+    endpoint = await attachPreparedReceiver(request, entry, receiver, false);
+    requirePreparedContinuation(run, entry.context);
+    continuation.endpoint = receiver;
+    continuation.preparedReady.resolve();
+  } catch (error) {
+    entry.released = true;
+    failContinuation(continuation, error);
+    if (!fatalAuthoringFailure && endpoint) endpoint.stop();
+    else if (!fatalAuthoringFailure && continuation.preparedPlayer !== null) {
+      // Preflight may reject before the endpoint takes ownership. Its onStop
+      // clears this handle whenever it has already freed the prepared player.
+      invokePreparedEngine(() => continuation.preparedPlayer.free());
+      continuation.preparedPlayer = null;
+    }
+    if (!fatalAuthoringFailure) retireSemanticContext(request.contextId, entry);
+    throw error;
+  } finally {
+    entry.endpoints.delete(pendingAttachment);
+    if (!fatalAuthoringFailure) retireSemanticContext(request.contextId, entry);
+  }
+}
+
+async function attachFinishedPreparedSemanticExecution(request, entry, pyodide) {
+  if (entry.preparedAttachmentStarted) throw new Error("prepared source attachment is single-use");
+  validatePreparedTransport(request);
+  entry.preparedAttachmentStarted = true;
+  const pendingAttachment = { stop() {} };
+  entry.endpoints.add(pendingAttachment);
+  let player, endpoint;
+  try {
+    player = invokePreparedEngine(() => entry.context.createFinishedPreparedExecutionPlayer(request.session));
+    if (player === undefined) {
+      player = null;
+      endpoint = await attachObservedSemanticExecution({ ...request, completedStaticSource: true }, entry, null, false, pyodide);
+      if (entry.released) throw new Error("completed static source was released during attachment");
+      return;
+    }
+    invokePreparedEngine(() => player.setPreparedLoopDuration(request.loopDurationSeconds ?? undefined));
+    const receiver = createPreparedReceiver(request, entry, null, player);
+    player = null; // The receiver now owns cleanup, including failed setup.
+    endpoint = await attachPreparedReceiver(request, entry, receiver, false);
+    if (entry.released) throw new Error("completed prepared source was released during attachment");
+    entry.endpoints.add(endpoint);
+  } catch (error) {
+    entry.released = true;
+    if (!fatalAuthoringFailure) {
+      if (endpoint) endpoint.stop();
+      else invokePreparedEngine(() => player?.free());
+      retireSemanticContext(request.contextId, entry);
+    }
+    throw error;
+  } finally {
+    entry.endpoints.delete(pendingAttachment);
+    if (!fatalAuthoringFailure) retireSemanticContext(request.contextId, entry);
+  }
+}
+
+// One lifecycle handle around the same Rust reader. No source, history, clock
+// or resource inventory is reconstructed in JavaScript. While detached it also
+// keeps registry retirement behind any pending source delivery/renderer setup.
+function createPreparedReceiver(request, entry, continuation, player) {
+  const receiver = {
+    endpoint: null, continuation, replacing: false, attaching: false, stopRequested: false, sourceRequired: false,
+    prepared: { player, generation: continuation?.generation,
+      wakeSource: () => continuation?.preparedDriver.wake() },
+    sourcePrefixDelivered() { receiver.endpoint?.sourcePrefixDelivered(); },
+    prepareSourceEffects(generation, staged) {
+      if (!receiver.endpoint) throw new Error("prepared source renderer endpoint is not attached");
+      return receiver.endpoint.prepareSourceEffects(generation, staged);
+    },
+    sourceExecutionRequired() {
+      receiver.sourceRequired = true;
+      receiver.endpoint?.sourceExecutionRequired();
+    },
+    stop() {
+      if (receiver.attaching) { receiver.stopRequested = true; return; }
+      if (receiver.endpoint) { receiver.endpoint.stop(); return; }
+      const owned = receiver.prepared.player;
+      if (!owned) return;
+      receiver.finish(null);
+      if (!fatalAuthoringFailure) {
+        invokePreparedEngine(() => owned.stopSourcePreparation());
+        invokePreparedEngine(() => owned.free());
+      }
+    },
+    finish(retained) {
+      entry.endpoints.delete(receiver.endpoint);
+      receiver.endpoint = null;
+      if (retained) {
+        receiver.prepared.player = retained;
+        entry.endpoints.add(receiver);
+        return;
+      }
+      receiver.prepared.player = null;
+      entry.endpoints.delete(receiver);
+      if (entry.preparedReceiver === receiver) entry.preparedReceiver = null;
+      if (continuation) continuation.preparedPlayer = null;
+      if (!continuation?.observedExecution) {
+        entry.released = true;
+        if (continuation) failContinuation(continuation, new Error("prepared playback endpoint stopped"));
+      }
+      retireSemanticContext(request.contextId, entry);
+    },
+  };
+  entry.preparedReceiver = receiver;
+  entry.endpoints.add(receiver);
+  return receiver;
+}
+
+async function attachPreparedReceiver(request, entry, receiver, recovering) {
+  receiver.attaching = true;
+  let endpoint;
+  try {
+    endpoint = await attachSemanticEngine(entry.context, { ...request, videoAssets: entry.videoAssets },
+      retained => receiver.finish(retained), null, null, null, null, null,
+      { ...receiver.prepared, retainOnSetupFailure: recovering }, observeSemanticExecution(request, entry, true));
+  } finally { receiver.attaching = false; }
+  receiver.endpoint = endpoint;
+  entry.endpoints.delete(receiver);
+  entry.endpoints.add(endpoint);
+  if (entry.released || receiver.stopRequested || entry.preparedReceiver !== receiver) {
+    endpoint.stop();
+    throw new Error("prepared receiver was retired during attachment");
+  }
+  if (receiver.continuation) receiver.continuation.endpoint = receiver;
+  if (receiver.sourceRequired) endpoint.sourceExecutionRequired();
+  return endpoint;
+}
+
+async function replacePreparedSemanticReceiver(request, entry) {
+  validatePreparedTransport(request);
+  const receiver = entry.preparedReceiver;
+  if (!receiver?.prepared.player || receiver.continuation?.observedExecution ||
+      receiver.replacing || request.callbackSessionId != null || request.pacing !== "realtime") {
+    throw new Error("receiver replacement requires its original retained prepared reader");
+  }
+  receiver.replacing = true;
+  try {
+    // Rust rejects reused/older namespaces before the old endpoint is detached.
+    invokePreparedEngine(() => receiver.prepared.player.resetReceiver(request.session));
+    receiver.endpoint?.detachPreparedReceiver();
+    const initiallyPaused = !invokePreparedEngine(() => receiver.prepared.player.preparedPlaying());
+    await attachPreparedReceiver({ ...request, initiallyPaused }, entry, receiver, true);
+  } catch (error) {
+    if ((entry.released || receiver.stopRequested) && !fatalAuthoringFailure) receiver.stop();
+    throw error;
+  } finally {
+    receiver.replacing = false;
+    if (!fatalAuthoringFailure) retireSemanticContext(request.contextId, entry);
+  }
 }
 
 function retireSemanticContext(token, entry) {
@@ -1181,6 +2031,16 @@ function retireSemanticContext(token, entry) {
   }
 }
 
+async function prepareLatex() {
+  if (!latexPreparation) {
+    latexPreparation = import("./latex/backend.js")
+      .then(({ prepareLatexBackend }) => prepareLatexBackend())
+      .then(backend => { latexCompiler = new WasmLatexCompiler(backend); })
+      .catch(error => { latexPreparation = null; throw error; });
+  }
+  await latexPreparation;
+}
+
 async function prepareAuthoringDependencies(pyodide, source) {
   // Explicit imports use Pyodide's ordinary package resolver. Implicit Manim
   // namespace aliases are detected by Python's AST parser and loaded separately
@@ -1195,11 +2055,12 @@ async function prepareAuthoringDependencies(pyodide, source) {
     const requiredJson = pyodide.runPython(
       `
 import _manim_namespace
-_manim_namespace.required_packages_json(__noon_dependency_source)
+_manim_namespace.source_dependencies_json(__noon_dependency_source)
 `,
       { globals },
     );
-    const requiredPackages = JSON.parse(requiredJson);
+    const { packages: requiredPackages, latex } = JSON.parse(requiredJson);
+    if (latex) await prepareLatex();
     if (requiredPackages.length === 0) return;
 
     const requiredPackagesJson = JSON.stringify(requiredPackages);
@@ -1227,8 +2088,43 @@ _manim_namespace.bind_loaded_packages_json(__noon_required_packages_json)
 
 async function runAuthoringSource(pyodide, source, context, requestId) {
   return withAuthoringDiagnostics(pyodide, source, context, requestId, async (globals) => {
-    await prepareAuthoringDependencies(pyodide, source);
-    return pyodide.runPythonAsync(diagnosedHostCode(`
+    const run = activeAuthoringRun;
+    const proof = measurePreparationOperation(run, "source-proof", () => authoringLibrariesPristine ? JSON.parse(pyodide.runPython(`
+import json
+from _manim_source_execution import source_execution_proof
+json.dumps(source_execution_proof(__noon_source, auto_prepare_latex=True))
+`, { globals })) : { admitted: false, reason: { code: "interpreter_tainted", span: null } });
+    if (!isRecord(proof) || typeof proof.admitted !== "boolean" ||
+        (proof.admitted ? proof.reason !== null : !isRecord(proof.reason) || typeof proof.reason.code !== "string")) {
+      throw new TypeError("source effect proof must contain admission and its reason");
+    }
+    const sceneOnly = proof.admitted;
+    authoringLibrariesPristine &&= sceneOnly;
+    run.sourceSceneOnly = sceneOnly;
+    globals.set("__noon_enable_prepared_source_yield", sceneOnly && run.preparedPlayback);
+    if (sceneOnly) {
+      // Admitted sources cannot carry factory handles between Runs. Their old
+      // Rust contexts and handles retain the prior arena through their own Rc.
+      const previousAuthoringStore = authoringStore;
+      authoringStore = new WasmAuthoringStore();
+      previousAuthoringStore.free();
+    }
+    post("execution_diagnostic", { requestId,
+      libraryTrust: authoringLibrariesPristine ? "pristine" : "tainted",
+      event: { stage: proof.reason?.code === "interpreter_tainted" ? "interpreter-trust" : "source-proof", ...proof },
+    });
+    if (run.diagnosticPreparationTiming) {
+      await awaitOutsidePreparedSourceTurn(run, "dependency-preparation",
+        () => prepareAuthoringDependencies(pyodide, source));
+    } else await prepareAuthoringDependencies(pyodide, source);
+    if (run.diagnosticPreparationTiming) startPreparedSourceTurn(run);
+    return await pyodide.runPythonAsync(diagnosedHostCode(`
+if globals().get("__noon_enable_prepared_source_yield", False):
+    from js import noonPreparedSourceYield
+    __noon_source_cooperative_yield = noonPreparedSourceYield
+else:
+    __noon_source_cooperative_yield = None
+
 import json
 import _manim_updaters
 from _manim_scene import (
@@ -1239,47 +2135,49 @@ from _manim_scene import (
 )
 from _manim_source_execution import (
     BARRIER_GLOBAL, MODULE_BARRIER_GLOBAL,
-    authoring_source_scope, execute_authoring_module,
+    COOPERATIVE_CHECKPOINT_GLOBAL, await_source_checkpoint,
+    authoring_source_scope, cooperative_source_yield_scope, execute_authoring_module,
 )
 from noon import Scene
 
 __noon_namespace = {
     "context": json.loads(__noon_context_json),
     "__name__": "__main__",
+    COOPERATIVE_CHECKPOINT_GLOBAL: await_source_checkpoint,
 }
 if __noon_portable_constructs:
     __noon_namespace[BARRIER_GLOBAL] = await_source_barrier
-if MODULE_BARRIER_GLOBAL in __noon_code.co_names:
+if __noon_portable_constructs or MODULE_BARRIER_GLOBAL in __noon_code.co_names:
     __noon_namespace[MODULE_BARRIER_GLOBAL] = await_module_source_barrier
-with authoring_source_scope():
-    await execute_authoring_module(__noon_code, __noon_namespace)
-
-if "result" in __noon_namespace:
-    __noon_result = __noon_namespace["result"]
-else:
-    __noon_scene_classes = [
-        value
-        for value in __noon_namespace.values()
-        if isinstance(value, type)
-        and issubclass(value, Scene)
-        and value is not Scene
-        and getattr(value, "__module__", None) == "__main__"
-    ]
-    if not __noon_scene_classes:
-        raise RuntimeError(
-            "Python authoring source must either assign result or define one Scene subclass"
+with cooperative_source_yield_scope(__noon_source_cooperative_yield):
+    with authoring_source_scope():
+        await execute_authoring_module(__noon_code, __noon_namespace)
+    if "result" in __noon_namespace:
+        __noon_result = __noon_namespace["result"]
+    else:
+        __noon_scene_classes = [
+            value
+            for value in __noon_namespace.values()
+            if isinstance(value, type)
+            and issubclass(value, Scene)
+            and value is not Scene
+            and getattr(value, "__module__", None) == "__main__"
+        ]
+        if not __noon_scene_classes:
+            raise RuntimeError(
+                "Python authoring source must either assign result or define one Scene subclass"
+            )
+        if len(__noon_scene_classes) != 1:
+            __noon_names = ", ".join(cls.__name__ for cls in __noon_scene_classes)
+            raise RuntimeError(
+                "Python authoring source defines multiple Scene subclasses; "
+                f"select one explicitly via result = SceneClass(): {__noon_names}"
+            )
+        __noon_result = __noon_scene_classes[0]()
+        await execute_construct(
+            __noon_result,
+            portable_constructs=__noon_portable_constructs,
         )
-    if len(__noon_scene_classes) != 1:
-        __noon_names = ", ".join(cls.__name__ for cls in __noon_scene_classes)
-        raise RuntimeError(
-            "Python authoring source defines multiple Scene subclasses; "
-            f"select one explicitly via result = SceneClass(): {__noon_names}"
-        )
-    __noon_result = __noon_scene_classes[0]()
-    await execute_construct(
-        __noon_result,
-        portable_constructs=__noon_portable_constructs,
-    )
 
 if isinstance(__noon_result, Scene):
     from js import noonRegisterSemanticExecution, noonSemanticContinuationGeneration
@@ -1351,12 +2249,39 @@ function validateRequest(request) {
   if (!Number.isSafeInteger(request.requestId) || request.requestId < 0) {
     throw new Error("Python authoring request has an invalid request ID");
   }
+  if (request.type === "runtime_module") {
+    if (!(request.port instanceof MessagePort)) throw new Error("runtime module delivery requires a MessagePort");
+    return;
+  }
   if (request.type === "run") {
     if (typeof request.source !== "string" || request.source.trim() === "") {
       throw new Error("Python authoring source must be a non-empty string");
     }
     if (!isRecord(request.context)) {
       throw new Error("Python authoring context must be an object");
+    }
+    if (request.videoFile !== undefined && !(request.videoFile instanceof Blob)) {
+      throw new Error("uploaded video must be a Blob");
+    }
+    if (request.preparedPlayback !== undefined && typeof request.preparedPlayback !== "boolean") {
+      throw new Error("preparedPlayback must be a boolean");
+    }
+    if (request.diagnosticPreparationTiming !== undefined &&
+        (typeof request.diagnosticPreparationTiming !== "boolean" ||
+         (request.diagnosticPreparationTiming && request.preparedPlayback !== true))) {
+      throw new Error("preparation timing diagnostics require prepared playback");
+    }
+    if (request.preparationLookaheadSeconds != null &&
+        (!Number.isFinite(request.preparationLookaheadSeconds) || request.preparationLookaheadSeconds <= 0)) {
+      throw new Error("preparationLookaheadSeconds must be null or positive and finite");
+    }
+    if (request.historyExportOptions !== undefined &&
+        (request.preparedPlayback !== true || request.preparationLookaheadSeconds !== null ||
+         request.loopPlayback !== false || !isRecord(request.historyExportOptions))) {
+      throw new Error("history export requires complete nonlooping source preparation");
+    }
+    if (request.loopPlayback !== undefined && typeof request.loopPlayback !== "boolean") {
+      throw new Error("loopPlayback must be a boolean");
     }
     return;
   }
@@ -1383,9 +2308,6 @@ function validateRequest(request) {
     }
     if (typeof request.initiallyPaused !== "boolean") {
       throw new Error("semantic attachment has an invalid initially-paused state");
-    }
-    if (request.initiallyPaused && request.continuationGeneration !== undefined) {
-      throw new Error("source-owned semantic continuations cannot start paused");
     }
     if (request.pacing !== "realtime" && request.pacing !== "external_samples") {
       throw new Error("semantic attachment has invalid pacing");

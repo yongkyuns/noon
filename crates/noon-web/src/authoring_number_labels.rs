@@ -1,8 +1,8 @@
 //! Thin native Text and DecimalNumber label adapters over shared Rust operations.
 use crate::authoring_error::{js_error, AuthoringFailure};
 use crate::{
-    WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmCoordinateOptions,
-    WasmDecimalNumberHandle, WasmLatexCompiler,
+    CanonicalAuthoringSceneContext, WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle,
+    WasmCoordinateOptions, WasmDecimalNumberHandle, WasmLatexCompiler,
 };
 use noon::plot_presentation::NumberLabelOptions;
 use noon::{ManimAxes, ManimNumberLine, ManimNumberPlane, Mobject};
@@ -121,6 +121,154 @@ fn numbers(values: &[f64], automatic: bool) -> Result<Option<&[f64]>, JsValue> {
     Ok(if automatic { None } else { Some(values) })
 }
 
+fn custom_values(values: &[f64], texts: js_sys::Array) -> Result<Vec<(f64, String)>, JsValue> {
+    if texts.length() as usize != values.len() {
+        return Err(failure(
+            "custom label positions and texts must have equal lengths",
+        ));
+    }
+    if values.len() > noon::plot_presentation::MAX_PLOT_LABELS {
+        return Err(failure("number-label limit exceeded"));
+    }
+    let mut labels = Vec::new();
+    labels
+        .try_reserve_exact(values.len())
+        .map_err(|_| failure("number-label allocation failed"))?;
+    for (index, number) in values.iter().enumerate() {
+        let text = texts
+            .get(index as u32)
+            .as_string()
+            .ok_or_else(|| failure("custom number-line label text must be a string"))?;
+        labels.push((*number, text));
+    }
+    Ok(labels)
+}
+
+#[wasm_bindgen]
+impl CanonicalAuthoringSceneContext {
+    #[wasm_bindgen(js_name = createNumberLineDecimalLabels)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_number_line_decimal_labels(
+        &mut self,
+        family: &WasmAuthoringFamilyHandle,
+        values: &[f64],
+        automatic: bool,
+        options: WasmNumberLabelOptions,
+        attach: bool,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let line = ManimNumberLine::from_family(family.semantic_family()?).map_err(failure)?;
+        self.inner
+            .local_authoring_scene()
+            .map_err(js_error)?
+            .number_line_decimal_labels(
+                &line,
+                compiler,
+                numbers(values, automatic)?,
+                &options.options,
+                attach,
+            )
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(failure)
+    }
+
+    #[wasm_bindgen(js_name = createCoordinateDecimalLabels)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_coordinate_decimal_labels(
+        &mut self,
+        x_axis: &WasmAuthoringFamilyHandle,
+        y_axis: &WasmAuthoringFamilyHandle,
+        x: &[f64],
+        automatic_x: bool,
+        y: &[f64],
+        automatic_y: bool,
+        x_options: WasmNumberLabelOptions,
+        y_options: WasmNumberLabelOptions,
+        compiler: &mut WasmLatexCompiler,
+    ) -> Result<js_sys::Array, JsValue> {
+        let x_axis = ManimNumberLine::from_family(x_axis.semantic_family()?).map_err(failure)?;
+        let y_axis = ManimNumberLine::from_family(y_axis.semantic_family()?).map_err(failure)?;
+        let values = [numbers(x, automatic_x)?, numbers(y, automatic_y)?];
+        self.inner
+            .local_authoring_scene()
+            .map_err(js_error)?
+            .coordinate_decimal_labels(
+                &x_axis,
+                &y_axis,
+                compiler,
+                values,
+                [&x_options.options, &y_options.options],
+            )
+            .map(label_family_handles)
+            .map_err(failure)
+    }
+
+    #[wasm_bindgen(js_name = createNumberLineTextLabels)]
+    pub fn create_number_line_text_labels(
+        &mut self,
+        family: &WasmAuthoringFamilyHandle,
+        values: &[f64],
+        automatic: bool,
+        options: WasmNumberLabelOptions,
+        attach: bool,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let line = ManimNumberLine::from_family(family.semantic_family()?).map_err(failure)?;
+        self.inner
+            .local_authoring_scene()
+            .map_err(js_error)?
+            .number_line_labels(&line, numbers(values, automatic)?, &options.options, attach)
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(failure)
+    }
+
+    #[wasm_bindgen(js_name = createNumberLineCustomLabels)]
+    pub fn create_number_line_custom_labels(
+        &mut self,
+        family: &WasmAuthoringFamilyHandle,
+        values: &[f64],
+        texts: js_sys::Array,
+        options: WasmNumberLabelOptions,
+    ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
+        let line = ManimNumberLine::from_family(family.semantic_family()?).map_err(failure)?;
+        let labels = custom_values(values, texts)?;
+        self.inner
+            .local_authoring_scene()
+            .map_err(js_error)?
+            .number_line_custom_labels(&line, &labels, &options.options)
+            .map(WasmAuthoringFamilyHandle::from_semantic_family)
+            .map_err(failure)
+    }
+
+    #[wasm_bindgen(js_name = createCoordinateTextLabels)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_coordinate_text_labels(
+        &mut self,
+        x_axis: &WasmAuthoringFamilyHandle,
+        y_axis: &WasmAuthoringFamilyHandle,
+        x: &[f64],
+        automatic_x: bool,
+        y: &[f64],
+        automatic_y: bool,
+        x_options: WasmNumberLabelOptions,
+        y_options: WasmNumberLabelOptions,
+    ) -> Result<js_sys::Array, JsValue> {
+        let x_axis = ManimNumberLine::from_family(x_axis.semantic_family()?).map_err(failure)?;
+        let y_axis = ManimNumberLine::from_family(y_axis.semantic_family()?).map_err(failure)?;
+        let values = [numbers(x, automatic_x)?, numbers(y, automatic_y)?];
+        self.inner
+            .local_authoring_scene()
+            .map_err(js_error)?
+            .coordinate_text_labels(
+                &x_axis,
+                &y_axis,
+                values,
+                [&x_options.options, &y_options.options],
+            )
+            .map(label_family_handles)
+            .map_err(failure)
+    }
+}
+
 #[wasm_bindgen]
 impl WasmAuthoringFamilyHandle {
     /// Construct retained DecimalNumber labels on one NumberLine axis.
@@ -144,7 +292,7 @@ impl WasmAuthoringFamilyHandle {
         Ok(Self::from_semantic_family(family))
     }
 
-    /// Cold-only construction. Python rejects this call after live bootstrap.
+    /// Detached construction through the authored family.
     #[wasm_bindgen(js_name = numberLabelFamily)]
     pub fn number_label_family(
         &self,
@@ -172,25 +320,7 @@ impl WasmAuthoringFamilyHandle {
         texts: js_sys::Array,
         options: WasmNumberLabelOptions,
     ) -> Result<WasmAuthoringFamilyHandle, JsValue> {
-        if texts.length() as usize != values.len() {
-            return Err(failure(
-                "custom label positions and texts must have equal lengths",
-            ));
-        }
-        if values.len() > noon::plot_presentation::MAX_PLOT_LABELS {
-            return Err(failure("number-label limit exceeded"));
-        }
-        let mut labels = Vec::new();
-        labels
-            .try_reserve_exact(values.len())
-            .map_err(|_| failure("number-label allocation failed"))?;
-        for (index, number) in values.iter().enumerate() {
-            let text = texts
-                .get(index as u32)
-                .as_string()
-                .ok_or_else(|| failure("custom number-line label text must be a string"))?;
-            labels.push((*number, text));
-        }
+        let labels = custom_values(values, texts)?;
         let line = ManimNumberLine::from_family(self.semantic_family()?).map_err(failure)?;
         let family = line
             .add_labels(&labels, &options.options)

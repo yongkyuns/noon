@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn mask_boundary_checks_seed_before_narrowing_and_keeps_explicit_zero() {
+    let update = mask_parameters(
+        EffectUpdate::default(),
+        Some(0.0),
+        Some(0.08),
+        Some(f64::from(u32::MAX)),
+    )
+    .unwrap();
+    let value = update
+        .apply_to(noon_core::NoiseDissolve::default())
+        .unwrap();
+    assert_eq!(
+        (value.seed(), value.progress(), value.softness()),
+        (u32::MAX, 0.0, 0.08)
+    );
+    assert!(update.writes(noon_core::EffectParameter::Progress));
+    assert!(update.apply_to(Glow::default()).is_err());
+    for seed in [
+        -1.0,
+        0.5,
+        f64::NAN,
+        f64::INFINITY,
+        f64::from(u32::MAX) + 1.0,
+    ] {
+        assert_eq!(
+            mask_parameters(EffectUpdate::default(), None, None, Some(seed))
+                .unwrap_err()
+                .code,
+            "effect.invalid_seed"
+        );
+    }
+    for invalid in [-0.1, 1.0 + f64::EPSILON, f64::NAN, f64::INFINITY] {
+        assert!(mask_parameters(EffectUpdate::default(), Some(invalid), None, None).is_err());
+        assert!(mask_parameters(EffectUpdate::default(), None, Some(invalid), None).is_err());
+    }
+}
+
+#[test]
 fn offset_shape_units_and_validation_reach_the_shared_shadow_value() {
     let update = effect_update(
         &[0.2, 0.4, 0.6, 0.5],
@@ -12,7 +50,7 @@ fn offset_shape_units_and_validation_reach_the_shared_shadow_value() {
         true,
     )
     .unwrap();
-    let shadow = noon_core::Shadow::new(update).unwrap();
+    let shadow = noon_core::Shadow::new(update.clone()).unwrap();
     assert_eq!(
         shadow.offset(),
         noon_core::EffectOffset::Pixels([-3.25, 4.5])
@@ -21,15 +59,15 @@ fn offset_shape_units_and_validation_reach_the_shared_shadow_value() {
     for offset in [vec![], vec![1.0], vec![1.0, 2.0, 3.0], vec![f64::NAN, 0.0]] {
         assert!(effect_update(&[], None, false, None, None, &offset, true).is_err());
     }
-    assert!(Glow::new(update).is_err());
-    assert!(noon_core::Blur::new(update).is_err());
+    assert!(Glow::new(update.clone()).is_err());
+    assert!(noon_core::Blur::new(update.clone()).is_err());
 }
 
 #[test]
 fn defaults_and_empty_updates_are_resolved_by_shared_rust() {
     let update = effect_update(&[], None, false, None, None, &[], false).unwrap();
     assert_eq!(update, EffectUpdate::default());
-    let value = Glow::new(update).unwrap();
+    let value = Glow::new(update.clone()).unwrap();
     assert_eq!(value, Glow::default());
     let custom = Glow::new(EffectUpdate::default().intensity(1.4).radius(0.3)).unwrap();
     assert_eq!(update.apply_to(custom).unwrap(), custom);
@@ -139,8 +177,7 @@ fn parsed_target_updates_share_copy_isolation_and_ordinary_declaration() {
         .declare_transform_to(&dot, &target, noon::AnimationOptions::new().run_time(1.5))
         .unwrap();
     assert_eq!(animation.options().unwrap().run_time, Some(1.5));
-    assert!(scene
-        .execution_session()
+    assert!(noon::integration::scene_execution::lower(&scene)
         .unwrap()
         .frame()
         .objects

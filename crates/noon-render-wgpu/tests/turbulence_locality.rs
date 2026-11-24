@@ -148,7 +148,9 @@ fn six_hundred_object_turbulence_remains_instance_only_for_every_measured_sample
     let mut preparer = FramePreparer::new();
 
     let initial_changes = instance.take_frame_changes();
-    let initial = preparer.prepare_incremental(instance.frame(), &initial_changes);
+    let initial = preparer
+        .prepare_incremental(instance.frame(), &initial_changes)
+        .unwrap();
     assert!(initial.stats.geometry_cache_misses > 0);
     assert!(initial.path_geometry_dirty);
 
@@ -159,7 +161,9 @@ fn six_hundred_object_turbulence_remains_instance_only_for_every_measured_sample
         let local_time = sample_index as f64 / SAMPLE_HZ - TURBULENCE_START;
         instance.advance_to(local_time).unwrap();
         let changes = instance.take_frame_changes();
-        let prepared = preparer.prepare_incremental(instance.frame(), &changes);
+        let prepared = preparer
+            .prepare_incremental(instance.frame(), &changes)
+            .unwrap();
 
         assert_eq!(prepared.stats.full_rebuilds, 0, "sample {sample_index}");
         assert_eq!(

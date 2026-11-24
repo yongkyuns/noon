@@ -20,6 +20,7 @@ mod resources;
 mod semantic_store;
 mod spatial3d;
 mod vector_path;
+mod video;
 pub use vector_path::{SemanticPathSegment, VectorPath};
 mod planar_math;
 pub use planar_math::{DRect, DVec2, Rect, Vec2};
@@ -38,6 +39,7 @@ pub use reactive::*;
 pub use resources::*;
 pub use semantic_store::*;
 pub use spatial3d::*;
+pub use video::*;
 
 use serde::{Deserialize, Serialize};
 
@@ -367,6 +369,25 @@ pub struct Style {
     #[serde(default)]
     pub stroke_cap: StrokeCap,
     pub opacity: f32,
+    /// Checked material radiance; projected explicitly at the draw boundary.
+    #[serde(default, skip_serializing_if = "Emission::is_neutral")]
+    pub emission: Emission,
+}
+
+impl Style {
+    /// Unit base paint and opacity bound the finite authored HDR/emission profile.
+    /// Raw already-linear raster input has a separate packing contract.
+    pub fn supports_emission(self) -> bool {
+        (0.0..=1.0).contains(&self.opacity)
+            && [self.fill, self.stroke, self.background_stroke]
+                .into_iter()
+                .flatten()
+                .all(|c| {
+                    [c.red, c.green, c.blue, c.alpha]
+                        .into_iter()
+                        .all(|v| (0.0..=1.0).contains(&v))
+                })
+    }
 }
 
 impl Default for Style {
@@ -381,6 +402,7 @@ impl Default for Style {
             stroke_join: StrokeJoin::Round,
             stroke_cap: StrokeCap::Round,
             opacity: 1.0,
+            emission: Emission::NONE,
         }
     }
 }
@@ -409,10 +431,18 @@ pub enum PathCommand {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GeometryRef {
-    Circle { radius: f32 },
-    Rectangle { size: Vec2 },
-    Line { start: Vec2, end: Vec2 },
-    VectorPath(VectorPath),
+    Circle {
+        radius: f32,
+    },
+    Rectangle {
+        size: Vec2,
+    },
+    Line {
+        start: Vec2,
+        end: Vec2,
+    },
+    /// Immutable path data shared by compiled/runtime rows and resource leases.
+    VectorPath(std::sync::Arc<VectorPath>),
     External(GeometryId),
 }
 
@@ -448,7 +478,7 @@ impl GeometryRef {
     }
 
     pub fn path(path: VectorPath) -> Self {
-        Self::VectorPath(path)
+        Self::VectorPath(std::sync::Arc::new(path))
     }
 
     pub fn local_bounds(&self) -> Option<Rect> {
@@ -526,7 +556,7 @@ mod tests {
         assert!(matches!(path.commands()[0], PathCommand::MoveTo { .. }));
         assert_eq!(
             GeometryRef::path(path.clone()),
-            GeometryRef::VectorPath(path)
+            GeometryRef::VectorPath(std::sync::Arc::new(path))
         );
     }
 

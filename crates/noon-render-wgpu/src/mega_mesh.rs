@@ -88,9 +88,7 @@ impl FramePreparer {
             // The painter traversal borrows render_batches; update disjoint cache fields.
             self.zero_contribution[4].set(
                 segment,
-                !self.paths[path_batch.instance_range.start as usize]
-                    .style
-                    .may_contribute_color(),
+                !self.paths[path_batch.instance_range.start as usize].may_contribute_color(),
             );
         }
 
@@ -156,7 +154,7 @@ impl FramePreparer {
         let segment = segment_start..segment_end;
         self.mega_path_segments[path_batch_index] = Some(segment.clone());
         self.mega_path_offsets.push(segment_start);
-        self.set_mega_zero_contribution(segment.clone(), packed.style);
+        self.set_mega_zero_contribution(segment.clone(), packed);
         self.mega_path_detached[path_batch_index] = false;
         push_dirty_range(
             &mut self.mega_path_index_dirty_ranges,
@@ -308,7 +306,7 @@ impl FramePreparer {
         let segment = self.mega_path_segments[path_batch_index]
             .clone()
             .expect("checked mega segment");
-        self.set_mega_zero_contribution(segment, packed.style);
+        self.set_mega_zero_contribution(segment, packed);
         let Some(vertex_range) = self.path_batch_vertex_ranges.get(path_batch_index) else {
             return;
         };

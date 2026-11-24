@@ -94,13 +94,13 @@ fn expansion_reuses_one_effective_capture_for_repeated_source_occurrence() {
     );
     let occurrences = activation.occurrences();
     assert_eq!(occurrences[0].source, s0);
-    assert_eq!(occurrences[0].target_state, t0);
+    assert_eq!(occurrences[0].target_state, t0.into());
     assert!(!occurrences[0].source_padding);
     assert_eq!(occurrences[1].source, s0);
-    assert_eq!(occurrences[1].target_state, t1);
+    assert_eq!(occurrences[1].target_state, t1.into());
     assert!(occurrences[1].source_padding);
     assert_eq!(occurrences[2].source, s1);
-    assert_eq!(occurrences[2].target_state, t2);
+    assert_eq!(occurrences[2].target_state, t2.into());
     assert!(!occurrences[2].source_padding);
     assert_eq!(
         occurrences[0].source_execution_object_id,
@@ -164,4 +164,65 @@ fn contraction_marks_repeated_target_without_inventing_source_execution_identity
         occurrences[1].source_execution_object_id,
         occurrences[2].source_execution_object_id
     );
+}
+
+#[test]
+fn local_family_endpoints_stay_pending_and_reject_topology_changes() {
+    use noon_core::SemanticNodeCreation;
+    for profile in ["flat", "unequal", "nested"] {
+        let mut store = SemanticStore::new();
+        let leaves = [object(&mut store, 1.0), object(&mut store, 1.0)];
+        let source = family(&mut store, &leaves);
+        store.attach_to_scene(source).unwrap();
+        let execution = index(&store);
+        let count = store.len();
+        let revision = store.scene_revision();
+        let mut transaction = SemanticMutationTransaction::new();
+        let target = transaction.create_node(SemanticNodeCreation::family());
+        let mut targets = Vec::new();
+        for id in leaves
+            .into_iter()
+            .take(if profile == "unequal" { 1 } else { 2 })
+        {
+            let leaf = transaction.create_node(SemanticNodeCreation::object(
+                store.semantic_object_state_checked(id).unwrap().clone(),
+            ));
+            targets.push(leaf);
+            if profile == "nested" {
+                let nested = transaction.create_node(SemanticNodeCreation::family());
+                transaction.add_member(nested, leaf);
+                transaction.add_member(target, nested);
+            } else {
+                transaction.add_member(target, leaf);
+            }
+        }
+        let animation =
+            transaction.create_family_transform_animation(source, target, AnimationOptions::new());
+        let prepared = transaction.prepare(&mut store).unwrap();
+        let schedule = lower_prepared_semantic_animation_schedule(
+            &prepared,
+            &execution,
+            animation,
+            0.0,
+            AnimationOptions::new(),
+        )
+        .unwrap();
+        let activation =
+            prepare_family_transform_activations(&prepared, &execution, &schedule, |object| {
+                Some(effective(object))
+            });
+        if profile == "flat" {
+            let activation = activation.unwrap();
+            for (occurrence, target) in activation.occurrences().iter().zip(targets) {
+                assert_eq!(occurrence.target_state, target.into());
+                assert!(!occurrence.source_padding && !occurrence.target_padding);
+            }
+            noon_compile::lower_prepared_family_transform_channels(&prepared, &activation).unwrap();
+        } else {
+            assert!(activation.is_err(), "{profile} local topology was accepted");
+        }
+        drop(prepared);
+        assert_eq!(store.len(), count);
+        assert_eq!(store.scene_revision(), revision);
+    }
 }

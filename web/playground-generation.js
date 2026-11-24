@@ -16,10 +16,11 @@ function requireExampleId(exampleId) {
 ///
 /// 1. selection requests -- source loads may complete out of order;
 /// 2. committed selections -- only a loaded, newest request may become active;
-/// 3. scene runs -- a run is valid only for the committed selection that started it.
+/// 3. scene runs -- editor selection does not invalidate a run; only another Run or
+///    explicit lifecycle cancellation advances its generation.
 ///
-/// `commitSelection()` also advances the run generation. That explicitly invalidates
-/// authoring work from the previous selection before the new selection becomes visible.
+/// A selected example is the current draft. The active run remains owned by its own
+/// run token until another explicit execution action replaces it.
 export class PlaygroundGeneration {
   #selectionRequestGeneration = 0;
   #selectionGeneration = 0;
@@ -56,16 +57,11 @@ export class PlaygroundGeneration {
       this.#selectionGeneration,
       "playground selection generation",
     );
-    // Preflight both counters before publishing either new generation. A failed
-    // commit must not partially invalidate the currently visible selection/run.
-    const nextRunGeneration = checkedNext(this.#runGeneration, "playground run generation");
     this.#selectionGeneration = nextSelectionGeneration;
-    this.#runGeneration = nextRunGeneration;
     return Object.freeze({
       kind: "selection",
       requestGeneration: requestToken.requestGeneration,
       selectionGeneration: nextSelectionGeneration,
-      runGeneration: nextRunGeneration,
       exampleId: requestToken.exampleId,
     });
   }
@@ -78,13 +74,17 @@ export class PlaygroundGeneration {
     );
   }
 
-  beginRun(exampleId) {
+  beginRun(exampleId, selectionGeneration = this.#selectionGeneration) {
     const normalizedExampleId = requireExampleId(exampleId);
+    if (!Number.isSafeInteger(selectionGeneration) || selectionGeneration < 0 ||
+        selectionGeneration > this.#selectionGeneration) {
+      throw new TypeError("playground run requires a committed selection generation");
+    }
     const nextGeneration = checkedNext(this.#runGeneration, "playground run generation");
     this.#runGeneration = nextGeneration;
     return Object.freeze({
       kind: "run",
-      selectionGeneration: this.#selectionGeneration,
+      selectionGeneration,
       runGeneration: nextGeneration,
       exampleId: normalizedExampleId,
     });
@@ -96,12 +96,10 @@ export class PlaygroundGeneration {
     return nextGeneration;
   }
 
-  isRunCurrent(token, activeExampleId) {
+  isRunCurrent(token) {
     return (
       token?.kind === "run" &&
-      token.selectionGeneration === this.#selectionGeneration &&
-      token.runGeneration === this.#runGeneration &&
-      token.exampleId === activeExampleId
+      token.runGeneration === this.#runGeneration
     );
   }
 

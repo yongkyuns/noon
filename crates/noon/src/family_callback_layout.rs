@@ -244,14 +244,13 @@ fn scale_bounds(
 mod tests {
     use super::*;
     use crate::{
-        AnimationCompositionRequest as Request, AnimationOptions, ExecutionSegment,
-        ExecutionSession, RateFunction, RustHostCallbackTable, Scene, TransformToRequest,
+        AnimationCompositionRequest as Request, AnimationOptions, ExecutionSegment, RateFunction,
+        RustHostCallbackTable, Scene, TransformToRequest,
     };
     use std::{cell::Cell, rc::Rc};
 
     struct Fixture {
-        scene: Scene,
-        session: ExecutionSession,
+        execution: crate::SceneExecution,
         source: crate::Mobject,
         target: crate::Mobject,
         segment: ExecutionSegment,
@@ -294,8 +293,11 @@ mod tests {
             end.set_translation(3.0, -2.0).unwrap();
             end.set_rotation(rotation).unwrap();
             let source_authored = source.state().unwrap().transform;
-            let mut session = scene.execution_session().unwrap();
-            session.begin_replay_retention(Default::default()).unwrap();
+            let mut execution = scene.into_execution().unwrap();
+            execution
+                .session_mut()
+                .begin_replay_retention(Default::default())
+                .unwrap();
             let options = AnimationOptions::new()
                 .run_time(1.0)
                 .rate_func(RateFunction::Smooth)
@@ -319,8 +321,8 @@ mod tests {
                 Request::TransformTo(TransformToRequest::new(&target, &end, options)),
                 expression,
             ];
-            let segment = scene
-                .live(&mut session)
+            let segment = execution
+                .live()
                 .declare_and_activate_animation_composition(
                     noon_core::SemanticAnimationCompositionKind::Parallel,
                     &requests,
@@ -353,8 +355,7 @@ mod tests {
                 })
                 .unwrap();
             Self {
-                scene,
-                session,
+                execution,
                 source,
                 target,
                 segment,
@@ -365,17 +366,19 @@ mod tests {
 
         fn sample(&mut self, time: f64) -> Transform2D {
             self.callbacks
-                .advance_segment_to(&mut self.session, self.segment, time)
+                .advance_segment_to(self.execution.session_mut(), self.segment, time)
                 .unwrap();
             self.transform()
         }
 
         fn transform(&self) -> Transform2D {
             let id = self
-                .session
+                .execution
+                .session()
                 .execution_object_id(self.source.node_id())
                 .unwrap();
-            self.session
+            self.execution
+                .session()
                 .frame()
                 .objects
                 .iter()
@@ -386,8 +389,8 @@ mod tests {
 
         fn finish(&mut self) {
             self.sample(1.0);
-            self.scene
-                .live(&mut self.session)
+            self.execution
+                .live()
                 .complete_segment(self.segment)
                 .unwrap();
         }
@@ -411,9 +414,9 @@ mod tests {
                 let reference = host.sample(time);
                 let target_anchor = crate::LayoutAnchor::from(&native.target);
                 let expected_width = native
-                    .scene
-                    .live(&mut native.session)
-                    .dimension_length(&target_anchor, crate::LayoutDimension::Width)
+                    .execution
+                    .scene()
+                    .effective_dimension_length(&target_anchor, crate::LayoutDimension::Width)
                     .unwrap();
                 assert!(
                     (f64::from(actual.scale.x) * 6.5 - expected_width).abs() <= 1.0e-6,
@@ -441,13 +444,13 @@ mod tests {
             native.finish();
             host.finish();
             assert_eq!(
-                host.session.seal_replay(),
+                host.execution.session_mut().seal_replay(),
                 Err(noon_runtime::ReplayError::UnsupportedDomain)
             );
-            native.session.seal_replay().unwrap();
+            native.execution.session_mut().seal_replay().unwrap();
             let authored = native.source.state().unwrap();
             for &(time, expected) in expected.iter().rev().chain(expected.iter()) {
-                native.session.seek(time).unwrap();
+                native.execution.session_mut().seek(time).unwrap();
                 assert_eq!(
                     native.transform(),
                     expected,
@@ -553,7 +556,7 @@ mod tests {
             assert!(fixture.calls.get() > 0);
             fixture.finish();
             assert_eq!(
-                fixture.session.seal_replay(),
+                fixture.execution.session_mut().seal_replay(),
                 Err(noon_runtime::ReplayError::UnsupportedDomain)
             );
         }
@@ -563,11 +566,11 @@ mod tests {
     fn active_segment_publication_barrier_preserves_the_folded_content_assumption() {
         let mut fixture = Fixture::new(true, false, (1.0, 3.0), 0.0, 0.0);
         fixture.sample(0.471);
-        let frame = fixture.session.frame().clone();
+        let frame = fixture.execution.session().frame().clone();
         let authored = fixture.source.state().unwrap();
         let error = fixture
-            .scene
-            .live(&mut fixture.session)
+            .execution
+            .scene_mut()
             .become_mobject(
                 &fixture.source,
                 &fixture.target,
@@ -580,7 +583,7 @@ mod tests {
                 .contains("active animation segment must be completed"),
             "{error}"
         );
-        assert_eq!(fixture.session.frame(), &frame);
+        assert_eq!(fixture.execution.session().frame(), &frame);
         assert_eq!(fixture.source.state().unwrap(), authored);
         fixture.finish();
     }
@@ -597,14 +600,17 @@ mod tests {
             assert!(fixture.calls.get() > 0);
             fixture.finish();
             assert_eq!(
-                fixture.session.seal_replay(),
+                fixture.execution.session_mut().seal_replay(),
                 Err(noon_runtime::ReplayError::UnsupportedDomain)
             );
-            let frame = fixture.session.frame().clone();
-            let publication = fixture.session.publication_context();
-            assert!(fixture.session.seek(0.3).is_err());
-            assert_eq!(fixture.session.frame(), &frame);
-            assert_eq!(fixture.session.publication_context(), publication);
+            let frame = fixture.execution.session().frame().clone();
+            let publication = fixture.execution.session().publication_context();
+            assert!(fixture.execution.session_mut().seek(0.3).is_err());
+            assert_eq!(fixture.execution.session().frame(), &frame);
+            assert_eq!(
+                fixture.execution.session().publication_context(),
+                publication
+            );
         }
     }
 }

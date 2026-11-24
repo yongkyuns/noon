@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { chromium } from "playwright";
 
-// Exercise the real enhanced editor without loading Python, WASM or a renderer.
+// Exercise the real enhanced editor without loading Noon's Python runtime or renderer.
 const editorSource = await readFile(new URL("../web/python-editor.js", import.meta.url), "utf8");
 const toolsSource = await readFile(new URL("../web/python-editor-tools.js", import.meta.url), "utf8");
+const editorBundle = await readFile(new URL("../web/pkg/python-editor-bundle.js", import.meta.url), "utf8");
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage();
@@ -14,7 +15,16 @@ try {
   page.on("request", (request) => {
     if (request.url().includes("ruff-wasm")) ruffRequests.push(request.url());
   });
+  // Enhanced editing uses the built asset even when the old CDN graph is down.
+  let editorCdnRequests = 0;
+  await page.route(url => url.origin === "https://esm.sh" && !url.pathname.startsWith("/@astral-sh/ruff-wasm-web"), route => {
+    editorCdnRequests++;
+    return route.abort("failed");
+  });
   await page.route("http://editor.test/**", (route) => {
+    if (route.request().url().endsWith("/pkg/python-editor-bundle.js")) {
+      return route.fulfill({ contentType: "text/javascript", body: editorBundle });
+    }
     const isTools = route.request().url().endsWith("/python-editor-tools.js");
     const isModule = route.request().url().endsWith("/editor.js") || isTools;
     return route.fulfill({
@@ -40,6 +50,7 @@ try {
   });
   await page.goto("http://editor.test/");
   await page.waitForSelector(".python-code-editor[data-editor-ready='true']");
+  assert.equal(editorCdnRequests, 0, "CodeMirror must load from the generated package");
   const snapshot = async () => {
     const state = await page.evaluate(() => ({
       source: document.querySelector("textarea").value,

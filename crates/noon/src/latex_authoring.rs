@@ -873,10 +873,10 @@ mod tests {
         .unwrap();
         assert_eq!(direct.state().unwrap().content.text(), Some(first_handle));
 
-        let mut execution = scene.execution_session().unwrap();
-        let live = scene
-            .live(&mut execution)
-            .create_math_tex(MathTex::new(source).unwrap(), &mut backend)
+        let mut execution = scene.into_execution().unwrap();
+        let live = execution
+            .scene_mut()
+            .math_tex(MathTex::new(source).unwrap(), &mut backend)
             .unwrap();
         assert_eq!(live.state().unwrap().content.text(), Some(first_handle));
         assert_eq!(
@@ -890,7 +890,12 @@ mod tests {
         );
 
         assert_eq!(
-            scene.integration_store().borrow().font_resources().len(),
+            execution
+                .scene()
+                .integration_store()
+                .borrow()
+                .font_resources()
+                .len(),
             names.len(),
             "compiled font resources are retained once"
         );

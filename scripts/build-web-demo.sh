@@ -39,14 +39,27 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/build-python-worker.mjs
   node --test scripts/worker-composite-rows.test.mjs
   node --check scripts/build-runtime-identity.mjs
+  node --check scripts/build-python-editor.mjs
+  node --check tools/python-editor/dependencies.js
   node --check scripts/execution-worker-smoke.mjs
   node --check scripts/glow-worker-qualification.mjs
+  node --check scripts/shader-time-qualification.mjs
+  node --check scripts/glow-profile-qualification.mjs
   node --check scripts/gaussian-blur-qualification.mjs
   node --test scripts/gaussian-blur-reference.test.mjs
+  node --test scripts/dissolve-mask-reference.test.mjs
+  node --check scripts/scope-opacity-qualification.mjs
+  node --check scripts/effect-restore-qualification.mjs
+  node --check scripts/pixelate-qualification.mjs
+  node --check scripts/glass-lens-qualification.mjs
+  node --check scripts/effect-resource-recovery-qualification.mjs
   node --check scripts/linear-gradient-qualification.mjs
   node --check scripts/radial-gradient-qualification.mjs
   node --check scripts/noise-paint-qualification.mjs
   node --check scripts/ordered-effects-qualification.mjs
+  node --check scripts/composed-effects-qualification.mjs
+  node --check scripts/noise-dissolve-qualification.mjs
+  node --check scripts/dissolve-qualification.mjs
   node --check scripts/noise-paint-reference.mjs
   node --test scripts/noise-paint-reference.test.mjs
   node --check scripts/hatch-paint-qualification.mjs
@@ -60,6 +73,7 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/browser-smoke.mjs
   node --check scripts/background-audio-smoke.mjs
   node --check scripts/browser-audio-observation.mjs
+  node --test scripts/audio-retirement-reference.test.mjs
   node --check scripts/python-background-audio-smoke.mjs
   node --check scripts/export-python-scene.mjs
   node --check scripts/browser-backend-visual-parity.mjs
@@ -88,6 +102,9 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/manim-compat-smoke.mjs
   node --check scripts/manim-tutorial-smoke.mjs
   node --check scripts/python-editor-input-smoke.mjs
+  node --check scripts/playground-prepared-loading-qualification.mjs
+  node --test scripts/playground-prepared-loading-observation.test.mjs
+  node --test scripts/playground-profile-expectations.test.mjs
   node --check scripts/playground-layout-smoke.mjs
   node --check scripts/playground-product-e2e.mjs
   node --check scripts/playground-product-fps.mjs
@@ -227,5 +244,11 @@ if (( worker_status != 0 )); then
   exit "$worker_status"
 fi
 
+# Local editor assets share the existing package artifact. Preflight-only checks
+# stay offline; npm's lockfile pins the graph and package scripts never execute.
+npm ci --prefix tools/python-editor --include=dev --ignore-scripts --no-audit --no-fund
+node scripts/build-python-editor.mjs
+
+cp crates/noon/assets/arimo/OFL.txt web/pkg/arimo-OFL.txt
 node scripts/build-runtime-identity.mjs
 node scripts/check-web-package.mjs

@@ -7,11 +7,34 @@ import unittest
 WEB = Path(__file__).resolve().parents[1]
 MANIFEST = json.loads((WEB / "python/examples/noon_showcase_manifest.json").read_text())
 # Qualified by the actual Pyodide showcase captures on both renderer backends.
-# These are bundled standard-library modules; optional packages stay excluded.
-QUALIFIED_BROWSER_MODULES = {"noon", "math", "colorsys", "struct", "zlib", "array", "re"}
+# NumPy is supplied by the browser worker for the pinned ManimGX ports.
+QUALIFIED_BROWSER_MODULES = {"noon", "math", "bisect", "colorsys", "struct", "zlib", "array", "re", "numpy"}
 
 
 class ShowcaseSourceContract(unittest.TestCase):
+    def test_credited_ports_admit_incremental_playback(self):
+        from _manim_source_execution import source_execution_proof
+
+        for entry in MANIFEST["entries"]:
+            if entry.get("credits"):
+                with self.subTest(example=entry["id"]):
+                    source = (WEB / entry["path"]).read_text()
+                    proof = source_execution_proof(source, auto_prepare_latex=True)
+                    self.assertTrue(proof["admitted"], proof["reason"])
+
+    def test_featured_lessons_compile_portable_constructs(self):
+        from _manim_source_execution import compile_authoring_source
+
+        examples = {entry["id"]: entry["path"] for entry in MANIFEST["entries"]}
+        featured = json.loads((WEB / "site/examples.json").read_text())
+        ports = [entry for entry in MANIFEST["entries"] if entry.get("credits")]
+        for entry in featured + ports:
+            with self.subTest(example=entry["id"]):
+                source = (WEB / examples[entry["id"]]).read_text()
+                _, portable = compile_authoring_source(source)
+                self.assertTrue(any(code.co_name == "construct" for code in portable),
+                                "the featured source must run without relying on JSPI")
+
     def test_sources_are_self_contained_animated_lessons(self):
         for entry in MANIFEST["entries"]:
             with self.subTest(example=entry["id"]):
@@ -32,43 +55,46 @@ class ShowcaseSourceContract(unittest.TestCase):
                 if entry["id"] == "showcase-background-music":
                     self._assert_finite_audio_lesson(entry, tree)
                     continue
-                scenes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+                scene_types = {"Scene", "MovingCameraScene", "ThreeDScene", "LinearTransformationScene"}
+                scenes = [node for node in tree.body if isinstance(node, ast.ClassDef)
+                          and any(isinstance(base, ast.Name) and base.id in scene_types for base in node.bases)]
                 self.assertEqual(len(scenes), 1)
                 is_surface = entry["id"] == "showcase-spatial-scene"
                 is_axes = entry["id"] == "showcase-three-d-axes"
+                is_spatial = is_surface or is_axes or entry["id"] in {"showcase-channel-flow", "showcase-miura-ori"}
                 is_linear = entry["id"] == "showcase-linear-algebra"
                 is_camera = entry["id"] == "showcase-camera-follows-path"
                 scene_bases = {base.id for base in scenes[0].bases if isinstance(base, ast.Name)}
-                expected_base = "ThreeDScene" if is_surface or is_axes else "LinearTransformationScene" if is_linear else "MovingCameraScene" if is_camera else "Scene"
-                self.assertIn(expected_base, scene_bases)
+                expected_base = "ThreeDScene" if is_spatial else "LinearTransformationScene" if is_linear else "MovingCameraScene" if is_camera else "Scene"
+                allowed_bases = {expected_base, "MovingCameraScene"} if expected_base == "Scene" else {expected_base}
+                self.assertTrue(allowed_bases & scene_bases)
                 calls = [node for node in ast.walk(scenes[0]) if isinstance(node, ast.Call)]
                 is_cuda = entry["id"] == "showcase-cuda-transpose"
                 if is_cuda:
-                    # This lesson uses awaited play_for() calls to preserve source-owned
-                    # Python continuation. Admit those calls only if the one helper
-                    # awaits the real Scene.play; a no-op wrapper must not pass.
+                    # Count play_for calls toward progression when the helper
+                    # delegates to Scene.play.
                     self.assertEqual(entry["path"], "python/examples/cuda_transpose_banks.py")
                     helpers = [method for method in scenes[0].body
-                               if isinstance(method, ast.AsyncFunctionDef) and method.name == "play_for"]
-                    self.assertEqual(len(helpers), 1, "CUDA lesson must have one async play helper")
+                               if isinstance(method, ast.FunctionDef) and method.name == "play_for"]
+                    self.assertEqual(len(helpers), 1, "CUDA lesson must have one ordinary play helper")
                     delegates = [node for node in ast.walk(helpers[0])
-                                 if isinstance(node, ast.Await) and isinstance(node.value, ast.Call)
-                                 and isinstance(node.value.func, ast.Attribute)
-                                 and isinstance(node.value.func.value, ast.Name)
-                                 and node.value.func.value.id == "self" and node.value.func.attr == "play"]
-                    self.assertEqual(len(delegates), 1, "CUDA helper must await the real Scene.play")
-                    parents = {child: parent for parent in ast.walk(scenes[0])
-                               for child in ast.iter_child_nodes(parent)}
+                                 if isinstance(node, ast.Call)
+                                 and isinstance(node.func, ast.Attribute)
+                                 and isinstance(node.func.value, ast.Name)
+                                 and node.func.value.id == "self" and node.func.attr == "play"]
+                    self.assertEqual(len(delegates), 1, "CUDA helper must call Scene.play")
                     progression = {"play_for"}
                 else:
-                    progression = {"play", "move_camera"} if is_surface or is_axes else {"apply_matrix"} if is_linear else {"play"}
+                    progression = {"play", "move_camera"} if is_spatial else {"apply_matrix"} if is_linear else {"play"}
                 plays = [node for node in calls if isinstance(node.func, ast.Attribute)
                          and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
                          and node.func.attr in progression]
-                self.assertGreaterEqual(len(plays), 2, "a lesson needs a progression, not just a static API probe")
-                if is_cuda:
-                    self.assertTrue(all(isinstance(parents[call], ast.Await) for call in plays),
-                                    "CUDA play_for calls must all be awaited")
+                if entry["id"] == "showcase-miura-ori":
+                    self.assertEqual(len(plays), 1)
+                    self.assertTrue(any(isinstance(node, ast.For) and plays[0] in list(ast.walk(node))
+                                        for node in ast.walk(scenes[0])))
+                else:
+                    self.assertGreaterEqual(len(plays), 2, "a lesson needs a progression, not just a static API probe")
                 if is_surface:
                     self.assertTrue(any(isinstance(node.func, ast.Attribute)
                                         and isinstance(node.func.value, ast.Name)
@@ -81,13 +107,24 @@ class ShowcaseSourceContract(unittest.TestCase):
                                         and node.func.id == "ThreeDAxes" for node in calls))
                     self.assertTrue(any(isinstance(node.func, ast.Attribute)
                                         and node.func.attr == "c2p" for node in calls))
+                elif is_spatial:
+                    self.assertTrue(any(isinstance(node.func, ast.Name)
+                                        and node.func.id == "WorldTransformTo" for node in calls))
                 elif is_linear:
                     self.assertTrue(any(isinstance(node.func, ast.Attribute)
                                         and node.func.attr == "add_vector" for node in calls))
                 else:
-                    self.assertTrue(any(isinstance(node.func, ast.Name)
-                                        and node.func.id in {"FadeIn", "Write", "Create"} for node in calls))
-                self.assertTrue(any(isinstance(node.func, ast.Attribute) and node.func.attr == "wait" for node in calls), "hold a readable state")
+                    self.assertTrue(
+                        any(isinstance(node.func, ast.Name)
+                            and node.func.id in {"FadeIn", "Write", "Create"} for node in calls)
+                        or any(isinstance(node, ast.Attribute) and node.attr == "animate"
+                               for node in ast.walk(scenes[0])),
+                        "teach an entrance or ordinary target animation")
+                # These ports preserve the original final beat through motion or an entrance.
+                if entry["id"] not in {"showcase-vector-cutout", "showcase-miura-ori",
+                                       "showcase-drip-fill-gauge", "showcase-brand-value-race"}:
+                    self.assertTrue(any(isinstance(node.func, ast.Attribute) and node.func.attr == "wait"
+                                        for node in calls), "hold a readable state")
     def _assert_finite_audio_lesson(self, entry, tree):
         """The explicit result profile is separate from ordinary continuation lessons."""
         self.assertEqual(entry["path"], "python/examples/background_music_lesson.py")

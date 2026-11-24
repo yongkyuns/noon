@@ -89,6 +89,7 @@ mod host_callbacks;
 pub use host_callbacks::*;
 
 mod camera;
+pub use camera::ViewColorProfile;
 
 mod semantic_references;
 mod semantic_text_resources;
@@ -135,6 +136,13 @@ pub enum SourceIdentity {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         lexical_path: Vec<String>,
     },
+}
+
+/// An optional authoring location. Several objects may originate at one call site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceSite {
+    pub line: std::num::NonZeroU32,
+    pub caller_line: Option<std::num::NonZeroU32>,
 }
 
 /// Whether a semantic node currently participates in authored top-level scene membership.
@@ -380,6 +388,7 @@ pub struct SemanticNode {
     /// temporary state-less frontend identity seam only.
     object_state: Option<SemanticObjectState>,
     source_identity: Option<SourceIdentity>,
+    source_site: Option<SourceSite>,
     scene_membership: SemanticSceneMembership,
     /// Families containing this node. Multiple parents are intentional and
     /// preserve Manim-style aliasing/reference semantics. This list contains only
@@ -433,6 +442,12 @@ impl SemanticNode {
 
     pub fn kind(&self) -> &SemanticNodeKind {
         &self.kind
+    }
+
+    pub fn has_scoped_audio_clips(&self) -> bool {
+        self.scoped_audio_clips
+            .as_ref()
+            .is_some_and(|clips| !clips.is_empty())
     }
 
     pub(crate) fn semantic_signal_state_mut(&mut self) -> Option<&mut SemanticSignalState> {
@@ -553,6 +568,32 @@ impl SemanticNode {
             ),
             _ => None,
         }
+    }
+
+    pub(crate) fn has_partial_family_opacity(&self) -> bool {
+        matches!(&self.kind, SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state))
+            if state.own_style.object_opacity != 1.0)
+    }
+
+    pub fn family_opacity_copy_provenance(&self) -> Option<SemanticFamilyOpacityCopyProvenance> {
+        match &self.kind {
+            SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) => state.opacity_copy,
+            _ => None,
+        }
+    }
+
+    pub(crate) fn set_family_opacity_copy_provenance(
+        &mut self,
+        copy: Option<SemanticFamilyOpacityCopyProvenance>,
+    ) {
+        if let SemanticNodeKind::Family(SemanticFamilyState::Unrendered(state)) = &mut self.kind {
+            state.opacity_copy = copy;
+        }
+    }
+
+    pub(crate) fn has_explicit_family_opacity_target(&self) -> bool {
+        self.family_opacity_copy_provenance()
+            .is_some_and(|copy| copy.writes_object_opacity())
     }
     pub fn family_background_stroke_opacity(&self) -> Option<f64> {
         self.family_style()
@@ -843,6 +884,9 @@ pub struct SemanticStore {
     // Derived cardinality, maintained at allocator insertion/retirement. It lets
     // the declaration-only effect profile reject execution without scene scans.
     effect_nodes: usize,
+    partial_opacity_families: usize,
+    explicit_family_opacity_targets: usize,
+    appearance_target_animations: usize,
     audio_clip_nodes: usize,
     scene_head: Option<SemanticNodeId>,
     scene_tail: Option<SemanticNodeId>,
@@ -983,6 +1027,9 @@ impl Clone for SemanticStore {
             free_head: self.free_head,
             live_nodes: self.live_nodes,
             effect_nodes: self.effect_nodes,
+            partial_opacity_families: self.partial_opacity_families,
+            explicit_family_opacity_targets: self.explicit_family_opacity_targets,
+            appearance_target_animations: self.appearance_target_animations,
             audio_clip_nodes: self.audio_clip_nodes,
             scene_head: self.scene_head,
             scene_tail: self.scene_tail,
@@ -1057,8 +1104,9 @@ impl SemanticStore {
     /// Intern immutable path content in this store's resource namespace.
     pub fn insert_geometry_path(
         &mut self,
-        path: crate::VectorPath,
+        path: impl Into<std::sync::Arc<crate::VectorPath>>,
     ) -> Result<crate::GeometryResourceHandle, crate::GeometryResourceError> {
+        let path = path.into();
         if !path.is_finite() {
             return Err(crate::GeometryResourceError::NonFinitePath);
         }
@@ -1078,7 +1126,7 @@ impl SemanticStore {
     /// fallible validation boundary above.
     pub(crate) fn insert_preflighted_geometry_path(
         &mut self,
-        path: crate::VectorPath,
+        path: std::sync::Arc<crate::VectorPath>,
     ) -> crate::GeometryResourceHandle {
         self.geometry_resources.insert_path(path)
     }
@@ -1088,13 +1136,16 @@ impl SemanticStore {
     /// discards only the unpublished resource, preserving existing handles.
     pub fn with_geometry_path<T, E>(
         &mut self,
-        path: crate::VectorPath,
+        path: impl Into<std::sync::Arc<crate::VectorPath>>,
         publish: impl FnOnce(&mut Self, crate::GeometryResourceHandle) -> Result<T, E>,
     ) -> Result<T, E>
     where
         E: From<crate::GeometryResourceError>,
     {
-        self.with_geometry_paths([path], |store, handles| publish(store, handles[0]))
+        self.with_geometry_resources(
+            [crate::GeometryResource::VectorPath(path.into())],
+            |store, handles| publish(store, handles[0]),
+        )
     }
 
     /// Admit one validated mesh for an atomic semantic publication. If the
@@ -1269,6 +1320,8 @@ impl SemanticStore {
     }
 
     fn insert_kind(&mut self, kind: SemanticNodeKind) -> SemanticNodeId {
+        self.appearance_target_animations += usize::from(matches!(&kind,
+            SemanticNodeKind::Animation(state) if matches!(state.intent(), SemanticAnimationIntent::EffectTargetTo { .. })));
         self.effect_nodes += usize::from(matches!(kind, SemanticNodeKind::Effect(_)));
         self.audio_clip_nodes += usize::from(matches!(kind, SemanticNodeKind::AudioClip(_)));
         let id = self
@@ -1290,6 +1343,7 @@ impl SemanticStore {
             kind,
             object_state: None,
             source_identity: None,
+            source_site: None,
             scene_membership: SemanticSceneMembership::Detached,
             parents: Vec::new(),
             members: OrderedFamilyMembers::default(),
@@ -1301,6 +1355,20 @@ impl SemanticStore {
             effects: None,
             scoped_audio_clips: None,
         });
+        self.partial_opacity_families += usize::from(
+            self.slots[slot_index as usize]
+                .node
+                .as_ref()
+                .expect("inserted node")
+                .has_partial_family_opacity(),
+        );
+        self.explicit_family_opacity_targets += usize::from(
+            self.slots[slot_index as usize]
+                .node
+                .as_ref()
+                .expect("inserted node")
+                .has_explicit_family_opacity_target(),
+        );
         self.live_nodes += 1;
         self.last_mutation = SemanticMutationStats {
             slots_written: 1,
@@ -1439,6 +1507,29 @@ impl SemanticStore {
         debug_assert!(inserted);
         self.register_semantic_scoped_signal_reference(scope, signal);
         Ok(true)
+    }
+
+    /// Record creation provenance without changing authored or effective scene state.
+    pub fn record_source_site(
+        &mut self,
+        id: SemanticNodeId,
+        line: u32,
+        caller_line: u32,
+    ) -> Result<(), SemanticStoreError> {
+        let node = self
+            .node_mut(id)
+            .ok_or(SemanticStoreError::UnknownNode(id))?;
+        if let Some(line) = std::num::NonZeroU32::new(line) {
+            node.source_site.get_or_insert(SourceSite {
+                line,
+                caller_line: std::num::NonZeroU32::new(caller_line),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn source_site(&self, id: SemanticNodeId) -> Option<SourceSite> {
+        self.node(id)?.source_site
     }
 
     pub fn set_source_identity(
@@ -1975,6 +2066,11 @@ impl SemanticStore {
 
         let slot = &mut self.slots[id.slot as usize];
         let removed = slot.node.take().expect("node existence validated above");
+        self.partial_opacity_families -= usize::from(removed.has_partial_family_opacity());
+        self.explicit_family_opacity_targets -=
+            usize::from(removed.has_explicit_family_opacity_target());
+        self.appearance_target_animations -= usize::from(matches!(&removed.kind,
+            SemanticNodeKind::Animation(state) if matches!(state.intent(), SemanticAnimationIntent::EffectTargetTo { .. })));
         self.effect_nodes -= usize::from(matches!(removed.kind, SemanticNodeKind::Effect(_)));
         self.audio_clip_nodes -=
             usize::from(matches!(removed.kind, SemanticNodeKind::AudioClip(_)));

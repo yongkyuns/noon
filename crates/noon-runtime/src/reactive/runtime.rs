@@ -33,7 +33,7 @@ struct ReactiveTarget {
 pub(crate) struct ReactiveRuntime {
     state: ComputeState,
     targets: Vec<ReactiveTarget>,
-    target_lookup: BTreeMap<(u64, u8), usize>,
+    target_lookup: BTreeMap<(u64, u16), usize>,
     targets_by_object: Vec<Vec<usize>>,
 }
 
@@ -75,10 +75,6 @@ impl ReactiveRuntime {
     pub(crate) fn owns_property(&self, object: ObjectId, property: Property) -> bool {
         self.target_lookup
             .contains_key(&binding_key(object, property))
-    }
-
-    pub(crate) fn has_property_bindings(&self) -> bool {
-        !self.targets.is_empty()
     }
     pub(crate) fn state_value(&self, signal: noon_core::SignalId) -> Option<&ReactiveValue> {
         self.state.value(signal)
@@ -268,6 +264,22 @@ impl ReactiveRuntime {
 }
 
 impl SceneInstance {
+    /// Apply the sparse derived-property changes after a sealed historical
+    /// forward step. The retained scalar schedule is authored; raw input paths
+    /// still invalidate history before reaching this helper.
+    pub(crate) fn apply_retained_scalar_reactive_changes(
+        &mut self,
+        changes: &[(usize, Property, ReactiveValue)],
+    ) {
+        for (object_index, property, value) in changes {
+            if self.object_slot_is_live(*object_index)
+                && apply_reactive_value(&mut self.frame, *object_index, *property, value)
+            {
+                self.mark_changed(*object_index);
+            }
+        }
+    }
+
     /// Preflight one input-only reactive slot append. `None` reserves a slot for
     /// a semantic identity that will be allocated by the owning transaction.
     pub fn prepare_reactive_signal_enrollment(
@@ -543,7 +555,12 @@ impl SceneInstance {
         }
     }
 
-    pub(crate) fn reapply_reactive_to_row(&self, object_index: usize, mut row: FrameRowMut<'_>) {
+    pub(crate) fn reapply_reactive_to_row(
+        &self,
+        object_index: usize,
+        mut row: FrameRowMut<'_>,
+        mut should_apply: impl FnMut(Property) -> bool,
+    ) {
         if !self.object_slot_is_live(object_index) {
             return;
         }
@@ -555,6 +572,9 @@ impl SceneInstance {
         };
         for target_index in target_indices {
             let target = reactive.targets[*target_index];
+            if !should_apply(target.property) {
+                continue;
+            }
             let value = reactive
                 .state
                 .value(target.signal)
@@ -562,26 +582,13 @@ impl SceneInstance {
             apply_reactive_value_to_row(&mut row, target.property, value);
         }
     }
-
-    pub(crate) fn reactive_properties_for_object(&self, object_index: usize) -> Vec<Property> {
-        let Some(reactive) = self.reactive.as_ref() else {
-            return Vec::new();
-        };
-        reactive
-            .targets_by_object
-            .get(object_index)
-            .into_iter()
-            .flatten()
-            .map(|&index| reactive.targets[index].property)
-            .collect()
-    }
 }
 
-fn binding_key(object: ObjectId, property: Property) -> (u64, u8) {
+fn binding_key(object: ObjectId, property: Property) -> (u64, u16) {
     (object.get(), property_slot(property))
 }
 
-const fn property_slot(property: Property) -> u8 {
+const fn property_slot(property: Property) -> u16 {
     match property {
         Property::Presence => 0,
         Property::Transform => 1,
@@ -602,6 +609,13 @@ const fn property_slot(property: Property) -> u8 {
         Property::EffectRadius => 16,
         Property::EffectIntensity => 17,
         Property::EffectOffset => 18,
+        Property::EffectProgress => 19,
+        Property::EffectSoftness => 20,
+        Property::EffectSeed => 21,
+        Property::EffectSize => 22,
+        Property::EffectThreshold => 23,
+        Property::Emission => 24,
+        Property::EffectShader(index) => 25 + index as u16,
     }
 }
 

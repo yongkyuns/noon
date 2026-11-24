@@ -1,0 +1,1208 @@
+//! Opt-in experimental prefix delivery over the existing finite replay history.
+//! One execution bootstrap is followed by changed-payload batches, not snapshots.
+//! The reader accepts future revisions without seeking to the producer frontier.
+use super::{ReplayError, ReplayLimits, Revision};
+use crate::signal_timeline::SignalTimelineCursor;
+use crate::{
+    EvaluationError, PreparedTransientAnimation, RuntimeIdentity, SceneInstance,
+    SignalTimelineAppendError, SignalTimelineSchedule,
+};
+use noon_compile::{
+    CompiledFamilyAnimationChannel, CompiledObject, CompiledResourceError, CompiledResources,
+};
+use noon_core::{GeometryRef, ObjectId, RetainedFamilyAnimationPlan, SemanticClickIndicate};
+use std::sync::Arc;
+
+mod history_payload_budget;
+mod object_budget;
+mod resource_budget;
+mod storage;
+use history_payload_budget::HistoryPayloadBudget;
+use resource_budget::ResourceBudget;
+
+#[cfg(test)]
+mod family_tests;
+#[cfg(test)]
+mod history_index_budget_tests;
+#[cfg(test)]
+mod history_payload_budget_tests;
+#[cfg(test)]
+mod inset_tests;
+#[cfg(test)]
+mod object_budget_tests;
+#[cfg(test)]
+mod payload_budget_tests;
+#[cfg(test)]
+mod resource_budget_tests;
+
+#[derive(Debug, PartialEq)]
+pub enum PrefixError {
+    Replay(ReplayError),
+    Evaluation(EvaluationError),
+    ScalarTimeline(SignalTimelineAppendError),
+    SourceChanged,
+    ReaderChanged,
+    Slots(crate::ExecutionSlotError),
+    NotReady,
+    UnexpectedBatch,
+    OutsideRange {
+        time: f64,
+        start: f64,
+        end_exclusive: f64,
+    },
+    /// The source is complete; waiting for more preparation cannot admit this time.
+    OutsideFinishedRange {
+        time: f64,
+        start: f64,
+        end: f64,
+    },
+    Allocation,
+    CapacityRequired {
+        object_slots: usize,
+    },
+    /// Logical immutable-resource payloads exceed this stream's explicit cap.
+    /// Existing history remains valid; this never evicts promised past resources.
+    ResourceBudgetExceeded {
+        retained_bytes: usize,
+        additional_bytes: usize,
+        limit_bytes: usize,
+    },
+    /// The preallocated revision index exceeds its byte ceiling. These fields
+    /// remain representable even when capacity times entry size would overflow.
+    HistoryIndexBudgetExceeded {
+        revision_capacity: usize,
+        bytes_per_revision: usize,
+        limit_bytes: usize,
+    },
+    /// Saved vectors and both-side logical inline geometry exceed the stream ceiling.
+    /// Other indirect payloads, the revision index and allocator peaks are excluded.
+    HistoryPayloadBudgetExceeded {
+        retained_bytes: usize,
+        additional_bytes: usize,
+        limit_bytes: usize,
+    },
+    /// Aggregate backing storage for compiled/runtime object vectors. `None`
+    /// denotes checked arithmetic overflow, not an unknown/uncharged amount.
+    ObjectStorageBudgetExceeded {
+        object_slots: usize,
+        required_bytes: Option<usize>,
+        limit_bytes: usize,
+    },
+    /// Plan/channel and scheduler tables need an explicit maintenance reservation.
+    FamilyAnimationCapacityRequired {
+        animations: usize,
+    },
+    Resources(CompiledResourceError),
+    Interaction(String),
+}
+impl std::fmt::Display for PrefixError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "prepared prefix unavailable: {self:?}")
+    }
+}
+impl std::error::Error for PrefixError {}
+impl From<ReplayError> for PrefixError {
+    fn from(error: ReplayError) -> Self {
+        Self::Replay(error)
+    }
+}
+impl From<EvaluationError> for PrefixError {
+    fn from(error: EvaluationError) -> Self {
+        Self::Evaluation(error)
+    }
+}
+impl From<SignalTimelineAppendError> for PrefixError {
+    fn from(error: SignalTimelineAppendError) -> Self {
+        Self::ScalarTimeline(error)
+    }
+}
+
+impl From<CompiledResourceError> for PrefixError {
+    fn from(error: CompiledResourceError) -> Self {
+        Self::Resources(error)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrefixBatchStats {
+    pub revisions: usize,
+    pub payloads: usize,
+    pub row_payloads: usize,
+    pub new_object_slots: usize,
+    /// Unique immutable resource entries and glyph plans delivered, not bytes.
+    pub resource_payloads: usize,
+}
+
+/// Source-bound cursor only. Does not own a Semantic Scene or another evaluator.
+/// Dropping a batch loses delivery; a new reader/bootstrap is then required.
+/// Transport retry/acknowledgment policy is intentionally not implemented here.
+#[derive(Debug)]
+pub struct PrefixPublisher {
+    source: RuntimeIdentity,
+    scope: Arc<()>,
+    stream: Arc<()>,
+    next_revision: usize,
+    family_animations: usize,
+    // Reader-side charge includes bootstrap and all extracted batches, even
+    // pending ones. Source inverse-history cost omits new slots/resources.
+    extracted_payloads: usize,
+    frontier: f64,
+    finished: bool,
+    object_slots: usize,
+    resources: CompiledResources,
+    resource_budget: ResourceBudget,
+    history_payload_budget: HistoryPayloadBudget,
+    object_vector_budget_bytes: usize,
+    scalar_timeline_cursor: SignalTimelineCursor,
+}
+
+impl PrefixPublisher {
+    /// Bind the publisher's starting cursor to the source-owned scalar schedule.
+    /// This is called once when its matching ExecutionSession bootstraps a reader.
+    #[doc(hidden)]
+    pub fn initialize_scalar_timeline(&mut self, schedule: &SignalTimelineSchedule) {
+        self.scalar_timeline_cursor = schedule.cursor();
+    }
+
+    /// Saved vectors and logical inline geometry extracted, including pending batches.
+    /// Not total history/heap memory; see the compiler-owned accounting contract.
+    pub fn extracted_history_payload_bytes(&self) -> usize {
+        self.history_payload_budget.bytes()
+    }
+
+    /// Resource payload bytes extracted for this stream, including pending output.
+    /// This is not a delivery receipt or process/allocator/GPU memory measurement.
+    pub fn extracted_resource_bytes(&self) -> usize {
+        self.resource_budget.bytes()
+    }
+    pub fn resource_budget_bytes(&self) -> usize {
+        self.resource_budget.limit()
+    }
+
+    /// The last extracted frontier, not a displayed time or proof of delivery.
+    pub fn frontier(&self) -> f64 {
+        self.frontier
+    }
+}
+
+/// An owned, ordered extension of one read-only historical projection.
+/// Fields are private: callers cannot mint revisions, edit identities, or combine
+/// streams. Moving it across threads requires no serialization or shared writes.
+#[derive(Debug)]
+pub struct PrefixBatch {
+    stream: Arc<()>,
+    from_revision: usize,
+    from_frontier: f64,
+    frontier: f64,
+    terminal: bool,
+    revisions: Vec<Revision>,
+    stats: PrefixBatchStats,
+    from_object_slots: usize,
+    from_family_animations: usize,
+    family_animations: Vec<(RetainedFamilyAnimationPlan, CompiledFamilyAnimationChannel)>,
+    new_objects: Vec<CompiledObject>,
+    resources: CompiledResources,
+    resource_bytes: usize,
+    history_payload_bytes: usize,
+    scalar_timeline_entries: Vec<noon_compile::CompiledScalarSignalTimelineEntry>,
+}
+impl PrefixBatch {
+    /// Saved vector backing and both-side logical inline geometry charged to the reader.
+    pub fn history_payload_bytes(&self) -> usize {
+        self.history_payload_bytes
+    }
+
+    /// Newly introduced immutable payload bytes; known resource handles cost zero.
+    pub fn resource_bytes(&self) -> usize {
+        self.resource_bytes
+    }
+
+    /// Reserve explicitly before append when additional object storage is needed.
+    pub fn required_object_capacity(&self) -> usize {
+        self.from_object_slots + self.new_objects.len()
+    }
+    /// Required immutable plan/channel table entries, not live frame state.
+    pub fn required_family_animation_capacity(&self) -> usize {
+        self.from_family_animations + self.family_animations.len()
+    }
+
+    /// Inspect only the newly delivered physical rows, in storage order.
+    /// These keys are not live targets or proof of stream membership. A session
+    /// must validate the batch before staging identity slots and must still use
+    /// the displayed revision for picking. No existing rows are scanned.
+    pub fn new_object_ids(&self) -> impl ExactSizeIterator<Item = ObjectId> + '_ {
+        self.new_objects.iter().map(|object| object.id)
+    }
+
+    pub fn stats(&self) -> PrefixBatchStats {
+        self.stats
+    }
+    pub fn frontier(&self) -> f64 {
+        self.frontier
+    }
+
+    /// Whether successful adoption closes this stream at its exact frontier.
+    /// Inspection alone neither installs the suffix nor marks a reader finished.
+    pub fn is_terminal(&self) -> bool {
+        self.terminal
+    }
+}
+
+/// Ordered receive cursor for one independent historical runtime incarnation.
+///
+/// The cursor owns no scene, evaluator, frame, or input policy. The enclosing
+/// session owns the returned `SceneInstance` and borrows it for checked delivery
+/// and readiness admission. It must not expose unguarded authored-time mutation
+/// through its public reader facade. A foreign, cloned, or unsealed runtime is
+/// rejected rather than silently rebinding this cursor.
+#[derive(Debug)]
+pub struct PrefixReceiver {
+    runtime: RuntimeIdentity,
+    scope: Arc<()>,
+    stream: Arc<()>,
+    start: f64,
+    frontier: f64,
+    finished: bool,
+    received_revisions: usize,
+    limits: ReplayLimits,
+    object_capacity: usize,
+    family_capacity: usize,
+    initial_object_slots: usize,
+    resource_budget: ResourceBudget,
+    history_payload_budget: HistoryPayloadBudget,
+    object_vector_budget_bytes: usize,
+}
+impl PrefixReceiver {
+    /// Read the terminal endpoint only after this reader has adopted it.
+    pub fn completed_end_time(&self, runtime: &SceneInstance) -> Result<f64, PrefixError> {
+        self.validate_runtime(runtime)?;
+        self.end_time().ok_or(PrefixError::NotReady)
+    }
+
+    /// Same source/scope/stream, with every extracted suffix already adopted.
+    pub fn matches_publisher(&self, publisher: &PrefixPublisher) -> bool {
+        Arc::ptr_eq(&self.scope, &publisher.scope)
+            && Arc::ptr_eq(&self.stream, &publisher.stream)
+            && self.frontier == publisher.frontier
+    }
+    /// Saved vectors and logical inline geometry held, including future history.
+    /// Seeking or removing visible membership does not release this charge.
+    pub fn retained_history_payload_bytes(&self) -> usize {
+        self.history_payload_budget.bytes()
+    }
+    pub fn history_payload_budget_bytes(&self) -> usize {
+        self.history_payload_budget.limit()
+    }
+
+    /// Logical immutable-resource bytes pinned by the adopted history, not heap/VRAM.
+    /// Future resources remain charged even while an older frame is displayed.
+    pub fn retained_resource_bytes(&self) -> usize {
+        self.resource_budget.bytes()
+    }
+    pub fn resource_budget_bytes(&self) -> usize {
+        self.resource_budget.limit()
+    }
+
+    fn validate_runtime(&self, runtime: &SceneInstance) -> Result<(), PrefixError> {
+        let valid = runtime.runtime_identity() == self.runtime
+            && runtime.replay_history.as_ref().is_some_and(|history| {
+                Arc::ptr_eq(&history.scope, &self.scope)
+                    && history.failure.is_none()
+                    && history.end == Some(self.frontier)
+                    && history.revisions.len() == self.received_revisions
+            });
+        if valid {
+            Ok(())
+        } else {
+            Err(PrefixError::ReaderChanged)
+        }
+    }
+
+    pub fn frontier(&self) -> f64 {
+        self.frontier
+    }
+    /// Exact, inclusive endpoint only after this reader adopts the terminal batch.
+    /// Producer completion or destruction alone does not change this observation.
+    pub fn end_time(&self) -> Option<f64> {
+        self.finished.then_some(self.frontier)
+    }
+
+    /// Admit an explicit seek before the session evaluates it through its ordinary
+    /// seek path. All rejection precedes storage growth or interaction cancellation.
+    pub fn prepare_seek(&self, runtime: &mut SceneInstance, time: f64) -> Result<(), PrefixError> {
+        self.validate_runtime(runtime)?;
+        self.validate_time(time)?;
+        runtime.extend_prefix_frame_storage();
+        Ok(())
+    }
+
+    /// Admit monotonic forward playback. The session still owns evaluation and
+    /// gesture/selection reconciliation; this cursor owns readiness, not a clock.
+    pub fn prepare_advance(
+        &self,
+        runtime: &mut SceneInstance,
+        time: f64,
+    ) -> Result<(), PrefixError> {
+        self.validate_runtime(runtime)?;
+        self.validate_time(time)?;
+        let current = runtime.frame().time;
+        if time < current {
+            return Err(EvaluationError::NonMonotonicPreparedAdvance {
+                current,
+                requested: time,
+            }
+            .into());
+        }
+        runtime.extend_prefix_frame_storage();
+        Ok(())
+    }
+
+    /// Read-only readiness over the same admission used by seek and advance.
+    pub fn contains_time(&self, time: f64) -> bool {
+        self.validate_time(time).is_ok()
+    }
+
+    /// Inclusive endpoints suitable for a timeline control. The open endpoint
+    /// is the last representable timestamp admitted by this receiver, not a
+    /// guessed frame time. Runtime identity and complete retained history are
+    /// checked before exposing the bounds.
+    pub fn selectable_time_bounds(
+        &self,
+        runtime: &SceneInstance,
+    ) -> Result<Option<(f64, f64)>, PrefixError> {
+        self.validate_runtime(runtime)?;
+        let end = if self.finished {
+            self.frontier
+        } else {
+            if self.frontier <= self.start {
+                return Ok(None);
+            }
+            // The immediate predecessor keeps the exclusive frontier itself
+            // out of the inclusive UI range without inventing a time step.
+            self.frontier.next_down()
+        };
+        if end < self.start || !self.contains_time(end) {
+            return Ok(None);
+        }
+        Ok(Some((self.start, end)))
+    }
+
+    fn validate_time(&self, time: f64) -> Result<(), PrefixError> {
+        if !time.is_finite()
+            || time < self.start
+            || time > self.frontier
+            || (time == self.frontier && !self.finished)
+        {
+            if self.finished {
+                return Err(PrefixError::OutsideFinishedRange {
+                    time,
+                    start: self.start,
+                    end: self.frontier,
+                });
+            }
+            return Err(PrefixError::OutsideRange {
+                time,
+                start: self.start,
+                end_exclusive: self.frontier,
+            });
+        }
+        Ok(())
+    }
+
+    /// Prepare the existing bounded Indicate effect against the displayed past,
+    /// independently of the producer's current membership or authored bindings.
+    /// Only filled analytic circles and rectangles are supported; the prefix
+    /// itself already excludes reactive drivers. Unsupported targets are rejected
+    /// before preparing or changing any effect.
+    /// Newly appended future slots are not interaction targets until displayed.
+    pub fn prepare_click_indicate(
+        &self,
+        runtime: &SceneInstance,
+        object: ObjectId,
+        binding: SemanticClickIndicate,
+    ) -> Result<Option<PreparedTransientAnimation>, PrefixError> {
+        let row = self.displayed_interaction_target(runtime, object)?;
+        // SceneInstance preparation normally follows semantic binding admission.
+        // This direct reader API must preserve that bounded target domain itself.
+        if row.style.fill.is_none()
+            || !matches!(
+                row.content.geometry(),
+                Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
+            )
+        {
+            return Err(PrefixError::Interaction(
+                "prefix Indicate requires a filled analytic circle or rectangle".into(),
+            ));
+        }
+        runtime
+            .prepare_click_indicate(object, binding)
+            .map_err(PrefixError::Interaction)
+    }
+
+    /// Prepare the authored click action from the displayed historical revision.
+    /// A visible target with no binding returns `None`. Future binding changes do
+    /// not take effect until playback selects their revision. Pointer collection,
+    /// picking, and trigger synthesis remain owned by the common input session.
+    pub fn prepare_bound_click_indicate(
+        &self,
+        runtime: &SceneInstance,
+        object: ObjectId,
+    ) -> Result<Option<PreparedTransientAnimation>, PrefixError> {
+        self.displayed_interaction_target(runtime, object)?;
+        let Some(binding) = runtime.click_indicate_binding(object) else {
+            return Ok(None);
+        };
+        self.prepare_click_indicate(runtime, object, binding)
+    }
+
+    fn displayed_interaction_target<'a>(
+        &self,
+        runtime: &'a SceneInstance,
+        object: ObjectId,
+    ) -> Result<&'a crate::FrameObjectState, PrefixError> {
+        self.validate_runtime(runtime)?;
+        runtime
+            .frame_index_for_object(object)
+            .filter(|&index| {
+                runtime.object_slot_is_live(index)
+                    && runtime.frame().presences.get(index) == Some(&true)
+            })
+            .and_then(|index| runtime.frame().objects.get(index))
+            .filter(|row| row.draw_enabled)
+            .ok_or_else(|| {
+                PrefixError::Interaction(
+                    "interaction target is not live in the displayed prefix".into(),
+                )
+            })
+    }
+
+    /// Validate a borrowed batch without consuming it or changing the reader.
+    /// Capacity can be reserved explicitly after `CapacityRequired`, then the
+    /// same owned batch can be checked and delivered without another bootstrap.
+    /// An out-of-order or foreign batch likewise remains with its caller.
+    ///
+    /// This is an observation, not a reservation or a reusable admission token.
+    /// `append` always validates against the then-current stream and budgets.
+    /// Reuses existing resource validation without scanning frames or history.
+    pub fn preflight_append(
+        &self,
+        runtime: &SceneInstance,
+        batch: &PrefixBatch,
+    ) -> Result<PrefixBatchStats, PrefixError> {
+        if !batch.scalar_timeline_entries.is_empty() {
+            return Err(ReplayError::UnsupportedDomain.into());
+        }
+        self.validate_append(runtime, batch).map(|_| batch.stats)
+    }
+
+    /// Preflight the ordered scalar suffix against this reader's current
+    /// schedule cursor without moving either the history or the display.
+    #[doc(hidden)]
+    pub fn preflight_append_with_scalar_timeline(
+        &self,
+        runtime: &SceneInstance,
+        batch: &PrefixBatch,
+        schedule: &SignalTimelineSchedule,
+    ) -> Result<PrefixBatchStats, PrefixError> {
+        self.validate_append(runtime, batch)?;
+        schedule.prepare_append_batch(
+            batch.scalar_timeline_entries.iter().cloned(),
+            runtime.frame().time,
+        )?;
+        Ok(batch.stats)
+    }
+
+    fn validate_append(
+        &self,
+        runtime: &SceneInstance,
+        batch: &PrefixBatch,
+    ) -> Result<(usize, usize, ResourceBudget, HistoryPayloadBudget), PrefixError> {
+        self.validate_runtime(runtime)?;
+        if self.finished
+            || !Arc::ptr_eq(&self.stream, &batch.stream)
+            || batch.from_revision != self.received_revisions
+            || batch.from_frontier != self.frontier
+            || batch.frontier < self.frontier
+            || (batch.frontier == self.frontier && !batch.terminal)
+        {
+            return Err(PrefixError::UnexpectedBatch);
+        }
+        if batch.from_object_slots != runtime.compiled.objects().len()
+            || batch.from_family_animations != runtime.compiled.family_animations().len()
+            || batch.from_family_animations != runtime.compiled.family_animation_plans().len()
+        {
+            return Err(PrefixError::UnexpectedBatch);
+        }
+        let resource_budget = self.resource_budget.with_additional(batch.resource_bytes)?;
+        let history_payload_budget = self
+            .history_payload_budget
+            .with_additional(batch.history_payload_bytes)?;
+        let history = runtime
+            .replay_history
+            .as_ref()
+            .expect("private reader history");
+        let count = history
+            .revisions
+            .len()
+            .checked_add(batch.stats.revisions)
+            .ok_or(ReplayError::RetentionLimit)?;
+        let payloads = history
+            .stats
+            .payloads_retained
+            .checked_add(batch.stats.payloads)
+            .ok_or(ReplayError::RetentionLimit)?;
+        if count > self.limits.revisions || payloads > self.limits.payloads {
+            return Err(ReplayError::RetentionLimit.into());
+        }
+        runtime
+            .compiled
+            .resources()
+            .preflight_merge(&batch.resources)?;
+        // CapacityRequired is actionable only after permanent admission checks.
+        // Never request storage growth for a batch the retained history cannot fit.
+        let required = batch.required_object_capacity();
+        object_budget::preflight_reserved(runtime, required, self.object_vector_budget_bytes)?;
+        if required > self.object_capacity {
+            return Err(PrefixError::CapacityRequired {
+                object_slots: required,
+            });
+        }
+        if batch.required_family_animation_capacity() > self.family_capacity
+            || !runtime
+                .timeline_scheduler
+                .prefix_groups_reserved(batch.family_animations.len())
+        {
+            return Err(PrefixError::FamilyAnimationCapacityRequired {
+                animations: batch.required_family_animation_capacity(),
+            });
+        }
+        Ok((count, payloads, resource_budget, history_payload_budget))
+    }
+
+    /// Install only future history. The displayed frame, runtime identity,
+    /// evaluation cursor and renderer dirty state are unchanged. All fallible
+    /// validation precedes moving revisions into the already-reserved history.
+    /// This consumes the batch even on failure; use `preflight_append` first
+    /// when delivery must remain recoverable after capacity/order rejection.
+    pub fn append(
+        &mut self,
+        runtime: &mut SceneInstance,
+        batch: PrefixBatch,
+    ) -> Result<PrefixBatchStats, PrefixError> {
+        if !batch.scalar_timeline_entries.is_empty() {
+            return Err(ReplayError::UnsupportedDomain.into());
+        }
+        let (count, payloads, resource_budget, history_payload_budget) =
+            self.validate_append(runtime, &batch)?;
+        self.install_validated_batch(
+            runtime,
+            batch,
+            (count, payloads, resource_budget, history_payload_budget),
+        )
+    }
+
+    /// Atomically adopt a validated runtime suffix and its matching scalar
+    /// schedule extension, preserving the reader's current event cursor.
+    #[doc(hidden)]
+    pub fn append_with_scalar_timeline(
+        &mut self,
+        runtime: &mut SceneInstance,
+        batch: PrefixBatch,
+        schedule: &mut SignalTimelineSchedule,
+    ) -> Result<PrefixBatchStats, PrefixError> {
+        let timeline = schedule.prepare_append_batch(
+            batch.scalar_timeline_entries.iter().cloned(),
+            runtime.frame().time,
+        )?;
+        let validated = self.validate_append(runtime, &batch)?;
+        let stats = self.install_validated_batch(runtime, batch, validated)?;
+        schedule.commit_append(timeline);
+        Ok(stats)
+    }
+
+    fn install_validated_batch(
+        &mut self,
+        runtime: &mut SceneInstance,
+        batch: PrefixBatch,
+        (count, payloads, resource_budget, history_payload_budget): (
+            usize,
+            usize,
+            ResourceBudget,
+            HistoryPayloadBudget,
+        ),
+    ) -> Result<PrefixBatchStats, PrefixError> {
+        let history = runtime
+            .replay_history
+            .as_mut()
+            .expect("private reader history");
+        // Only this sealed reader owns its history; capacity was reserved once.
+        debug_assert!(count <= history.revisions.capacity());
+        runtime.compiled.merge_prepared_resources(batch.resources);
+        runtime
+            .compiled
+            .install_prefix_tombstones(batch.new_objects);
+        let first_family = runtime.compiled.family_animations().len();
+        runtime
+            .compiled
+            .install_prefix_family_delta(batch.family_animations);
+        for index in first_family..runtime.compiled.family_animations().len() {
+            let (start, end) =
+                crate::family_animation_interval(&runtime.compiled.family_animations()[index]);
+            runtime
+                .timeline_scheduler
+                .append_family_animation(index, start, end);
+        }
+        history.revisions.extend(batch.revisions);
+        history.stats.revisions_retained = count;
+        history.stats.payloads_retained = payloads;
+        history.end = Some(batch.frontier);
+        self.resource_budget = resource_budget;
+        self.history_payload_budget = history_payload_budget;
+        self.received_revisions = count;
+        self.frontier = batch.frontier;
+        self.finished = batch.terminal;
+        Ok(batch.stats)
+    }
+}
+
+impl SceneInstance {
+    /// Provisional cap for logical immutable resources and glyph-plan descriptors.
+    /// Not a total memory limit: revisions, object/storage capacity, allocator
+    /// overhead, source allocations and renderer residency require separate caps.
+    pub const DEFAULT_PREFIX_RESOURCE_BUDGET_BYTES: usize = 64 * 1024 * 1024;
+
+    /// Provisional ceiling for the reader's preallocated revision index,
+    /// including unused Vec capacity. This excludes nested row/track payloads,
+    /// source history, object storage, allocator overhead and GPU residency.
+    pub const MAX_PREFIX_HISTORY_INDEX_BYTES: usize = 64 * 1024 * 1024;
+
+    /// Provisional ceiling for saved vectors and both-side logical inline paths.
+    /// Shared paths are charged per reference. Excludes other shared payloads, source
+    /// allocations, active object/track storage, allocator overhead and GPU state.
+    pub const MAX_PREFIX_HISTORY_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
+
+    /// Low-level bootstrap. The owning ExecutionSession must additionally prove
+    /// its source segment and callback completion BEFORE invoking this method.
+    /// This experimental path copies the existing execution projection once;
+    /// its source owner separately excludes causal native input routes.
+    #[doc(hidden)]
+    pub fn create_prefix_projection(
+        &self,
+    ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
+        self.create_prefix_projection_with_resource_budget(
+            Self::DEFAULT_PREFIX_RESOURCE_BUDGET_BYTES,
+        )
+    }
+
+    /// Same bootstrap with an explicit logical immutable-resource byte cap.
+    /// Admission happens before cloning the projection or reserving its history.
+    /// Zero permits resource-free scenes. No history is evicted to meet the cap.
+    #[doc(hidden)]
+    pub fn create_prefix_projection_with_resource_budget(
+        &self,
+        resource_budget_bytes: usize,
+    ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
+        self.create_prefix_projection_with_budgets(
+            resource_budget_bytes,
+            Self::MAX_PREFIX_HISTORY_PAYLOAD_BYTES,
+        )
+    }
+
+    // Internal limit parameter permits small deterministic admission tests. No
+    // additional frontend configuration or public migration mode is introduced.
+    fn create_prefix_projection_with_budgets(
+        &self,
+        resource_budget_bytes: usize,
+        history_payload_budget_bytes: usize,
+    ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
+        self.create_prefix_projection_with_object_budget(
+            resource_budget_bytes,
+            history_payload_budget_bytes,
+            Self::MAX_PREFIX_OBJECT_VECTOR_BYTES,
+        )
+    }
+
+    /// Bootstrap a completed stream, including an exact zero-duration range.
+    /// The owning session must prove source completion before calling this.
+    #[doc(hidden)]
+    pub fn create_finished_prefix_projection(
+        &self,
+    ) -> Result<(SceneInstance, PrefixReceiver), PrefixError> {
+        let (_, runtime, receiver) = self.create_prefix_projection_for_state(
+            Self::DEFAULT_PREFIX_RESOURCE_BUDGET_BYTES,
+            Self::MAX_PREFIX_HISTORY_PAYLOAD_BYTES,
+            Self::MAX_PREFIX_OBJECT_VECTOR_BYTES,
+            true,
+        )?;
+        Ok((runtime, receiver))
+    }
+
+    fn create_prefix_projection_with_object_budget(
+        &self,
+        resource_budget_bytes: usize,
+        history_payload_budget_bytes: usize,
+        object_vector_budget_bytes: usize,
+    ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
+        self.create_prefix_projection_for_state(
+            resource_budget_bytes,
+            history_payload_budget_bytes,
+            object_vector_budget_bytes,
+            false,
+        )
+    }
+
+    /// Whether completed retained history has an open interval. This performs
+    /// no projection allocation; bootstrap still applies domain and byte caps.
+    #[doc(hidden)]
+    pub fn has_prefix_interval(&self) -> Result<bool, PrefixError> {
+        let history = self
+            .replay_history
+            .as_ref()
+            .ok_or(ReplayError::NotRecording)?;
+        if let Some(error) = history.failure {
+            return Err(error.into());
+        }
+        if history.end.is_some() || history.applied != history.revisions.len() {
+            return Err(PrefixError::NotReady);
+        }
+        Ok(self.frame.time > history.start)
+    }
+
+    fn create_prefix_projection_for_state(
+        &self,
+        resource_budget_bytes: usize,
+        history_payload_budget_bytes: usize,
+        object_vector_budget_bytes: usize,
+        finished: bool,
+    ) -> Result<(PrefixPublisher, SceneInstance, PrefixReceiver), PrefixError> {
+        let history = self
+            .replay_history
+            .as_ref()
+            .ok_or(ReplayError::NotRecording)?;
+        if let Some(error) = history.failure {
+            return Err(error.into());
+        }
+        let ready = if finished {
+            history.end == Some(self.frame.time)
+        } else {
+            history.end.is_none() && self.frame.time > history.start
+        };
+        if !ready || history.applied != history.revisions.len() {
+            return Err(PrefixError::NotReady);
+        }
+        // Initial cloning includes retained inverse revisions. Checking only
+        // active relations would admit an inset added and removed before this
+        // boundary, then silently omit that view when the reader rewinds.
+        if self.compiled.inset_2d_views().next().is_some() || history.inset_view_history {
+            return Err(ReplayError::UnsupportedDomain.into());
+        }
+        // Charge reserved entries, not just current history length. Reject a
+        // pathological configured maximum before cloning any reader state.
+        // Completed history cannot grow; reserve only its occupied index.
+        let revision_capacity = if finished {
+            history.revisions.len()
+        } else {
+            history.limits.revisions.max(history.revisions.len())
+        };
+        storage::preflight_history_index_capacity(revision_capacity)?;
+        object_budget::preflight_clone(
+            self,
+            self.compiled.objects().len(),
+            object_vector_budget_bytes,
+        )?;
+        let resource_bytes = self
+            .compiled
+            .resources()
+            .prefix_resource_bytes()
+            .and_then(|bytes| bytes.checked_add(self.compiled.prefix_family_payload_bytes(0)?))
+            .ok_or(ReplayError::RetentionLimit)?;
+        let resource_budget =
+            ResourceBudget::new(resource_budget_bytes).with_additional(resource_bytes)?;
+        let history_payload_budget = HistoryPayloadBudget::new(history_payload_budget_bytes)
+            .with_additional(
+                self.compiled
+                    .prefix_effect_payload_bytes()
+                    .ok_or(ReplayError::RetentionLimit)?,
+            )?;
+        let history_payload_budget = history_payload_budget.with_additional(
+            self.compiled
+                .prefix_composed_payload_bytes()
+                .ok_or(ReplayError::RetentionLimit)?,
+        )?;
+        // Check the requested nested-vector storage before cloning the runtime.
+        // Source spare capacity is not copied, so this pass uses occupied lengths.
+        let history_payload_budget =
+            history_payload_budget.with_additional(history_payload_budget::clone_bytes(
+                history
+                    .revisions
+                    .iter()
+                    .filter_map(|revision| revision.inverse.as_ref()),
+            )?)?;
+        let stream = Arc::new(());
+        let mut runtime = self.clone();
+        // Reserve every historical row, including inactive order slots, once.
+        // Reuse the same explicit maintenance boundary as later suffix growth.
+        storage::reserve_object_vectors(
+            &mut runtime,
+            self.compiled.objects().len(),
+            object_vector_budget_bytes,
+        )?;
+        let copied = runtime
+            .replay_history
+            .as_mut()
+            .expect("cloned finite history");
+        // Validate reported capacities too, before exposing the reader. This
+        // cannot bound an allocator's transient over-allocation or clone peak.
+        let history_payload_budget =
+            history_payload_budget.with_additional(history_payload_budget::retained_bytes(
+                copied
+                    .revisions
+                    .iter()
+                    .filter_map(|revision| revision.inverse.as_ref()),
+            )?)?;
+        // A named, bounded bootstrap allocation, not an unpredictable O(history)
+        // relocation on every append. Payload budgets retain existing semantics.
+        let extra = revision_capacity.saturating_sub(copied.revisions.len());
+        copied
+            .revisions
+            .try_reserve_exact(extra)
+            .map_err(|_| PrefixError::Allocation)?;
+        // Vec may report more capacity than requested. Never publish an index
+        // over the ceiling; this is not a bound on transient allocator peaks.
+        storage::preflight_history_index_capacity(copied.revisions.capacity())?;
+        runtime.seal_replay()?;
+        runtime.seek(history.start)?;
+        object_budget::preflight_reserved(&runtime, 0, object_vector_budget_bytes)?;
+        let publisher = PrefixPublisher {
+            source: self.runtime_identity(),
+            scope: history.scope.clone(),
+            stream: stream.clone(),
+            next_revision: history.revisions.len(),
+            family_animations: self.compiled.family_animations().len(),
+            extracted_payloads: history.stats.payloads_retained,
+            frontier: self.frame.time,
+            finished,
+            object_slots: self.compiled.objects().len(),
+            resources: self.compiled.resources().clone(),
+            resource_budget,
+            history_payload_budget,
+            object_vector_budget_bytes,
+            scalar_timeline_cursor: SignalTimelineCursor::default(),
+        };
+        let receiver = PrefixReceiver {
+            runtime: runtime.runtime_identity(),
+            scope: history.scope.clone(),
+            stream,
+            start: history.start,
+            frontier: self.frame.time,
+            finished,
+            received_revisions: history.revisions.len(),
+            limits: history.limits,
+            object_capacity: self.compiled.objects().len(),
+            family_capacity: self.compiled.family_animations().len(),
+            initial_object_slots: self.compiled.objects().len(),
+            resource_budget,
+            history_payload_budget,
+            object_vector_budget_bytes,
+        };
+        Ok((publisher, runtime, receiver))
+    }
+
+    /// Prepare an extension after the source owner validates another completed
+    /// boundary. Reads only the NEW suffix, preserving every intermediate write.
+    /// Unsupported domains fail without consuming the publisher cursor, changing
+    /// the source, or damaging any already-delivered prefix.
+    #[doc(hidden)]
+    pub fn prepare_prefix_update(
+        &self,
+        publisher: &mut PrefixPublisher,
+    ) -> Result<PrefixBatch, PrefixError> {
+        self.prepare_prefix_batch(publisher, false, None)
+    }
+
+    /// Prepare an extension and transfer only scalar timeline entries appended
+    /// since this publisher's last frontier. The schedule remains session-owned.
+    #[doc(hidden)]
+    pub fn prepare_prefix_update_with_scalar_timeline(
+        &self,
+        publisher: &mut PrefixPublisher,
+        schedule: &SignalTimelineSchedule,
+    ) -> Result<PrefixBatch, PrefixError> {
+        self.prepare_prefix_batch(publisher, false, Some(schedule))
+    }
+
+    /// Publish the final suffix from a sealed source at its actual endpoint.
+    /// The owning session must still validate its source completion boundary.
+    /// Equal-frontier publication is allowed here: it carries any last writes
+    /// at that timestamp, or an empty terminal marker when no writes remain.
+    /// Failure does not consume the cursor. Success closes this publisher.
+    #[doc(hidden)]
+    pub fn prepare_prefix_finish(
+        &self,
+        publisher: &mut PrefixPublisher,
+    ) -> Result<PrefixBatch, PrefixError> {
+        self.prepare_prefix_batch(publisher, true, None)
+    }
+
+    /// Seal a terminal batch with the source-owned scalar timeline suffix.
+    #[doc(hidden)]
+    pub fn prepare_prefix_finish_with_scalar_timeline(
+        &self,
+        publisher: &mut PrefixPublisher,
+        schedule: &SignalTimelineSchedule,
+    ) -> Result<PrefixBatch, PrefixError> {
+        self.prepare_prefix_batch(publisher, true, Some(schedule))
+    }
+
+    /// Validate source provenance before an interpreter advances or seals it.
+    /// This read-only check deliberately permits an unfinished source segment.
+    #[doc(hidden)]
+    pub fn validate_prefix_publisher(
+        &self,
+        publisher: &PrefixPublisher,
+    ) -> Result<(), PrefixError> {
+        let history = self
+            .replay_history
+            .as_ref()
+            .ok_or(ReplayError::NotRecording)?;
+        if self.runtime_identity() != publisher.source
+            || !Arc::ptr_eq(&history.scope, &publisher.scope)
+        {
+            return Err(PrefixError::SourceChanged);
+        }
+        Ok(())
+    }
+
+    /// Retire prefix publication while preserving the original bounded journal
+    /// for ordinary replay admission after observed source execution completes.
+    #[doc(hidden)]
+    pub fn retire_prefix_publication(&mut self) {
+        if let Some(history) = self.replay_history.as_mut() {
+            history.scope = Arc::new(());
+        }
+    }
+
+    /// Constant-time source admission before a headless drive. Publication-time
+    /// profile indices qualify only the publisher's new suffix; bootstrap admits
+    /// ordinary retained history. This
+    /// does not promise extraction capacity/resource admission or advance a cursor.
+    #[doc(hidden)]
+    pub fn preflight_prefix_source(
+        &self,
+        publisher: Option<&PrefixPublisher>,
+    ) -> Result<(), PrefixError> {
+        let history = self
+            .replay_history
+            .as_ref()
+            .ok_or(ReplayError::NotRecording)?;
+        if let Some(publisher) = publisher {
+            self.validate_prefix_publisher(publisher)?;
+        }
+        if let Some(error) = history.failure {
+            return Err(error.into());
+        }
+        if history.end.is_some() || history.applied != history.revisions.len() {
+            return Err(PrefixError::NotReady);
+        }
+        if self.compiled.inset_2d_views().next().is_some() || history.inset_view_history {
+            return Err(ReplayError::UnsupportedDomain.into());
+        }
+        if let Some(publisher) = publisher {
+            if publisher.next_revision > history.revisions.len() {
+                return Err(PrefixError::SourceChanged);
+            }
+            if history
+                .last_non_prefix_revision
+                .is_some_and(|index| index >= publisher.next_revision)
+            {
+                return Err(ReplayError::UnsupportedDomain.into());
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_prefix_batch(
+        &self,
+        publisher: &mut PrefixPublisher,
+        terminal: bool,
+        scalar_timeline: Option<&SignalTimelineSchedule>,
+    ) -> Result<PrefixBatch, PrefixError> {
+        let history = self
+            .replay_history
+            .as_ref()
+            .ok_or(ReplayError::NotRecording)?;
+        self.validate_prefix_publisher(publisher)?;
+        if let Some(error) = history.failure {
+            return Err(error.into());
+        }
+        let ready = if terminal {
+            history.end == Some(self.frame.time) && self.frame.time >= publisher.frontier
+        } else {
+            history.end.is_none() && self.frame.time > publisher.frontier
+        };
+        if publisher.finished || history.applied != history.revisions.len() || !ready {
+            return Err(PrefixError::NotReady);
+        }
+        let suffix = history
+            .revisions
+            .get(publisher.next_revision..)
+            .ok_or(PrefixError::SourceChanged)?;
+        let mut inverse = Vec::with_capacity(suffix.len());
+        let mut scalar_timeline_count = 0usize;
+        let mut stats = PrefixBatchStats {
+            revisions: suffix.len(),
+            ..Default::default()
+        };
+        for revision in suffix {
+            if revision.time < publisher.frontier || revision.time > self.frame.time {
+                return Err(PrefixError::SourceChanged);
+            }
+            if let Some(saved) = revision.inverse.as_ref() {
+                stats.payloads = stats
+                    .payloads
+                    .checked_add(saved.retention_cost())
+                    .ok_or(ReplayError::RetentionLimit)?;
+                stats.row_payloads += saved.object_indices().count();
+                inverse.push(saved);
+            } else if revision.scalar_timeline_entries > 0 {
+                scalar_timeline_count = scalar_timeline_count
+                    .checked_add(revision.scalar_timeline_entries)
+                    .ok_or(ReplayError::RetentionLimit)?;
+                stats.payloads = stats
+                    .payloads
+                    .checked_add(revision.scalar_timeline_entries)
+                    .ok_or(ReplayError::RetentionLimit)?;
+            } else {
+                return Err(ReplayError::UnsupportedDomain.into());
+            }
+        }
+        let (scalar_timeline_entries, next_scalar_timeline_cursor) = match scalar_timeline {
+            Some(schedule) => schedule
+                .appended_since(&publisher.scalar_timeline_cursor)
+                .ok_or(PrefixError::SourceChanged)?,
+            None => (Vec::new(), publisher.scalar_timeline_cursor.clone()),
+        };
+        if scalar_timeline_entries.len() != scalar_timeline_count {
+            return Err(ReplayError::UnsupportedDomain.into());
+        }
+        let new_objects = self
+            .compiled
+            .objects()
+            .get(publisher.object_slots..)
+            .ok_or(PrefixError::SourceChanged)?;
+        stats.new_object_slots = new_objects.len();
+        stats.payloads = stats
+            .payloads
+            .checked_add(stats.new_object_slots)
+            .ok_or(ReplayError::RetentionLimit)?;
+        let payloads = publisher
+            .extracted_payloads
+            .checked_add(stats.payloads)
+            .ok_or(ReplayError::RetentionLimit)?;
+        // Reject the known cumulative cost before forward conversion or cloning
+        // new rows. Resource closure entries are added below, once per handle.
+        if history.revisions.len() > history.limits.revisions || payloads > history.limits.payloads
+        {
+            return Err(ReplayError::RetentionLimit.into());
+        }
+        // Reject known object-vector growth before converting/cloning the suffix
+        // or committing this publisher. Reader spare capacity is checked again
+        // by receiver admission and the explicit reservation barrier.
+        object_budget::preflight_clone(
+            self,
+            self.compiled.objects().len(),
+            publisher.object_vector_budget_bytes,
+        )?;
+        // Forward conversion preserves vector lengths, not necessarily their
+        // reported capacities. Admit its known cost before allocating that copy.
+        publisher
+            .history_payload_budget
+            .with_additional(history_payload_budget::clone_bytes(
+                inverse.iter().copied(),
+            )?)?;
+        let forward = if inverse.is_empty() {
+            Vec::new()
+        } else {
+            self.compiled
+                .forward_prefix_revisions(&inverse)
+                .ok_or(ReplayError::UnsupportedDomain)?
+        };
+        let history_payload_bytes = history_payload_budget::retained_bytes(forward.iter())?;
+        let history_payload_budget = publisher
+            .history_payload_budget
+            .with_additional(history_payload_bytes)?;
+        let resources = self
+            .compiled
+            .prefix_resource_delta(&forward, &publisher.resources)?;
+        // Measure only the new dependency closure, never the retained arena.
+        // Reject before moving the cursor or retaining new publisher pins.
+        let family_bytes = self
+            .compiled
+            .prefix_family_payload_bytes(publisher.family_animations)
+            .ok_or(ReplayError::RetentionLimit)?;
+        let resource_bytes = resources
+            .prefix_resource_bytes()
+            .and_then(|bytes| bytes.checked_add(family_bytes))
+            .ok_or(ReplayError::RetentionLimit)?;
+        let resource_budget = publisher.resource_budget.with_additional(resource_bytes)?;
+        stats.resource_payloads = resources
+            .prefix_payload_count()
+            .checked_add(self.compiled.family_animations().len() - publisher.family_animations)
+            .ok_or(ReplayError::RetentionLimit)?;
+        stats.payloads = stats
+            .payloads
+            .checked_add(stats.resource_payloads)
+            .ok_or(ReplayError::RetentionLimit)?;
+        let extracted_payloads = payloads
+            .checked_add(stats.resource_payloads)
+            .ok_or(ReplayError::RetentionLimit)?;
+        if extracted_payloads > history.limits.payloads {
+            return Err(ReplayError::RetentionLimit.into());
+        }
+        let mut forward = forward.into_iter();
+        let revisions = suffix
+            .iter()
+            .map(|source| Revision {
+                time: source.time,
+                inverse: source.inverse.as_ref().map(|_| {
+                    forward
+                        .next()
+                        .expect("each inverse has one forward revision")
+                }),
+                scalar_timeline_entries: source.scalar_timeline_entries,
+            })
+            .collect();
+        let batch = PrefixBatch {
+            stream: publisher.stream.clone(),
+            from_revision: publisher.next_revision,
+            from_frontier: publisher.frontier,
+            frontier: self.frame.time,
+            terminal,
+            revisions,
+            stats,
+            from_object_slots: publisher.object_slots,
+            from_family_animations: publisher.family_animations,
+            family_animations: self
+                .compiled
+                .prefix_family_delta(publisher.family_animations),
+            new_objects: new_objects.to_vec(),
+            resources,
+            resource_bytes,
+            history_payload_bytes,
+            scalar_timeline_entries,
+        };
+        publisher
+            .resources
+            .extend_prefix_knowledge(&batch.resources);
+        publisher.resource_budget = resource_budget;
+        publisher.history_payload_budget = history_payload_budget;
+        publisher.extracted_payloads = extracted_payloads;
+        publisher.object_slots = self.compiled.objects().len();
+        publisher.family_animations = self.compiled.family_animations().len();
+        publisher.next_revision = history.revisions.len();
+        publisher.scalar_timeline_cursor = next_scalar_timeline_cursor;
+        publisher.frontier = self.frame.time;
+        publisher.finished = terminal;
+        Ok(batch)
+    }
+}

@@ -56,7 +56,7 @@ fn mixed_paths_preserve_order_and_only_coalesce_matching_coverage_profiles() {
     };
     let mut preparer = FramePreparer::new();
     let indices = {
-        let prepared = preparer.prepare(&frame);
+        let prepared = preparer.prepare(&frame).unwrap();
         let ordered = prepared.ordered_render_batches().collect::<Vec<_>>();
         let mega = ordered
             .iter()
@@ -91,7 +91,7 @@ fn mixed_paths_preserve_order_and_only_coalesce_matching_coverage_profiles() {
     // Revealing a stroke uses its original triangles without rebuilding the
     // resident mesh or routing the neighboring curve through polygon coverage.
     frame.reveals[0] = 0.4;
-    let changed = preparer.prepare(&frame);
+    let changed = preparer.prepare(&frame).unwrap();
     assert_eq!(changed.stats.geometry_cache_misses, 0);
     assert_eq!(changed.stats.path_vertices_repacked, 0);
     assert_eq!(changed.mega_path_indices, indices);

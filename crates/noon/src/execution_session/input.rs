@@ -280,9 +280,10 @@ impl ExecutionSession {
     /// callers still deliver unbound records through the normal session contract.
     /// Interaction interest is owned here alongside lowered native routes.
     pub fn has_native_pointer_subscribers(&self) -> bool {
-        !self.interaction_bindings.is_empty()
+        self.runtime.has_click_indicate_bindings()
+            || !self.interaction_bindings.is_empty()
             || self.translation_drag.has_targets()
-            || self.pointer_selection.enabled()
+            || (self.pointer_selection.enabled() && !self.default_viewer_selection())
             || !self
                 .reactive_projection
                 .native_state_targets(&NativeStateSource::PointerPosition)
@@ -392,6 +393,44 @@ impl ExecutionSession {
         self.submit_native_pointer_input_with_effective(store, token, input, effective, false)
     }
 
+    /// The historical reader admits only presentation effects. Preparation and
+    /// metadata commit are the ordinary pointer lane; no producer arena is borrowed.
+    #[cfg(any(feature = "prepared-prefix", test))]
+    pub(super) fn submit_prepared_pointer_presentation(
+        &mut self,
+        token: &NativePointerInputToken,
+        input: NativePointerInput,
+        allow_viewer_drag: bool,
+    ) -> Result<NativePointerInputPublication, ExecutionSessionInputError> {
+        let drag = self.prepare_viewer_drag(token, input, allow_viewer_drag)?;
+        let prepared = self.prepare_native_pointer_input_with_effective(
+            token,
+            input,
+            self.empty_effective_batch(),
+            drag.is_some(),
+        )?;
+        let (frame, effective, timeline, metadata) = prepared.into_parts();
+        if frame.is_some()
+            || effective.is_some()
+            || timeline.is_some()
+            || matches!(
+                metadata.action,
+                Some(
+                    super::interactions::PreparedClickAction::GlowPulse { .. }
+                        | super::interactions::PreparedClickAction::Playback(_)
+                )
+            )
+        {
+            return Err(ExecutionSessionInputError::Interaction(
+                "prepared pointer input does not admit causal or semantic mutation".into(),
+            ));
+        }
+        if let Some(drag) = drag {
+            self.commit_viewer_drag(drag)?;
+        }
+        self.commit_prepared_native_pointer_metadata(None, metadata)
+    }
+
     /// Commit one typed native occurrence and a preflighted scoped effective
     /// write in the same prepared-frame publication. Gesture policy lives in
     /// sibling session modules; this remains the sole pointer admission lane.
@@ -422,10 +461,23 @@ impl ExecutionSession {
     ) -> Result<PreparedNativePointerPublication, ExecutionSessionInputError> {
         let previous = self.preflight_native_pointer_input(token, input)?;
         let selection = self.prepare_pointer_selection(token, input)?;
-        let action = (!suppress_click_action)
-            .then(|| self.prepare_click_action(selection.click))
-            .transpose()?
-            .flatten();
+        let mut action = None;
+        if !suppress_click_action {
+            let authored_click = selection.click.filter(|click| {
+                !self.default_viewer_selection() || click.target() == selection.viewer_target
+            });
+            action = self.prepare_click_action(authored_click)?;
+            if action.is_none() {
+                if let Some((object, binding)) = selection
+                    .viewer_target
+                    .and_then(|target| self.prepare_viewer_indicate(target))
+                {
+                    action = Some(super::interactions::PreparedClickAction::ViewerIndicate(
+                        object, binding,
+                    ));
+                }
+            }
+        }
 
         let mut inputs = if matches!(input.kind(), NativePointerInputKind::Cancel(_)) {
             self.pointer_button_reset_inputs()
@@ -502,6 +554,7 @@ impl ExecutionSession {
                             self.publication_context(),
                         )
                         .map_err(ExecutionSessionInputError::Interaction)?
+                        .map(Box::new)
                         .map(super::interactions::PreparedClickAction::Animation);
                 } else {
                     if attachment.is_some() {
@@ -559,7 +612,11 @@ impl ExecutionSession {
                     self.apply_prepared_semantic_transaction_with_execution_contract(
                         prepared,
                         Vec::new(),
-                        PreparedRuntimePublication { effective, frame },
+                        PreparedRuntimePublication {
+                            effective,
+                            frame,
+                            ..Default::default()
+                        },
                         SemanticPublicationPurpose::TransientGlowLifecycle,
                         None,
                         None,
@@ -568,7 +625,7 @@ impl ExecutionSession {
                         pending.activation_scene_revision = store.scene_revision();
                     }
                     metadata.action = Some(super::interactions::PreparedClickAction::Animation(
-                        animation,
+                        Box::new(animation),
                     ));
                     return self.commit_prepared_native_pointer_metadata(timeline, metadata);
                 }
@@ -603,8 +660,12 @@ impl ExecutionSession {
         let playback_control = match action {
             Some(super::interactions::PreparedClickAction::Animation(animation)) => {
                 self.runtime
-                    .start_transient_animation(animation)
+                    .start_transient_animation(*animation)
                     .expect("admitted native input cannot change authored revision or time");
+                None
+            }
+            Some(super::interactions::PreparedClickAction::ViewerIndicate(object, binding)) => {
+                self.start_viewer_indicate(object, binding);
                 None
             }
             Some(super::interactions::PreparedClickAction::Playback(control)) => Some(control),

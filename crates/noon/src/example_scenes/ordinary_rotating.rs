@@ -1,7 +1,7 @@
 //! A centered full turn, then a signed quarter turn through one shared runtime.
 use crate::{
     AnimationCompositionRequest, AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram,
-    LiveSession, ManimRotationPivot, Mobject, RateFunction, Scene,
+    ManimRotationPivot, Mobject, RateFunction, Scene,
 };
 
 pub struct OrdinaryRotating {
@@ -10,7 +10,8 @@ pub struct OrdinaryRotating {
 }
 impl LiveContinuation for OrdinaryRotating {
     type Error = String;
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         let result = match self.stage {
             0 => live.wait_segment(0.25),
             1 | 2 => live.declare_and_activate_composition(

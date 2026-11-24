@@ -1,43 +1,33 @@
 //! Shared foreground persistence and family restructuring through ordinary membership edits.
-use std::{cell::RefCell, rc::Rc};
-
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    MobjectFamily,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, Mobject, MobjectFamily,
     MobjectTarget::{Family, Object as Leaf},
     RateFunction, Scene, SemanticNodeId,
 };
-use noon_core::SemanticStore;
-
 pub struct ForegroundMembership {
     red: Mobject,
     blue: Mobject,
     green: Mobject,
     later: Mobject,
     family: MobjectFamily,
-    store: Rc<RefCell<SemanticStore>>,
-    root: SemanticNodeId,
     stage: u8,
 }
 
 impl ForegroundMembership {
     fn assert_lists(
         &self,
+        scene: &Scene,
         display: &[SemanticNodeId],
         foreground: &[SemanticNodeId],
     ) -> Result<(), String> {
-        let store = self.store.borrow();
-        let root = store
-            .node(self.root)
-            .ok_or("foreground example root was retired")?;
-        if root.members() != display || root.foreground_members() != foreground {
+        let members = scene.root_member_ids().map_err(|error| error.to_string())?;
+        let foreground_members = scene
+            .foreground_member_ids()
+            .map_err(|error| error.to_string())?;
+        if members != display || foreground_members != foreground {
             return Err(format!(
-                "foreground stage {}: display {:?} foreground {:?}, expected {:?} / {:?}",
-                self.stage,
-                root.members(),
-                root.foreground_members(),
-                display,
-                foreground,
+                "foreground stage {}: display {members:?} foreground {foreground_members:?}, expected {display:?} / {foreground:?}",
+                self.stage
             ));
         }
         Ok(())
@@ -47,15 +37,17 @@ impl ForegroundMembership {
 impl LiveContinuation for ForegroundMembership {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         match self.stage {
             0 => {
-                live.add_foreground_many(&[Family(&self.family)])
+                scene
+                    .add_foreground_many(&[Family(&self.family)])
                     .map_err(|error| error.to_string())?;
-                self.assert_lists(&[self.family.node_id()], &[self.family.node_id()])?;
+                self.assert_lists(scene, &[self.family.node_id()], &[self.family.node_id()])?;
             }
             1 => {
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_fade(
                         &self.green,
                         noon_core::SemanticFadeDirection::In,
@@ -65,6 +57,7 @@ impl LiveContinuation for ForegroundMembership {
                     )
                     .map_err(|error| error.to_string())?;
                 self.assert_lists(
+                    scene,
                     &[self.green.node_id(), self.family.node_id()],
                     &[self.family.node_id()],
                 )?;
@@ -72,15 +65,18 @@ impl LiveContinuation for ForegroundMembership {
                 return Ok(ContinuationStep::Await(segment));
             }
             2 => {
-                live.remove_foreground_many(&[Leaf(&self.red)])
+                scene
+                    .remove_foreground_many(&[Leaf(&self.red)])
                     .map_err(|error| error.to_string())?;
                 self.assert_lists(
+                    scene,
                     &[self.green.node_id(), self.family.node_id()],
                     &[self.blue.node_id()],
                 )?;
             }
             3 => {
-                let segment = live
+                let segment = scene
+                    .live()
                     .declare_and_activate_create(
                         &self.later,
                         AnimationOptions::new()
@@ -89,6 +85,7 @@ impl LiveContinuation for ForegroundMembership {
                     )
                     .map_err(|error| error.to_string())?;
                 self.assert_lists(
+                    scene,
                     &[
                         self.green.node_id(),
                         self.red.node_id(),
@@ -101,9 +98,11 @@ impl LiveContinuation for ForegroundMembership {
                 return Ok(ContinuationStep::Await(segment));
             }
             4 => {
-                live.remove_foreground_many(&[Leaf(&self.blue)])
+                scene
+                    .remove_foreground_many(&[Leaf(&self.blue)])
                     .map_err(|error| error.to_string())?;
                 self.assert_lists(
+                    scene,
                     &[
                         self.green.node_id(),
                         self.red.node_id(),
@@ -117,7 +116,9 @@ impl LiveContinuation for ForegroundMembership {
             _ => return Err("foreground continuation resumed after completion".into()),
         }
         self.stage += 1;
-        live.wait_segment(0.35)
+        scene
+            .live()
+            .wait_segment(0.35)
             .map(ContinuationStep::Await)
             .map_err(|error| error.to_string())
     }
@@ -152,8 +153,6 @@ pub fn program() -> Result<LiveProgram<ForegroundMembership>, String> {
         green,
         later,
         family,
-        store: Rc::clone(scene.integration_store()),
-        root: scene.root(),
         stage: 0,
     };
     scene

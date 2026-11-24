@@ -1,14 +1,58 @@
 //! Attachment lifetime on the existing execution publication and scheduler.
 use std::sync::Arc;
 
-use noon_compile::{
-    CompilePatchError, CompiledChannelKey, CompiledEffect, CompiledEffectStack, ExecutionPatch,
-};
+use noon_compile::{CompilePatchError, CompiledChannelKey, CompiledEffectStack, ExecutionPatch};
 use noon_core::ObjectId;
 
 use crate::{EvaluationStats, RuntimePatchStats, SceneInstance};
 
 impl SceneInstance {
+    // Sparse derived dependency indices, not authored values or another clock.
+    // The attached set proves finite-time admission; the active set keeps quiet
+    // hidden rows out of ordinary ticks and makes wake observation O(1).
+    pub(crate) fn refresh_time_effect_row(&mut self, index: usize) {
+        let row = &self.frame.objects[index];
+        let timed = self.object_slot_is_live(index)
+            && row.effects.as_ref().is_some_and(|stack| {
+                stack
+                    .definitions()
+                    .iter()
+                    .filter_map(|d| d.as_shader())
+                    .any(|shader| shader.program().schema().dependencies.authored_time)
+            });
+        if timed {
+            self.time_effect_rows.insert(index);
+        } else {
+            self.time_effect_rows.remove(&index);
+        }
+        let active = timed
+            && self.frame.is_present(index)
+            && (row.draw_enabled || row.content.composed_source().is_some())
+            && row.style.opacity > 0.0
+            && row.appearance > 0.0;
+        if active {
+            self.active_time_effect_rows.insert(index);
+        } else {
+            self.active_time_effect_rows.remove(&index);
+        }
+    }
+
+    pub(crate) fn rebuild_time_effect_rows(&mut self) {
+        self.time_effect_rows.clear();
+        self.active_time_effect_rows.clear();
+        for index in 0..self.frame.objects.len() {
+            self.refresh_time_effect_row(index);
+        }
+    }
+
+    pub(crate) fn invalidate_time_effects(&mut self) -> usize {
+        for &index in &self.active_time_effect_rows {
+            // Time changes appearance only; geometry/spatial work stays clean.
+            self.changes.insert(index);
+        }
+        self.active_time_effect_rows.len()
+    }
+
     pub(crate) fn apply_effect_stack_patch(
         &mut self,
         patch: &ExecutionPatch,
@@ -42,7 +86,11 @@ impl SceneInstance {
             {
                 continue;
             }
-            for property in CompiledEffect::PARAMETER_PROPERTIES {
+            let retired = previous
+                .as_ref()
+                .and_then(|stack| stack.get(attachment))
+                .expect("validated previous attachment");
+            for property in retired.parameter_properties() {
                 let channel = CompiledChannelKey::effect(index, property, attachment);
                 if self.groups.remove(&channel).is_some() {
                     let retired = self.timeline_scheduler.relower_channel(channel, &[]);
@@ -54,6 +102,7 @@ impl SceneInstance {
         }
         let index = index as usize;
         self.frame.objects[index].effects = next;
+        self.refresh_time_effect_row(index);
         // Halo coverage is renderer-derived. Semantic geometry, spatial queries,
         // object motion, painter order and all unrelated rows stay untouched.
         self.mark_nonspatial_changed(index);
@@ -66,7 +115,9 @@ impl SceneInstance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use noon_compile::{CompiledObject, CompiledScene, ExecutionMutationTransaction};
+    use noon_compile::{
+        CompiledEffect, CompiledObject, CompiledScene, ExecutionMutationTransaction,
+    };
     use noon_core::{
         Blur, EffectTrackEndBehavior, EffectTrackValue, EffectUpdate, GeometryRef, Property,
         RateFunction, SemanticNodeId, Style, TrackDefinition, TrackId, TrackTiming, TrackValues,
@@ -99,7 +150,7 @@ mod tests {
 
     fn radius_track(id: u64, effect: CompiledEffect, radius: f64) -> TrackDefinition {
         let (property, values) = effect
-            .parameter_channels(EffectUpdate::default().radius(radius))
+            .parameter_channels(&EffectUpdate::default().radius(radius))
             .unwrap()
             .remove(0);
         TrackDefinition {
@@ -121,6 +172,7 @@ mod tests {
             .unwrap()
             .definition
             .radius()
+            .unwrap()
     }
 
     #[test]
@@ -128,8 +180,8 @@ mod tests {
         let a = blur(10, 1.0);
         let b = blur(11, 2.0);
         let tracks = [
-            radius_track(1, a, 5.0),
-            radius_track(2, b, 10.0),
+            radius_track(1, a.clone(), 5.0),
+            radius_track(2, b.clone(), 10.0),
             TrackDefinition {
                 id: TrackId::new(3),
                 object: ObjectId::new(0),
@@ -142,7 +194,7 @@ mod tests {
                 time_map: Default::default(),
             },
         ];
-        let mut runtime = runtime(stack([a, b]), &tracks);
+        let mut runtime = runtime(stack([a.clone(), b.clone()]), &tracks);
         runtime.seek(1.0).unwrap();
         assert_eq!(
             radius(&runtime, a.attachment),
@@ -165,7 +217,7 @@ mod tests {
             .apply_execution_patch(&ExecutionPatch::SetEffectStack {
                 object: ObjectId::new(0),
                 expected: Box::new([a.attachment, b.attachment]),
-                effects: Some(stack([b])),
+                effects: Some(stack([b.clone()])),
             })
             .unwrap();
         assert_eq!(
@@ -209,11 +261,110 @@ mod tests {
     }
 
     #[test]
+    fn mask_seed_publication_preserves_drivers_and_removal_retires_only_its_channels() {
+        let a = CompiledEffect {
+            attachment: SemanticNodeId::new(10, 2),
+            definition: noon_core::NoiseDissolve::new(7, 0.08).unwrap().into(),
+        };
+        let b = CompiledEffect {
+            attachment: SemanticNodeId::new(11, 2),
+            definition: noon_core::NoiseDissolve::new(11, 0.08).unwrap().into(),
+        };
+        let mut tracks = Vec::new();
+        for (effect, update) in [
+            (
+                a.clone(),
+                EffectUpdate::default().progress(0.8).softness(0.4),
+            ),
+            (b.clone(), EffectUpdate::default().progress(0.6)),
+        ] {
+            for (property, values) in effect.parameter_channels(&update).unwrap() {
+                tracks.push(TrackDefinition {
+                    id: TrackId::new(tracks.len() as u64 + 1),
+                    object: ObjectId::new(0),
+                    property,
+                    values,
+                    timing: TrackTiming::new(0.0, 2.0, RateFunction::Linear),
+                    time_map: Default::default(),
+                });
+            }
+        }
+        let mut runtime = runtime(stack([a.clone(), b.clone()]), &tracks);
+        runtime.seek(1.0).unwrap();
+        let edited_b = CompiledEffect {
+            definition: EffectUpdate::default()
+                .seed(u32::MAX)
+                .apply_to(b.definition.clone())
+                .unwrap(),
+            ..b.clone()
+        };
+        runtime.take_frame_changes();
+        runtime.take_spatial_changes();
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetEffects {
+                object: ObjectId::new(0),
+                effects: stack([a.clone(), edited_b.clone()]),
+            })
+            .unwrap();
+        let value = runtime.frame().objects[0]
+            .effects
+            .as_ref()
+            .unwrap()
+            .get(b.attachment)
+            .unwrap()
+            .definition
+            .as_noise_dissolve()
+            .unwrap();
+        assert_eq!(
+            (value.seed(), value.progress(), value.softness()),
+            (u32::MAX, 0.3, 0.08)
+        );
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+                object: ObjectId::new(0),
+                expected: Box::new([a.attachment, b.attachment]),
+                effects: Some(stack([edited_b])),
+            })
+            .unwrap();
+        assert_eq!(runtime.compiled.track_count(), 1);
+        assert!(runtime.compiled.track(TrackId::new(1)).is_none());
+        assert!(runtime.compiled.track(TrackId::new(2)).is_none());
+        assert!(runtime.compiled.track(TrackId::new(3)).is_some());
+        assert_eq!(
+            runtime.take_frame_changes(),
+            crate::FrameChanges::objects(vec![0])
+        );
+        assert!(runtime.take_spatial_changes().is_empty());
+        for time in [1.5, 0.25, 1.0] {
+            runtime.seek(time).unwrap();
+            let value = runtime.frame().objects[0]
+                .effects
+                .as_ref()
+                .unwrap()
+                .get(b.attachment)
+                .unwrap()
+                .definition
+                .as_noise_dissolve()
+                .unwrap();
+            assert_eq!((value.seed(), value.progress()), (u32::MAX, 0.3 * time));
+        }
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetEffectStack {
+                object: ObjectId::new(0),
+                expected: Box::new([b.attachment]),
+                effects: None,
+            })
+            .unwrap();
+        assert_eq!(runtime.compiled.track_count(), 0);
+        assert!(runtime.frame().objects[0].effects.is_none());
+    }
+
+    #[test]
     fn prepared_value_columns_share_the_submitted_allocation_and_reject_late_stale_write_atomically(
     ) {
         let a = blur(10, 1.0);
         let b = blur(11, 2.0);
-        let mut runtime = runtime(stack([a, b]), &[]);
+        let mut runtime = runtime(stack([a.clone(), b.clone()]), &[]);
         let edit = |first: CompiledEffect, second: CompiledEffect, first_radius, second_radius| {
             ExecutionPatch::SetEffects {
                 object: ObjectId::new(0),
@@ -235,7 +386,7 @@ mod tests {
                 ]),
             }
         };
-        let final_patch = edit(a, b, 5.0, 4.0);
+        let final_patch = edit(a.clone(), b.clone(), 5.0, 4.0);
         let ExecutionPatch::SetEffects {
             effects: submitted, ..
         } = &final_patch
@@ -244,8 +395,8 @@ mod tests {
         };
         let submitted = Arc::clone(submitted);
         let transaction = ExecutionMutationTransaction::from_mutations([
-            edit(a, b, 3.0, 2.0),
-            edit(a, b, 3.0, 4.0),
+            edit(a.clone(), b.clone(), 3.0, 2.0),
+            edit(a.clone(), b.clone(), 3.0, 4.0),
             final_patch,
         ]);
         runtime.take_frame_changes();
@@ -261,7 +412,10 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert_eq!(radius(&runtime, a.attachment), a.definition.radius());
+        assert_eq!(
+            radius(&runtime, a.attachment),
+            a.definition.radius().unwrap()
+        );
         runtime.commit_prepared_authored_value_publication(prepared);
         assert!(
             Arc::ptr_eq(
@@ -299,12 +453,12 @@ mod tests {
         let frame = runtime.frame().clone();
         let stale = CompiledEffect {
             attachment: SemanticNodeId::new(b.attachment.slot(), b.attachment.generation() + 1),
-            ..b
+            ..b.clone()
         };
         assert!(runtime
             .prepare_authored_value_publication(
                 &ExecutionMutationTransaction::from_mutations([
-                    edit(a, b, 6.0, 4.0),
+                    edit(a.clone(), b, 6.0, 4.0),
                     edit(a, stale, 6.0, 7.0)
                 ]),
                 Default::default(),
@@ -373,13 +527,16 @@ mod tests {
         };
         let b = blur(11, 2.0);
         let c = blur(12, 3.0);
-        let mut runtime = runtime(stack([a, b]), &[radius_track(1, b, 10.0)]);
+        let mut runtime = runtime(
+            stack([a.clone(), b.clone()]),
+            &[radius_track(1, b.clone(), 10.0)],
+        );
         runtime.seek(1.0).unwrap();
         let prepared = runtime
             .prepare_click_glow_pulse(
                 ObjectId::new(0),
                 noon_core::SemanticClickGlowPulse::new(2.0, 1.0, RateFunction::ThereAndBack, false),
-                a,
+                a.clone(),
                 false,
                 runtime.publication_context(),
             )
@@ -392,7 +549,7 @@ mod tests {
             .apply_execution_patch(&ExecutionPatch::SetEffectStack {
                 object: ObjectId::new(0),
                 expected: Box::new([a.attachment, b.attachment]),
-                effects: Some(stack([a, b, c])),
+                effects: Some(stack([a.clone(), b.clone(), c])),
             })
             .unwrap();
         assert_eq!(

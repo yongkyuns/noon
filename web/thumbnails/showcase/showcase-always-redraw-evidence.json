@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "4f9f60ab31429b5befbb8c52475bed0c5daf3609",
+  "backend": "webgl",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "4f9f60ab31429b5befbb8c52475bed0c5daf3609",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "0272bfc54ad3fa3f56c1380ec0407dd23b8df3c7021933f94409677c2bd32f85"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "72b4833c3b49c70e943486c77957f776ae659b3a24dfe79808158ec547461511"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "f12acde4bfc4682e450f186f28980d1bee295a0843a09732ef5519074a18801b"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
+      }
+    },
+    "buildId": "68c0686aa0aa8b2020a493f4470bb0f6d0573214b0a07775e9acd1c42e57c55c"
+  },
+  "posters": [
+    {
+      "id": "showcase-always-redraw",
+      "captureBuildId": "68c0686aa0aa8b2020a493f4470bb0f6d0573214b0a07775e9acd1c42e57c55c",
+      "sourceSha256": "ba4bb6ea213b2aa3253f11ced91c2f0e61722a48bd158a93abdabe81fb0a8d00",
+      "thumbnailTime": 4,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 22295,
+        "pngSha256": "ab0a85cc4623479595cbc0661be1dea2d7a88be20cad4d723a746948feda95d3",
+        "pixelSha256": "fba6ca31e75e4a51b4041aae9abf517614634b0b6534401e04926213d4b429f4"
+      },
+      "sample": {
+        "requestedTime": 4,
+        "publishedTime": 4,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}

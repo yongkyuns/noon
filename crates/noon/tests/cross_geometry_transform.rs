@@ -1,3 +1,4 @@
+use noon::integration::scene_execution;
 use noon::{AnimationOptions, GeometryRef, RateFunction, Scene, StoredGeometry};
 
 #[test]
@@ -6,13 +7,13 @@ fn shared_cross_kind_transform_publishes_target_content_without_replacing_identi
     let circle = scene.circle(1.0).unwrap();
     let square = scene.square(2.0).unwrap();
     scene.add(&circle).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let id = session.frame().objects[0].id;
     assert!(matches!(
         session.frame().render_geometry(0),
         Some(GeometryRef::Circle { .. })
     ));
-    let mut live = scene.live(&mut session);
+    let mut live = scene_execution::borrow_uninstalled(&scene, &mut session);
     let segment = live
         .declare_and_activate_transform_to(
             &circle,
@@ -27,7 +28,7 @@ fn shared_cross_kind_transform_publishes_target_content_without_replacing_identi
     live.advance_segment_to(segment, 1.5).unwrap();
     live.complete_segment(segment).unwrap();
     assert!(matches!(
-        live.authored(&circle).unwrap().content.geometry(),
+        scene.authored(&circle).unwrap().content.geometry(),
         Some(StoredGeometry::Rectangle { .. })
     ));
     assert_eq!(session.frame().objects[0].id, id);

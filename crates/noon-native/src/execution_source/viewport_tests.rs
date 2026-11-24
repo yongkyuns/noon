@@ -2,12 +2,12 @@
 //! The no-op device checks upload and draw command construction, not physical GPU execution.
 
 use super::*;
+use noon::integration::scene_execution;
 use noon::integration::PointerFillOutcome;
 use noon::{AnimationOptions, RateFunction, Scene};
 use noon_core::{
     NativeInputModifiers, NativePointerId, NativePointerInput, NativePointerInputKind,
-    NativePointerPosition, SemanticMutationTransaction, SemanticObjectProperty,
-    SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Vec2,
+    NativePointerPosition, SemanticObjectState, SemanticStore, SemanticVec3, StoredGeometry, Vec2,
 };
 use noon_render_wgpu::text::TextDeviceMetrics;
 use noon_render_wgpu::{CircleInstance, FramePreparer, GpuRenderer, RetainedFramePreparer};
@@ -54,9 +54,9 @@ fn expansion_source(with_second: bool) -> (StaticExecutionSource, noon::Executio
         .add_many(&[(&source).into(), (&visible).into(), (&unrelated).into()])
         .unwrap();
 
-    let mut session = scene.execution_session().unwrap();
+    let mut session = scene_execution::lower(&scene).unwrap();
     let segment = {
-        let mut live = scene.live(&mut session);
+        let mut live = scene_execution::borrow_uninstalled(&scene, &mut session);
         live.declare_and_activate_family_transform_to(
             &source,
             &target,
@@ -68,7 +68,7 @@ fn expansion_source(with_second: bool) -> (StaticExecutionSource, noon::Executio
     };
     (
         StaticExecutionSource::new(
-            scene.into_execution_with_session(session).unwrap(),
+            scene_execution::consume_with_session(scene, session).unwrap(),
             RustHostCallbackTable::new(),
         ),
         segment,
@@ -270,6 +270,11 @@ fn native_host_adapter_keeps_100k_viewport_and_pointer_candidates_local_through_
     let mut session = crate::test_scene_from_store(store)
         .into_execution()
         .unwrap();
+    let target = noon::Mobject::from_node(
+        std::rc::Rc::clone(session.scene().integration_store()),
+        target,
+    )
+    .unwrap();
     session
         .session_mut()
         .configure_native_pointer_input(POINTER, 1)
@@ -306,17 +311,10 @@ fn native_host_adapter_keeps_100k_viewport_and_pointer_candidates_local_through_
         } else {
             Vec2::ZERO
         };
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.set_property(
-            target,
-            SemanticObjectProperty::Translation,
-            SemanticVec3::new(f64::from(next.x), f64::from(next.y), 0.0),
-        );
         source
             .session
-            .with_store_and_session(|store, session| {
-                session.apply_semantic_transaction(store, transaction)
-            })
+            .scene_mut()
+            .set_translation(&target, f64::from(next.x), f64::from(next.y))
             .unwrap();
 
         // Exercise the native adapter's normalized input lane before comparing
@@ -403,7 +401,7 @@ fn native_host_adapter_keeps_100k_viewport_and_pointer_candidates_local_through_
                 |_| true,
             )
             .unwrap();
-        assert_eq!(picked.outcome(), PointerFillOutcome::Hit(target));
+        assert_eq!(picked.outcome(), PointerFillOutcome::Hit(target.node_id()));
         assert_eq!(picked.precise_tests(), 1);
         assert_eq!(picked.spatial_stats().full_scan_fallbacks, 0);
         assert!(picked.spatial_stats().candidates_tested <= 16);

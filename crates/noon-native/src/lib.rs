@@ -7,14 +7,42 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+mod blocking;
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+pub use blocking::{run_scene, run_scene_with_config};
+
 mod execution_source;
 mod playback_controls;
 mod pointer_input;
 mod selection_overlay;
+#[cfg(test)]
+mod view_output;
+
+#[cfg(test)]
+fn observed_callbacks(scene: &noon::Scene, target: &noon::Mobject) -> RustHostCallbackTable {
+    let id = noon_core::HostCallbackId::new(719);
+    let mut callbacks = RustHostCallbackTable::new();
+    callbacks
+        .insert(id, |_| Ok::<(), std::io::Error>(()))
+        .unwrap();
+    callbacks
+        .add_updater(
+            &mut scene.integration_store().borrow_mut(),
+            target.node_id(),
+            id,
+            0.0,
+            None,
+        )
+        .unwrap();
+    callbacks
+}
 
 #[cfg(feature = "audio")]
 mod audio_output;
 
+#[cfg(test)]
+mod incremental_playback_tests;
 #[cfg(test)]
 mod realtime_tests;
 
@@ -23,12 +51,14 @@ mod latex;
 #[cfg(feature = "latex")]
 pub use latex::{NativeLatexBackend, NativeLatexConfig};
 
+#[cfg(test)]
+use noon::integration::scene_execution;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use noon::integration::{RendererPublication, TimelineWakeState};
 #[cfg(test)]
-use noon::ExecutionSession;
+use noon::integration::scene_execution::ExecutionSession;
+use noon::integration::{RendererPublication, TimelineWakeState};
 use noon::{
     EvaluationError, ExecutionSessionCameraError, ExecutionSessionInputError, LiveContinuation,
     LiveProgram, RustHostCallbackError, RustHostCallbackTable, SceneExecution,
@@ -39,8 +69,8 @@ use noon_core::{
 };
 use noon_render_wgpu::text::TextDeviceMetrics;
 use noon_render_wgpu::{
-    Camera2D, GpuRenderer, InteractiveRetainedFrame, OverlayGpuState, RetainedFramePreparer,
-    RetainedTextGpuState,
+    AuthoredViewOutput, Camera2D, GpuRenderer, InteractiveRetainedFrame, OverlayGpuState,
+    RetainedFramePreparer, RetainedTextGpuState,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -55,8 +85,7 @@ fn test_scene_from_store(mut store: noon_core::SemanticStore) -> noon::Scene {
     for member in members {
         store.add_semantic_family_member(root, member).unwrap();
     }
-    noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
-        .unwrap()
+    scene_execution::adopt_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root).unwrap()
 }
 
 #[cfg(test)]
@@ -64,12 +93,11 @@ fn test_scene_from_root(
     store: noon_core::SemanticStore,
     root: noon_core::SemanticNodeId,
 ) -> noon::Scene {
-    noon::Scene::with_integration_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root)
-        .unwrap()
+    scene_execution::adopt_root(std::rc::Rc::new(std::cell::RefCell::new(store)), root).unwrap()
 }
 use winit::window::{Window, WindowId};
 
-use execution_source::{LiveProgramExecutionSource, NativeExecutionSource, StaticExecutionSource};
+use execution_source::{NativeExecutionSource, PlaybackExecutionSource, StaticExecutionSource};
 
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.0,
@@ -121,6 +149,7 @@ pub enum NativeHostError {
     Callback(RustHostCallbackError),
     Camera(ExecutionSessionCameraError),
     Input(ExecutionSessionInputError),
+    TranslationDrag(noon::TranslationDragError),
     Program(String),
     PointerFrame(noon::integration::PointerFrameError),
     Inspection(noon::InspectionNavigationError),
@@ -142,6 +171,7 @@ impl std::fmt::Display for NativeHostError {
             Self::Callback(error) => error.fmt(formatter),
             Self::Camera(error) => error.fmt(formatter),
             Self::Input(error) => error.fmt(formatter),
+            Self::TranslationDrag(error) => error.fmt(formatter),
             Self::PointerFrame(error) => error.fmt(formatter),
             Self::Inspection(error) => error.fmt(formatter),
             Self::Program(message) => write!(formatter, "native live program error: {message}"),
@@ -223,6 +253,9 @@ pub fn run_with_callbacks_and_config(
 }
 
 /// Run one resumable Rust authoring continuation through the native viewport.
+/// The shared player prepares bounded history ahead where admitted and retains
+/// the original observed source for callbacks or causal input. No source rerun
+/// is used for seeking; an observed source has no replay range.
 pub fn run_live_program<C>(program: LiveProgram<C>) -> Result<(), NativeHostError>
 where
     C: LiveContinuation + 'static,
@@ -265,7 +298,7 @@ where
     C: LiveContinuation + 'static,
     C::Error: std::fmt::Display,
 {
-    let source = LiveProgramExecutionSource::new(program, callbacks)?;
+    let source = PlaybackExecutionSource::new(program, callbacks)?;
     run_source(Box::new(source), config)
 }
 
@@ -273,24 +306,7 @@ fn run_source(
     source: Box<dyn NativeExecutionSource>,
     config: NativeViewportConfig,
 ) -> Result<(), NativeHostError> {
-    // Profile admission precedes window/device allocation. The host must not
-    // silently omit authored audio or consume a click without its control action.
-    if source.session().has_audio() {
-        #[cfg(not(feature = "audio"))]
-        return Err(NativeHostError::AudioOutputUnavailable);
-        #[cfg(feature = "audio")]
-        audio_output::admit_profile(source.as_ref())?;
-    }
-    if (config.playback_controls || source.session().has_playback_controls())
-        && source.finite_transport_end().is_none()
-    {
-        return Err(NativeHostError::PlaybackControlsUnavailable);
-    }
-    if config.width == 0 || config.height == 0 {
-        return Err(NativeHostError::Platform(
-            "initial viewport dimensions must be positive".to_owned(),
-        ));
-    }
+    admit_source(source.as_ref(), &config)?;
 
     let event_loop =
         EventLoop::new().map_err(|error| NativeHostError::Platform(error.to_string()))?;
@@ -307,6 +323,32 @@ fn run_source(
     if let Some(error) = app.error.take() {
         return Err(error);
     }
+    Ok(())
+}
+
+fn admit_source(
+    source: &dyn NativeExecutionSource,
+    config: &NativeViewportConfig,
+) -> Result<(), NativeHostError> {
+    // Profile admission precedes window/device allocation. The host must not
+    // silently omit authored audio or consume a click without its control action.
+    if source.session().has_audio() {
+        #[cfg(not(feature = "audio"))]
+        return Err(NativeHostError::AudioOutputUnavailable);
+        #[cfg(feature = "audio")]
+        audio_output::admit_profile(source)?;
+    }
+    if (config.playback_controls || source.session().has_playback_controls())
+        && !source.playback_controls_available()
+    {
+        return Err(NativeHostError::PlaybackControlsUnavailable);
+    }
+    if config.width == 0 || config.height == 0 {
+        return Err(NativeHostError::Platform(
+            "initial viewport dimensions must be positive".to_owned(),
+        ));
+    }
+
     Ok(())
 }
 
@@ -349,6 +391,9 @@ struct NativeApp {
     config: NativeViewportConfig,
     window: Option<Arc<Window>>,
     gpu: Option<NativeGpu>,
+    video: Option<noon_render_wgpu::VideoPresentation>,
+    video_waiting: bool,
+    video_pending_time: Option<f64>,
     realtime_clock: Option<RealtimeClock>,
     // Viewer intent and presentation admission on the existing host clock;
     // Runtime remains the only authored-time and replay authority.
@@ -366,17 +411,45 @@ struct NativeApp {
     interaction_wall_origin: Instant,
     next_input_sequence: u64,
     pointer: pointer_input::PointerCollector,
+    viewer_presentation: noon::integration::ViewerPresentation,
     force_full_redraw: bool,
     last_selection_presentation: Option<noon::integration::PointerSelectionPresentation>,
     error: Option<NativeHostError>,
     #[cfg(test)]
     exit_after_present: Option<f64>,
     #[cfg(test)]
+    close_on_user_event: bool,
+    #[cfg(test)]
+    close_event_timeline: Option<TimelineWakeState>,
+    #[cfg(test)]
     presented_frame_time: Option<f64>,
     #[cfg(test)]
     last_geometry_draw_calls: usize,
     #[cfg(test)]
     last_text_draw_calls: usize,
+    #[cfg(test)]
+    last_bloom_passes: [usize; 5],
+}
+
+// A deliberate runtime-incarnation handoff starts a new publication ordering
+// domain. Retire disposable renderer state; never renumber source frame epochs.
+fn reset_renderer_source(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    size: [u32; 2],
+    preparer: &mut RetainedFramePreparer,
+    renderer: &mut GpuRenderer,
+    text: &mut RetainedTextGpuState,
+) {
+    let camera = renderer.camera();
+    let mut replacement = GpuRenderer::new(device, queue, format);
+    replacement.copy_effect_program_cache_from(device, renderer);
+    replacement.set_viewport(device, queue, size[0], size[1]);
+    replacement.set_camera(queue, camera);
+    *text = replacement.create_retained_text_state(device, queue);
+    *renderer = replacement;
+    *preparer = RetainedFramePreparer::new();
 }
 
 impl NativeApp {
@@ -404,19 +477,21 @@ impl NativeApp {
     }
 
     fn from_source(source: Box<dyn NativeExecutionSource>, config: NativeViewportConfig) -> Self {
-        let finite_transport_end =
-            if config.playback_controls || source.session().has_playback_controls() {
-                source.finite_transport_end()
-            } else if source.session().has_audio() {
-                source.session().finite_timeline_end_time()
-            } else {
-                None
-            };
+        let finite_transport_end = source.finite_transport_end().or_else(|| {
+            source
+                .session()
+                .has_audio()
+                .then(|| source.session().finite_timeline_end_time())
+                .flatten()
+        });
         Self {
             execution: source,
             config,
             window: None,
             gpu: None,
+            video: None,
+            video_waiting: false,
+            video_pending_time: None,
             realtime_clock: None,
             playback_paused: false,
             playback_picture_pending: false,
@@ -432,17 +507,24 @@ impl NativeApp {
             interaction_wall_origin: Instant::now(),
             next_input_sequence: 0,
             pointer: pointer_input::PointerCollector::default(),
+            viewer_presentation: noon::integration::ViewerPresentation::default(),
             force_full_redraw: false,
             last_selection_presentation: None,
             error: None,
             #[cfg(test)]
             exit_after_present: None,
             #[cfg(test)]
+            close_on_user_event: false,
+            #[cfg(test)]
+            close_event_timeline: None,
+            #[cfg(test)]
             presented_frame_time: None,
             #[cfg(test)]
             last_geometry_draw_calls: 0,
             #[cfg(test)]
             last_text_draw_calls: 0,
+            #[cfg(test)]
+            last_bloom_passes: [0; 5],
         }
     }
 
@@ -536,7 +618,11 @@ impl NativeApp {
         timeline: TimelineWakeState,
         now: Instant,
     ) -> Option<RealtimeClock> {
-        if self.playback_paused || self.playback_picture_pending {
+        if self.playback_paused
+            || self.playback_picture_pending
+            || !self.execution.presentation_ready()
+            || self.execution.buffering()
+        {
             return None;
         }
         if matches!(timeline, TimelineWakeState::Quiescent) {
@@ -563,9 +649,141 @@ impl NativeApp {
     }
 
     fn resume_ready_preserving_clock(&mut self, now: Instant) -> Result<bool, NativeHostError> {
-        let resumed = self.execution.resume_ready()?;
+        let identity = self.execution.session().runtime_identity();
+        let was_buffering = self.execution.buffering();
+        let demand = if self.playback_paused
+            || self.playback_picture_pending
+            || self.execution.buffering()
+        {
+            self.execution.frame_time()
+        } else {
+            self.realtime_clock
+                .map_or(self.execution.frame_time(), |clock| {
+                    clock.scene_time_at(now)
+                })
+                .max(self.execution.frame_time())
+        };
+        let resumed = self.execution.prepare_until(demand + 1.0)?;
+        self.sync_playback_presentation(identity, now)?;
+        if let Some(programs) = self.execution.pending_effect_programs().map(<[_]>::to_vec) {
+            if let Some(gpu) = self.gpu.as_mut() {
+                let request = gpu
+                    .renderer
+                    .effect_module_preparation(&gpu.device, &programs);
+                let prepared = pollster::block_on(request.prepare())
+                    .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+                gpu.renderer
+                    .cache_effect_programs(&gpu.device, &prepared)
+                    .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+                self.execution.publish_prepared_effects()?;
+                gpu.prepared_effect_modules = Some(prepared);
+            }
+        }
+        self.finite_transport_end = self.execution.finite_transport_end().or_else(|| {
+            self.execution
+                .session()
+                .has_audio()
+                .then(|| self.execution.session().finite_timeline_end_time())
+                .flatten()
+        });
         let _ = self.realtime_clock_for_timeline(self.execution.timeline(), now);
+        if resumed || was_buffering != self.execution.buffering() {
+            self.update_playback_title();
+        }
         Ok(resumed)
+    }
+
+    fn sync_playback_presentation(
+        &mut self,
+        previous: noon::integration::RuntimeIdentity,
+        now: Instant,
+    ) -> Result<(), NativeHostError> {
+        if self.execution.session().runtime_identity() != previous {
+            self.video = None;
+            self.video_waiting = false;
+            self.video_pending_time = None;
+            // Retire the collector's old contact and physical receipt. Never
+            // retag a historical pointer edge for the causal source incarnation.
+            self.pointer_source_changed()?;
+            if let Some(gpu) = &mut self.gpu {
+                if gpu.preparer.last_applied_publication().is_some() {
+                    let format = if gpu.working_profile == noon_core::ViewColorProfile::LinearHdr {
+                        wgpu::TextureFormat::Rgba16Float
+                    } else {
+                        gpu.config.format
+                    };
+                    reset_renderer_source(
+                        &gpu.device,
+                        &gpu.queue,
+                        format,
+                        [gpu.config.width, gpu.config.height],
+                        &mut gpu.preparer,
+                        &mut gpu.renderer,
+                        &mut gpu.text_state,
+                    );
+                    gpu.prepared_effect_modules = None;
+                }
+            }
+            self.last_selection_presentation = None;
+            self.force_full_redraw = true;
+        }
+        if self.execution.take_clock_reanchor() {
+            self.realtime_clock = if self.playback_paused || self.playback_picture_pending {
+                None
+            } else {
+                Some(RealtimeClock::new(
+                    now.max(Instant::now()),
+                    self.execution.frame_time(),
+                ))
+            };
+        }
+        if self.execution.buffering() || !self.execution.presentation_ready() {
+            self.realtime_clock = None;
+        }
+        Ok(())
+    }
+
+    fn attach_video(&mut self) -> Result<(), NativeHostError> {
+        let videos = self.execution.session().video_rasters();
+        if self.video.is_none() && !videos.is_empty() {
+            let window = Arc::downgrade(self.window.as_ref().expect("video host owns a window"));
+            self.video = Some(
+                noon_render_wgpu::VideoPresentation::new(
+                    videos,
+                    Arc::new(move || {
+                        if let Some(window) = window.upgrade() {
+                            window.request_redraw();
+                        }
+                    }),
+                )
+                .map_err(|error| NativeHostError::Program(error.to_string()))?,
+            );
+        }
+        Ok(())
+    }
+
+    fn video_ready(&mut self, target: f64) -> Result<bool, NativeHostError> {
+        if let Some(video) = self.video.as_mut() {
+            self.video_waiting = !video
+                .prepare_realtime(target)
+                .map_err(|error| NativeHostError::Program(error.to_string()))?;
+        }
+        Ok(!self.video_waiting)
+    }
+
+    fn advance_with_video(&mut self, target: f64) -> Result<(), NativeHostError> {
+        if self.video_ready(target)? {
+            self.execution.advance_to(target)
+        } else {
+            self.video_pending_time = Some(target);
+            self.playback_picture_pending = true;
+            self.realtime_clock = None;
+            self.force_full_redraw = true;
+            #[cfg(feature = "audio")]
+            self.release_audio();
+            self.update_playback_title();
+            Ok(())
+        }
     }
 
     fn advance_realtime_timeline(&mut self, now: Instant) -> Result<(), NativeHostError> {
@@ -581,31 +799,30 @@ impl NativeApp {
         let requested = self
             .finite_transport_end
             .map_or(requested, |end| requested.min(end));
-        let was_finished = self
-            .finite_transport_end
-            .is_some_and(|end| self.execution.frame_time() >= end);
+        let was_finished = self.execution.playback_finished();
+        let was_buffering = self.execution.buffering();
+        let identity = self.execution.session().runtime_identity();
         match timeline {
-            TimelineWakeState::Continuous => self.execution.advance_to(requested)?,
+            TimelineWakeState::Continuous => self.advance_with_video(requested)?,
             TimelineWakeState::Deadline(scene_time) => {
                 if clock
                     .wall_deadline(scene_time)
                     .is_some_and(|deadline| deadline <= now)
                 {
-                    self.execution.advance_to(requested.max(scene_time))?;
+                    self.advance_with_video(requested.max(scene_time))?;
                 }
             }
             TimelineWakeState::Quiescent => {
                 unreachable!("quiescent timeline has no realtime clock")
             }
         }
+        self.sync_playback_presentation(identity, now)?;
         // Neither required callbacks nor ordinary source continuations are an
         // intentional pause. Their wall time stays in this epoch and is sampled
         // on the next available wake; it is never subtracted from playback.
         let _ = self.realtime_clock_for_timeline(self.execution.timeline(), now);
-        if !was_finished
-            && self
-                .finite_transport_end
-                .is_some_and(|end| self.execution.frame_time() >= end)
+        if (!was_finished && self.execution.playback_finished())
+            || was_buffering != self.execution.buffering()
         {
             self.update_playback_title();
         }
@@ -621,10 +838,32 @@ impl NativeApp {
         }
 
         self.resume_ready_preserving_clock(Instant::now())?;
+        if !self.execution.presentation_ready() {
+            return Ok(());
+        }
+        self.attach_video()?;
+        let video_was_waiting = self.video_waiting;
+        if !self.video_ready(
+            self.video_pending_time
+                .unwrap_or_else(|| self.execution.frame_time()),
+        )? {
+            self.update_playback_title();
+            return Ok(());
+        }
+        if let Some(target) = self.video_pending_time.take() {
+            self.execution.advance_to(target)?;
+            #[cfg(feature = "audio")]
+            self.prepare_audio()?;
+        }
+        if video_was_waiting {
+            self.update_playback_title();
+        }
         if !self.publication_pending()
             && (self.playback_paused
+                || self.execution.buffering()
                 || matches!(self.execution.timeline(), TimelineWakeState::Quiescent))
             && !self.execution.session().interactions_active()
+            && !self.execution.session().viewer_inspection_active()
         {
             return Ok(());
         }
@@ -649,6 +888,12 @@ impl NativeApp {
         // AFTER it succeeds, not the old timestamp from before that wait.
         let now = Instant::now();
         self.advance_realtime_timeline(now)?;
+        if self.video_waiting {
+            return Ok(());
+        }
+        // Reaching a frontier may transfer an already-staged publication to the
+        // observed owner. Complete its device handshake before drawing that head.
+        self.resume_ready_preserving_clock(now)?;
         self.execution.advance_interactions(
             now.saturating_duration_since(self.interaction_wall_origin)
                 .as_secs_f64(),
@@ -691,133 +936,237 @@ impl NativeApp {
             let highlight = self.execution.session().pointer_selection_presentation();
             let overlay = selection_overlay::prepare_highlight(highlight.as_ref())?;
             let force_full_redraw = self.force_full_redraw && pass == 0;
-            let endpoint = self.execution.pending_endpoint();
-            let Some(((surface_texture, reconfigure_after_present), publication)) =
-                Self::take_renderer_publication_after_acquire(
-                    self.execution.as_mut(),
-                    force_full_redraw,
-                    acquired.take(),
-                )
-            else {
-                return Ok(());
-            };
-
+            let endpoint = self
+                .execution
+                .pending_endpoint()
+                .filter(|_| pass < MAX_RETAINED_ENDPOINTS);
+            let spatial_camera = self.execution.session().inspection_spatial_camera()?;
+            let pick_view = self.capture_viewer_pick_frame(
+                &pointer_frame,
+                spatial_camera.map(|(_, camera)| camera),
+                force_full_redraw,
+            );
+            let samples = self.execution.session().viewer_indications();
             let gpu = self
                 .gpu
                 .as_mut()
                 .expect("drawable native host must own GPU state");
-            gpu.overlay.update(&gpu.device, &gpu.queue, overlay);
-            gpu.renderer
-                .prepare_spatial(&gpu.device, &gpu.queue, &publication)
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            let metrics = gpu.text_metrics(camera)?;
-            gpu.preparer.set_inset_views_active(!inset_views.is_empty());
-            gpu.renderer
-                .set_inset_2d_views(&gpu.device, &gpu.queue, &mut gpu.text_state, &inset_views)
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            let derived = gpu
-                .preparer
-                .prepare_transient_presentations_visible(&publication, visibility.object_indices())
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            // Glow can contribute outside the semantic object's hit bounds.
-            // Query the existing renderer-derived source set, then keep its
-            // ordinary painter slot in the retained GPU preparation.
-            let glow_visible = gpu
-                .renderer
-                .effect_source_visibility(&publication, visibility.object_indices())
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            let prepared = gpu
-                .preparer
-                .prepare_planned_publication_visible(
-                    &gpu.device,
-                    &publication,
-                    glow_visible,
-                    metrics,
-                )
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            gpu.renderer
-                .upload_retained(&gpu.device, &gpu.queue, &prepared, &mut gpu.text_state);
-            if !derived.slots.is_empty() {
-                gpu.renderer
-                    .upload_derived(&gpu.device, &gpu.queue, &derived);
-            }
-            if let Some(expected) = endpoint.filter(|_| pass < MAX_RETAINED_ENDPOINTS) {
-                let retained = publication.context();
-                if retained != expected {
-                    return Err(NativeHostError::Program(
-                        "retained endpoint changed during native frame preparation".to_owned(),
-                    ));
-                }
-                // Retain all resource/dirty changes in the SAME production renderer
-                // before admitting the endpoint. Do not display an obsolete endpoint
-                // or install a pointer receipt for an image that was never shown.
-                self.execution.admit_retained_publication(retained)?;
+            let mut rebind_after_present = false;
+            #[cfg(feature = "audio")]
+            let mut presented_submission = None;
+            let presented = self.execution.with_viewer_renderer_publication(
+                &samples,
+                spatial_camera,
+                &self.viewer_presentation,
+                &mut |mut publication| {
+                    if force_full_redraw {
+                        publication.invalidate_all();
+                    }
+                    gpu.prepare_working_profile(&publication, !inset_views.is_empty(), camera)?;
+                    pollster::block_on(
+                        gpu.renderer
+                            .prepare_effect_programs(&gpu.device, &publication),
+                    )
+                    .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    gpu.prepared_effect_modules = None;
+                    gpu.overlay.update(&gpu.device, &gpu.queue, overlay);
+                    gpu.renderer
+                        .prepare_spatial(&gpu.device, &gpu.queue, &publication)
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    let metrics = gpu.text_metrics(camera)?;
+                    gpu.preparer.set_inset_views_active(!inset_views.is_empty());
+                    gpu.renderer
+                        .set_inset_2d_views(
+                            &gpu.device,
+                            &gpu.queue,
+                            &mut gpu.text_state,
+                            &inset_views,
+                        )
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    let derived = gpu
+                        .preparer
+                        .prepare_transient_presentations_visible(
+                            &publication,
+                            visibility.object_indices(),
+                        )
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    // Glow can contribute outside the semantic object's hit bounds.
+                    // Query the existing renderer-derived source set, then keep its
+                    // ordinary painter slot in the retained GPU preparation.
+                    let mut viewer_visible = Vec::new();
+                    let visible = if samples.is_empty() {
+                        visibility.object_indices()
+                    } else {
+                        // A group pulse may move a member into the viewport. Include
+                        // those affected rows without refitting the authored index.
+                        viewer_visible.extend_from_slice(visibility.object_indices());
+                        viewer_visible.extend(samples.iter().filter_map(|sample| {
+                            let index = publication.object_index(sample.object)?;
+                            let bounds = publication.object_bounds(index)?;
+                            view_bounds
+                                .iter()
+                                .any(|view| {
+                                    view.min.x <= bounds.max.x
+                                        && bounds.min.x <= view.max.x
+                                        && view.min.y <= bounds.max.y
+                                        && bounds.min.y <= view.max.y
+                                })
+                                .then_some(index)
+                        }));
+                        viewer_visible
+                            .sort_unstable_by_key(|&index| publication.painter_rank(index));
+                        viewer_visible.dedup();
+                        &viewer_visible
+                    };
+                    let glow_visible = gpu
+                        .renderer
+                        .effect_source_visibility(&publication, visible)
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    let prepared = gpu
+                        .preparer
+                        .prepare_planned_publication_visible(
+                            &gpu.device,
+                            &publication,
+                            glow_visible,
+                            metrics,
+                        )
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    gpu.renderer.upload_retained(
+                        &gpu.device,
+                        &gpu.queue,
+                        &prepared,
+                        &mut gpu.text_state,
+                    );
+                    if let Some(video) = self.video.as_ref() {
+                        video
+                            .upload(&mut gpu.renderer, &gpu.queue)
+                            .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    }
+                    if !derived.slots.is_empty() {
+                        gpu.renderer
+                            .upload_derived(&gpu.device, &gpu.queue, &derived);
+                    }
+                    let retained = publication.context();
+                    if let Some(expected) = endpoint {
+                        if retained != expected {
+                            return Err(NativeHostError::Program(
+                                "retained endpoint changed during native frame preparation"
+                                    .to_owned(),
+                            ));
+                        }
+                        return Ok(retained);
+                    }
+                    let (surface_texture, reconfigure_after_present) = acquired
+                        .take()
+                        .expect("final pass owns the acquired native surface");
+                    let view = surface_texture
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+                    let mut encoder =
+                        gpu.device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("Noon native frame"),
+                            });
+                    let clear = noon_render_wgpu::authored_clear_color(
+                        CLEAR_COLOR,
+                        publication.color_profile(),
+                    );
+                    let no_overlay = OverlayGpuState::default();
+                    // Endpoint drains above retain the same surface and renderer; only
+                    // the final bounded pass may create a glow capture/blur workload.
+                    gpu.renderer
+                        .prepare_retained_effects(
+                            &gpu.device,
+                            &gpu.queue,
+                            &mut encoder,
+                            &prepared,
+                            &gpu.text_state,
+                            &publication,
+                            clear,
+                            noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
+                        )
+                        .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
+                    let _draw = gpu
+                        .renderer
+                        .encode_retained_with_transient_presentations_and_overlay(
+                            &mut encoder,
+                            gpu.view_output.scene_view(&view),
+                            InteractiveRetainedFrame {
+                                prepared: &prepared,
+                                text: &gpu.text_state,
+                                transient: Some(&derived),
+                                overlay: if gpu.view_output.is_hdr() {
+                                    &no_overlay
+                                } else {
+                                    &gpu.overlay
+                                },
+                            },
+                            clear,
+                            None,
+                        )
+                        .map_err(|error| {
+                            gpu.renderer.invalidate_effect_captures();
+                            gpu.view_output.invalidate();
+                            NativeHostError::Gpu(error.to_string())
+                        })?;
+                    #[cfg(test)]
+                    {
+                        self.last_geometry_draw_calls = _draw.geometry.draw_calls;
+                        self.last_text_draw_calls = _draw.text.draw_calls;
+                    }
+                    let _view_work = gpu
+                        .view_output
+                        .resolve(
+                            &gpu.device,
+                            &gpu.queue,
+                            &mut encoder,
+                            &mut gpu.renderer,
+                            &publication,
+                            f64::from(camera.height),
+                            &gpu.overlay,
+                            &surface_texture.texture,
+                        )
+                        .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+                    #[cfg(test)]
+                    {
+                        self.last_bloom_passes = _view_work.passes;
+                    }
+                    window.pre_present_notify();
+                    let _submission = gpu.queue.submit(Some(encoder.finish()));
+                    gpu.queue.present(surface_texture);
+                    if reconfigure_after_present {
+                        gpu.surface.configure(&gpu.device, &gpu.config);
+                    }
+                    #[cfg(feature = "audio")]
+                    {
+                        presented_submission = Some(_submission);
+                    }
+                    if reconfigure_after_present {
+                        rebind_after_present = true;
+                    }
+                    Ok(retained)
+                },
+            )?;
+            self.viewer_presentation.presented(&samples, spatial_camera);
+            if endpoint.is_some() {
+                // Retain the endpoint in the same renderer before releasing the
+                // source. No picture or pointer receipt was displayed for it.
+                self.execution.admit_retained_publication(presented)?;
                 self.advance_realtime_timeline(now)?;
-                acquired = Some((surface_texture, reconfigure_after_present));
+                if self.video_waiting {
+                    return Ok(());
+                }
                 continue;
             }
-            let view = surface_texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            let mut encoder = gpu
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Noon native frame"),
-                });
-            // Endpoint drains above retain the same surface and renderer; only
-            // the final bounded pass may create a glow capture/blur workload.
-            gpu.renderer
-                .prepare_retained_effects(
-                    &gpu.device,
-                    &gpu.queue,
-                    &mut encoder,
-                    &prepared,
-                    &gpu.text_state,
-                    &publication,
-                    noon_render_wgpu::DEFAULT_EFFECT_TEXTURE_BUDGET,
-                )
-                .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
-            let _draw = gpu
-                .renderer
-                .encode_retained_with_transient_presentations_and_overlay(
-                    &mut encoder,
-                    &view,
-                    InteractiveRetainedFrame {
-                        prepared: &prepared,
-                        text: &gpu.text_state,
-                        transient: Some(&derived),
-                        overlay: &gpu.overlay,
-                    },
-                    CLEAR_COLOR,
-                    None,
-                )
-                .map_err(|error| {
-                    gpu.renderer.invalidate_effect_captures();
-                    NativeHostError::Gpu(error.to_string())
-                })?;
-            #[cfg(test)]
-            {
-                self.last_geometry_draw_calls = _draw.geometry.draw_calls;
-                self.last_text_draw_calls = _draw.text.draw_calls;
-            }
-            window.pre_present_notify();
-            let _submission = gpu.queue.submit(Some(encoder.finish()));
-            gpu.queue.present(surface_texture);
-            if reconfigure_after_present {
-                gpu.surface.configure(&gpu.device, &gpu.config);
-            }
-            let presented = publication.context();
             debug_assert_eq!(pointer_frame.publication(), presented);
             self.execution.admit_presented_frame(&pointer_frame)?;
             #[cfg(feature = "audio")]
             if !self.audio_picture_ready {
                 if let Some(output) = self.audio_output.as_ref() {
                     // One cold/resume barrier, never a per-frame GPU fence.
-                    // Queue submission alone does not mean the first picture
-                    // has finished its shader/resource preparation.
                     gpu.device
                         .poll(wgpu::PollType::Wait {
-                            submission_index: Some(_submission),
+                            submission_index: presented_submission,
                             timeout: Some(Duration::from_secs(10)),
                         })
                         .map_err(|error| NativeHostError::Gpu(error.to_string()))?;
@@ -827,6 +1176,8 @@ impl NativeApp {
                     }
                 }
             }
+
+            self.pointer.presented_viewer = pick_view;
             self.pointer.presented = Some(pointer_frame);
             self.pointer.refresh_pending = false;
             self.last_selection_presentation = highlight;
@@ -836,7 +1187,7 @@ impl NativeApp {
             }
             self.force_full_redraw = false;
             self.playback_picture_pending = false;
-            if reconfigure_after_present {
+            if rebind_after_present {
                 // The submitted image belongs to the old surface configuration.
                 self.rebind_pointer_view()?;
             }
@@ -868,6 +1219,7 @@ impl NativeApp {
     ///
     /// A timeout, occlusion, or surface recovery leaves the session's pending
     /// publication intact so the next acquired surface receives the same changes.
+    #[cfg(test)]
     fn take_renderer_publication_after_acquire<T>(
         execution: &mut dyn NativeExecutionSource,
         force_full_redraw: bool,
@@ -885,6 +1237,20 @@ impl NativeApp {
 }
 
 impl ApplicationHandler for NativeApp {
+    #[cfg(test)]
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: ()) {
+        if self.close_on_user_event {
+            self.close_on_user_event = false;
+            self.close_event_timeline = Some(self.execution.timeline());
+            let window = self
+                .window
+                .as_ref()
+                .expect("close fixture owns a window")
+                .id();
+            self.window_event(event_loop, window, WindowEvent::CloseRequested);
+        }
+    }
+
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
         #[cfg(feature = "audio")]
         if let Err(error) = self.suspend_audio(Instant::now()) {
@@ -919,6 +1285,10 @@ impl ApplicationHandler for NativeApp {
             self.window = Some(window);
         }
 
+        if let Err(error) = self.attach_video() {
+            self.fail(event_loop, error);
+            return;
+        }
         if self.gpu.is_none() {
             let window = self
                 .window
@@ -1112,13 +1482,19 @@ impl ApplicationHandler for NativeApp {
             event_loop.exit();
             return;
         }
+        if self.video_waiting {
+            self.set_wait_mode(event_loop, ControlFlow::Wait);
+            return;
+        }
         if self.publication_pending() {
             window.request_redraw();
             self.set_wait_mode(event_loop, ControlFlow::Wait);
             return;
         }
 
-        if self.execution.session().interactions_active() {
+        if self.execution.session().interactions_active()
+            || self.execution.session().viewer_inspection_active()
+        {
             window.request_redraw();
             self.set_wait_mode(event_loop, ControlFlow::Poll);
             return;
@@ -1189,7 +1565,10 @@ struct NativeGpu {
     preparer: RetainedFramePreparer,
     text_state: RetainedTextGpuState,
     renderer: GpuRenderer,
+    prepared_effect_modules: Option<noon_render_wgpu::PreparedEffectPrograms>,
     overlay: OverlayGpuState,
+    view_output: AuthoredViewOutput,
+    working_profile: noon_core::ViewColorProfile,
 }
 
 impl NativeGpu {
@@ -1231,6 +1610,12 @@ impl NativeGpu {
         renderer.set_camera(&queue, camera_for_viewport(camera, width, height)?);
 
         let text_state = renderer.create_retained_text_state(&device, &queue);
+        let view_output = AuthoredViewOutput::new(
+            &adapter,
+            &device,
+            config.format,
+            noon_render_wgpu::OutputTransfer::Direct,
+        );
         Ok(Self {
             instance,
             surface,
@@ -1241,7 +1626,10 @@ impl NativeGpu {
             preparer: RetainedFramePreparer::new(),
             text_state,
             renderer,
+            prepared_effect_modules: None,
             overlay: OverlayGpuState::default(),
+            view_output,
+            working_profile: noon_core::ViewColorProfile::Compatibility,
         })
     }
 
@@ -1254,6 +1642,10 @@ impl NativeGpu {
         if !self.drawable {
             return Ok(());
         }
+        if self.working_profile == noon_core::ViewColorProfile::LinearHdr {
+            AuthoredViewOutput::validate_extent(&self.device, [size.width, size.height])
+                .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+        }
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
@@ -1264,6 +1656,43 @@ impl NativeGpu {
             camera_for_viewport(camera, size.width, size.height)?,
         );
         Ok(())
+    }
+
+    fn prepare_working_profile(
+        &mut self,
+        publication: &RendererPublication<'_>,
+        insets_active: bool,
+        camera: Camera2DState,
+    ) -> Result<(), NativeHostError> {
+        let profile = self
+            .view_output
+            .prepare(
+                &self.device,
+                publication,
+                insets_active,
+                [self.config.width, self.config.height],
+            )
+            .map_err(|e| NativeHostError::Gpu(e.to_string()))?;
+        if profile != self.working_profile {
+            let format = if profile == noon_core::ViewColorProfile::LinearHdr {
+                wgpu::TextureFormat::Rgba16Float
+            } else {
+                self.config.format
+            };
+            let mut renderer = GpuRenderer::new(&self.device, &self.queue, format);
+            renderer.copy_effect_program_cache_from(&self.device, &self.renderer);
+            renderer.set_viewport(
+                &self.device,
+                &self.queue,
+                self.config.width,
+                self.config.height,
+            );
+            self.text_state = renderer.create_retained_text_state(&self.device, &self.queue);
+            self.renderer = renderer;
+            self.preparer = RetainedFramePreparer::new();
+            self.working_profile = profile;
+        }
+        self.set_camera(camera)
     }
 
     fn set_camera(&mut self, camera: Camera2DState) -> Result<(), NativeHostError> {
@@ -1373,7 +1802,7 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use noon::{ContinuationStep, LiveSession, Scene};
+    use noon::{ContinuationStep, Scene};
     use noon_core::{AnimationOptions, RateFunction};
 
     use super::*;
@@ -1447,9 +1876,14 @@ mod tests {
     }
 
     impl LiveContinuation for NativeWaitContinuation {
+        const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
         type Error = noon::LiveSessionError;
 
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut noon::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             self.resumes.set(self.resumes.get() + 1);
             if self.waiting {
                 Ok(ContinuationStep::Finished)
@@ -1461,7 +1895,7 @@ mod tests {
     }
 
     #[test]
-    fn live_wait_resumes_at_its_runtime_deadline_without_a_renderer_publication() {
+    fn prepared_wait_finishes_source_ahead_without_advancing_the_display() {
         let mut scene = Scene::new();
         let circle = scene.circle(0.4).unwrap();
         scene.add(&circle).unwrap();
@@ -1472,8 +1906,7 @@ mod tests {
                 waiting: false,
             })
             .unwrap();
-        let source =
-            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let source = PlaybackExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
         let mut app = NativeApp::from_source(Box::new(source), NativeViewportConfig::default());
         app.execution.take_renderer_publication();
         assert!(!app.publication_pending());
@@ -1483,7 +1916,12 @@ mod tests {
         app.advance_realtime_timeline(origin).unwrap();
         app.advance_realtime_timeline(origin + Duration::from_millis(500))
             .unwrap();
-        assert_eq!(resumes.get(), 1);
+        assert_eq!(
+            resumes.get(),
+            2,
+            "prepare one source call ahead of the wait deadline"
+        );
+        assert_eq!(app.execution.frame_time(), 0.0);
         assert!(!app.publication_pending());
 
         app.advance_realtime_timeline(origin + Duration::from_secs(1))
@@ -1500,9 +1938,14 @@ mod tests {
     }
 
     impl LiveContinuation for NativeWaitThenAnimateContinuation {
+        const EFFECTS: noon::ContinuationEffects = noon::ContinuationEffects::SceneOnly;
         type Error = noon::LiveSessionError;
 
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut noon::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             let step = self.step;
             self.step += 1;
             match step {
@@ -1535,8 +1978,7 @@ mod tests {
                 step: 0,
             })
             .unwrap();
-        let source =
-            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let source = PlaybackExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
         let mut app = NativeApp::from_source(Box::new(source), NativeViewportConfig::default());
         app.execution.take_renderer_publication();
 
@@ -1563,9 +2005,10 @@ mod tests {
             app.session().frame().objects[0].transform.translation.x,
             2.0
         );
-        // The source's endpoint admission is internal waiting, not user idle.
-        assert!(app.execution.pending_endpoint().is_some());
-        assert_eq!(app.realtime_clock.unwrap().wall_origin, origin);
+        assert!(app.execution.pending_endpoint().is_none());
+        assert_eq!(app.execution.finite_transport_end(), Some(2.0));
+        assert!(!app.execution.source_active());
+        assert!(app.realtime_clock.is_none());
     }
 
     struct NativeAnimatedContinuation {
@@ -1578,7 +2021,11 @@ mod tests {
     impl LiveContinuation for NativeAnimatedContinuation {
         type Error = noon::LiveSessionError;
 
-        fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, Self::Error> {
+        fn resume(
+            &mut self,
+            scene: &mut noon::ContinuationScene,
+        ) -> Result<ContinuationStep, Self::Error> {
+            let live = &mut scene.live();
             self.resumes.set(self.resumes.get() + 1);
             if self.started {
                 Ok(ContinuationStep::Finished)
@@ -1605,6 +2052,7 @@ mod tests {
         let mut target = source.target_editor().unwrap();
         target.set_translation(2.0, 0.0).unwrap();
         let resumes = Rc::new(Cell::new(0));
+        let callbacks = observed_callbacks(&scene, &source);
         let program = scene
             .into_live_program(NativeAnimatedContinuation {
                 source,
@@ -1613,8 +2061,7 @@ mod tests {
                 started: false,
             })
             .unwrap();
-        let mut execution =
-            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let mut execution = PlaybackExecutionSource::new(program, callbacks).unwrap();
         let initial = execution.take_renderer_publication().context();
         execution.advance_to(1.0).unwrap();
         assert_eq!(resumes.get(), 1);
@@ -1655,24 +2102,21 @@ mod tests {
 
     #[test]
     fn realtime_clock_reanchors_when_timed_work_starts_after_quiescence() {
-        use noon_core::{
-            AnimationOptions, RateFunction, SemanticObjectState, SemanticStore, SemanticVec3,
-            StoredGeometry,
-        };
-
-        let mut store = SemanticStore::new();
-        let object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.0,
-            }));
-        store.attach_to_scene(object).unwrap();
-        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
-        target_state.transform.translation = SemanticVec3::new(4.0, 0.0, 0.0);
-        let target = store.insert_semantic_object(target_state);
-        let animation = store
-            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
+        let mut scene = Scene::new();
+        let circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let target = scene.target_editor(&circle).unwrap();
+        scene.set_translation(&target, 4.0, 0.0).unwrap();
+        let animation = scene
+            .declare_transform_to(
+                &circle,
+                &target,
+                AnimationOptions::new()
+                    .run_time(1.0)
+                    .rate_func(RateFunction::Linear),
+            )
             .unwrap();
-        let session = test_scene_from_store(store).into_execution().unwrap();
+        let session = scene.into_execution().unwrap();
         let mut app = NativeApp::new(session, NativeViewportConfig::default());
 
         let original_wall = Instant::now();
@@ -1686,17 +2130,8 @@ mod tests {
         app.execution
             .static_execution_mut()
             .unwrap()
-            .with_store_and_session(|store, session| {
-                session
-                    .activate_animation(
-                        store,
-                        animation,
-                        AnimationOptions::new()
-                            .run_time(1.0)
-                            .rate_func(RateFunction::Linear),
-                    )
-                    .map(|_| ())
-            })
+            .live()
+            .play_animation(&animation)
             .unwrap();
         app.advance_realtime_timeline(restart_wall).unwrap();
         assert_eq!(app.session().frame().time, 0.0);
@@ -1778,45 +2213,32 @@ mod tests {
     fn native_callback_completion_preserves_the_active_epoch() {
         use noon::RustHostCallbackTable;
         use noon_core::HostCallbackId;
-        use noon_core::{
-            AnimationOptions, RateFunction, SemanticMutationTransaction, SemanticObjectState,
-            SemanticStore, SemanticVec3, StoredGeometry,
-        };
+        use noon_core::{AnimationOptions, RateFunction};
 
         const CALLBACK: HostCallbackId = HostCallbackId::new(1);
 
-        let mut store = SemanticStore::new();
-        let object =
-            store.insert_semantic_object(SemanticObjectState::new(StoredGeometry::Circle {
-                radius: 1.0,
-            }));
-        store.attach_to_scene(object).unwrap();
-        let mut target_state = store.semantic_object_state_checked(object).unwrap().clone();
-        target_state.transform.translation = SemanticVec3::new(2.0, 0.0, 0.0);
-        let target = store.insert_semantic_object(target_state);
-        let animation = store
-            .insert_semantic_transform_animation(object, target, AnimationOptions::new())
-            .unwrap();
-        let mut transaction = SemanticMutationTransaction::new();
-        transaction.add_updater(object, CALLBACK, 0.0, None);
-        transaction.apply(&mut store).unwrap();
-
-        let mut callbacks = RustHostCallbackTable::new();
-        callbacks
-            .insert(CALLBACK, |_context| Ok::<_, std::io::Error>(()))
-            .unwrap();
-        let scene = test_scene_from_store(store);
-        let mut session = scene.execution_session().unwrap();
-        session
-            .activate_animation(
-                &mut scene.integration_store().borrow_mut(),
-                animation,
+        let mut scene = noon::Scene::new();
+        let object = scene.circle(1.0).unwrap();
+        scene.add(&object).unwrap();
+        let target = scene.target_editor(&object).unwrap();
+        scene.set_translation(&target, 2.0, 0.0).unwrap();
+        let animation = scene
+            .declare_transform_to(
+                &object,
+                &target,
                 AnimationOptions::new()
                     .run_time(1.0)
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let session = scene.into_execution_with_session(session).unwrap();
+        scene_execution::add_updater(&mut scene, &object, CALLBACK, 0.0, None).unwrap();
+
+        let mut callbacks = RustHostCallbackTable::new();
+        callbacks
+            .insert(CALLBACK, |_context| Ok::<_, std::io::Error>(()))
+            .unwrap();
+        let mut session = scene.into_execution().unwrap();
+        session.live().play_animation(&animation).unwrap();
         let mut app =
             NativeApp::new_with_callbacks(session, callbacks, NativeViewportConfig::default());
 
@@ -2129,8 +2551,7 @@ mod tests {
     #[ignore = "requires an X11 display and a working native wgpu adapter"]
     fn native_surface_smoke_presents_affine_continuation_endpoint() {
         let program = noon::example_scenes::ordinary_affine_continuation_program().unwrap();
-        let source =
-            LiveProgramExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
+        let source = PlaybackExecutionSource::new(program, RustHostCallbackTable::new()).unwrap();
         let app = present_continuation_endpoint(Box::new(source), 4.0);
         assert_eq!(
             app.session().frame().render_transform(0).translation,
@@ -2145,7 +2566,7 @@ mod tests {
     fn native_surface_smoke_presents_callback_continuation_endpoint() {
         let (program, callbacks) =
             noon::example_scenes::ordinary_callback_continuation_program().unwrap();
-        let source = LiveProgramExecutionSource::new(program, callbacks).unwrap();
+        let source = PlaybackExecutionSource::new(program, callbacks).unwrap();
         let app = present_continuation_endpoint(Box::new(source), 1.0);
         assert_eq!(
             app.session().frame().render_transform(0).translation,

@@ -7,6 +7,13 @@ on:
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - "crates/noon-native/**"
+      - "crates/noon-python/**"
+      - "web/python/**"
+      - "scripts/build-native-python.py"
+      - "scripts/test_build_native_python.py"
+      - "scripts/test_native_python.py"
+      - "scripts/python_host_conformance.py"
+      - "parity/python-host/**"
       - "crates/noon-export/**"
       - "crates/noon/**"
       - "crates/noon-core/**"
@@ -26,6 +33,13 @@ on:
       - "Cargo.toml"
       - "rust-toolchain.toml"
       - "crates/noon-native/**"
+      - "crates/noon-python/**"
+      - "web/python/**"
+      - "scripts/build-native-python.py"
+      - "scripts/test_build_native_python.py"
+      - "scripts/test_native_python.py"
+      - "scripts/python_host_conformance.py"
+      - "parity/python-host/**"
       - "crates/noon-export/**"
       - "crates/noon/**"
       - "crates/noon-core/**"
@@ -163,6 +177,42 @@ jobs:
           xvfb-run -a -s "-screen 0 1280x720x24" \
             cargo test -p noon-native native_surface_smoke_presents_typed_semantic_frame \
               -- --ignored --nocapture --test-threads=1
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_incremental_first_picture_precedes_source_completion \
+              -- --ignored --nocapture --test-threads=1
+
+      - name: Qualify synchronous Rust authoring and cancellation
+        run: |
+          timeout 90s xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native --lib \
+              ordinary_helpers_pump_native_frames_and_return_after_admitted_boundaries \
+              -- --ignored --nocapture --test-threads=1
+          timeout 90s xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native --lib \
+              rejected_first_boundary_is_recoverable_and_window_close_cancels_the_next_wait \
+              -- --ignored --nocapture --test-threads=1
+
+      - name: Qualify native HDR pixels, capture equivalence and recovery
+        env:
+          NOON_NATIVE_HDR_ARTIFACTS: ${{ github.workspace }}/native-hdr-proof
+          NOON_PLAYBACK_EVIDENCE_DIR: ${{ github.workspace }}/native-hdr-proof/playback
+        run: |
+          # Keep independent GPU device lifecycles serial and failure logs attributable.
+          cargo test -p noon-native --features wgsl-effects --lib view_output::native_hdr -- --include-ignored --nocapture --test-threads=1
+          cargo test -p noon-native --features wgsl-effects --lib native_incremental_handoff_pixels_match_original_observed_source -- --ignored --nocapture --test-threads=1
+      - name: Present authored camera Bloom through native host
+        run: |
+          xvfb-run -a -s "-screen 0 1280x720x24" \
+            cargo test -p noon-native native_surface_smoke_presents_authored_camera_bloom \
+              -- --ignored --nocapture --test-threads=1
+      - name: Preserve native HDR proof
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-hdr-proof
+          path: native-hdr-proof
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Present typed Rust continuation endpoint through native host
         run: |
@@ -261,10 +311,10 @@ jobs:
           key: ${{ runner.os }}-capture-cargo-sources-${{ hashFiles('rust-toolchain.toml', '**/Cargo.toml') }}
           restore-keys: ${{ runner.os }}-capture-cargo-sources-
 
-      - name: Install software Vulkan without a virtual display
+      - name: Install software Vulkan and FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1 ffmpeg
 
       - name: Verify native capture does not depend on a window or language host
         run: |
@@ -289,7 +339,25 @@ jobs:
               --lib gpu::tests:: -- --include-ignored --nocapture --test-threads=1
             env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
               --test capture -- --include-ignored --nocapture --test-threads=1
+            NOON_EFFECT_EXPORT_PROOF_DIR=capture-proof/effects \
+              env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-export --all-features \
+              --test effects -- --include-ignored --nocapture --test-threads=1
           } 2>&1 | tee capture-proof/tests.log
+
+      - name: Qualify prefix identity, incremental lifecycle, interactions, and pixels
+        run: |
+          set -euo pipefail
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon-runtime --features prepared-prefix \
+            --test prefix_interactions --test prefix_bindings \
+            -- --include-ignored --nocapture --test-threads=1 \
+            2>&1 | tee capture-proof/prefix-interactions.log
+          env -u DISPLAY -u WAYLAND_DISPLAY cargo test -p noon --no-default-features \
+            --features prepared-prefix \
+            --test prepared_prefix_identity --test prepared_prefix_incremental \
+            --test prepared_prefix_lifecycle --test prepared_prefix_raster \
+            --test prepared_prefix_interactions --test prepared_prefix_bindings \
+            -- --include-ignored --nocapture --test-threads=1 \
+            2>&1 | tee -a capture-proof/prefix-interactions.log
 
       - name: Check formatting and lint the native capture package
         run: |
@@ -306,6 +374,20 @@ jobs:
           assert output.stat().st_size == 90 * 320 * 180 * 4, output.stat().st_size
           output.unlink()
           PY
+
+      - name: Use CPython for the optional native binding
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Qualify CPython source, cleanup and native pixels without a browser
+        run: |
+          python3 scripts/test_build_native_python.py
+          python3 scripts/build-native-python.py --profile dev --video
+          PYTHONPATH=build/python env -u DISPLAY -u WAYLAND_DISPLAY \
+            python3 scripts/test_native_python.py -v
+          python3 scripts/python_host_conformance.py \
+            --output capture-proof/python-host.json
 
       - name: Retain pinned formatter diagnostics without changing tested code
         if: always()

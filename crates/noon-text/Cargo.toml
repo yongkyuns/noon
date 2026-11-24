@@ -1,12 +1,15 @@
 [package]
 name = "noon-text"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
 description = "CPU text shaping and glyph raster services for Noon"
 
 [dependencies]
-noon-core = { path = "../noon-core" }
+noon-core = { version = "0.1.0", path = "../noon-core" }
 swash = "=0.2.10"
 skrifa = { version = "=0.44.0", default-features = false, features = ["std"] }
 

@@ -1,4 +1,5 @@
 //! Real lowering failure after pixel admission must leave the live publication intact.
+use noon::integration::scene_execution;
 use noon::integration::SemanticMutationTransaction;
 use noon::{ExecutionSessionPublicationError, ImageMobjectOptions, Scene};
 use std::error::Error;
@@ -25,7 +26,7 @@ fn late_compiler_failure_after_image_admission_rolls_back_and_recovers() -> Test
         let existing = scene.image(image_options())?;
         let existing_state = existing.state()?;
         let existing_handle = existing_state.content.image().unwrap().resource();
-        let mut session = scene.execution_session()?;
+        let mut session = scene_execution::lower(&scene)?;
         session.take_frame_changes();
         let context = session.publication_context();
         let frame = session.frame().clone();
@@ -123,7 +124,10 @@ fn late_compiler_failure_after_image_admission_rolls_back_and_recovers() -> Test
         } else {
             ImageMobjectOptions::rgba8(1, 1, vec![11, 22, 33, 44])?
         };
-        let retry = scene.live(&mut session).create_image(retry_options)?;
+        let mut execution = scene_execution::consume_with_session(scene, session)?;
+        let retry = execution.scene_mut().image(retry_options)?;
+        let scene = execution.scene();
+        let session = execution.session();
         let retry_handle = retry.state()?.content.image().unwrap().resource();
         if duplicate {
             assert_eq!(retry_handle, existing_handle);

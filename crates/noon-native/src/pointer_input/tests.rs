@@ -1,5 +1,5 @@
 use super::*;
-use crate::{execution_source::LiveProgramExecutionSource, NativeViewportConfig};
+use crate::{execution_source::PlaybackExecutionSource, NativeViewportConfig};
 use noon_core::{
     NativeEventOccurrence, NativeEventSource, ReactiveValue, SemanticMutationTransaction,
     SemanticNativeInputSource, SemanticNodeCreation, SemanticNodeId, SemanticSignalValue,
@@ -609,7 +609,7 @@ fn pending_callback_rejects_bursts_without_acknowledging_or_overwriting_position
 fn idle_callback_only_program_does_not_activate_pointer_ingress() {
     let (program, callbacks) =
         noon::example_scenes::ordinary_callback_continuation_program().unwrap();
-    let source = LiveProgramExecutionSource::new(program, callbacks).unwrap();
+    let source = PlaybackExecutionSource::new(program, callbacks).unwrap();
     let mut app = NativeApp::from_source(Box::new(source), NativeViewportConfig::default());
     assert!(!app.execution.session().has_native_pointer_subscribers());
     app.rebind_pointer_view().unwrap();
@@ -629,7 +629,7 @@ fn idle_callback_only_program_does_not_activate_pointer_ingress() {
 fn native_mapping_uses_the_shared_snapshot_projection_for_outside_coordinates() {
     let scene = noon::Scene::new();
     // Test the shared projection contract, not a second native formula.
-    let mut session = scene.execution_session().unwrap();
+    let mut session = noon::integration::scene_execution::lower(&scene).unwrap();
     let view =
         PointerFrameView::new(0, Vec2::new(800.0, 400.0), session.camera().unwrap()).unwrap();
     let frame = session.capture_pointer_frame(view).unwrap();

@@ -42,10 +42,10 @@ fn text_root_owns_no_points_on_authored_and_live_paths() {
     let text = scene.text(noon::Text::new("A")).unwrap();
     assert_eq!(text.get_num_points().unwrap(), 0);
     scene.add(&text).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let publication = execution.publication_context();
-    assert_eq!(scene.live(&mut execution).get_num_points(&text).unwrap(), 0);
-    assert_eq!(execution.publication_context(), publication);
+    let running = scene.into_execution().unwrap();
+    let publication = running.session().publication_context();
+    assert_eq!(running.scene().own_point_count((&text).into()).unwrap(), 0);
+    assert_eq!(running.session().publication_context(), publication);
 }
 
 #[test]
@@ -58,9 +58,9 @@ fn live_point_counts_preserve_partial_paths_and_publication_guards() {
     let empty = scene.path(VectorPath::new(), Default::default()).unwrap();
     scene.add(&image).unwrap();
     scene.add(&empty).unwrap();
-    let mut execution = scene.execution_session().unwrap();
-    let reveal = scene
-        .live(&mut execution)
+    let mut running = scene.into_execution().unwrap();
+    let reveal = running
+        .live()
         .declare_and_activate_create(
             &circle,
             AnimationOptions::new()
@@ -78,38 +78,31 @@ fn live_point_counts_preserve_partial_paths_and_publication_guards() {
         (0.75, 28),
         (1.0, 32),
     ] {
-        scene
-            .live(&mut execution)
-            .advance_segment_to(reveal, alpha)
-            .unwrap();
-        let publication = execution.publication_context();
+        running.live().advance_segment_to(reveal, alpha).unwrap();
+        let publication = running.session().publication_context();
         assert_eq!(
-            scene.live(&mut execution).get_num_points(&circle).unwrap(),
+            running.scene().own_point_count((&circle).into()).unwrap(),
             expected
         );
         assert_eq!(
-            noon::integration::effective_path_query(scene.integration_store(), &execution, &circle)
+            running
+                .scene()
+                .effective_path_query(&circle)
                 .unwrap()
                 .point_count(),
             expected
         );
-        assert_eq!(
-            scene.live(&mut execution).get_num_points(&image).unwrap(),
-            4
-        );
-        assert_eq!(
-            scene.live(&mut execution).get_num_points(&empty).unwrap(),
-            0
-        );
-        assert_eq!(execution.publication_context(), publication);
+        assert_eq!(running.scene().own_point_count((&image).into()).unwrap(), 4);
+        assert_eq!(running.scene().own_point_count((&empty).into()).unwrap(), 0);
+        assert_eq!(running.session().publication_context(), publication);
     }
-    let publication = execution.publication_context();
+    let publication = running.session().publication_context();
     let mut other_scene = Scene::new();
     let foreign = other_scene.circle(1.0).unwrap();
-    assert!(scene.live(&mut execution).get_num_points(&foreign).is_err());
+    assert!(running.scene().own_point_count((&foreign).into()).is_err());
     image.set_object_opacity(0.5).unwrap();
-    assert!(scene.live(&mut execution).get_num_points(&image).is_err());
-    assert_eq!(execution.publication_context(), publication);
+    assert!(running.scene().own_point_count((&image).into()).is_err());
+    assert_eq!(running.session().publication_context(), publication);
 }
 
 fn near(actual: (f64, f64), expected: (f64, f64)) {
@@ -911,24 +904,18 @@ fn effective_queries_capture_one_live_affine_publication() {
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.)
-        .unwrap();
-    let query =
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-            .unwrap();
+    let mut running = scene.into_execution().unwrap();
+    let segment = running.live().play_animation(&animation).unwrap();
+    running.live().advance_segment_to(segment, 1.).unwrap();
+    let query = running.scene().effective_path_query(&object).unwrap();
     near(query.start().unwrap(), (1., 1.5));
     near(object.path_query().unwrap().start().unwrap(), (1., 0.5));
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 2.)
-        .unwrap();
+    running.live().advance_segment_to(segment, 2.).unwrap();
     near(query.start().unwrap(), (1., 1.5));
     near(
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+        running
+            .scene()
+            .effective_path_query(&object)
             .unwrap()
             .start()
             .unwrap(),
@@ -953,118 +940,47 @@ fn effective_all_points_uses_the_live_publication_and_keeps_family_aliases() {
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.)
-        .unwrap();
+    let mut execution = scene.into_execution().unwrap();
+    let mut live = execution.live();
+    let segment = live.play_animation(&animation).unwrap();
+    live.advance_segment_to(segment, 1.).unwrap();
 
-    let points = noon::integration::effective_all_points(
-        scene.integration_store(),
-        &session,
-        MobjectTarget::from(&family),
-    )
-    .unwrap();
-    let expected =
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-            .unwrap()
-            .points()
-            .unwrap();
-    assert_eq!(points, expected);
-    let effective_path =
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-            .unwrap();
+    let scene = execution.scene();
+    let family_target = MobjectTarget::from(&family);
+    let object_target = MobjectTarget::from(&object);
+    let points = scene.all_points(family_target).unwrap();
+    let effective_path = scene.effective_path_query(&object).unwrap();
+    assert_eq!(points, effective_path.points().unwrap());
     assert_eq!(
-        noon::integration::effective_path_boundary_points(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&object),
-        )
-        .unwrap(),
+        scene.path_boundary_points(object_target).unwrap(),
         effective_path.anchors().unwrap()
     );
-    assert_ne!(points, MobjectTarget::from(&family).all_points().unwrap());
+    assert_eq!(scene.path_boundary_points(family_target).unwrap(), points);
+    assert_eq!(
+        scene
+            .path_boundary_extremum_along_dim(object_target, 1, 1.)
+            .unwrap(),
+        1.5
+    );
+    let boundary = scene.path_boundary_point(object_target, 0., 1.).unwrap();
+    assert_eq!(boundary.1, 1.5);
+    assert_ne!(points, family_target.all_points().unwrap());
     let expected_center = (
         points.iter().map(|point| point.0).sum::<f64>() / points.len() as f64,
         points.iter().map(|point| point.1).sum::<f64>() / points.len() as f64,
     );
     assert_eq!(
-        noon::integration::effective_center_of_mass(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&family),
-        )
-        .unwrap(),
+        scene.center_of_mass(family_target).unwrap(),
         expected_center
     );
-    let effective_top = noon::integration::effective_boundary_point(
-        scene.integration_store(),
-        &session,
-        MobjectTarget::from(&family),
-        0.,
-        1.,
-    )
-    .unwrap();
+    let effective_top = scene.boundary_point(family_target, 0., 1.).unwrap();
     assert_eq!(effective_top.1, 1.5);
-    assert_eq!(
-        noon::integration::effective_length_over_dim(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&family),
-            0,
-        )
-        .unwrap(),
-        2.
-    );
-    assert_eq!(
-        noon::integration::effective_length_over_dim(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&family),
-            1,
-        )
-        .unwrap(),
-        1.
-    );
-    assert_eq!(
-        noon::integration::effective_length_over_dim(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&family),
-            2,
-        )
-        .unwrap(),
-        0.
-    );
-    assert_eq!(
-        MobjectTarget::from(&family)
-            .extremum_along_dim(1, 1.)
-            .unwrap(),
-        0.5
-    );
-    assert_eq!(
-        noon::integration::effective_extremum_along_dim(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&family),
-            1,
-            1.,
-        )
-        .unwrap(),
-        1.5
-    );
-    assert_eq!(
-        noon::integration::effective_extremum_along_dim(
-            scene.integration_store(),
-            &session,
-            MobjectTarget::from(&family),
-            2,
-            1.,
-        )
-        .unwrap(),
-        0.
-    );
+    assert_eq!(scene.length_over_dim(family_target, 0).unwrap(), 2.);
+    assert_eq!(scene.length_over_dim(family_target, 1).unwrap(), 1.);
+    assert_eq!(scene.length_over_dim(family_target, 2).unwrap(), 0.);
+    assert_eq!(family_target.extremum_along_dim(1, 1.).unwrap(), 0.5);
+    assert_eq!(scene.extremum_along_dim(family_target, 1, 1.).unwrap(), 1.5);
+    assert_eq!(scene.extremum_along_dim(family_target, 2, 1.).unwrap(), 0.);
 }
 
 #[test]
@@ -1082,11 +998,12 @@ fn effective_reveal_queries_keep_curve_boundaries_transforms_and_snapshots() {
         .unwrap();
     object.set_scale(2., 1.).unwrap();
     object.shift(1., 3.).unwrap();
-    let mut session = scene.execution_session().unwrap();
+    near(scene.path_query(&object).unwrap().end().unwrap(), (21., 5.));
+    let mut running = scene.into_execution().unwrap();
     let snapshot;
     {
-        let segment = scene
-            .live(&mut session)
+        let segment = running
+            .live()
             .declare_and_activate_create(
                 &object,
                 AnimationOptions::new()
@@ -1094,43 +1011,28 @@ fn effective_reveal_queries_keep_curve_boundaries_transforms_and_snapshots() {
                     .rate_func(RateFunction::Linear),
             )
             .unwrap();
-        let initial =
-            noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-                .unwrap();
+        let initial = running.scene().path_query(&object).unwrap();
         near(initial.start().unwrap(), (1., 3.));
         near(initial.end().unwrap(), (1., 3.));
-        scene
-            .live(&mut session)
-            .advance_segment_to(segment, 1.5)
-            .unwrap();
-        snapshot =
-            noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-                .unwrap();
+        running.live().advance_segment_to(segment, 1.5).unwrap();
+        snapshot = running.scene().path_query(&object).unwrap();
         assert_eq!(snapshot.curve_count(), 2);
         assert_eq!(snapshot.subpaths().len(), 2);
         near(snapshot.end().unwrap(), (21., 4.));
         assert!((snapshot.arc_length(None).unwrap() - 9.).abs() < 1e-6);
-        scene
-            .live(&mut session)
-            .advance_segment_to(segment, 2.)
-            .unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        running.live().advance_segment_to(segment, 2.).unwrap();
+        running.live().complete_segment(segment).unwrap();
         near(
-            noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-                .unwrap()
-                .end()
-                .unwrap(),
+            running.scene().path_query(&object).unwrap().end().unwrap(),
             (21., 5.),
         );
         near(snapshot.end().unwrap(), (21., 4.));
     }
-    let committed_revision = scene.revision();
-    session.seek(1.5).unwrap();
-    let replay =
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-            .unwrap();
+    let committed_revision = running.scene().revision();
+    running.seek(1.5).unwrap();
+    let replay = running.scene().path_query(&object).unwrap();
     assert_eq!(replay.anchors_and_handles(), snapshot.anchors_and_handles());
-    assert_eq!(scene.revision(), committed_revision);
+    assert_eq!(running.scene().revision(), committed_revision);
     near(object.path_query().unwrap().end().unwrap(), (21., 5.));
 }
 
@@ -1173,17 +1075,12 @@ fn effective_morph_queries_interpolate_controls_and_keep_snapshot_and_seek_coher
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
+    let mut running = scene.into_execution().unwrap();
     let midpoint;
     {
-        let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-        scene
-            .live(&mut session)
-            .advance_segment_to(segment, 1.)
-            .unwrap();
-        midpoint =
-            noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-                .unwrap();
+        let segment = running.live().play_animation(&animation).unwrap();
+        running.live().advance_segment_to(segment, 1.).unwrap();
+        midpoint = running.scene().effective_path_query(&object).unwrap();
         assert_eq!(midpoint.curve_count(), 4);
         for index in 0..4 {
             let start = source_query.curve_points(index).unwrap();
@@ -1197,23 +1094,20 @@ fn effective_morph_queries_interpolate_controls_and_keep_snapshot_and_seek_coher
                 near(point, ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5));
             }
         }
-        scene
-            .live(&mut session)
-            .advance_segment_to(segment, 2.)
-            .unwrap();
-        scene.live(&mut session).complete_segment(segment).unwrap();
+        running.live().advance_segment_to(segment, 2.).unwrap();
+        running.live().complete_segment(segment).unwrap();
         near(
-            noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+            running
+                .scene()
+                .effective_path_query(&object)
                 .unwrap()
                 .start()
                 .unwrap(),
             target_query.start().unwrap(),
         );
     }
-    session.seek(1.).unwrap();
-    let replay =
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-            .unwrap();
+    running.seek(1.).unwrap();
+    let replay = running.scene().effective_path_query(&object).unwrap();
     for index in 0..4 {
         assert_eq!(
             replay.curve_points(index).unwrap(),
@@ -1251,29 +1145,22 @@ fn effective_combined_morph_reveal_uses_authored_curve_progress_and_direct_seek(
         ],
         options: AnimationOptions::new(),
     };
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene
-        .live(&mut session)
+    let mut running = scene.into_execution().unwrap();
+    let segment = running
+        .live()
         .declare_and_activate_composition(&request, AnimationOptions::new())
         .unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.)
-        .unwrap();
-    let midpoint =
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-            .unwrap();
+    running.live().advance_segment_to(segment, 1.).unwrap();
+    let midpoint = running.scene().effective_path_query(&object).unwrap();
     // Persistent partial geometry keeps the zero-length boundary curve so later
     // path alignment observes the same authored two-curve topology.
     assert_eq!(midpoint.curve_count(), 2);
     near(midpoint.start().unwrap(), (0., 0.));
     near(midpoint.end().unwrap(), (1., 1.));
 
-    session.seek(0.25).unwrap();
-    session.seek(1.).unwrap();
-    let replay =
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
-            .unwrap();
+    running.seek(0.25).unwrap();
+    running.seek(1.).unwrap();
+    let replay = running.scene().effective_path_query(&object).unwrap();
     assert_eq!(replay.anchors_and_handles(), midpoint.anchors_and_handles());
     assert_eq!(replay.end().unwrap(), midpoint.end().unwrap());
 }
@@ -1311,14 +1198,13 @@ fn native_object_scaled_strokes_use_the_same_morph_controls() {
                 .rate_func(RateFunction::Linear),
         )
         .unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let segment = scene.live(&mut session).play_animation(&animation).unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 1.)
-        .unwrap();
+    let mut running = scene.into_execution().unwrap();
+    let segment = running.live().play_animation(&animation).unwrap();
+    running.live().advance_segment_to(segment, 1.).unwrap();
     near(
-        noon::integration::effective_path_query(scene.integration_store(), &session, &object)
+        running
+            .scene()
+            .effective_path_query(&object)
             .unwrap()
             .start()
             .unwrap(),

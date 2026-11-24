@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en" data-project-home="true">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Noon is an open-source animation engine written in Rust and inspired by Manim. Write scenes in Python or Rust.">
+  <meta name="theme-color" content="#f5f3ed">
+  <meta property="og:title" content="Noon — open-source animation engine">
+  <meta property="og:description" content="An experimental animation engine inspired by Manim, with Python and Rust examples and an editable browser playground.">
+  <meta property="og:type" content="website">
+  <title>Noon — open-source animation engine</title>
+  <link rel="icon" href="data:,">
+  <script src="./site/theme-init.js"></script>
+  <link rel="stylesheet" href="./site/site.css">
+  <link rel="stylesheet" href="./site/live.css">
+  <script type="module" src="./site/site.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header"><div class="header-inner">
+    <a class="wordmark" href="./" aria-label="Noon home">noon<span aria-hidden="true">.</span></a>
+    <nav class="primary-nav" aria-label="Main navigation"><a href="./site/docs/index.html">Docs</a><a href="./site/docs/examples.html">Examples</a><a href="./site/docs/api.html">API</a><a href="./playground.html?catalog=showcase">Playground</a></nav>
+    <div class="header-tools"><a class="search-link" data-search-shortcut href="./site/docs/search.html">Search docs <kbd aria-hidden="true">⌘ K</kbd></a><label class="theme-label"><span class="sr-only">Theme</span><select data-theme-choice aria-label="Color theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label></div>
+  </div></header>
+  <main id="main">
+    <section class="wrap hero" aria-labelledby="intro-title">
+      <div class="hero-copy">
+        <h1 id="intro-title">Noon</h1>
+        <p class="lede">Noon is an experimental, open-source animation engine written in Rust and inspired by Manim. The browser playground runs Python scenes. The repository has examples in Python and Rust that run locally.</p>
+        <div class="actions"><a class="button" href="./playground.html?catalog=showcase&amp;example=showcase-first-scene">Open the playground <span aria-hidden="true">↗</span></a><a class="button secondary" href="./site/docs/getting-started.html">Getting started <span aria-hidden="true">→</span></a></div>
+      </div>
+      <figure class="featured">
+        <div class="demo-card" data-demo="showcase-cache-locality" data-frame-src="./embed.html?catalog=showcase&amp;example=showcase-cache-locality">
+          <div data-demo-frame></div><p data-demo-status role="status">Loading live scene…</p>
+          <button type="button" data-demo-retry hidden>Retry</button>
+          <noscript><p>JavaScript is required for this live scene.</p></noscript>
+        </div>
+        <figcaption><strong>Why loop order changes cache misses</strong><a href="./playground.html?catalog=showcase&amp;example=showcase-cache-locality">Open in the playground <span aria-hidden="true">↗</span></a></figcaption>
+      </figure>
+    </section>
+    <section class="wrap section" id="examples" aria-labelledby="examples-title">
+      <div class="section-heading"><h2 id="examples-title">Live examples</h2><a class="text-link" href="./playground.html?catalog=showcase">Browse the gallery <span aria-hidden="true">↗</span></a></div>
+      <p class="section-intro"><span class="touch-preview-instructions">Tap <strong>Play scene</strong> to start a demo. Two demos can play together. </span>Open <strong>Code</strong> to edit a scene’s Python source. Edits run automatically.</p>
+      <div class="examples">
+        <article class="example">
+          <div class="demo-card" data-demo="showcase-doubling-curve" data-frame-src="./embed.html?catalog=showcase&amp;example=showcase-doubling-curve">
+          <div data-demo-frame></div><p data-demo-status role="status">Loading live scene…</p>
+          <button type="button" data-demo-retry hidden>Retry</button>
+          <noscript><p>JavaScript is required for this live scene.</p></noscript>
+        </div>
+          <div class="example-body"><h3><a href="./playground.html?catalog=showcase&amp;example=showcase-doubling-curve">Why a doubling curve becomes a straight line <span aria-hidden="true">↗</span></a></h3><p>Follow a growing value, then warp the plot to see equal ratios form a straight line.</p><a class="source" href="https://github.com/yongkyuns/noon/blob/master/web/python/examples/showcase_doubling_curve.py">View Python source</a></div>
+        </article>
+        <article class="example">
+          <div class="demo-card" data-demo="showcase-riemann-sums" data-frame-src="./embed.html?catalog=showcase&amp;example=showcase-riemann-sums">
+          <div data-demo-frame></div><p data-demo-status role="status">Loading live scene…</p>
+          <button type="button" data-demo-retry hidden>Retry</button>
+          <noscript><p>JavaScript is required for this live scene.</p></noscript>
+        </div>
+          <div class="example-body"><h3><a href="./playground.html?catalog=showcase&amp;example=showcase-riemann-sums">Rectangles become an integral <span aria-hidden="true">↗</span></a></h3><p>Split rectangles into thinner strips to measure the area under a curve.</p><a class="source" href="https://github.com/yongkyuns/noon/blob/master/web/python/examples/showcase_riemann_sums.py">View Python source</a></div>
+        </article>
+        <article class="example">
+          <div class="demo-card" data-demo="showcase-channel-flow" data-frame-src="./embed.html?catalog=showcase&amp;example=showcase-channel-flow">
+          <div data-demo-frame></div><p data-demo-status role="status">Loading live scene…</p>
+          <button type="button" data-demo-retry hidden>Retry</button>
+          <noscript><p>JavaScript is required for this live scene.</p></noscript>
+        </div>
+          <div class="example-body"><h3><a href="./playground.html?catalog=showcase&amp;example=showcase-channel-flow">Why water speeds up through a narrow channel <span aria-hidden="true">↗</span></a></h3><p>Follow a dye pulse and compare a second of flow through two 3D cross-sections.</p><a class="source" href="https://github.com/yongkyuns/noon/blob/master/web/python/examples/showcase_channel_flow.py">View Python source</a></div>
+        </article>
+        <article class="example">
+          <div class="demo-card" data-demo="showcase-neon-glow" data-frame-src="./embed.html?catalog=showcase&amp;example=showcase-neon-glow">
+          <div data-demo-frame></div><p data-demo-status role="status">Loading live scene…</p>
+          <button type="button" data-demo-retry hidden>Retry</button>
+          <noscript><p>JavaScript is required for this live scene.</p></noscript>
+        </div>
+          <div class="example-body"><h3><a href="./playground.html?catalog=showcase&amp;example=showcase-neon-glow">Why a neon sign glows beyond its edges <span aria-hidden="true">↗</span></a></h3><p>Build a soft halo behind a sharp tube and see two halos overlap.</p><a class="source" href="https://github.com/yongkyuns/noon/blob/master/web/python/examples/showcase_neon_glow.py">View Python source</a></div>
+        </article>
+      </div>
+      <p class="footnote">The gallery also has examples of <a href="./playground.html?catalog=showcase&amp;example=showcase-pointer-selection">click selection</a> and <a href="./playground.html?catalog=showcase&amp;example=showcase-translation-drag">dragging objects</a>.</p>
+    </section>
+    <section class="start-section" id="start" aria-labelledby="start-title"><div class="wrap section">
+      <div class="section-heading"><h2 id="start-title">Tutorials and local setup</h2></div>
+      <div class="start-paths">
+        <a class="start-path" href="./site/docs/getting-started.html"><strong>Browser tutorial</strong><p>Change the color and timing of an example scene in the browser.</p></a>
+        <a class="start-path" href="./site/docs/python.html"><strong>Python walkthrough</strong><p>Create and group objects, then animate them with Python.</p></a>
+        <a class="start-path" href="./site/docs/rust.html"><strong>Rust walkthrough</strong><p>Write a scene in Rust, open it in a native window, and export it.</p></a>
+      </div>
+      <div class="local-options">
+        <details><summary>Native Python <span>CPython + the Rust engine</span></summary><div class="details-body"><p>From a checkout, with CPython 3.11+ and the repository-pinned Rust toolchain. These commands use a POSIX shell.</p><pre><code>git clone https://github.com/yongkyuns/noon.git
+cd noon
+python3 scripts/build-native-python.py --profile dev
+PYTHONPATH=build/python python3 -m noon_native \
+  web/python/examples/ordinary_affine_play.py</code></pre><p>This builds the native extension from source. It does not use a browser. <a href="./site/docs/native-python.html">Native Python setup and current limits ↗</a></p></div></details>
+        <details><summary>Native Rust <span>No Python dependency</span></summary><div class="details-body"><p>Clone the repository and run a native example with its pinned Rust toolchain:</p><pre><code>git clone https://github.com/yongkyuns/noon.git
+cd noon
+cargo run -p noon-native --example ordinary_affine_play</code></pre><p><a href="https://github.com/yongkyuns/noon/tree/master/crates/noon-native/examples">Browse Rust examples ↗</a> · <a href="./site/docs/reference.html#authoring">Rust authoring reference ↗</a></p></div></details>
+      </div>
+    </div></section>
+    <section class="wrap section about" id="about" aria-labelledby="about-title">
+      <h2 id="about-title">About Noon</h2>
+      <div class="about-copy"><h3>Project history</h3><p>Noon started as a small prototype. Recent development has included a redesign with AI coding agents.</p><h3>Manim compatibility</h3><p><a href="https://www.manim.community/">Manim Community Edition</a> is the reference for the Python APIs and visual behavior that Noon supports. The implementation reference describes coverage and limitations by host.</p><h3>Current status</h3><p>APIs are still changing. Playback and feature support differ between native and browser hosts. Some callback-driven and interactive scenes have replay restrictions.</p><p><a href="./site/docs/reference.html">Implementation reference ↗</a> · <a href="./site/docs/architecture.html">Architecture ↗</a> · <a href="https://github.com/yongkyuns/noon/issues">Issues ↗</a></p></div>
+    </section>
+  </main>
+  <footer class="site-footer"><a class="wordmark" href="./">noon<span aria-hidden="true">.</span></a><nav aria-label="Footer"><a href="./site/docs/getting-started.html">Get started</a><a href="./site/docs/architecture.html">Architecture</a><a href="https://github.com/yongkyuns/noon">GitHub ↗</a></nav></footer>
+</body>
+</html>

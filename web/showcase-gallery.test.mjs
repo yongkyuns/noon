@@ -81,6 +81,9 @@ test("lessons have unique sources, outcomes, and real-poster destinations", asyn
   for (const entry of gallery.examples) {
     const source = await readFile(new URL(entry.path, import.meta.url), "utf8");
     assert.ok(source.includes("from noon import *"));
+    for (const credit of entry.credits) {
+      assert.ok(source.includes(credit.url), `${entry.id}: credit must also appear in the Python source`);
+    }
     assert.equal(/^\s*assert\b/m.test(source), false, `${entry.id}: no embedded regression assertions`);
   }
   const pointer = gallery.examples.find((entry) => entry.id === "showcase-pointer-selection");
@@ -89,9 +92,6 @@ test("lessons have unique sources, outcomes, and real-poster destinations", asyn
   assert.ok(pointer.features.includes("Indicate"));
   assert.equal(pointer.interaction, null);
   assert.equal(pointerSource.interaction, undefined);
-  assert.equal(pointer.inspectionZoom, true);
-  assert.match(pointerSource.host_setup, /wheel\/trackpad zoom/);
-  assert.ok(gallery.examples.filter(entry => entry.id !== pointer.id).every(entry => !entry.inspectionZoom));
   assert.equal(parityLabel("noon-showcase"), "Noon showcase");
   assert.equal(parityLabel("parity-qualified"), "Parity qualified");
 });
@@ -105,8 +105,8 @@ test("invalid or misleading publication metadata is rejected", () => {
     (value) => { value.entries[0].thumbnail = "https://example.test/invented.svg"; },
     (value) => { value.entries[0].thumbnail_time = 1e9; },
     (value) => { value.entries[0].beats = []; },
-    (value) => { value.entries[0].inspection_zoom = "true"; },
-    (value) => { value.entries[0].inspection_zoom = true; value.entries[0].host_setup = ""; },
+    (value) => { value.entries[0].credits = [{ label: "", url: "https://example.test" }]; },
+    (value) => { value.entries[0].credits = [{ label: "Example", url: "javascript:alert(1)" }]; },
   ]) {
     const value = copy();
     mutate(value);
@@ -147,31 +147,18 @@ test("playback capability is finite and all nonreplayable capabilities require a
   delete reactive.playback_limitation;
   assert.throws(() => normalizeShowcaseManifest(missingExplanation), /requires a user-facing limitation/);
 
-  const gallery = normalizeShowcaseManifest(manifest);
-  const normalizedReactive = gallery.examples.find((entry) => entry.id === "showcase-reactive-relationships");
+  reactive.playback_limitation = "Use Run to repeat this scene.";
+  const fixture = normalizeShowcaseManifest(missingExplanation);
+  const normalizedReactive = fixture.examples.find((entry) => entry.id === reactive.id);
   assert.equal(normalizedReactive.playbackCapability, "nonreplayable-host-callbacks");
-  assert.match(normalizedReactive.summary, /cannot be retained for deterministic replay/);
-  const redraw = gallery.examples.find((entry) => entry.id === "showcase-always-redraw");
-  assert.equal(redraw.playbackCapability, "nonreplayable-host-callbacks");
-  assert.match(redraw.summary, /always_redraw callbacks/);
-  const camera = gallery.examples.find((entry) => entry.id === "showcase-camera-follows-path");
-  assert.equal(camera.playbackCapability, "nonreplayable-host-callbacks");
-  assert.match(camera.playbackLimitation, /Run/);
-  const nativeDrag = gallery.examples.find((entry) => entry.id === "showcase-translation-drag");
-  assert.equal(nativeDrag.playbackCapability, "nonreplayable-native-input");
-  assert.equal(nativeDrag.playbackLimitation, "Dragging changes this scene. Use Run to reset; seeking and restart are unavailable.");
-  assert.ok(gallery.examples.filter((entry) => ![normalizedReactive.id, redraw.id, camera.id, nativeDrag.id].includes(entry.id))
-    .every((entry) => entry.playbackCapability === "deterministic-retained-replay"));
+  assert.match(normalizedReactive.summary, /Use Run to repeat/);
 });
 
-test("the checked-in catalog declares callback and native-input lessons nonreplayable", () => {
+test("the checked-in showcase has no nonreplayable entries", () => {
   assert.deepEqual(
     manifest.entries.filter((entry) => entry.playback_capability?.startsWith("nonreplayable-"))
       .map((entry) => [entry.id, entry.playback_capability]),
-    [["showcase-reactive-relationships", "nonreplayable-host-callbacks"],
-      ["showcase-camera-follows-path", "nonreplayable-host-callbacks"],
-      ["showcase-always-redraw", "nonreplayable-host-callbacks"],
-      ["showcase-translation-drag", "nonreplayable-native-input"]],
+    [],
   );
 });
 

@@ -1,5 +1,6 @@
-import { ExecutionWorkerClient, ExecutionTransitionCancelled, MAX_IN_FLIGHT_NATIVE_INPUTS } from "./execution-worker-client.js";
-import { attachBrowserPointerInput } from "./browser-pointer-input.js";
+import { attachSpatialInspectionInput } from "./spatial-inspection-input.js";
+import { ExecutionWorkerClient, ExecutionTransitionCancelled } from "./execution-worker-client.js";
+import { attachBrowserPointerInput, MAX_BROWSER_POINTER_SAMPLES } from "./browser-pointer-input.js";
 import { DEFAULT_SHARED_SLOT_CAPACITY } from "./execution-transport.js";
 
 export const AUTHORING_EXECUTION_SEMANTIC = "semantic";
@@ -23,6 +24,7 @@ export class AuthoringExecutionClient {
   #player = null;
   #preparedPlayer = null;
   #mode = null;
+  #preparedPlayback = false;
   #rendererBackend = "";
   #loopDurationSeconds = DEFAULT_LOOP_DURATION_SECONDS;
   #transportMode = null;
@@ -35,6 +37,10 @@ export class AuthoringExecutionClient {
   #pointerSourceSequence = 0;
   #pointerCollector = null;
   #inspectionZoom = false;
+  #viewerInspection = false;
+  #viewerPointerMotion = true;
+  #spatialInspection = false;
+  #spatialInput = null;
   #pointerViewport = null;
   #transition = null;
   #lifecycleGeneration = 0;
@@ -79,13 +85,14 @@ export class AuthoringExecutionClient {
     {
       transportMode = undefined,
       sharedSlotCapacity = DEFAULT_SHARED_SLOT_CAPACITY,
+      connectRuntimeModule = undefined,
     } = {},
   ) {
     if (this.#player !== null || this.#preparedPlayer !== null || this.#transition !== null) {
       throw new Error("AuthoringExecutionClient is already started or preparing");
     }
     this.#sharedSlotCapacity = validateSharedSlotCapacity(sharedSlotCapacity);
-    const options = { sharedSlotCapacity: this.#sharedSlotCapacity };
+    const options = { sharedSlotCapacity: this.#sharedSlotCapacity, connectRuntimeModule };
     if (transportMode !== undefined) {
       options.transportMode = transportMode;
     }
@@ -134,9 +141,6 @@ export class AuthoringExecutionClient {
     if (typeof initiallyPaused !== "boolean") {
       throw new TypeError("initiallyPaused must be a boolean");
     }
-    if (initiallyPaused && semantic.continuationGeneration !== null) {
-      throw new Error("source-owned semantic continuations cannot start paused");
-    }
     validateSemanticPacing(pacing);
     if (pacing === SEMANTIC_PACING_EXTERNAL_SAMPLES && semantic.continuationGeneration === null) {
       throw new Error("external sample pacing requires a source-owned semantic continuation");
@@ -173,12 +177,14 @@ export class AuthoringExecutionClient {
         initialPointerView,
         callbackSessionId: semantic.callbackSessionId,
         continuationGeneration: semantic.continuationGeneration,
+        preparedPlayback: semantic.preparedPlayback,
       });
       this.#assertLifecycleCurrent(generation, terminateCandidate);
       if (this.#preparedPlayer === player) {
         this.#preparedPlayer = null;
       }
       this.#player = player;
+      this.#preparedPlayback = ready.engine.preparedPlayback === true;
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
       this.#rendererBackend = ready.render.backend;
       this.#transportMode = ready.transportMode;
@@ -208,6 +214,9 @@ export class AuthoringExecutionClient {
       await this.#transition;
     }
     this.#requireStarted();
+    if (this.#preparedPlayback) {
+      throw new Error("prepared playback retains its historical player after source completion; use a fresh Run to replace it");
+    }
     const semantic = validateSemanticExecutionDescriptor(descriptor);
     validateSemanticAuthoringClient(authoringClient);
     const duration = validateOptionalLoopDurationSeconds(loopDurationSeconds);
@@ -221,6 +230,7 @@ export class AuthoringExecutionClient {
         continuationGeneration: semantic.continuationGeneration,
       });
       this.#mode = AUTHORING_EXECUTION_SEMANTIC;
+      this.#preparedPlayback = ready.engine.preparedPlayback === true;
       this.#rendererBackend = ready.render.backend;
       const state = await this.#player.state();
       return {
@@ -241,7 +251,15 @@ export class AuthoringExecutionClient {
   }
 
   async state() {
-    return this.#withStablePlayer((player) => player.state());
+    return this.#withStablePlayer(async player => {
+      const state = await player.state();
+      if (typeof state.viewerPointerMotion === "boolean") this.#viewerPointerMotion = state.viewerPointerMotion;
+      return state;
+    });
+  }
+
+  async feedbackTargets(query) {
+    return this.#withStablePlayer((player) => player.feedbackTargets(query));
   }
 
   async metrics(options = {}) {
@@ -273,12 +291,17 @@ export class AuthoringExecutionClient {
     if (this.#transition !== null) await this.#transition;
     this.#requireStarted();
     await this.#runTransition(() => this.#player.retireExecutionSource());
+    this.#preparedPlayback = false;
   }
 
-  async resume() {
+  preparePlaybackActivation() {
+    return this.#withInputPlayer(player => player.preparePlaybackActivation());
+  }
+
+  async resume(activation = null) {
     // Device activation belongs to this gesture and owner. A replacement
     // scene must receive its own explicit Play, never a retried unlock.
-    return this.#withInputPlayer((player) => player.resume());
+    return this.#withInputPlayer((player) => player.resume(activation));
   }
 
   async seek(timeSeconds) {
@@ -312,9 +335,28 @@ export class AuthoringExecutionClient {
     return this.#withInputPlayer((player) => player.setPointerFillSelection(maxMovement));
   }
 
+  async enableViewerInspection() {
+    this.#viewerInspection = true;
+    this.#inspectionZoom = true;
+    this.#canvas.toggleAttribute?.("data-viewer-inspection", true);
+    const state = await this.#withInputPlayer(player => player.setPointerFillSelection(null, true));
+    if (typeof state.viewerPointerMotion === "boolean") this.#viewerPointerMotion = state.viewerPointerMotion;
+  }
+
   setInspectionZoom(enabled) {
     if (typeof enabled !== "boolean") throw new TypeError("inspectionZoom must be a boolean");
     this.#inspectionZoom = enabled;
+  }
+
+  setSpatialInspection(enabled) {
+    if (this.#spatialInspection === enabled) return;
+    this.#spatialInspection = enabled;
+    this.#canvas.toggleAttribute?.("data-spatial-inspection", enabled);
+    if (!enabled) this.#spatialInput?.cancel();
+  }
+
+  resetSpatialInspection() {
+    this.#spatialInput?.reset();
   }
 
   async emitNativeEvent(source) {
@@ -364,6 +406,7 @@ export class AuthoringExecutionClient {
   async restart() {
     if (this.#transition !== null) await this.#transition;
     this.#requireStarted();
+    this.#retirePointerInput();
     const ready = await this.#runTransition(async () => {
       const player = this.#player;
       const mode = this.#mode;
@@ -429,6 +472,7 @@ export class AuthoringExecutionClient {
       this.#canvas = activePlayer.canvas;
     }
     this.#player = null;
+    this.#preparedPlayback = false;
     this.#mode = null;
     this.#rendererBackend = "";
     this.#transportMode = null;
@@ -438,7 +482,20 @@ export class AuthoringExecutionClient {
     return new ExecutionWorkerClient(this.#canvas, {
       onError: this.#onError,
       onRecoverableError: this.#onRecoverableError,
+      onSourceHandoff: generation => this.#handoffPreparedSource(generation),
     });
+  }
+
+  async #handoffPreparedSource(generation) {
+    const active = this.#player;
+    this.#retirePointerInput();
+    await this.#runTransition(async () => {
+      if (this.#player !== active) throw new Error("source handoff belongs to a retired player");
+      const ready = await active.handoffPreparedSource(generation);
+      this.#preparedPlayback = false;
+      this.#rendererBackend = ready.render.backend;
+    });
+    await this.#withStablePlayer(() => this.#attachPointerInput(), { retryOnTransition: true });
   }
 
   #resolveStartupSharedSlotCapacity(sharedSlotCapacity) {
@@ -554,6 +611,7 @@ export class AuthoringExecutionClient {
     this.#pointerAbortController?.abort();
     this.#pointerAbortController = null;
     this.#pointerCollector = null;
+    this.#spatialInput = null;
   }
 
   #attachPointerInput(registeredView = null) {
@@ -595,26 +653,46 @@ export class AuthoringExecutionClient {
           kind: "cancel", source_id: lastInput.source_id, pointer_id: lastInput.pointer_id,
           view_revision: lastInput.view_revision, surface_x: null, surface_y: null,
         });
-      } catch (cancellationError) { report(cancellationError); }
+      } catch (cancellationError) {
+        if (!(cancellationError instanceof ExecutionTransitionCancelled)) report(cancellationError);
+      }
     };
     const submit = input => {
       if (signal.aborted || this.#player !== player || this.#transition !== null) return;
-      lastInput = input;
+      const lastOccurrence = Array.isArray(input) ? input.at(-1) : input;
+      lastInput = lastOccurrence;
       const preceding = previousDelivery;
       const delivery = player.submitBrowserPointerInput(input);
       previousDelivery = delivery;
       void delivery.then(result => {
         if (result.pointerInputAccepted === false && this.#pointerAbortController === controller) {
-          this.#pointerCollector?.retireSource(input.source_id);
+          this.#pointerCollector?.retireSource(lastOccurrence.source_id);
         }
       }).catch(error => fault(error, preceding));
     };
+    const current = () => this.#player === player && this.#lifecycleGeneration === generation &&
+      this.#transition === null;
+    canvas.toggleAttribute?.("data-spatial-inspection", this.#spatialInspection);
+    canvas.toggleAttribute?.("data-viewer-inspection", this.#viewerInspection);
+    this.#spatialInput = attachSpatialInspectionInput(canvas, {
+      signal,
+      enabled: () => current() && (this.#spatialInspection || this.#viewerInspection),
+      spatial: () => this.#spatialInspection,
+      beginPlanarGesture: () => this.#pointerCollector?.cancel(),
+      viewRevision: () => this.#pointerViewRevision,
+      presentation: () => player.pointerPresentation,
+      send: input => current() && player.moveSpatialInspection(input),
+      onError: error => {
+        if (current() && !(error instanceof ExecutionTransitionCancelled)) report(error);
+      },
+    });
     this.#pointerCollector = attachBrowserPointerInput(canvas, {
       signal,
       registeredView: registeredView?.revision === this.#pointerViewRevision ? registeredView : null,
-      isCurrent: () => this.#player === player && this.#lifecycleGeneration === generation &&
-        this.#transition === null,
+      isCurrent: current,
+      collectHover: () => !this.#viewerInspection || this.#viewerPointerMotion,
       send: submit,
+      sendMotionBatch: submit,
       allocateSource: () => {
         if (this.#pointerSourceSequence >= Number.MAX_SAFE_INTEGER) {
           throw new Error("browser pointer source sequence exhausted");
@@ -624,7 +702,7 @@ export class AuthoringExecutionClient {
       viewRevision: () => this.#pointerViewRevision,
       advanceView: () => this.#advancePointerView(),
       onError: error => { void fault(error); },
-      maxSamples: MAX_IN_FLIGHT_NATIVE_INPUTS,
+      maxSamples: MAX_BROWSER_POINTER_SAMPLES,
       asynchronousWheel: true,
       onWheel: input => {
         // A DOM wheel has no associated pointer identity. Retain its own cursor
@@ -724,10 +802,15 @@ function validateSemanticExecutionDescriptor(descriptor) {
        descriptor.continuationGeneration <= 0)) {
     throw new TypeError("semantic continuation generation must be a positive safe integer");
   }
+  const preparedPlayback = descriptor.preparedPlayback ?? false;
+  if (typeof preparedPlayback !== "boolean") {
+    throw new TypeError("preparedPlayback must be a boolean");
+  }
   return {
     contextId: descriptor.contextId,
     callbackSessionId: descriptor.callbackSessionId ?? null,
     continuationGeneration: descriptor.continuationGeneration ?? null,
+    preparedPlayback,
   };
 }
 

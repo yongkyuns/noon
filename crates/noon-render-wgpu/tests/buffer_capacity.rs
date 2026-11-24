@@ -13,7 +13,7 @@ fn analytic_instance_buffer_grows_geometrically_only_at_capacity_boundary() {
     let mut preparer = FramePreparer::new();
 
     let initial = circle_frame(1_000);
-    let prepared = preparer.prepare(&initial);
+    let prepared = preparer.prepare(&initial).unwrap();
     let first = renderer.upload(&device, &queue, &prepared);
     assert_eq!(first.buffer_reallocations, 1);
 
@@ -25,18 +25,20 @@ fn analytic_instance_buffer_grows_geometrically_only_at_capacity_boundary() {
     assert!(max_instances_without_growth >= initial.objects.len());
 
     let at_capacity = circle_frame(max_instances_without_growth);
-    let prepared = preparer.prepare(&at_capacity);
+    let prepared = preparer.prepare(&at_capacity).unwrap();
     let within = renderer.upload(&device, &queue, &prepared);
     assert_eq!(within.buffer_reallocations, 0);
     assert_eq!(renderer.circle_capacity_bytes(), initial_capacity);
 
     let crossing = circle_frame(max_instances_without_growth + 1);
-    let prepared = preparer.prepare(&crossing);
+    let prepared = preparer.prepare(&crossing).unwrap();
     let growth = renderer.upload(&device, &queue, &prepared);
     assert_eq!(growth.buffer_reallocations, 1);
     assert_eq!(renderer.circle_capacity_bytes(), initial_capacity * 2);
 
-    let prepared = preparer.prepare_incremental(&crossing, &FrameChanges::default());
+    let prepared = preparer
+        .prepare_incremental(&crossing, &FrameChanges::default())
+        .unwrap();
     let steady = renderer.upload(&device, &queue, &prepared);
     assert_eq!(steady.buffer_reallocations, 0);
     assert_eq!(steady.bytes_uploaded, 0);

@@ -222,7 +222,7 @@ fn drag_is_scoped_to_target_commits_once_and_is_undoable() {
         SemanticVec3::new(3.0, 0.0, 0.0)
     );
     let undo = receipt.undo.unwrap();
-    undo.undo(&mut session, &mut store).unwrap();
+    undo.undo_in_session(&mut session, &mut store).unwrap();
     assert_eq!(translation(&session, target), Vec2::ZERO);
 }
 
@@ -254,7 +254,8 @@ fn same_target_opacity_animation_continues_during_translation_drag() {
         .insert_semantic_parallel_animation(&[opacity_animation], AnimationOptions::new())
         .unwrap();
     let mut session =
-        ExecutionSession::from_semantic_root_with_animation_root(&store, root, animation).unwrap();
+        ExecutionSession::from_semantic_root_with_animation_root_at(&store, root, animation, 0.0)
+            .unwrap();
     session.configure_native_pointer_input(POINTER, 1).unwrap();
     session.set_translation_drag_targets([target]).unwrap();
     session.take_frame_changes();
@@ -511,7 +512,7 @@ fn undo_rejects_a_later_authored_revision() {
         .apply_semantic_transaction(&mut store, later)
         .unwrap();
     assert_eq!(
-        undo.undo(&mut session, &mut store),
+        undo.undo_in_session(&mut session, &mut store),
         Err(TranslationDragError::StaleUndo)
     );
     assert_eq!(translation(&session, target), Vec2::new(2.0, 0.0));
@@ -573,7 +574,7 @@ fn release_uses_final_pointer_position_and_preserves_authored_z() {
     receipt
         .undo
         .unwrap()
-        .undo(&mut session, &mut store)
+        .undo_in_session(&mut session, &mut store)
         .unwrap();
     assert_eq!(
         store
@@ -630,7 +631,7 @@ fn active_drag_blocks_undo_mapping_changes_compaction_and_callback_cancellation(
     .unwrap();
     let before = session.publication_context();
     assert_eq!(
-        undo.undo(&mut session, &mut store),
+        undo.undo_in_session(&mut session, &mut store),
         Err(TranslationDragError::DriverConflict)
     );
     assert!(session.configure_native_pointer_input(POINTER, 2).is_err());
@@ -962,7 +963,7 @@ fn unrelated_animation_and_drag_resolve_in_either_order_or_cancel() {
             receipt
                 .undo
                 .unwrap()
-                .undo(&mut session, &mut store)
+                .undo_in_session(&mut session, &mut store)
                 .unwrap();
             assert_eq!(translation(&session, target), Vec2::ZERO);
             assert_eq!(translation(&session, unrelated), Vec2::new(12.0, 0.0));
@@ -1043,7 +1044,7 @@ fn sustained_unrelated_animation_and_drag_cycles_restore_a_quiescent_baseline() 
         .unwrap()
         .undo
         .unwrap();
-        undo.undo(&mut session, &mut store).unwrap();
+        undo.undo_in_session(&mut session, &mut store).unwrap();
         assert_eq!(translation(&session, target), Vec2::ZERO);
         assert_eq!(
             store

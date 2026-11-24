@@ -10,27 +10,27 @@ from _manim_semantic_handles import (
     _attach_shared_handle,
     _family_wrapper_key,
     _handle_for,
-    _live_constructor_context,
+    _path_authoring_context,
     _is_missing_handle,
     _shared_handle_key as _handle_key,
 )
 
 try:
-    from js import noonIsAuthoringFamilyHandle as _is_family_handle
+    from _noon_host import noonIsAuthoringFamilyHandle as _is_family_handle
 except ImportError:
     _is_family_handle = None
 
 try:
-    from js import noonCreateAuthoringTableHandle as _create_table
-    from js import noonCreateAuthoringMathTableHandle as _create_math_table
-    from js import noonCreateAuthoringIntegerTableHandle as _create_integer_table
-    from js import noonCreateAuthoringDecimalTableHandle as _create_decimal_table
-    from js import noonCreateAuthoringMobjectTableHandle as _create_mobject_table
-    from js import noonCreateAuthoringTableWithLabelsHandle as _create_table_with_labels
-    from js import noonHighlightTableCell as _highlight_table
-    from js import noonGetHighlightedTableCell as _get_highlighted_table
-    from js import noonTableFromFamily as _table_from_family
-    from js import noonTableCell as _table_cell
+    from _noon_host import noonCreateAuthoringTableHandle as _create_table
+    from _noon_host import noonCreateAuthoringMathTableHandle as _create_math_table
+    from _noon_host import noonCreateAuthoringIntegerTableHandle as _create_integer_table
+    from _noon_host import noonCreateAuthoringDecimalTableHandle as _create_decimal_table
+    from _noon_host import noonCreateAuthoringMobjectTableHandle as _create_mobject_table
+    from _noon_host import noonCreateAuthoringTableWithLabelsHandle as _create_table_with_labels
+    from _noon_host import noonHighlightTableCell as _highlight_table
+    from _noon_host import noonGetHighlightedTableCell as _get_highlighted_table
+    from _noon_host import noonTableFromFamily as _table_from_family
+    from _noon_host import noonTableCell as _table_cell
 except ImportError:
     _table_from_family = None
     _create_table = _create_math_table = _create_integer_table = None
@@ -232,7 +232,7 @@ class Table(_compat.VGroup):
             column_label_mobjects = list(column_label_mobjects)
         if _create_table is None:
             raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
-        context = _live_constructor_context("Table", allow_unstarted=True)
+        context = _path_authoring_context()
         if row_label_mobjects is not None or column_label_mobjects is not None or top_left_entry is not None:
             if _create_table_with_labels is None:
                 raise RuntimeError("Table labels require Noon’s shared Rust authoring runtime")
@@ -439,7 +439,7 @@ class Table(_compat.VGroup):
             raise NotImplementedError("cell styling is owned by the Rust table API")
         if _table_cell is None:
             raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
-        context = _live_constructor_context("Table.get_cell", allow_unstarted=True)
+        context = _path_authoring_context(self)
         selection, column = _cell_position(self._table_handle, pos)
         return self._rectangle_wrapper(engine_call(_table_cell, context, selection, column))
 
@@ -450,7 +450,7 @@ class Table(_compat.VGroup):
         color = _compat._as_color("color", color)
         if _get_highlighted_table is None:
             raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
-        context = _live_constructor_context("Table.get_highlighted_cell", allow_unstarted=True)
+        context = _path_authoring_context(self)
         selection, column = _cell_position(self._table_handle, pos)
         return self._rectangle_wrapper(engine_call(
             _get_highlighted_table,
@@ -466,7 +466,7 @@ class Table(_compat.VGroup):
         if _highlight_table is None:
             raise RuntimeError("Table requires Noon’s shared Rust authoring runtime")
         color = _compat._as_color("color", color)
-        context = _live_constructor_context("Table.add_highlighted_cell", allow_unstarted=True)
+        context = _path_authoring_context(self)
         selection, column = _cell_position(self._table_handle, pos)
         handle = engine_call(
             _highlight_table,
@@ -485,7 +485,7 @@ class MathTable(Table):
             return
         if _create_math_table is None:
             raise RuntimeError("MathTable requires Noon’s shared Rust authoring runtime")
-        context = _live_constructor_context("MathTable", allow_unstarted=True)
+        context = _path_authoring_context()
         self._initialize_table(engine_call(_create_math_table, _rows(table, str), *_options(kwargs), context), context)
 
 
@@ -495,7 +495,7 @@ class IntegerTable(Table):
             return
         if _create_integer_table is None:
             raise RuntimeError("IntegerTable requires Noon’s shared Rust authoring runtime")
-        context = _live_constructor_context("IntegerTable", allow_unstarted=True)
+        context = _path_authoring_context()
         self._initialize_table(engine_call(_create_integer_table, _rows(table, float), *_options(kwargs), context), context)
 
 
@@ -512,7 +512,7 @@ class DecimalTable(Table):
             return
         if _create_decimal_table is None:
             raise RuntimeError("DecimalTable requires Noon’s shared Rust authoring runtime")
-        context = _live_constructor_context("DecimalTable", allow_unstarted=True)
+        context = _path_authoring_context()
         self._initialize_table(engine_call(
             _create_decimal_table,
             _rows(table, float),
@@ -558,7 +558,7 @@ class MobjectTable(Table):
         top_left_entry_handle = (
             self._label_handle(top_left_entry) if top_left_entry is not None else None
         )
-        context = _live_constructor_context("MobjectTable", allow_unstarted=True)
+        context = _path_authoring_context()
         self._initialize_table(
             engine_call(
                 _create_mobject_table,

@@ -45,6 +45,7 @@ mod vector_field;
 mod vector_field_defaults;
 
 pub use coordinates::*;
+pub use flatten::{open_path_stroke_hit, point_near_stroke_segment};
 pub use geometry_proportion::*;
 pub use isoline::*;
 pub use morph::*;

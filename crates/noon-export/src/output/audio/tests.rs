@@ -1,4 +1,5 @@
 use super::*;
+use noon::integration::scene_execution;
 use noon::integration::{ExportEndReason, FrameRate};
 use noon::{AudioClipOptions, AudioResource, Scene};
 use std::path::PathBuf;
@@ -41,7 +42,7 @@ fn source() -> ExecutionSession {
             },
         )
         .unwrap();
-    scene.execution_session().unwrap()
+    scene_execution::lower(&scene).unwrap()
 }
 
 fn summary(frames: u64, rate: FrameRate, start: f64, end: f64) -> ExportFrameSummary {
@@ -138,7 +139,7 @@ fn staged_blocks_preserve_absolute_scene_phase_and_runtime_publication() {
             },
         )
         .unwrap();
-    let session = scene.execution_session().unwrap();
+    let session = scene_execution::lower(&scene).unwrap();
     let publication = session.publication_context();
     let soundtrack = Soundtrack::new(
         &session,

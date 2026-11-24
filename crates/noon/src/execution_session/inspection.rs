@@ -4,18 +4,100 @@
 //! here. A caller presents the returned shared view and retains its snapshot only
 //! after successful presentation, exactly as for ordinary pointer frames.
 
-use noon_core::{Camera2DState, Vec2};
+use std::collections::BTreeMap;
+
+use noon_core::{
+    Camera2DState, NativePointerId, ObjectId, RateFunction, SemanticClickIndicate, SemanticNodeId,
+    SemanticVec3, Vec2,
+};
 
 use super::{
     ExecutionSession, ExecutionSessionInputError, PointerFrameError, PointerFrameSnapshot,
     PointerFrameView,
 };
-use crate::{InspectionView2D, InspectionViewError};
+use crate::{
+    inspection_view::InspectionView3D, InspectionView2D, InspectionViewError,
+    SpatialInspectionMotion,
+};
 
-#[derive(Clone, Copy, Debug, Default)]
+mod gesture;
+mod picking;
+
+pub use gesture::{SpatialPointerInput, SpatialPointerPhase};
+pub use picking::{PlanarPickCache, PlanarPickFrame, SpatialPickCache, SpatialPickFrame};
+
+use gesture::{SpatialGesture, SpatialGestures};
+
+#[derive(Clone, Copy, Debug)]
+enum InspectionStart {
+    Planar(InspectionView2D),
+    Spatial(InspectionView3D),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InspectionReset {
+    start: InspectionStart,
+    origin: Option<f64>,
+}
+
+pub use noon_runtime::ViewerIndication;
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ViewerIndicateTarget {
+    Family(SemanticNodeId),
+    Object(ObjectId),
+}
+
+#[derive(Debug)]
+struct ViewerIndicate {
+    binding: SemanticClickIndicate,
+    origin: Option<f64>,
+    progress: f32,
+    phase: f64,
+    start_phase: f64,
+}
+
+pub enum PlanarViewerPointer {
+    Press { surface: Vec2, scene: Vec2 },
+    Move(Vec2),
+    Release(Vec2),
+    Cancel,
+}
+
+#[derive(Debug)]
+struct PlanarPress {
+    pointer: NativePointerId,
+    surface: Vec2,
+    target: Option<(ObjectId, Option<SemanticNodeId>)>,
+}
+
+#[derive(Debug, Default)]
 pub(super) struct SessionInspectionView {
     adjustment: InspectionView2D,
+    spatial: InspectionView3D,
+    reset: Option<InspectionReset>,
+    spatial_gestures: SpatialGestures,
+    planar_press: Option<PlanarPress>,
+    indications: BTreeMap<ViewerIndicateTarget, ViewerIndicate>,
     revision: u64,
+}
+
+impl SessionInspectionView {
+    pub(super) fn without_gestures(&self) -> Self {
+        Self {
+            adjustment: self.adjustment,
+            spatial: self.spatial,
+            reset: self.reset,
+            revision: self.revision,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn clear_indications(&mut self) {
+        self.indications.clear();
+        self.planar_press = None;
+        self.spatial_gestures = SpatialGestures::default();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -25,6 +107,7 @@ pub enum InspectionNavigationError {
     Composition(InspectionViewError),
     RevisionExhausted,
     InvalidScroll,
+    InvalidSpatialMotion,
     CameraChangedDuringCancellation,
 }
 
@@ -34,6 +117,9 @@ impl std::fmt::Display for InspectionNavigationError {
             Self::Frame(error) => error.fmt(f),
             Self::Input(error) => error.fmt(f),
             Self::Composition(error) => error.fmt(f),
+            Self::InvalidSpatialMotion => {
+                f.write_str("inspection motion is outside the spatial camera domain")
+            }
             Self::InvalidScroll => f.write_str("inspection scroll delta must be finite"),
             Self::RevisionExhausted => f.write_str("inspection view revision is exhausted"),
             Self::CameraChangedDuringCancellation => f.write_str(
@@ -55,6 +141,16 @@ impl std::error::Error for InspectionNavigationError {
 }
 
 impl ExecutionSession {
+    #[cfg(feature = "prepared-prefix")]
+    pub(crate) fn inherit_prepared_inspection(&mut self, reader: &Self) {
+        // The runtime incarnation still changes. This copies only the viewer's
+        // adjustment; no old frame/input receipt or pointer contact is rebound.
+        self.inspection = reader.inspection.without_gestures();
+        if reader.default_viewer_selection() {
+            self.enable_default_viewer_selection();
+        }
+    }
+
     /// Navigation revision scoped to this runtime incarnation. It never resets
     /// when zoom returns to its original value; old displayed snapshots stay stale.
     pub const fn inspection_view_revision(&self) -> u64 {
@@ -72,6 +168,378 @@ impl ExecutionSession {
                     .unwrap_or_default(),
             )
             .map_err(PointerFrameError::Inspection)
+    }
+
+    /// Resolve the viewer adjustment for the existing spatial camera row. An
+    /// identity adjustment leaves the authored renderer publication untouched.
+    pub fn inspection_spatial_camera(
+        &self,
+    ) -> Result<Option<(usize, noon_core::SemanticCamera3D)>, InspectionNavigationError> {
+        self.resolve_spatial_inspection(self.inspection.spatial)
+    }
+
+    fn resolve_spatial_inspection(
+        &self,
+        adjustment: InspectionView3D,
+    ) -> Result<Option<(usize, noon_core::SemanticCamera3D)>, InspectionNavigationError> {
+        if adjustment == InspectionView3D::default() {
+            return Ok(None);
+        }
+        let camera = self
+            .camera_3d()
+            .map_err(PointerFrameError::Camera)
+            .map_err(InspectionNavigationError::Frame)?;
+        let Some((camera, index)) = camera.zip(
+            self.camera_object
+                .and_then(|id| self.runtime.frame_index_for_object(id)),
+        ) else {
+            return Ok(None);
+        };
+        let focal_distance = self.frame().objects[index]
+            .camera_profile()
+            .map(|(profile, ..)| profile.focal_distance);
+        adjustment
+            .resolve(camera, focal_distance)
+            .map(|view| Some((index, view)))
+            .ok_or(InspectionNavigationError::InvalidSpatialMotion)
+    }
+
+    pub fn cancel_spatial_pointer_gestures(&mut self) {
+        self.inspection.spatial_gestures = SpatialGestures::default();
+    }
+
+    pub fn submit_spatial_pointer(
+        &mut self,
+        input: SpatialPointerInput,
+        displayed: Option<&SpatialPickFrame>,
+        aspect: f64,
+    ) -> Result<bool, InspectionNavigationError> {
+        match self.inspection.spatial_gestures.submit(input, || {
+            displayed.and_then(|frame| frame.pick_group(input.position, aspect))
+        }) {
+            SpatialGesture::None => Ok(false),
+            SpatialGesture::Motion(motion) => self.move_spatial_inspection(motion),
+            SpatialGesture::Click(target) => Ok(self.indicate_displayed_target(target)),
+            SpatialGesture::Reset => self.move_spatial_inspection(SpatialInspectionMotion {
+                reset: true,
+                ..SpatialInspectionMotion::default()
+            }),
+        }
+    }
+
+    /// Viewer-only contact. Picking uses the picture observed at pointer down.
+    /// Release confirms the physical click without requiring the moving object
+    /// to stay underneath the cursor. Authored input never enters this lane.
+    pub fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        kind: PlanarViewerPointer,
+        displayed: Option<&PlanarPickFrame>,
+    ) {
+        use PlanarViewerPointer::{Cancel, Move, Press, Release};
+        let pending = &mut self.inspection.planar_press;
+        if !matches!(kind, Press { .. })
+            && pending
+                .as_ref()
+                .is_some_and(|press| press.pointer != pointer)
+        {
+            return;
+        }
+        match kind {
+            Press { surface, scene } if pending.is_none() => {
+                *pending = Some(PlanarPress {
+                    pointer,
+                    surface,
+                    target: displayed.and_then(|frame| frame.pick(scene)),
+                });
+            }
+            Move(surface)
+                if pending.as_ref().is_some_and(|press| {
+                    press.pointer == pointer && within_click_slop(press.surface, surface)
+                }) => {}
+            Release(surface) => {
+                let target = pending
+                    .take()
+                    .filter(|press| {
+                        press.pointer == pointer && within_click_slop(press.surface, surface)
+                    })
+                    .and_then(|press| press.target);
+                self.indicate_displayed_target(target);
+            }
+            Press { .. } | Move(_) | Cancel => *pending = None,
+        }
+    }
+
+    fn indicate_displayed_target(
+        &mut self,
+        target: Option<(ObjectId, Option<SemanticNodeId>)>,
+    ) -> bool {
+        let Some((object, binding)) = target
+            .filter(|&(object, group)| self.runtime.viewer_group(object) == group)
+            .map(|(object, _)| object)
+            .filter(|&object| {
+                self.runtime
+                    .frame_index_for_object(object)
+                    .is_some_and(|index| super::picking::viewer_row_visible(self.frame(), index))
+            })
+            .and_then(|object| self.interaction_semantic_object_id(object))
+            .and_then(|node| self.prepare_viewer_indicate(node))
+        else {
+            return false;
+        };
+        self.start_viewer_indicate(object, binding)
+    }
+
+    pub fn cancel_planar_viewer_pointer(&mut self) {
+        self.inspection.planar_press = None;
+    }
+
+    pub(super) fn start_viewer_indicate(
+        &mut self,
+        object: ObjectId,
+        binding: SemanticClickIndicate,
+    ) -> bool {
+        let target = self.runtime.viewer_group(object).map_or(
+            ViewerIndicateTarget::Object(object),
+            ViewerIndicateTarget::Family,
+        );
+        let effect = self
+            .inspection
+            .indications
+            .entry(target)
+            .or_insert(ViewerIndicate {
+                binding,
+                origin: None,
+                progress: 0.0,
+                phase: 0.0,
+                start_phase: 0.0,
+            });
+        // Resume from the rising phase with the same strength. A second click
+        // during the return can rise again without a jump to the authored style.
+        effect.start_phase = effect.phase.min(1.0 - effect.phase);
+        effect.origin = None;
+        true
+    }
+
+    /// Sample restoring feedback against the current effective poses. Group
+    /// members share one clock and a pivot from their current drawn bounds.
+    pub fn viewer_indications(&self) -> Vec<ViewerIndication> {
+        let mut output = Vec::new();
+        for (&target, effect) in &self.inspection.indications {
+            if effect.progress <= 0.0 {
+                continue;
+            }
+            let indication = |object, center| ViewerIndication {
+                object,
+                scale: 1.0 + (effect.binding.scale_factor() - 1.0) * f64::from(effect.progress),
+                color: effect.binding.color(),
+                strength: effect.progress,
+                center,
+            };
+            match target {
+                ViewerIndicateTarget::Object(object) => output.push(indication(object, None)),
+                ViewerIndicateTarget::Family(group) => {
+                    let Some(members) = self.runtime.viewer_group_members(group) else {
+                        continue;
+                    };
+                    let visible = || {
+                        members.iter().filter_map(|&object| {
+                            let index = self.runtime.frame_index_for_object(object)?;
+                            super::picking::viewer_row_visible(self.frame(), index)
+                                .then_some((object, index))
+                        })
+                    };
+                    let mut planar = None;
+                    let mut spatial = None;
+                    for (object, index) in visible() {
+                        if let Some(world) = self.frame().objects[index].world_transform() {
+                            let (min, max) = self.viewer_spatial_bounds(index, world);
+                            extend_indicate_bounds(&mut spatial, min, max);
+                        } else if let Some(bounds) = self.runtime.effective_object_bounds(object) {
+                            let point =
+                                |p: Vec2| SemanticVec3::new(f64::from(p.x), f64::from(p.y), 0.0);
+                            extend_indicate_bounds(
+                                &mut planar,
+                                point(bounds.min),
+                                point(bounds.max),
+                            );
+                        }
+                    }
+                    let center = |bounds: Option<(SemanticVec3, SemanticVec3)>| {
+                        bounds.map(|(min, max)| {
+                            SemanticVec3::new(
+                                (min.x * 0.5) + (max.x * 0.5),
+                                (min.y * 0.5) + (max.y * 0.5),
+                                (min.z * 0.5) + (max.z * 0.5),
+                            )
+                        })
+                    };
+                    let planar = center(planar);
+                    let spatial = center(spatial);
+                    for (object, index) in visible() {
+                        let center = if self.frame().objects[index].world_transform().is_some() {
+                            spatial
+                        } else {
+                            planar
+                        };
+                        output.push(indication(object, center));
+                    }
+                }
+            }
+        }
+        // A topology change may join a previously pulsing individual to a
+        // family already in flight. The shared family sample wins that row.
+        output.sort_by_key(|effect| effect.object);
+        output.dedup_by_key(|effect| effect.object);
+        output
+    }
+
+    fn viewer_spatial_bounds(
+        &self,
+        index: usize,
+        world: noon_core::SemanticWorldTransform3D,
+    ) -> (SemanticVec3, SemanticVec3) {
+        use noon_core::{GeometryRef, GeometryResource, GeometryResourceLookup};
+        let mesh_bounds = self.frame().objects[index]
+            .content
+            .geometry()
+            .and_then(|geometry| {
+                let GeometryRef::External(id) = geometry else {
+                    return None;
+                };
+                let resources = self.runtime.geometry_resources();
+                let GeometryResource::Mesh(mesh) = resources.get(resources.current_handle(*id)?)?
+                else {
+                    return None;
+                };
+                picking::mesh_world_bounds(mesh, world)
+            });
+        mesh_bounds.map_or((world.translation, world.translation), |bounds| {
+            (bounds.min, bounds.max)
+        })
+    }
+
+    /// Schedule view and click animations even when the authored clock is paused.
+    pub fn viewer_inspection_active(&self) -> bool {
+        self.inspection.reset.is_some() || !self.inspection.indications.is_empty()
+    }
+
+    pub fn advance_viewer_inspection(
+        &mut self,
+        wall_time_seconds: f64,
+    ) -> Result<(), InspectionNavigationError> {
+        if !self.viewer_inspection_active() {
+            return Ok(());
+        }
+        if !wall_time_seconds.is_finite() || wall_time_seconds < 0.0 {
+            return Err(InspectionNavigationError::InvalidSpatialMotion);
+        }
+        let runtime = &self.runtime;
+        self.inspection.indications.retain(|&target, effect| {
+            let present = match target {
+                ViewerIndicateTarget::Object(object) => runtime.effective_object(object).is_some(),
+                ViewerIndicateTarget::Family(group) => {
+                    runtime.viewer_group_members(group).is_some()
+                }
+            };
+            if !present {
+                return false;
+            }
+            let origin = *effect.origin.get_or_insert(wall_time_seconds);
+            let elapsed = (wall_time_seconds - origin).max(0.0);
+            effect.phase = (effect.start_phase + elapsed / effect.binding.run_time()).min(1.0);
+            effect.progress = RateFunction::ThereAndBack.evaluate(effect.phase as f32);
+            effect.phase < 1.0
+        });
+        let Some(mut reset) = self.inspection.reset else {
+            return Ok(());
+        };
+        let origin = *reset.origin.get_or_insert(wall_time_seconds);
+        let progress = ((wall_time_seconds - origin) / 0.35).clamp(0.0, 1.0);
+        let eased = progress * progress * (3.0 - 2.0 * progress);
+        match reset.start {
+            InspectionStart::Planar(start) => {
+                self.commit_inspection_view(start.returning_to_authored(eased))?;
+            }
+            InspectionStart::Spatial(start) => {
+                let next = start
+                    .returning_to_authored(eased)
+                    .ok_or(InspectionNavigationError::InvalidSpatialMotion)?;
+                self.resolve_spatial_inspection(next)?;
+                self.inspection.spatial = next;
+            }
+        }
+        self.inspection.reset = (progress < 1.0).then_some(reset);
+        Ok(())
+    }
+
+    /// Apply relative spatial navigation. This command has no picking anchor,
+    /// so successive updates can compose while a previous view is presenting.
+    /// The planar HUD/pointer mapping and authored publication stay unchanged.
+    pub fn move_spatial_inspection(
+        &mut self,
+        motion: SpatialInspectionMotion,
+    ) -> Result<bool, InspectionNavigationError> {
+        let spatial = self
+            .camera_3d()
+            .map_err(PointerFrameError::Camera)
+            .map_err(InspectionNavigationError::Frame)?
+            .is_some();
+        if motion.reset {
+            let start = if spatial && self.inspection.spatial != InspectionView3D::default() {
+                InspectionStart::Spatial(self.inspection.spatial)
+            } else if !spatial && self.inspection.adjustment != InspectionView2D::default() {
+                InspectionStart::Planar(self.inspection.adjustment)
+            } else {
+                return Ok(false);
+            };
+            self.inspection.reset = Some(InspectionReset {
+                start,
+                origin: None,
+            });
+            return Ok(true);
+        }
+        if !spatial {
+            if !motion
+                .pan
+                .into_iter()
+                .chain([motion.zoom])
+                .all(f64::is_finite)
+            {
+                return Err(InspectionNavigationError::InvalidSpatialMotion);
+            }
+            let mut next = self.inspection.adjustment.panned(motion.pan);
+            if motion.zoom != 0.0 {
+                let camera = self
+                    .camera()
+                    .map_err(PointerFrameError::Camera)
+                    .map_err(InspectionNavigationError::Frame)?;
+                let center = next
+                    .resolve(camera)
+                    .map_err(InspectionNavigationError::Composition)?
+                    .center;
+                next = next
+                    .zoom_about(camera, center, motion.zoom.clamp(-16.0, 16.0).exp())
+                    .map_err(InspectionNavigationError::Composition)?;
+            }
+            let changed = self.commit_inspection_view(next)?;
+            if changed {
+                self.inspection.reset = None;
+            }
+            return Ok(changed);
+        }
+        let next = self
+            .inspection
+            .spatial
+            .moved(motion)
+            .ok_or(InspectionNavigationError::InvalidSpatialMotion)?;
+        if next == self.inspection.spatial {
+            return Ok(false);
+        }
+        self.resolve_spatial_inspection(next)?;
+        self.inspection.spatial = next;
+        self.inspection.reset = None;
+        Ok(true)
     }
 
     /// Resolve one view for rendering, coordinate mapping and frame association.
@@ -122,7 +590,11 @@ impl ExecutionSession {
             .adjustment
             .zoom_about(camera, anchor, factor)
             .map_err(InspectionNavigationError::Composition)?;
-        self.commit_inspection_view(next)
+        let changed = self.commit_inspection_view(next)?;
+        if changed {
+            self.inspection.reset = None;
+        }
+        Ok(changed)
     }
 
     /// Scroll by normalized logical pixels (positive means zoom out).
@@ -155,7 +627,9 @@ impl ExecutionSession {
     pub fn reset_inspection_view(&mut self) -> Result<bool, InspectionNavigationError> {
         self.ensure_direct_input_ingress_available()
             .map_err(InspectionNavigationError::Input)?;
-        self.commit_inspection_view(InspectionView2D::default())
+        let changed = self.commit_inspection_view(InspectionView2D::default())?;
+        self.inspection.reset = None;
+        Ok(changed)
     }
 
     fn commit_inspection_view(
@@ -211,13 +685,29 @@ impl ExecutionSession {
         // All fallible arithmetic, native evaluation and publication precedes
         // this bounded commit. Neither identity allocator nor semantic state changes.
         self.retire_pointer_view_binding();
-        self.inspection = SessionInspectionView {
-            adjustment: next,
-            revision,
-        };
+        self.inspection.adjustment = next;
+        self.inspection.revision = revision;
+        self.cancel_planar_viewer_pointer();
         Ok(true)
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+fn within_click_slop(a: Vec2, b: Vec2) -> bool {
+    (f64::from(a.x) - f64::from(b.x)).hypot(f64::from(a.y) - f64::from(b.y)) <= 4.0
+}
+
+fn extend_indicate_bounds(
+    bounds: &mut Option<(SemanticVec3, SemanticVec3)>,
+    min: SemanticVec3,
+    max: SemanticVec3,
+) {
+    *bounds = Some(bounds.map_or((min, max), |(lower, upper)| {
+        (
+            SemanticVec3::new(lower.x.min(min.x), lower.y.min(min.y), lower.z.min(min.z)),
+            SemanticVec3::new(upper.x.max(max.x), upper.y.max(max.y), upper.z.max(max.z)),
+        )
+    }));
+}

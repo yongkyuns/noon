@@ -101,30 +101,26 @@ impl MobjectFamily {
 impl Scene {
     /// Parse static SVG with Manim-style inherited parser fallback paint.
     pub fn svg_from_str_with_svg_default(
-        &self,
+        &mut self,
         source: &str,
         svg_default: SvgDefaultStyle,
     ) -> Result<MobjectFamily, SvgAuthoringError> {
-        MobjectFamily::from_svg_str_with_svg_default(
-            Rc::clone(self.integration_store()),
+        self.svg_from_str_with_options_and_svg_default(
             source,
+            SvgImportOptions::default(),
             svg_default,
         )
     }
 
     /// Parse static SVG with explicit placement and inherited parser fallback paint.
     pub fn svg_from_str_with_options_and_svg_default(
-        &self,
+        &mut self,
         source: &str,
         options: SvgImportOptions,
         svg_default: SvgDefaultStyle,
     ) -> Result<MobjectFamily, SvgAuthoringError> {
-        MobjectFamily::from_svg_str_with_options_and_svg_default(
-            Rc::clone(self.integration_store()),
-            source,
-            options,
-            svg_default,
-        )
+        let wrapped = source_with_svg_default(source, svg_default)?;
+        self.svg_from_str_with_options(&wrapped, options)
     }
 }
 
@@ -299,7 +295,7 @@ mod tests {
 
     #[test]
     fn svg_default_supplies_missing_leaf_paint() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let source = r##"<svg xmlns="http://www.w3.org/2000/svg">
             <path d="M0 0 L10 0 L10 10 Z"/>
         </svg>"##;
@@ -334,7 +330,7 @@ mod tests {
 
     #[test]
     fn root_and_leaf_presentation_override_svg_default() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let source = r##"<svg xmlns="http://www.w3.org/2000/svg" fill="#112233" stroke="#445566" stroke-width="4">
             <rect x="0" y="0" width="5" height="5"/>
             <rect x="5" y="0" width="5" height="5" fill="#778899" stroke="#AABBCC" stroke-width="6"/>
@@ -374,7 +370,7 @@ mod tests {
 
     #[test]
     fn specific_svg_defaults_override_generic_color_and_opacity() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let source = r##"<svg xmlns="http://www.w3.org/2000/svg">
             <path d="M0 0 L10 0 L10 10 Z"/>
         </svg>"##;
@@ -408,7 +404,7 @@ mod tests {
 
     #[test]
     fn zero_svg_default_stroke_width_retains_stroke_only_path() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let source = r##"<svg xmlns="http://www.w3.org/2000/svg">
             <path d="M0 0 L10 0" fill="none"/>
         </svg>"##;
@@ -430,7 +426,7 @@ mod tests {
 
     #[test]
     fn absent_svg_default_stroke_width_uses_svg_initial_width() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let source = r##"<svg xmlns="http://www.w3.org/2000/svg">
             <path d="M0 0 L10 0" fill="none" stroke="#FFFFFF"/>
         </svg>"##;
@@ -463,7 +459,7 @@ mod tests {
 
     #[test]
     fn invalid_svg_default_fails_before_publication() {
-        let scene = Scene::new();
+        let mut scene = Scene::new();
         let before = scene.revision();
         let source = r##"<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 L1 0"/></svg>"##;
         assert!(matches!(

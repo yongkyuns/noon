@@ -161,32 +161,49 @@ fn rejected_live_attachment_preserves_both_scene_and_runtime() {
     let mut dot = scene.circle(0.08).unwrap();
     dot.set_scale(0.0, 1.0).unwrap();
     scene.add(&dot).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    let before = scene.revision();
-    let nodes_before = scene.integration_store().borrow().len();
-    let publication = session.publication_context();
+    let mut session = scene.into_execution().unwrap();
+    let before = session.scene().revision();
+    let nodes_before = session.scene().integration_store().borrow().len();
+    let publication = session.session().publication_context();
     {
-        let mut live = scene.live(&mut session);
-        assert!(live.set_glow(&dot, EffectUpdate::default()).is_err());
+        assert!(session
+            .scene_mut()
+            .set_glow(&dot, EffectUpdate::default())
+            .is_err());
         assert_eq!(
-            live.effective(&dot).unwrap().transform.translation,
+            session
+                .scene()
+                .effective(&dot)
+                .unwrap()
+                .transform
+                .translation,
             Vec2::ZERO
         );
     }
-    assert_eq!(scene.revision(), before);
-    assert_eq!(session.publication_context(), publication);
-    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
+    assert_eq!(session.scene().revision(), before);
+    assert_eq!(session.session().publication_context(), publication);
+    assert_eq!(
+        session.scene().integration_store().borrow().len(),
+        nodes_before
+    );
     {
-        let mut live = scene.live(&mut session);
-        live.set_translation(&dot, 1.0, 0.0).unwrap();
+        session.scene_mut().set_translation(&dot, 1.0, 0.0).unwrap();
         assert_eq!(
-            live.effective(&dot).unwrap().transform.translation,
+            session
+                .scene()
+                .effective(&dot)
+                .unwrap()
+                .transform
+                .translation,
             Vec2::new(1.0, 0.0)
         );
     }
     assert!(dot.get_effect("glow").is_err());
-    assert_eq!(scene.integration_store().borrow().len(), nodes_before);
-    assert_ne!(scene.revision(), before); // only the successful ordinary edit
+    assert_eq!(
+        session.scene().integration_store().borrow().len(),
+        nodes_before
+    );
+    assert_ne!(session.scene().revision(), before); // only the successful ordinary edit
 }
 
 #[test]
@@ -220,21 +237,21 @@ fn remove_absent_glow_is_an_idempotent_authoring_operation() {
 }
 
 #[test]
-fn state_only_replacement_fails_before_losing_attachment_correspondence() {
+fn state_replacement_retires_an_old_binding_when_the_target_has_no_effects() {
     let mut scene = Scene::new();
     let mut source = scene.circle(0.08).unwrap();
     let target = scene.circle(1.0).unwrap();
     source.set_glow(EffectUpdate::default()).unwrap();
-    let before = source.state().unwrap();
-    let revision = scene.revision();
-    let result = source.become_handle(&target, crate::ManimBecomeOptions::default());
-    assert!(matches!(
-        result,
-        Err(AuthoringError::EffectStateReplacementUnavailable)
-    ));
-    assert_eq!(source.state().unwrap(), before);
-    assert_eq!(scene.revision(), revision);
-    assert!(source.get_effect("glow").is_ok());
+    let old = source.get_effect("glow").unwrap();
+    source
+        .become_handle(&target, crate::ManimBecomeOptions::default())
+        .unwrap();
+    assert_eq!(
+        source.state().unwrap().content,
+        target.state().unwrap().content
+    );
+    assert!(source.get_effect("glow").is_err());
+    assert!(old.authored_definition().is_err());
 }
 
 mod contract;

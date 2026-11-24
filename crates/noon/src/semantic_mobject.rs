@@ -29,8 +29,7 @@ pub(crate) use style::{
     edit_fade_to, edit_fade_to_occurrences, edit_fill, edit_fill_color, edit_fill_opacity,
     edit_manim_opacity, edit_object_opacity, edit_stroke, edit_stroke_color, edit_stroke_opacity,
     edit_stroke_width, fade_factor, manim_color_from_effective, opaque_paint_color,
-    parse_stroke_cap, prepare_fill_gradient, prepare_fill_paint_value, validate_fade_to_inputs,
-    PaintStyleEdit,
+    parse_stroke_cap, prepare_fill_paint_value, validate_fade_to_inputs, PaintStyleEdit,
 };
 use style::{parse_stroke_join, parse_stroke_width_mode};
 
@@ -656,9 +655,8 @@ impl Mobject {
     /// Raw shared arena access for explicit integration, not live mutation.
     ///
     /// External edits can invalidate generational handles and leave an existing
-    /// execution session on a stale scene revision. Use `Scene::live` and its
-    /// coherent publication operations for edits after lowering. No revision
-    /// validation is bypassed by this accessor; see [`crate::integration`].
+    /// execution session on a stale scene revision. Use the owning Scene for
+    /// persistent edits after lowering. See [`crate::integration`].
     pub fn integration_store(&self) -> &Rc<RefCell<SemanticStore>> {
         &self.store
     }
@@ -1086,6 +1084,7 @@ impl Mobject {
             &source,
             target,
             options,
+            None,
         )?;
         prepared.publish(&mut self.store.borrow_mut(), |store, transaction| {
             transaction
@@ -1525,6 +1524,7 @@ fn manim_style(color: Color) -> SemanticStyle {
         // Preserve Manim's public AUTO value; Cairo resolves its untouched default to butt.
         stroke_cap: StrokeCap::Auto,
         object_opacity: 1.0,
+        emission: noon_core::Emission::NONE,
     }
 }
 

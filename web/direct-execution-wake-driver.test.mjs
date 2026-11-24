@@ -102,6 +102,7 @@ test("continuous direct execution uses one RAF and settles when runtime becomes 
   assert.equal(scheduler.animationFrames.size, 1);
   const [[handle, callback]] = scheduler.animationFrames.entries();
   scheduler.animationFrames.delete(handle);
+  scheduler.setNow(1_016);
   callback(1_016);
 
   assert.deepEqual(renderer.advances, [1_016]);
@@ -147,6 +148,7 @@ test("repeated wake preserves the queued animation RAF and drives once", () => {
 
   assert.deepEqual([...scheduler.animationFrames.keys()], [handle]);
   scheduler.animationFrames.delete(handle);
+  scheduler.setNow(1_016);
   callback(1_016);
   assert.deepEqual(renderer.advances, [1_016]);
   assert.equal(renderer.renders, 1);
@@ -168,6 +170,7 @@ test("failed immediate presentation retry retains its animation RAF", () => {
 
   assert.deepEqual([...scheduler.animationFrames.keys()], [handle]);
   scheduler.animationFrames.delete(handle);
+  scheduler.setNow(1_016);
   callback(1_016);
   assert.equal(renderer.advances.length, 1);
   assert.equal(renderer.renders, 3);
@@ -204,4 +207,52 @@ test("timer and idle directives cancel RAF and a refreshed timer deadline replac
   assert.equal(scheduler.animationFrames.size, 0);
   assert.deepEqual(renderer.advances, [1_040]);
   assert.equal(scheduler.timers.size, 0);
+});
+
+test("optional preparation demand observes actual advances and explicit controls, never idle polling", () => {
+  const scheduler = fakeScheduler(); let demands = 0;
+  const renderer = fakeRenderer({ presentNow: true, cadence: "timer", delayMs: 250 }, () => ({ presentNow: true, cadence: "idle", delayMs: null }));
+  const driver = createDirectExecutionWakeDriver(renderer, { ...scheduler.options, onDemand() { demands++; } });
+  assert.equal(demands, 0, "initial presentation is not a source step");
+  const [handle, timer] = [...scheduler.timers.entries()][0];
+  scheduler.timers.delete(handle); scheduler.setNow(1250); timer.callback();
+  assert.equal(demands, 1); assert.equal(driver.stats().idle, true);
+  assert.equal(scheduler.timers.size, 0); assert.equal(scheduler.animationFrames.size, 0);
+  driver.wake(); assert.equal(demands, 2);
+  assert.equal(scheduler.timers.size, 0); assert.equal(scheduler.animationFrames.size, 0);
+  driver.stop(); driver.wake(); assert.equal(demands, 2);
+});
+
+test("continuous playback requests preparation without adding a second frame loop", () => {
+  const scheduler = fakeScheduler(); let demands = 0;
+  const renderer = fakeRenderer({ presentNow: true, cadence: "animation-frame", delayMs: null });
+  const driver = createDirectExecutionWakeDriver(renderer, { ...scheduler.options, onDemand() { demands++; } });
+  const [handle, callback] = [...scheduler.animationFrames.entries()][0];
+  scheduler.animationFrames.delete(handle); scheduler.setNow(1100); callback(1100);
+  assert.equal(demands, 1); assert.equal(scheduler.animationFrames.size, 1);
+  assert.equal(scheduler.timers.size, 0);
+  driver.stop();
+});
+
+
+test("a RAF frame stamp older than a delivered timer cannot move runtime time backward", () => {
+  const scheduler = fakeScheduler();
+  let previous = 1_000;
+  const renderer = fakeRenderer(
+    { presentNow: false, cadence: "timer", delayMs: 500 },
+    wallTimeMs => {
+      assert.ok(wallTimeMs >= previous, "host supplied a backward sample");
+      previous = wallTimeMs;
+      return { presentNow: true, cadence: wallTimeMs < 1_500.4 ? "animation-frame" : "idle", delayMs: null };
+    },
+    [false, false, true],
+  );
+  const driver = createDirectExecutionWakeDriver(renderer, scheduler.options);
+  const [[timerHandle, timer]] = scheduler.timers;
+  scheduler.timers.delete(timerHandle); scheduler.setNow(1_500.3); timer.callback();
+  const [[frameHandle, frame]] = scheduler.animationFrames;
+  scheduler.animationFrames.delete(frameHandle); scheduler.setNow(1_500.4); frame(1_500.2);
+  assert.deepEqual(renderer.advances, [1_500.3, 1_500.4]);
+  assert.equal(driver.stats().idle, true);
+  assert.equal(scheduler.animationFrames.size + scheduler.timers.size, 0);
 });

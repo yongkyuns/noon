@@ -13,6 +13,7 @@ on:
       - "crates/noon-web/**"
       - "scripts/build-web-demo.sh"
       - "scripts/playground-playback-controls-smoke.mjs"
+      - "scripts/playground-rectangle-feedback-smoke.mjs"
       - "scripts/playground-playback-rerun-stress.mjs"
       - "scripts/playground-playback-morph-regression.mjs"
       - "scripts/playground-wait-clock-regression.mjs"
@@ -27,7 +28,22 @@ on:
       - "scripts/showcase-viewport.mjs"
       - "scripts/direct-pointer-presentation-qualification.mjs"
       - "scripts/direct-inspection-qualification.mjs"
+      - "scripts/direct-view-output-qualification.mjs"
+      - "scripts/worker-view-output-qualification.mjs"
+      - "scripts/prepared-canvas-qualification.mjs"
+      - "scripts/prepared-source-qualification.mjs"
+      - "scripts/prepared-python-qualification.mjs"
+      - "scripts/prepared-construct-qualification.mjs"
+      - "scripts/prepared-worker-qualification.mjs"
+      - "scripts/prepared-authoring-worker-qualification.mjs"
+      - "scripts/prepared-observed-source-qualification.mjs"
+      - "scripts/prepared-source-counter-probe.mjs"
+      - "scripts/prepared-source-effects-qualification.mjs"
+      - "scripts/playground-prepared-lifecycle-qualification.mjs"
+      - "scripts/prepared-gpu-loss-probe.mjs"
+      - "scripts/webgpu-device-capture.mjs"
       - "scripts/worker-inspection-qualification.mjs"
+      - "scripts/shader-time-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - "web/**"
       - "!web/**/*.test.mjs"
@@ -38,11 +54,14 @@ on:
       - "crates/noon-runtime/**"
       - "crates/noon-web/**"
       - "web/playground-playback-controls*"
+      - "web/playground-feedback*"
+      - "scripts/playground-rectangle-feedback-smoke.mjs"
       - "web/semantic-engine-endpoint*"
       - "web/main.js"
       - "web/browser-pointer-input*"
       - "web/native-inputs*"
       - "web/direct-execution-wake-driver*"
+      - "web/prepared-interpreter-driver*"
       - "web/authoring-execution-client*"
       - "web/execution-worker-client*"
       - "crates/noon-render-wgpu/**"
@@ -57,7 +76,22 @@ on:
       - "scripts/showcase-viewport.mjs"
       - "scripts/direct-pointer-presentation-qualification.mjs"
       - "scripts/direct-inspection-qualification.mjs"
+      - "scripts/direct-view-output-qualification.mjs"
+      - "scripts/worker-view-output-qualification.mjs"
+      - "scripts/prepared-canvas-qualification.mjs"
+      - "scripts/prepared-source-qualification.mjs"
+      - "scripts/prepared-python-qualification.mjs"
+      - "scripts/prepared-construct-qualification.mjs"
+      - "scripts/prepared-worker-qualification.mjs"
+      - "scripts/prepared-authoring-worker-qualification.mjs"
+      - "scripts/prepared-observed-source-qualification.mjs"
+      - "scripts/prepared-source-counter-probe.mjs"
+      - "scripts/prepared-source-effects-qualification.mjs"
+      - "scripts/playground-prepared-lifecycle-qualification.mjs"
+      - "scripts/prepared-gpu-loss-probe.mjs"
+      - "scripts/webgpu-device-capture.mjs"
       - "scripts/worker-inspection-qualification.mjs"
+      - "scripts/shader-time-qualification.mjs"
       - "scripts/check-web-package.mjs"
       - ".github/workflows/playground-playback-controls.yml"
       - "scripts/playground-playback-*.mjs"
@@ -134,6 +168,11 @@ jobs:
           npx playwright install chromium
       - name: Qualify actual DOM samples and paused click-selection pixels
         run: |
+          node scripts/shader-time-qualification.mjs
+          NOON_SHADER_SOURCE_MODE=jspi NOON_PAIRED_ARTIFACTS=ci-artifacts/shader-jspi node scripts/shader-time-qualification.mjs
+          NOON_SHADER_SOURCE_MODE=async NOON_PAIRED_ARTIFACTS=ci-artifacts/shader-async node scripts/shader-time-qualification.mjs
+          node scripts/direct-view-output-qualification.mjs
+          node scripts/worker-view-output-qualification.mjs
           node --test scripts/pointer-selection-raster-contract.test.mjs
           node scripts/browser-pointer-input-smoke.mjs
           node scripts/pointer-selection-qualification.mjs
@@ -150,6 +189,8 @@ jobs:
         env:
           NOON_PLAYGROUND_PLAYBACK_ARTIFACTS: browser-smoke-artifacts/playground-playback-controls
         run: node scripts/playground-playback-controls-smoke.mjs
+      - name: Verify rectangle feedback on a real lesson
+        run: node scripts/playground-rectangle-feedback-smoke.mjs
       - name: Stress reruns across playback states
         env:
           NOON_PLAYGROUND_RERUN_STRESS_ARTIFACTS: browser-smoke-artifacts/playground-playback-rerun-stress
@@ -172,6 +213,10 @@ jobs:
         with:
           name: playground-playback-controls
           path: |
+            ci-artifacts/shader-time
+            ci-artifacts/shader-jspi
+            ci-artifacts/direct-view-output
+            ci-artifacts/worker-view-output
             browser-smoke-artifacts/pointer-dom
             browser-smoke-artifacts/pointer-selection
             browser-smoke-artifacts/pointer-selection-direct
@@ -181,6 +226,8 @@ jobs:
             browser-smoke-artifacts/worker-inspection
             browser-smoke-artifacts/gallery-pointer-selection
             browser-smoke-artifacts/playground-playback-controls
+            browser-smoke-artifacts/rectangle-feedback/selection.png
+            browser-smoke-artifacts/rectangle-feedback/comparison/*.png
             browser-smoke-artifacts/playground-playback-rerun-stress
             browser-smoke-artifacts/playground-playback-morph
             browser-smoke-artifacts/playground-playback-morph-webgpu
@@ -189,4 +236,88 @@ jobs:
             browser-smoke-artifacts/playground-playback-dynamic
             browser-smoke-artifacts/playground-playback-dynamic-webgpu
           if-no-files-found: error
+          retention-days: 3
+
+  prepared-canvas:
+    name: Opt-in prepared canvas on WebGPU and WebGL
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Use repository-pinned Rust
+        run: rustup install
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-sources-${{ hashFiles('Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-sources-
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
+        with:
+          tool: wasm-pack@0.15.0
+          fallback: none
+      - name: Test bounded prepared canvas lifecycle
+        run: |
+          cargo test --locked -p noon-compile --features prepared-prefix --lib replay_revision::prefix
+          cargo test --locked -p noon-runtime --features prepared-prefix --lib replay::prefix
+          cargo test --locked -p noon-web --all-features --lib prepared_canvas_playback
+          cargo test --locked -p noon-web --all-features --lib prepared_worker
+          cargo test --locked -p noon-web --all-features --lib interpreter_prefix
+          cargo test --locked -p noon-web --all-features --lib interpreter_worker
+          python3 -m unittest discover -s web/python -p test_prepared_execution.py
+          cargo test --locked -p noon --no-default-features --features prepared-prefix --lib cooperative_source
+          node --test web/cooperative-preparation-driver.test.mjs web/direct-execution-wake-driver.test.mjs web/prepared-interpreter-driver.test.mjs
+          node --test web/semantic-engine-endpoint.prepared.test.mjs web/prepared-authoring-worker.test.mjs
+          node --test web/playground-prepared-lifecycle.test.mjs
+      - name: Build explicitly enabled same-context canvas
+        run: |
+          wasm-pack build crates/noon-web --target web --out-dir ../../web/pkg --dev --no-opt --features prepared-prefix,renderer-smoke --locked
+          node scripts/build-python-worker.mjs
+          npm ci --prefix tools/python-editor --include=dev --ignore-scripts --no-audit --no-fund
+          node scripts/build-python-editor.mjs
+          node scripts/build-runtime-identity.mjs
+          node scripts/check-web-package.mjs
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
+      - name: Install pinned Chromium and pixel decoder
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1 pngjs@7.0.0
+          npx playwright install chromium
+      - name: Qualify actual prepared canvas, DOM input and buffering
+        run: |
+          node scripts/prepared-canvas-qualification.mjs
+          node scripts/prepared-source-qualification.mjs
+          node scripts/prepared-python-qualification.mjs
+          node scripts/prepared-construct-qualification.mjs
+          node scripts/prepared-worker-qualification.mjs
+          NOON_PREPARED_WORKER_SOURCE=python node scripts/prepared-worker-qualification.mjs
+          node scripts/prepared-authoring-worker-qualification.mjs
+          node scripts/prepared-observed-source-qualification.mjs
+          node scripts/prepared-source-effects-qualification.mjs
+          node scripts/playground-prepared-lifecycle-qualification.mjs
+      - name: Retain prepared canvas evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prepared-canvas
+          path: |
+            browser-smoke-artifacts/prepared-canvas
+            browser-smoke-artifacts/prepared-worker
+            browser-smoke-artifacts/prepared-authoring-worker
+            browser-smoke-artifacts/prepared-observed-source
+            browser-smoke-artifacts/prepared-gallery
+          if-no-files-found: warn
           retention-days: 3

@@ -49,14 +49,14 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
-    /// Create a canonical indexed mesh through the cold Scene or active LiveSession owner.
+    /// Create a detached indexed mesh in the owning Scene.
     #[wasm_bindgen(js_name = createMesh)]
     pub fn create_mesh(
         &mut self,
         candidate: WasmMeshOptions,
     ) -> Result<WasmAuthoringMobjectHandle, JsValue> {
         self.inner
-            .create_mesh(candidate.options)
+            .create_mesh(candidate.value.into_options())
             .map(WasmAuthoringMobjectHandle::from_semantic_mobject)
             .map_err(js_error)
     }
@@ -308,7 +308,7 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
-    /// Declare an activatable shared world-transform intent before execution.
+    /// Publish an activatable world-transform declaration on the Scene.
     #[wasm_bindgen(js_name = declareWorldTransform)]
     pub fn declare_world_transform(
         &mut self,

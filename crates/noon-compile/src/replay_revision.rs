@@ -42,6 +42,18 @@ pub struct CompiledReplayRevision {
     // inverse tracks. Charge each side by its command count in the finite replay
     // payload budget just as camera intervals are charged by payload count.
     path_motion_commands: usize,
+    // Worst-side logical inline geometry retained by this revision. The runtime
+    // finalizes both sides after the compiler commits a validated patch.
+    #[cfg(feature = "prepared-prefix")]
+    geometry_payload_bytes: usize,
+    // Logical immutable effect-stack payload retained by both row snapshots.
+    // Arc aliases are conservatively charged per row reference by the reader.
+    #[cfg(feature = "prepared-prefix")]
+    effect_payload_bytes: usize,
+    // Logical composed-source membership payload retained by both row snapshots.
+    // Arc aliases are conservatively charged per row reference by the reader.
+    #[cfg(feature = "prepared-prefix")]
+    composed_payload_bytes: usize,
 }
 
 impl CompiledReplayRevision {
@@ -54,6 +66,10 @@ impl CompiledReplayRevision {
     pub fn channels(&self) -> impl Iterator<Item = CompiledChannelKey> + '_ {
         self.channels.iter().copied()
     }
+    pub fn track_ids(&self) -> impl Iterator<Item = TrackId> + '_ {
+        self.tracks.iter().map(|(id, _)| *id)
+    }
+
     /// Reserve each affected track or inset relation even when its saved side is
     /// absent. Exchanges therefore cannot grow beyond the admitted scope budget.
     pub fn retention_cost(&self) -> usize {
@@ -120,7 +136,11 @@ impl CompiledScene {
             | ExecutionPatch::SetSemanticTransform { object, .. }
             | ExecutionPatch::SetSpatialState { object, .. }
             | ExecutionPatch::SetDrawEnabled { object, .. }
+            | ExecutionPatch::SetViewerDraggable { object, .. }
+            | ExecutionPatch::SetViewerGroup { object, .. }
+            | ExecutionPatch::SetClickIndicate { object, .. }
             | ExecutionPatch::SetStyle { object, .. }
+            | ExecutionPatch::SetViewColorProfile { object, .. }
             | ExecutionPatch::SetEffects { object, .. } => {
                 rows.insert(index(*object)?);
             }
@@ -138,7 +158,11 @@ impl CompiledScene {
                     {
                         continue;
                     }
-                    for property in crate::CompiledEffect::PARAMETER_PROPERTIES {
+                    let retired = self.objects[slot as usize]
+                        .effects
+                        .as_ref()
+                        .and_then(|stack| stack.get(attachment))?;
+                    for property in retired.parameter_properties() {
                         let channel = CompiledChannelKey::effect(slot, property, attachment);
                         if !self.channel_tracks(channel).is_empty() {
                             channels.insert(channel);
@@ -212,6 +236,12 @@ impl CompiledScene {
             inset_2d_view,
             camera_motion_payloads: saved_motion_payloads + incoming_motion_payloads,
             path_motion_commands: saved_path_motion_commands + incoming_path_motion_commands,
+            #[cfg(feature = "prepared-prefix")]
+            geometry_payload_bytes: 0,
+            #[cfg(feature = "prepared-prefix")]
+            effect_payload_bytes: 0,
+            #[cfg(feature = "prepared-prefix")]
+            composed_payload_bytes: 0,
             rows: rows
                 .into_iter()
                 .map(|index| SavedRow {
@@ -246,6 +276,7 @@ impl CompiledScene {
             let current = self.objects[index]
                 .live
                 .then(|| self.objects[index].clone());
+            let previous_composed = self.composed_plan(self.objects[index].id);
             let current_order = saved.order.map(|_| self.family_successor(saved.index));
             if saved.order.is_some() {
                 if let Some(rank) = self.family_ranks[index].take() {
@@ -258,14 +289,34 @@ impl CompiledScene {
                     self.painter_order.remove(rank as usize);
                     for rank in rank as usize..self.painter_order.len() {
                         self.painter_ranks[self.painter_order[rank] as usize] = Some(rank as u32);
+                        self.refresh_prefix_rank(
+                            self.objects[self.painter_order[rank] as usize].id,
+                            Some(rank),
+                        );
                     }
                 }
             }
             let id = self.objects[index].id;
+            let old_group = current.as_ref().and_then(|row| row.viewer_group);
+            if let Some(next) = saved.object.as_ref().filter(|next| next.id == id) {
+                self.update_viewer_group(id, old_group, next.viewer_group);
+            } else {
+                self.update_viewer_group(id, old_group, None);
+                if let Some(next) = saved.object.as_ref() {
+                    self.update_viewer_group(next.id, None, next.viewer_group);
+                }
+            }
+            self.viewer_drag_target_count -=
+                usize::from(self.objects[index].live && self.objects[index].viewer_draggable);
+            self.click_indicate_count -= usize::from(
+                self.objects[index].live && self.objects[index].click_indicate.is_some(),
+            );
             self.object_indices.remove(&id);
             self.retired_object_indices.remove(&id);
             self.live_object_count -= usize::from(self.objects[index].live);
             if let Some(object) = saved.object.take() {
+                self.click_indicate_count += usize::from(object.click_indicate.is_some());
+                self.viewer_drag_target_count += usize::from(object.viewer_draggable);
                 self.objects[index] = object;
                 self.object_indices
                     .insert(self.objects[index].id, saved.index);
@@ -288,6 +339,10 @@ impl CompiledScene {
                     self.painter_order.push(saved.index);
                     self.reposition_painter_row(saved.index);
                 }
+            }
+            self.update_composed_dependency(id, previous_composed);
+            if self.objects[index].id != id {
+                self.refresh_prefix_admission(self.objects[index].id);
             }
             saved.object = current;
             saved.order = current_order;
@@ -336,6 +391,8 @@ fn path_motion_command_count(values: &noon_core::TrackValues) -> usize {
     }
 }
 
+#[cfg(feature = "prepared-prefix")]
+mod prefix;
 #[cfg(test)]
 mod tests {
     use super::*;

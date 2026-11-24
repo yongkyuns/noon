@@ -1,5 +1,5 @@
 // Observe committed editor input after target listeners, in the same browser
-// task. A later Playwright round trip may already see the automatic rebuild.
+// task, keeping draft status separate from the active Run status.
 export function installStressObservation(target = globalThis) {
   const document = target.document;
   let pendingEdit = null;
@@ -17,6 +17,8 @@ export function installStressObservation(target = globalThis) {
       presentedFrames: Number(status?.dataset.presentedFrames ?? "0"),
       patchState: patch?.dataset.state ?? "",
       patchText: patch?.value ?? patch?.textContent ?? "",
+      draftText: document.querySelector("#draft-status")?.value ?? "",
+      draftState: document.querySelector("#draft-status")?.dataset.state ?? "",
       patchOperation: patch?.dataset.operation ?? "",
       patchSequence: patch?.dataset.sequence ?? "",
       patchRunGeneration: patch?.dataset.runGeneration ?? "",
@@ -25,6 +27,9 @@ export function installStressObservation(target = globalThis) {
       runInFlight: target.__noonExampleGallery?.runInFlight ?? false,
       runGeneration: target.__noonExampleGallery?.generationDiagnostics.runGeneration ?? null,
       runDisabled: document.querySelector("#replace-scene")?.disabled ?? true,
+      playbackPlaying: status?.dataset.playbackPlaying === "true",
+      playbackPhase: status?.dataset.playbackPhase ?? "",
+      elapsedSeconds: Number(document.querySelector(".playback-controls")?.dataset.elapsedSeconds ?? "0"),
       editorHeight: pane?.getBoundingClientRect().height ?? 0,
       bodyHeight: document.body.scrollHeight,
       editorScrollHeight: scroller?.scrollHeight ?? 0,

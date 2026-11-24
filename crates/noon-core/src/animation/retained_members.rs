@@ -44,6 +44,7 @@ impl RetainedAnimationMembers {
             // geometry variants.
             ObjectContentRef::Geometry(_) => vec![RetainedAnimationMember::Geometry],
             ObjectContentRef::Image(_) => vec![RetainedAnimationMember::Image],
+            ObjectContentRef::Composed(_) => Vec::new(),
             ObjectContentRef::Text(handle) => {
                 let resource = texts
                     .get(*handle)

@@ -99,19 +99,21 @@ test("semantic startup uses context-owned ports without constructing an engine w
   client.terminate();
 });
 
-test("initially paused startup rejects a source-owned continuation before attachment", async () => {
+test("initially paused startup reaches the same source-owned continuation", async () => {
   FakeWorker.instances.length = 0;
   const authoring = new FakeSemanticAuthoringClient();
   const client = new AuthoringExecutionClient(new FakeCanvas());
-  await assert.rejects(
-    client.startSemanticExecution(
+  const render = await prepare(client);
+  const starting = client.startSemanticExecution(
       { contextId: "semantic-continuation", continuationGeneration: 7 },
       { authoringClient: authoring, initiallyPaused: true },
-    ),
-    /source-owned semantic continuations cannot start paused/,
   );
-  assert.equal(authoring.attachments.length, 0);
-  assert.deepEqual(FakeWorker.instances, []);
+  await Promise.resolve();
+  replyRender(render, "start_engine", "engine_started", { mode: "legacy" });
+  const ready = await starting;
+  assert.equal(authoring.attachments.length, 1);
+  assert.equal(authoring.attachments[0].options.initiallyPaused, true);
+  assert.equal(ready.session, 1);
   client.terminate();
 });
 
@@ -225,9 +227,10 @@ test("semantic rerun preflights its context before switching the live renderer",
   client.terminate();
 });
 
-test("source retirement waits for its owner and reuses the renderer for a paused replacement", async () => {
+for (const prepared of [false, true]) test(`${prepared ? "prepared" : "ordinary"} source retirement waits for its owner and reuses the renderer for a paused replacement`, async () => {
   FakeWorker.instances.length = 0;
   const authoring = new FakeSemanticAuthoringClient();
+  authoring.preparedPlayback = prepared;
   const client = new AuthoringExecutionClient(new FakeCanvas());
   const render = await prepare(client);
   const initial = client.startSemanticExecution(
@@ -267,7 +270,7 @@ test("source retirement waits for its owner and reuses the renderer for a paused
   assert.equal((await rendererMetrics).metrics.presentedFrames, 9);
 
   const replacement = client.reconcileSemanticExecution(
-    { contextId: "semantic-new" }, { authoringClient: authoring },
+    { contextId: "semantic-new", preparedPlayback: prepared }, { authoringClient: authoring },
   );
   const rebuild = await waitForRequest(render, "rebuild_engine");
   render.emitMessage(envelope("noon.render", "engine_rebuilt", {
@@ -279,12 +282,16 @@ test("source retirement waits for its owner and reuses the renderer for a paused
   assert.equal(client.canvas, canvas);
   assert.equal(FakeWorker.instances.length, 1, "Run must reuse its retained renderer");
   assert.deepEqual(released, ["semantic-old"]);
+  if (prepared) await assert.rejects(client.reconcileSemanticExecution(
+    { contextId: "must-not-replace-history" }, { authoringClient: authoring },
+  ), /historical player/);
   client.terminate();
 });
 
-test("rejected source release keeps the same context and renderer available for retry", async () => {
+for (const prepared of [false, true]) test(`${prepared ? "prepared" : "ordinary"} rejected source release keeps the same context and renderer available for retry`, async () => {
   FakeWorker.instances.length = 0;
   const authoring = new FakeSemanticAuthoringClient();
+  authoring.preparedPlayback = prepared;
   const client = new AuthoringExecutionClient(new FakeCanvas());
   const render = await prepare(client);
   const initial = client.startSemanticExecution(
@@ -305,6 +312,9 @@ test("rejected source release keeps the same context and renderer available for 
   assert.equal(engine.closed, false);
   assert.equal(render.terminated, false);
   assert.equal(authoring.attachments.length, 1);
+  if (prepared) await assert.rejects(client.reconcileSemanticExecution(
+    { contextId: "must-not-replace-unreleased-history" }, { authoringClient: authoring },
+  ), /historical player/);
   reject = false;
   await client.retireExecutionSource();
   assert.deepEqual(attempts, ["semantic-retained", "semantic-retained"]);

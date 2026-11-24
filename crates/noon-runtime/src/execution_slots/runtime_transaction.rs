@@ -202,7 +202,7 @@ impl SceneInstance {
     }
 
     /// A scalar extension is proven by the compiler-derived, runtime-pinned schedule append.
-    pub fn prepare_scalar_timeline_plan_change(
+    fn prepare_scalar_timeline_plan_change(
         &self,
         expected: PublicationContext,
         scene_revision: SceneRevision,
@@ -404,7 +404,8 @@ impl SceneInstance {
     ) -> Result<&FrameState, CompilePatchError> {
         self.require_replay_writable()?;
         self.compiled.preflight_execution_transaction(transaction)?;
-        let changed = self.apply_preflighted_transaction(transaction);
+        let final_writes = final_value_writes(transaction);
+        let changed = self.apply_preflighted_transaction(&final_writes);
         if changed {
             self.publish_execution_change();
         }
@@ -552,17 +553,21 @@ impl SceneInstance {
                                         == Some(effect)
                                 })
                             })
-                            && noon_compile::CompiledEffect::PARAMETER_PROPERTIES
-                                .into_iter()
-                                .all(|property| {
-                                    self.compiled
-                                        .channel_tracks(noon_compile::CompiledChannelKey::effect(
-                                            index as u32,
-                                            property,
-                                            attachment,
-                                        ))
-                                        .is_empty()
-                                })
+                            && current.and_then(|stack| stack.get(attachment)).is_some_and(
+                                |effect| {
+                                    effect.parameter_properties().all(|property| {
+                                        self.compiled
+                                            .channel_tracks(
+                                                noon_compile::CompiledChannelKey::effect(
+                                                    index as u32,
+                                                    property,
+                                                    attachment,
+                                                ),
+                                            )
+                                            .is_empty()
+                                    })
+                                },
+                            )
                             && self.transient_glow_attachment(*object) == Some((attachment, true))
                     })
                 } else {
@@ -643,8 +648,9 @@ impl SceneInstance {
             self.preflight_prepared_frame_commit(frame, &empty)
                 .map_err(AuthoredPublicationError::PreparedFrame)?;
         }
-        let execution_changed = final_value_writes(transaction)
-            .into_iter()
+        let final_writes = final_value_writes(transaction);
+        let execution_changed = final_writes
+            .iter()
             .any(|patch| self.compiled.patch_changes_execution(patch));
         let next_execution = if execution_changed {
             Some(current.execution_revision().checked_next().ok_or(
@@ -720,7 +726,7 @@ impl SceneInstance {
             .collect::<Vec<_>>();
 
         self.compiled.merge_prepared_resources(resource_additions);
-        let applied_execution_change = self.apply_preflighted_transaction(transaction);
+        let applied_execution_change = self.apply_preflighted_transaction(&final_writes);
         debug_assert_eq!(applied_execution_change, execution_changed);
         if let Some(effective) = effective {
             for (object_index, write) in effective.writes {
@@ -767,17 +773,14 @@ impl SceneInstance {
         Ok(&self.frame)
     }
 
-    fn apply_preflighted_transaction(
-        &mut self,
-        transaction: &ExecutionMutationTransaction,
-    ) -> bool {
+    fn apply_preflighted_transaction(&mut self, final_writes: &[&ExecutionPatch]) -> bool {
         self.last_patch_stats = crate::RuntimePatchStats::default();
         // Intermediate value writes in an atomic batch are not observable. Keep
         // the last write per property, bounded by structural/timeline operations
         // that may change what a property write means. Full preflight above still
         // validates overwritten writes rather than hiding malformed input.
         let mut changed = false;
-        for patch in final_value_writes(transaction) {
+        for patch in final_writes.iter().copied() {
             if !self.compiled.patch_changes_execution(patch) {
                 continue;
             }
@@ -833,7 +836,7 @@ mod tests {
     }
 
     fn stack(effect: Arc<noon_compile::CompiledEffect>) -> Arc<noon_compile::CompiledEffectStack> {
-        Arc::new(noon_compile::CompiledEffectStack::new([*effect]).unwrap())
+        Arc::new(noon_compile::CompiledEffectStack::new([effect.as_ref().clone()]).unwrap())
     }
 
     fn enroll_temporary_glow(
@@ -852,7 +855,7 @@ mod tests {
             .prepare_click_glow_pulse(
                 object,
                 noon_core::SemanticClickGlowPulse::new(2.0, 1.0, RateFunction::ThereAndBack, false),
-                *glow,
+                glow.as_ref().clone(),
                 true,
                 proposed,
             )
@@ -1203,7 +1206,7 @@ mod tests {
         let attachment = noon_core::SemanticNodeId::new(90, 1);
         enroll_temporary_glow(&mut instance, object, attachment);
         let (property, values) = neutral_glow(attachment)
-            .parameter_channels(noon_core::EffectUpdate::default().radius(0.3))
+            .parameter_channels(&noon_core::EffectUpdate::default().radius(0.3))
             .unwrap()
             .pop()
             .unwrap();

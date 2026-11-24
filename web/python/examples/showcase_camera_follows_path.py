@@ -4,7 +4,7 @@ from noon import *
 
 
 class CameraFollowsPath(MovingCameraScene):
-    async def construct(self):
+    def construct(self):
         camera_frame = self.camera.frame
         camera_frame.save_state()
 
@@ -13,8 +13,8 @@ class CameraFollowsPath(MovingCameraScene):
             x_length=10, y_length=3.6, color=GRAY,
         )
         path = axes.plot(lambda x: 0.9 * sin(0.85 * x), [0, 9], color=BLUE)
-        start_point = axes.i2gp(path.t_min, path)
-        end_point = axes.i2gp(path.t_max, path)
+        start_point = path.point_from_proportion(0)
+        end_point = path.point_from_proportion(1)
         start_marker = Dot(start_point, radius=0.11, color=TEAL)
         end_marker = Dot(end_point, radius=0.11, color=RED)
         moving_dot = Dot(start_point, radius=0.09, color=YELLOW)
@@ -25,28 +25,26 @@ class CameraFollowsPath(MovingCameraScene):
         caption = Text("The curve and axes stay fixed as the view moves.", font_size=19, color=GRAY).shift(3.0 * DOWN)
         resolved = Text("The full path stays available as a reference.", font_size=22).shift(3.0 * DOWN)
 
-        await self.play(FadeIn(title), FadeIn(caption), run_time=0.6)
-        await self.play(Create(axes), run_time=0.8, rate_func=smooth)
-        await self.play(
+        self.play(FadeIn(title), FadeIn(caption), run_time=0.6)
+        self.play(Create(axes), run_time=0.8, rate_func=smooth)
+        self.play(
             Create(path), FadeIn(start_marker), FadeIn(end_marker), FadeIn(moving_dot),
             FadeIn(start_label), FadeIn(end_label), run_time=1.2, rate_func=smooth,
         )
-        await self.wait(0.4)
+        self.wait(0.4)
 
-        await self.play(
+        self.play(
             FadeOut(title), FadeOut(caption),
             camera_frame.animate.scale(0.62).move_to(moving_dot),
             run_time=0.7, rate_func=smooth,
         )
 
-        def follow_point(frame):
-            frame.move_to(moving_dot.get_center())
+        self.play(
+            MoveAlongPath(moving_dot, path), MoveAlongPath(camera_frame, path),
+            run_time=3.2, rate_func=linear,
+        )
+        self.wait(0.4)
 
-        camera_frame.add_updater(follow_point)
-        await self.play(MoveAlongPath(moving_dot, path, rate_func=linear), run_time=3.2)
-        camera_frame.remove_updater(follow_point)
-        await self.wait(0.4)
-
-        await self.play(Restore(camera_frame), run_time=1.0, rate_func=smooth)
-        await self.play(FadeIn(resolved), run_time=0.5)
-        await self.wait(1.0)
+        self.play(Restore(camera_frame), run_time=1.0, rate_func=smooth)
+        self.play(FadeIn(resolved), run_time=0.5)
+        self.wait(1.0)

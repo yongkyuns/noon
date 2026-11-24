@@ -535,6 +535,7 @@ mod tests {
             ..Transform2D::IDENTITY
         };
         let delta = RetainedExecutionDeltaEnvelope {
+            primary_view: None,
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.into(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: 7,
@@ -551,10 +552,12 @@ mod tests {
                 order: 0,
                 object: ObjectId::new(21),
                 effects: Vec::new(),
+                visibility: None,
                 z_index: 0.0,
-                content: TransportObjectContent::from(&ObjectContentRef::Geometry(
+                content: TransportObjectContent::try_from(&ObjectContentRef::Geometry(
                     GeometryRef::circle(1.0),
-                )),
+                ))
+                .unwrap(),
                 transform,
                 spatial: None,
                 style: Style::default(),

@@ -97,6 +97,7 @@ fn root_only_preparation_does_not_capture_existing_children_or_unrelated_objects
             captured.push(object.node_id());
             object.state()
         },
+        |_, _, _| Ok(()),
         |_, id, _, _| {
             effects.push(id);
             Ok(())
@@ -193,6 +194,7 @@ fn structured_root_rejects_before_copy_capture_or_publication() {
         graph.family().into(),
         &[],
         |_, _| panic!("structured root must reject before capture"),
+        |_, _, _| panic!("structured root must reject before family capture"),
         |_, _, _, _| panic!("structured root must reject before effect copy"),
     );
     assert!(matches!(
@@ -212,39 +214,42 @@ fn live_promotion_keeps_effective_xyz_and_child_identity_in_one_publication() {
     let source = scene.family(&[(&child).into()]).unwrap();
     source.set_points_3d(&points()).unwrap();
     scene.add_many(&[(&source).into()]).unwrap();
-    let mut session = scene.execution_session().unwrap();
-    scene
-        .live(&mut session)
+    let mut session = scene.into_execution().unwrap();
+    session
+        .scene_mut()
         .shift_3d(
             &source.own_object().unwrap().unwrap(),
             SemanticVec3::new(2., -1., 0.5),
         )
         .unwrap();
-    let expected = source
-        .effective_own_path_query(&session)
+    let expected = session
+        .scene()
+        .family_own_path_query(&source)
         .unwrap()
         .points_3d()
         .unwrap();
     let child_state = child.state().unwrap();
-    let before = session.publication_context();
-    let revision = scene.revision();
-    let copied = scene
-        .live(&mut session)
+    let before = session.session().publication_context();
+    let revision = session.scene().revision();
+    let copied = session
+        .scene_mut()
         .promote_own_points((&source).into(), &[])
         .unwrap();
     let promoted = copied.family(&source).unwrap();
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
-    assert_ne!(session.publication_context(), before);
+    assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
+    assert_ne!(session.session().publication_context(), before);
     assert_eq!(
-        source
-            .effective_own_path_query(&session)
+        session
+            .scene()
+            .family_own_path_query(&source)
             .unwrap()
             .point_count(),
         0
     );
     assert_eq!(
-        promoted
-            .effective_own_path_query(&session)
+        session
+            .scene()
+            .family_own_path_query(&promoted)
             .unwrap()
             .points_3d()
             .unwrap(),
@@ -256,12 +261,12 @@ fn live_promotion_keeps_effective_xyz_and_child_identity_in_one_publication() {
         child.node_id()
     );
     assert_eq!(promoted.member_count().unwrap(), 0);
-    let after = session.publication_context();
+    let after = session.session().publication_context();
     let foreign = Scene::new().circle(0.1).unwrap();
-    assert!(scene
-        .live(&mut session)
+    assert!(session
+        .scene_mut()
         .promote_own_points((&source).into(), &[(&foreign).into()])
         .is_err());
-    assert_eq!(session.publication_context(), after);
-    assert_eq!(scene.revision(), revision.checked_next().unwrap());
+    assert_eq!(session.session().publication_context(), after);
+    assert_eq!(session.scene().revision(), revision.checked_next().unwrap());
 }

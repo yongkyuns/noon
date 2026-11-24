@@ -161,9 +161,9 @@ class BrowserRunnerContracts(unittest.TestCase):
                      'CUDA_PIXELS','expected-rejection'):
             self.assertIn(term,s)
         self.assertNotIn('waitForTimeout(',s)
-        self.assertIn('async def _qualified_cuda_construct(self)',s)
-        self.assertIn('await _original_cuda_construct(self)',s)
-        self.assertIn('CudaTransposeBanks.construct = _qualified_cuda_construct',s)
+        self.assertIn('CudaTransposeBanks.setup = _qualified_cuda_setup',s)
+        self.assertIn('disableAuthoringJspi(page.context())',s)
+        self.assertNotIn('CudaTransposeBanks.construct =',s)
         self.assertNotIn('result.construct()',s)
         for mutation in ('wrong_bank','wrong_highlight','detached_label','invisible_packet','early_store','dim_highlight'):
             self.assertIn(mutation,s)

@@ -20,6 +20,45 @@ use crate::{
 
 pub(crate) type ValidatedFamilyStateUpdate = (usize, Option<FamilyAnimationState>, Option<u32>);
 
+/// Bounded identity duplicated at the genuine worker boundary so JavaScript can
+/// route/chunk a publication without deserializing its retained body. Rust still
+/// compares every field against the typed body before admission.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RetainedFamilyExecutionDeltaHeader {
+    pub channel: String,
+    pub session: u32,
+    pub sequence: u64,
+    pub snapshot: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer_view: Option<crate::PointerPresentationView>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn decode_worker_execution_delta_carrier(
+    packet: &str,
+) -> Result<RetainedFamilyExecutionDeltaEnvelope, String> {
+    let separator = packet
+        .find('\n')
+        .filter(|&index| index > 0 && index <= 512 && index + 1 < packet.len())
+        .ok_or_else(|| "worker publication has an invalid bounded metadata header".to_owned())?;
+    let header: RetainedFamilyExecutionDeltaHeader = serde_json::from_str(&packet[..separator])
+        .map_err(|error| format!("worker publication metadata is invalid: {error}"))?;
+    let delta: RetainedFamilyExecutionDeltaEnvelope =
+        serde_json::from_str(&packet[separator + 1..])
+            .map_err(|error| format!("worker publication body is invalid: {error}"))?;
+    if header.channel != delta.retained.channel
+        || header.session != delta.retained.session
+        || header.sequence != delta.retained.sequence
+        || header.snapshot != delta.retained.snapshot
+        || header.pointer_view != delta.pointer_view
+    {
+        return Err("worker publication header does not match its retained body".into());
+    }
+    Ok(delta)
+}
+
 /// One identity-free transient presentation occurrence crossing the genuine
 /// execution-worker to render-worker boundary. `anchor` is an existing stable
 /// source object used only to recover renderer-local painter placement; it never
@@ -57,7 +96,9 @@ impl RetainedTransientPresentationOccurrence {
         let state = object.state();
         let geometry = match &state.content {
             ObjectContentRef::Geometry(geometry) => geometry.clone(),
-            ObjectContentRef::Text(_) | ObjectContentRef::Image(_) => {
+            ObjectContentRef::Text(_)
+            | ObjectContentRef::Image(_)
+            | ObjectContentRef::Composed(_) => {
                 return Err(
                     RetainedFamilyExecutionTransportError::UnsupportedTransientContent(
                         object.occurrence_index(),
@@ -910,6 +951,7 @@ mod tests {
 
     fn retained(snapshot: bool, sequence: u64) -> RetainedExecutionDeltaEnvelope {
         RetainedExecutionDeltaEnvelope {
+            primary_view: None,
             channel: RETAINED_EXECUTION_TRANSPORT_CHANNEL.to_owned(),
             protocol_version: RETAINED_EXECUTION_TRANSPORT_VERSION,
             session: 1,
@@ -929,6 +971,7 @@ mod tests {
                 order: 0,
                 object: ObjectId::new(7),
                 effects: Vec::new(),
+                visibility: None,
                 z_index: 0.0,
                 content: TransportObjectContent::Geometry {
                     geometry: GeometryRef::circle(1.0),
@@ -992,6 +1035,54 @@ mod tests {
     }
 
     #[test]
+    fn worker_carrier_requires_typed_header_body_identity_before_admission() {
+        let delta = family_snapshot(0.5);
+        let packet = delta.encode_worker_carrier().unwrap();
+        assert_eq!(
+            decode_worker_execution_delta_carrier(&packet).unwrap(),
+            delta
+        );
+
+        let (header, body) = packet.split_once('\n').unwrap();
+        let header: serde_json::Value = serde_json::from_str(header).unwrap();
+        let body: serde_json::Value = serde_json::from_str(body).unwrap();
+        for (field, value) in [
+            ("channel", serde_json::json!("other")),
+            ("session", serde_json::json!(delta.retained.session + 1)),
+            ("sequence", serde_json::json!(delta.retained.sequence + 1)),
+            ("snapshot", serde_json::json!(!delta.retained.snapshot)),
+            (
+                "pointer_view",
+                serde_json::json!({"revision": 1, "width": 10.0, "height": 10.0}),
+            ),
+        ] {
+            let mut mismatched = body.clone();
+            mismatched[field] = value;
+            let candidate = format!("{}\n{}", header, mismatched);
+            assert!(
+                decode_worker_execution_delta_carrier(&candidate)
+                    .unwrap_err()
+                    .contains("does not match"),
+                "{field}"
+            );
+        }
+
+        let mut invalid_resource = body;
+        invalid_resource["resource_additions"] = serde_json::json!("invalid resource bundle");
+        assert!(decode_worker_execution_delta_carrier(&format!(
+            "{}\n{}",
+            header, invalid_resource
+        ))
+        .unwrap_err()
+        .contains("body is invalid"));
+        assert!(
+            decode_worker_execution_delta_carrier(&format!("{}\n{{", header))
+                .unwrap_err()
+                .contains("body is invalid")
+        );
+    }
+
+    #[test]
     fn row_patch_cannot_arrive_with_new_family_plan() {
         let mut delta = family_snapshot(0.25);
         delta.retained.snapshot = false;
@@ -1030,7 +1121,7 @@ mod tests {
             TransientPresentationState {
                 fill_paint: None,
                 z_index: 0.0,
-                content: ObjectContentRef::Geometry(GeometryRef::VectorPath(path.clone())),
+                content: ObjectContentRef::Geometry(GeometryRef::path(path.clone())),
                 text_bounds: None,
                 transform: Transform2D::IDENTITY,
                 style: Style::default(),
@@ -1038,7 +1129,7 @@ mod tests {
                 presence: true,
                 reveal: 1.0,
                 morph: 0.25,
-                render_geometry: Some(Arc::new(GeometryRef::VectorPath(path))),
+                render_geometry: Some(Arc::new(GeometryRef::path(path))),
                 render_transform: None,
             },
         );

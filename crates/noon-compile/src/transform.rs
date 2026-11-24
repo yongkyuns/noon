@@ -144,8 +144,8 @@ pub(crate) fn compile_transform_geometry_values(
             to.style,
             from.transform,
             to.transform,
-            source.clone(),
-            target.clone(),
+            source.as_ref().clone(),
+            target.as_ref().clone(),
         )?,
         (GeometryRef::Circle { .. }, GeometryRef::Rectangle { .. })
         | (GeometryRef::Rectangle { .. }, GeometryRef::Circle { .. }) => {

@@ -55,6 +55,11 @@ impl ImagePaintOptions {
             .raster_image_resources()
             .get(content.resource())
             .ok_or(AuthoringError::MissingImageResource(content.resource()))?;
+        if resource.video().is_some() {
+            return Err(AuthoringError::Unsupported(
+                crate::UnsupportedAuthoringOperation::ImageContent,
+            ));
+        }
         let mut options = Self::from_resource(resource.clone());
         options.sampling = content.sampling();
         Ok(options)
@@ -138,7 +143,7 @@ pub(crate) fn prepare_image_fill_mapping(
 }
 
 /// Inert image constructor. It owns prepared pixels, but no semantic identity or
-/// retained-resource admission until a Scene/Mobject/live construction succeeds.
+/// retained-resource admission until construction succeeds.
 #[derive(Clone, Debug)]
 pub struct ImageMobjectOptions {
     pixels: RasterImageResource,
@@ -231,6 +236,30 @@ impl ImageMobjectOptions {
         Ok(())
     }
 
+    pub(crate) fn state_builder(
+        &self,
+    ) -> Result<
+        impl FnOnce(noon_core::RasterImageResourceHandle) -> SemanticObjectState + use<>,
+        AuthoringError,
+    > {
+        let scale = self.scale()?;
+        let sampling = self.sampling;
+        let opacity = self.opacity;
+        let z_index = self.z_index;
+        Ok(move |handle| {
+            let mut state =
+                SemanticObjectState::new(SemanticImageContent::with_sampling(handle, sampling));
+            state.transform.scale = SemanticVec3::new(scale, scale, 1.0);
+            state.style.fill = Some(noon_core::SemanticPaint::Solid(noon_core::Color::WHITE));
+            state.style.fill_opacity = opacity;
+            state.style.stroke = None;
+            state.style.stroke_width = 0.0;
+            state.style.stroke_opacity = 0.0;
+            state.set_z_index(z_index);
+            state
+        })
+    }
+
     fn scale(&self) -> Result<f64, AuthoringError> {
         let height = self.display_height.unwrap_or_else(|| {
             if self.scale_to_resolution == 0.0 {
@@ -270,34 +299,17 @@ pub(crate) fn publish_image_creation(
         SemanticMutationTransaction,
     ) -> Result<SemanticMutationTransactionResult, AuthoringError>,
 ) -> Result<SemanticNodeId, AuthoringError> {
-    let scale = options.scale()?;
-    let width = options.pixels.width();
-    let height = options.pixels.height();
-    store.with_raster_image_rgba8(
-        width,
-        height,
-        options.pixels.into_rgba8(),
-        |store, handle| {
-            let mut state = SemanticObjectState::new(SemanticImageContent::with_sampling(
-                handle,
-                options.sampling,
-            ));
-            state.transform.scale = SemanticVec3::new(scale, scale, 1.0);
-            state.style.fill = Some(noon_core::SemanticPaint::Solid(noon_core::Color::WHITE));
-            state.style.fill_opacity = options.opacity;
-            state.style.stroke = None;
-            state.style.stroke_width = 0.0;
-            state.style.stroke_opacity = 0.0;
-            state.set_z_index(options.z_index);
-            let mut transaction = SemanticMutationTransaction::new();
-            transaction.add_node(SemanticNodeCreation::object(state));
-            let result = publish(store, transaction)?;
-            let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
-                unreachable!("one image creation publishes exactly one semantic node")
-            };
-            Ok(*node)
-        },
-    )
+    let make_state = options.state_builder()?;
+    store.with_raster_image(options.pixels, |store, handle| {
+        let state = make_state(handle);
+        let mut transaction = SemanticMutationTransaction::new();
+        transaction.add_node(SemanticNodeCreation::object(state));
+        let result = publish(store, transaction)?;
+        let [SemanticMutationImpact::NodeAdded { node }] = result.impacts() else {
+            unreachable!("one image creation publishes exactly one semantic node")
+        };
+        Ok(*node)
+    })
 }
 
 impl Mobject {
@@ -328,8 +340,8 @@ impl Mobject {
         let state = prepare_image_fill_mapping(self, mapping, opacity)?;
         self.commit_state(state)
     }
-    /// Cold-authoring image constructor. For an already-running Scene use
-    /// `Scene::image` or `LiveSession::create_image`, which preserve revision coherence.
+    /// Construct an authored image in a raw store. Use [`crate::Scene::image`]
+    /// when the Scene owns publication.
     pub fn from_image(
         store: Rc<RefCell<SemanticStore>>,
         options: ImageMobjectOptions,
@@ -371,10 +383,21 @@ impl Mobject {
         sampling: RasterImageSampling,
     ) -> Result<(), AuthoringError> {
         let mut state = self.state()?;
-        let image = state.content.image().ok_or(AuthoringError::Unsupported(
-            crate::UnsupportedAuthoringOperation::ImageContent,
-        ))?;
-        state.content = SemanticImageContent::with_sampling(image.resource(), sampling).into();
+        let content = image_content_with_sampling(&state, sampling)?;
+        state.content = content.into();
         self.commit_state(state)
     }
+}
+
+pub(crate) fn image_content_with_sampling(
+    state: &SemanticObjectState,
+    sampling: RasterImageSampling,
+) -> Result<SemanticImageContent, AuthoringError> {
+    let image = state.content.image().ok_or(AuthoringError::Unsupported(
+        crate::UnsupportedAuthoringOperation::ImageContent,
+    ))?;
+    Ok(SemanticImageContent::with_sampling(
+        image.resource(),
+        sampling,
+    ))
 }

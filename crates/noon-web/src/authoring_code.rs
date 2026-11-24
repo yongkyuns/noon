@@ -1,38 +1,11 @@
 //! Language handles for Rust-owned code highlighting, layout and retained text.
 
-use crate::authoring_error::{js_error, AuthoringFailure};
+use crate::authoring_error::js_error;
 use crate::{
     WasmAuthoringFamilyHandle, WasmAuthoringMobjectHandle, WasmAuthoringStore, WasmNativeFontFace,
 };
+use noon::integration::code_input;
 use wasm_bindgen::prelude::*;
-
-fn invalid_option(name: &'static str, value: f64) -> JsValue {
-    js_error(noon::CodeAuthoringError::InvalidOption {
-        name,
-        value: value.to_string(),
-    })
-}
-
-fn finite_f32(name: &'static str, value: f64) -> Result<f32, JsValue> {
-    if !value.is_finite() || !(value as f32).is_finite() {
-        return Err(invalid_option(name, value));
-    }
-    Ok(value as f32)
-}
-
-fn color(red: f64, green: f64, blue: f64, alpha: f64) -> Result<noon::Color, JsValue> {
-    for value in [red, green, blue, alpha] {
-        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-            return Err(invalid_option("color component", value));
-        }
-    }
-    Ok(noon::Color::rgba(
-        red as f32,
-        green as f32,
-        blue as f32,
-        alpha as f32,
-    ))
-}
 
 #[wasm_bindgen]
 pub struct WasmCodeOptions {
@@ -52,43 +25,17 @@ impl WasmCodeOptions {
         line_numbers_from: f64,
         background: &str,
     ) -> Result<Self, JsValue> {
-        // Preserve JS numbers until checked: integer wasm-bindgen parameters
-        // would wrap or truncate invalid inputs before Rust can reject them.
-        if !tab_width.is_finite()
-            || tab_width.fract() != 0.0
-            || !(0.0..=f64::from(u32::MAX)).contains(&tab_width)
-        {
-            return Err(invalid_option("tab_width", tab_width));
-        }
-        if !line_numbers_from.is_finite()
-            || line_numbers_from.fract() != 0.0
-            || !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&line_numbers_from)
-        {
-            return Err(invalid_option("line_numbers_from", line_numbers_from));
-        }
-        let background = match background {
-            "rectangle" => noon::CodeBackground::Rectangle,
-            "window" => noon::CodeBackground::Window,
-            _ => {
-                return Err(js_error(AuthoringFailure::new(
-                    "invalid_input",
-                    "code.invalid_background",
-                    "Code background must be 'rectangle' or 'window'",
-                )))
-            }
-        };
-        Ok(Self {
-            options: noon::CodeOptions {
-                language,
-                source_path,
-                formatter_style,
-                tab_width: tab_width as usize,
-                add_line_numbers,
-                line_numbers_from: line_numbers_from as i32,
-                background,
-                ..Default::default()
-            },
-        })
+        code_input::options(
+            language,
+            source_path,
+            formatter_style,
+            tab_width,
+            add_line_numbers,
+            line_numbers_from,
+            background,
+        )
+        .map(|options| Self { options })
+        .map_err(js_error)
     }
 
     #[wasm_bindgen(js_name = setParagraph)]
@@ -100,13 +47,14 @@ impl WasmCodeOptions {
         disable_ligatures: bool,
         font_face: Option<WasmNativeFontFace>,
     ) -> Result<(), JsValue> {
-        self.options.paragraph_config = noon::CodeParagraphConfig {
+        self.options.paragraph_config = code_input::paragraph(
             font,
-            font_size: finite_f32("font_size", font_size)?,
-            line_spacing: finite_f32("line_spacing", line_spacing)?,
+            font_size,
+            line_spacing,
             disable_ligatures,
-            font_face: font_face.map(|input| input.face),
-        };
+            font_face.map(|input| input.face),
+        )
+        .map_err(js_error)?;
         Ok(())
     }
 
@@ -129,7 +77,8 @@ impl WasmCodeOptions {
         blue: f64,
         alpha: f64,
     ) -> Result<(), JsValue> {
-        self.options.background_config.fill_color = Some(color(red, green, blue, alpha)?);
+        self.options.background_config.fill_color =
+            Some(code_input::color(red, green, blue, alpha).map_err(js_error)?);
         Ok(())
     }
 
@@ -144,7 +93,8 @@ impl WasmCodeOptions {
         width: f64,
         opacity: f64,
     ) -> Result<(), JsValue> {
-        self.options.background_config.stroke_color = color(red, green, blue, alpha)?;
+        self.options.background_config.stroke_color =
+            code_input::color(red, green, blue, alpha).map_err(js_error)?;
         self.options.background_config.stroke_width = width;
         self.options.background_config.stroke_opacity = opacity;
         Ok(())

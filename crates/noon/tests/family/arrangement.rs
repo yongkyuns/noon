@@ -69,12 +69,12 @@ fn selected_member_options_are_shared_by_authored_and_live_arrangement() {
             for object in [&first, &second, &third, &fourth] {
                 scene.add(object).unwrap();
             }
-            let mut execution = scene.execution_session().unwrap();
-            let mut live = scene.live(&mut execution);
-            let result = live.arrange_family_with_options(&outer, &options).unwrap();
+            let mut execution = scene.into_execution().unwrap();
+            let scene = execution.scene_mut();
+            let result = scene.arrange_family_with_options(&outer, &options).unwrap();
             assert_eq!(result.impacts().len(), 2);
-            close(live.effective_layout(&third).unwrap().center, (3.25, 0.0));
-            close(live.effective_layout(&fourth).unwrap().center, (7.25, 0.0));
+            close(scene.effective_layout(&third).unwrap().center, (3.25, 0.0));
+            close(scene.effective_layout(&fourth).unwrap().center, (7.25, 0.0));
         } else {
             outer.arrange_with_options(&options).unwrap();
             close(third.center().unwrap(), (3.25, 0.0));
@@ -107,15 +107,137 @@ fn late_invalid_selection_and_foreign_aligner_never_publish_a_prefix() {
     for object in [&first, &second] {
         scene.add(object).unwrap();
     }
-    let mut execution = scene.execution_session().unwrap();
-    let mut live = scene.live(&mut execution);
+    let mut execution = scene.into_execution().unwrap();
+    let scene = execution.scene_mut();
     let before = scene.integration_store().borrow().scene_revision();
-    assert!(live.arrange_family_with_options(&family, &options).is_err());
+    assert!(scene
+        .arrange_family_with_options(&family, &options)
+        .is_err());
     assert_eq!(scene.integration_store().borrow().scene_revision(), before);
-    close(live.effective_layout(&second).unwrap().center, (0.0, 0.0));
+    close(scene.effective_layout(&second).unwrap().center, (0.0, 0.0));
     let mut other = Scene::new();
     options.member_index = None;
     options.aligner = Some(LayoutAnchor::from(&other.square(1.0).unwrap()));
-    assert!(live.arrange_family_with_options(&family, &options).is_err());
+    assert!(scene
+        .arrange_family_with_options(&family, &options)
+        .is_err());
     assert_eq!(scene.integration_store().borrow().scene_revision(), before);
+}
+
+#[test]
+fn sequential_family_example_waits_for_admission_and_preserves_aliased_leaf_identity() {
+    use noon::{
+        example_scenes::family_arrangement, Color, LiveProgram, LiveProgramError,
+        LiveProgramStatus, RustHostCallbackTable, SceneScript,
+    };
+
+    let mut program = family_arrangement::program().unwrap();
+    let mut callbacks = RustHostCallbackTable::new();
+    let runtime = program.session().runtime_identity();
+    let ids: Vec<_> = program
+        .session()
+        .frame()
+        .objects
+        .iter()
+        .map(|object| object.id)
+        .collect();
+    assert_eq!(
+        ids.len(),
+        2,
+        "an aliased leaf must be rendered exactly once"
+    );
+    assert_ne!(ids[0], ids[1]);
+    let assert_layout =
+        |program: &LiveProgram<SceneScript>, time: f64, centers: [(f64, f64); 2]| {
+            let frame = program.session().frame();
+            assert_eq!(frame.time, time);
+            assert_eq!(program.session().runtime_identity(), runtime);
+            assert_eq!(
+                frame
+                    .objects
+                    .iter()
+                    .map(|object| object.id)
+                    .collect::<Vec<_>>(),
+                ids,
+                "layout and family membership must preserve painter identity and order"
+            );
+            for ((object, center), color) in frame
+                .objects
+                .iter()
+                .zip(centers)
+                .zip([Color::BLUE, Color::YELLOW])
+            {
+                close(
+                    (
+                        f64::from(object.transform.translation.x),
+                        f64::from(object.transform.translation.y),
+                    ),
+                    center,
+                );
+                assert_eq!(object.style.fill, Some(color));
+                assert_eq!(object.style.stroke_width, 0.0);
+            }
+        };
+
+    let initial = [(-1.0, 0.0), (1.0, 0.0)];
+    let arranged = [(0.35, 0.7), (1.0, 0.7)];
+    assert_layout(&program, 0.0, initial);
+    assert!(matches!(
+        program.resume().unwrap(),
+        LiveProgramStatus::Awaiting(_)
+    ));
+    assert!(matches!(
+        program.drive_to(&mut callbacks, 0.25).unwrap(),
+        LiveProgramStatus::Awaiting(_)
+    ));
+    assert_layout(&program, 0.25, initial);
+    assert!(matches!(
+        program.resume(),
+        Err(LiveProgramError::InvalidState { .. })
+    ));
+
+    // Deliberately retain the initial publication: reaching authored time alone
+    // must not execute the membership and layout statements after the await.
+    let LiveProgramStatus::PublicationPending(expected) =
+        program.drive_to(&mut callbacks, 0.5).unwrap()
+    else {
+        panic!("the host must admit the outstanding endpoint publication");
+    };
+    assert_layout(&program, 0.5, initial);
+    assert!(matches!(
+        program.resume(),
+        Err(LiveProgramError::InvalidState { .. })
+    ));
+    let actual = program.take_renderer_publication().context();
+    assert_eq!(actual, expected);
+    assert_eq!(
+        program.admit_publication(actual).unwrap(),
+        LiveProgramStatus::ReadyToResume
+    );
+    assert!(matches!(
+        program.resume().unwrap(),
+        LiveProgramStatus::Awaiting(_)
+    ));
+    assert_layout(&program, 0.5, arranged);
+    assert!(matches!(
+        program.drive_to(&mut callbacks, 0.75).unwrap(),
+        LiveProgramStatus::Awaiting(_)
+    ));
+    assert_layout(&program, 0.75, arranged);
+
+    let LiveProgramStatus::PublicationPending(expected) =
+        program.drive_to(&mut callbacks, 1.0).unwrap()
+    else {
+        panic!("the final wait must retain its pending publication");
+    };
+    assert_layout(&program, 1.0, arranged);
+    assert!(matches!(
+        program.resume(),
+        Err(LiveProgramError::InvalidState { .. })
+    ));
+    let actual = program.take_renderer_publication().context();
+    assert_eq!(actual, expected);
+    program.admit_publication(actual).unwrap();
+    assert_eq!(program.resume().unwrap(), LiveProgramStatus::Finished);
+    assert_layout(&program, 1.0, arranged);
 }

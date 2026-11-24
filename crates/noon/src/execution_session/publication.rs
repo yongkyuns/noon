@@ -8,7 +8,7 @@ use noon_compile::{
 use noon_core::{
     PreparedSemanticMutationTransaction, PublicationContext, SceneRevision, SemanticMutation,
     SemanticMutationTransaction, SemanticMutationTransactionError,
-    SemanticMutationTransactionResult, SemanticNodeId, SemanticStore,
+    SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId, SemanticStore,
 };
 use noon_runtime::{
     preflight_execution_slot_membership_shape, AuthoredPublicationError, ExecutionSlotError,
@@ -19,7 +19,9 @@ use super::ExecutionSession;
 
 mod prepared_value;
 use prepared_value::PreparedPublication;
+mod staged_effects;
 mod transient_glow;
+pub use staged_effects::StagedEffectPublication;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SemanticPublicationPurpose {
@@ -37,6 +39,7 @@ pub(crate) enum SemanticPublicationPurpose {
 pub(super) struct PreparedRuntimePublication {
     pub effective: Option<PreparedEffectivePropertyBatch>,
     pub frame: Option<noon_runtime::PreparedFrameEvaluation>,
+    pub prepared_effect_programs: Vec<noon_core::WgslEffectProgram>,
 }
 
 impl From<Option<PreparedEffectivePropertyBatch>> for PreparedRuntimePublication {
@@ -44,6 +47,7 @@ impl From<Option<PreparedEffectivePropertyBatch>> for PreparedRuntimePublication
         Self {
             effective,
             frame: None,
+            prepared_effect_programs: Vec::new(),
         }
     }
 }
@@ -54,8 +58,8 @@ pub(crate) struct PreparedReactiveEnrollmentBatch {
 }
 
 pub(super) struct PreparedScalarPublicationContract {
-    handled_signals: std::collections::HashSet<SemanticNodeId>,
-    reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
+    pub(super) handled_signals: std::collections::HashSet<SemanticNodeId>,
+    pub(super) reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +73,7 @@ pub enum ExecutionSessionPublicationError {
     SegmentCompletionPending,
     TranslationDragActive,
     ForeignSemanticStore,
+    ExternalEffectPreparationRequired,
     ReplaySealed,
     StaleSceneRevision {
         expected: SceneRevision,
@@ -103,6 +108,7 @@ impl std::fmt::Display for ExecutionSessionPublicationError {
             Self::TranslationDragActive => f.write_str(
                 "cancel or release the active translation drag before authored publication",
             ),
+            Self::ExternalEffectPreparationRequired => f.write_str("newly executable shader programs require the publication-preparation barrier"),
             Self::ForeignSemanticStore => {
                 f.write_str("semantic store does not own this execution session")
             }
@@ -144,6 +150,7 @@ impl std::error::Error for ExecutionSessionPublicationError {
             | Self::SegmentCompletionPending
             | Self::TranslationDragActive
             | Self::ForeignSemanticStore
+            | Self::ExternalEffectPreparationRequired
             | Self::StaleSceneRevision { .. }
             | Self::UnknownObject(_) => None,
         }
@@ -160,7 +167,7 @@ pub struct StructuralPublicationStats {
 /// A borrowed effective runtime value and the exact context that published it.
 /// Active drivers can make this value differ from authored/base state.
 #[derive(Clone, Copy, Debug)]
-pub struct EffectiveSemanticObject<'a> {
+pub(crate) struct EffectiveSemanticObject<'a> {
     pub object: &'a FrameObjectState,
     pub publication: PublicationContext,
     authored_content_layout_applicable: bool,
@@ -181,6 +188,27 @@ impl EffectiveSemanticObject<'_> {
 }
 
 impl ExecutionSession {
+    pub(super) fn validate_shader_view_profile(
+        &self,
+        prepared: &PreparedSemanticMutationTransaction<'_>,
+        publication: &noon_compile::PreparedSemanticPublication,
+    ) -> Result<(), ExecutionSessionPublicationError> {
+        let Some(camera) = self
+            .camera_object
+            .and_then(|object| self.execution_index.semantic_object_id(object))
+        else {
+            return Ok(());
+        };
+        publication
+            .validate_shader_view_profile(
+                prepared,
+                &self.execution_index,
+                &self.reachability,
+                camera,
+            )
+            .map_err(ExecutionSessionPublicationError::Lowering)
+    }
+
     pub(crate) fn require_published_store(
         &self,
         store: &SemanticStore,
@@ -202,12 +230,6 @@ impl ExecutionSession {
         &self,
         purpose: SemanticPublicationPurpose,
     ) -> Result<(), ExecutionSessionPublicationError> {
-        // Until audio participates in live structural/history publication, a
-        // scope detach or removal must not leave an obsolete audible plan alive.
-        // Reject the whole batch before resource admission or semantic staging.
-        if self.runtime.has_audio() {
-            return Err(ExecutionSessionPublicationError::AudioExecutionImmutable);
-        }
         if self.has_playback_controls() {
             return Err(ExecutionSessionPublicationError::PlaybackControlsExecutionImmutable);
         }
@@ -248,6 +270,37 @@ impl ExecutionSession {
         Ok(())
     }
 
+    fn require_audio_schedule_unchanged<'a>(
+        &self,
+        store: &SemanticStore,
+        mutations: impl IntoIterator<Item = &'a SemanticMutation>,
+    ) -> Result<(), ExecutionSessionPublicationError> {
+        // The authored audio list is complete when this runtime is created. It
+        // stays fixed across seeks and unrelated visual publication, including
+        // after a rewind to zero.
+        if !self.runtime.has_audio() {
+            return Ok(());
+        }
+        let changes_audio = mutations.into_iter().any(|mutation| match mutation {
+            SemanticMutation::ReplaceAudioClip { .. }
+            | SemanticMutation::AddNode {
+                creation: SemanticNodeCreation::AudioClip { .. },
+                ..
+            } => true,
+            SemanticMutation::RemoveNode { node } => node.existing().is_some_and(|id| {
+                store.node(id).is_some_and(|node| {
+                    matches!(node.kind(), noon_core::SemanticNodeKind::AudioClip(_))
+                        || node.has_scoped_audio_clips()
+                })
+            }),
+            _ => false,
+        });
+        if changes_audio {
+            return Err(ExecutionSessionPublicationError::AudioExecutionImmutable);
+        }
+        Ok(())
+    }
+
     /// Admit resource-producing detached construction before it can change the arena.
     /// Ordinary waits remain admissible: only animation completion and required
     /// callback publication block authored construction. No scene traversal is needed.
@@ -279,8 +332,8 @@ impl ExecutionSession {
     /// Structural publication admits geometry entries, local
     /// family exits, and content already owned by this store before session bootstrap.
     /// Aliases are reduced to exact net membership after semantic commit. Root-relative
-    /// painter reordering is published through [`LiveSession`](crate::LiveSession), which
-    /// supplies the authoritative execution root. Resource allocation and reactive
+    /// painter reordering uses the owning [`crate::Scene`] or the explicit
+    /// root-aware integration entry point. Resource allocation and reactive
     /// membership remain explicit unsupported cases.
     pub fn apply_semantic_transaction(
         &mut self,
@@ -302,6 +355,7 @@ impl ExecutionSession {
         root: SemanticNodeId,
         transaction: SemanticMutationTransaction,
     ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
+        self.require_audio_schedule_unchanged(store, transaction.mutations())?;
         self.require_published_store(store)?;
         if !is_semantic_updater_publication(transaction.mutations()) {
             validate_semantic_publication(&transaction)
@@ -338,6 +392,7 @@ impl ExecutionSession {
         } else {
             purpose
         };
+        self.require_audio_schedule_unchanged(store, transaction.mutations())?;
         self.require_publication_ready(admission)?;
         self.require_published_store(store)?;
         if !is_semantic_updater_publication(transaction.mutations()) {
@@ -413,29 +468,6 @@ impl ExecutionSession {
         .map(|(result, _)| result)
     }
 
-    pub(crate) fn apply_prepared_semantic_transaction_with_execution_and_reactive_enrollment(
-        &mut self,
-        prepared: PreparedSemanticMutationTransaction<'_>,
-        execution_prefix: Vec<ExecutionPatch>,
-        order_root: Option<SemanticNodeId>,
-        purpose: SemanticPublicationPurpose,
-        reactive_enrollment: Option<PreparedReactiveEnrollmentBatch>,
-        handled_scalar_signals: std::collections::HashSet<SemanticNodeId>,
-    ) -> Result<SemanticMutationTransactionResult, ExecutionSessionPublicationError> {
-        self.apply_prepared_semantic_transaction_with_execution_contract(
-            prepared,
-            execution_prefix,
-            None.into(),
-            purpose,
-            Some(PreparedScalarPublicationContract {
-                handled_signals: handled_scalar_signals,
-                reactive_enrollment,
-            }),
-            order_root,
-        )
-        .map(|(result, _)| result)
-    }
-
     pub(crate) fn apply_prepared_scalar_timeline_transaction_with_execution(
         &mut self,
         prepared: PreparedSemanticMutationTransaction<'_>,
@@ -496,6 +528,7 @@ impl ExecutionSession {
         ),
         ExecutionSessionPublicationError,
     > {
+        self.require_audio_schedule_unchanged(prepared.store(), prepared.candidate_mutations())?;
         let pulse_edit = if purpose == SemanticPublicationPurpose::AuthoredMutation
             && self.pending_segment_completion.is_some()
         {
@@ -568,7 +601,11 @@ impl ExecutionSession {
         ),
         ExecutionSessionPublicationError,
     > {
-        let PreparedRuntimePublication { effective, frame } = runtime;
+        let PreparedRuntimePublication {
+            effective,
+            frame,
+            prepared_effect_programs,
+        } = runtime;
         debug_assert!(
             frame.is_none() || !matches!(purpose, SemanticPublicationPurpose::Callback(_))
         );
@@ -649,6 +686,14 @@ impl ExecutionSession {
                     .map_err(ExecutionSessionPublicationError::Lowering)?;
                 (publication, revised)
             };
+        self.validate_shader_view_profile(&prepared, &publication)?;
+        if self.require_effect_preparation
+            && publication
+                .introduced_shader_programs()
+                .any(|program| !prepared_effect_programs.contains(program))
+        {
+            return Err(ExecutionSessionPublicationError::ExternalEffectPreparationRequired);
+        }
         let preparation_stats = publication.stats();
         let order_patches = order_root
             .map(|root| prepare_semantic_root_order(&prepared, root))
@@ -691,14 +736,7 @@ impl ExecutionSession {
                 .map(ExecutionPatch::RemoveObject),
         );
         let graph_patches = publication.conservative_graph_patches().collect::<Vec<_>>();
-        if !execution_suffix.is_empty()
-            || order_patches
-                .as_ref()
-                .is_some_and(|items| !items.is_empty())
-            || !graph_patches.is_empty()
-        {
-            conservative_patches.extend(publication.conservative_entry_patches(&prepared));
-        }
+        conservative_patches.extend(publication.conservative_entry_patches(&prepared));
         conservative_patches.extend(order_patches.iter().flatten().cloned());
         conservative_patches.extend(graph_patches);
         conservative_patches.extend(execution_suffix.iter().cloned());
@@ -711,9 +749,6 @@ impl ExecutionSession {
                 declaration: entry.declaration,
             })
             .collect::<Vec<_>>();
-        let mut numeric_patches = conservative.mutations().to_vec();
-        numeric_patches.extend(publication.conservative_entry_patches(&prepared));
-        let numeric_transaction = ExecutionMutationTransaction::from_mutations(numeric_patches);
         let mut pending_numeric_signals = scalar
             .as_ref()
             .and_then(|scalar| scalar.reactive_enrollment.as_ref())
@@ -737,7 +772,7 @@ impl ExecutionSession {
         let prepared_numeric = self
             .runtime
             .prepare_numeric_text_driver_revision(
-                &numeric_transaction,
+                &conservative,
                 numeric_entries,
                 prepared.store().text_resources(),
                 &pending_numeric_signals,
@@ -882,14 +917,14 @@ impl ExecutionSession {
             self.callback_schedule
                 .refresh_native_bindings(store, changed_native_bindings);
         }
+        self.runtime
+            .commit_numeric_text_driver_revision(prepared_numeric);
         self.publish_replay_membership(&exited, &entered);
         self.reconcile_callback_membership(&exited, false);
         self.execution_index
             .apply_transaction_result(store, &result);
         self.execution_index.apply_reachability_update(&membership);
         self.reconcile_callback_membership(&entered, true);
-        self.runtime
-            .commit_numeric_text_driver_revision(prepared_numeric);
         self.refresh_interaction_bindings(store, &result, &entered, &exited);
         self.reconcile_pointer_selection();
         self.last_structural_publication = StructuralPublicationStats {
@@ -904,9 +939,47 @@ impl ExecutionSession {
         self.last_structural_publication
     }
 
+    /// Borrow the published attachment column for a drawable or composed owner.
+    /// A composed controller has no object geometry and cannot use layout queries.
+    pub(crate) fn effective_effects(
+        &self,
+        store: &SemanticStore,
+        node: SemanticNodeId,
+    ) -> Result<Option<&noon_compile::CompiledEffectStack>, ExecutionSessionPublicationError> {
+        self.require_published_store(store)?;
+        store
+            .node(node)
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        let index = self
+            .execution_index
+            .execution_object_id(node)
+            .and_then(|object| self.runtime.frame_index_for_object(object))
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        Ok(self.runtime.frame().objects[index].effects.as_deref())
+    }
+
+    /// Read an isolated family's owned opacity from the indexed coherent row.
+    pub(crate) fn effective_family_opacity(
+        &self,
+        store: &SemanticStore,
+        node: SemanticNodeId,
+    ) -> Result<f32, ExecutionSessionPublicationError> {
+        self.require_published_store(store)?;
+        store
+            .node(node)
+            .and_then(|node| node.family_style())
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        let object = self
+            .execution_index
+            .execution_object_id(node)
+            .and_then(|object| self.runtime.effective_object(object))
+            .ok_or(ExecutionSessionPublicationError::UnknownObject(node))?;
+        Ok(object.style.opacity)
+    }
+
     /// Query a live semantic object through its originating store in indexed time.
     /// Both provenance and scene revision must match this published session.
-    pub fn effective_semantic_object(
+    pub(crate) fn effective_semantic_object(
         &self,
         store: &SemanticStore,
         node: SemanticNodeId,

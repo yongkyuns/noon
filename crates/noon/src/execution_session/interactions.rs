@@ -32,7 +32,9 @@ impl InteractionBindings {
 }
 
 pub(super) enum PreparedClickAction {
-    Animation(PreparedTransientAnimation),
+    // Keep queued control metadata small as captured material state grows.
+    Animation(Box<PreparedTransientAnimation>),
+    ViewerIndicate(noon_core::ObjectId, noon_core::SemanticClickIndicate),
     GlowPulse {
         target: SemanticNodeId,
         binding: noon_core::SemanticClickGlowPulse,
@@ -78,7 +80,7 @@ impl ExecutionSession {
     /// Retire input-owned state before a platform replaces this source owner.
     /// This does not advance authored time or cancel authored animations. A
     /// recovery handoff that retains this same execution must not call it.
-    pub fn retire_interactions_for_source_replacement(
+    pub(crate) fn retire_interactions_for_source_replacement(
         &mut self,
         store: &mut SemanticStore,
     ) -> Result<(), ExecutionSessionInputError> {
@@ -132,7 +134,7 @@ impl ExecutionSession {
                 continue;
             };
             if self.execution_object_id(effect.owner()) == Some(retirement.object)
-                && effect.name() == "glow"
+                && effect.name() == Some("glow")
                 && store.effect_by_name(effect.owner(), "glow").ok().flatten()
                     == Some(retirement.attachment)
             {
@@ -181,7 +183,7 @@ impl ExecutionSession {
                     ..
                 } => {
                     let owner = owner.existing();
-                    name.as_ref() == "glow"
+                    name.authored() == Some("glow")
                         && *definition == EffectDefinition::Glow(neutral)
                         && copy_provenance.is_none()
                         && owner.is_some_and(|owner| {
@@ -206,7 +208,7 @@ impl ExecutionSession {
                             .semantic_effect_state(attachment)
                             .ok()
                             .is_some_and(|effect| {
-                                effect.name() == "glow"
+                                effect.name() == Some("glow")
                                     && self.execution_object_id(effect.owner()).is_some_and(
                                         |object| {
                                             self.runtime.transient_glow_attachment(object)
@@ -247,7 +249,8 @@ impl ExecutionSession {
             .semantic_object_state_checked(node)
             .ok()
             .filter(|state| state.signal_bindings().is_empty())
-            .and_then(|state| state.click_action());
+            .and_then(|state| state.click_action())
+            .filter(|action| !matches!(action, SemanticClickAction::Indicate(_)));
         if let Some(binding) = binding.filter(|_| self.semantic_object_is_reachable(node)) {
             self.interaction_bindings.insert(node, binding);
         } else {
@@ -287,6 +290,32 @@ impl ExecutionSession {
         }
     }
 
+    pub(super) fn prepare_viewer_indicate(
+        &self,
+        node: SemanticNodeId,
+    ) -> Option<(noon_core::ObjectId, noon_core::SemanticClickIndicate)> {
+        if self.pending_callback.is_some() || self.interaction_bindings.bindings.contains_key(&node)
+        {
+            return None;
+        }
+        let object = self.interaction_execution_object_id(node)?;
+        if self.runtime.object_has_transient_animation(object) {
+            return None;
+        }
+        let options = crate::IndicateOptions::default();
+        let binding = self
+            .runtime
+            .click_indicate_binding(object)
+            .unwrap_or_else(|| {
+                noon_core::SemanticClickIndicate::new(
+                    options.scale_factor,
+                    options.color,
+                    noon_core::AnimationDefaults::MANIM.run_time,
+                )
+            });
+        Some((object, binding))
+    }
+
     pub(super) fn prepare_click_action(
         &self,
         click: Option<PointerSelectionClick>,
@@ -294,26 +323,31 @@ impl ExecutionSession {
         let Some(node) = click.and_then(|click| click.target()) else {
             return Ok(None);
         };
-        let Some(binding) = self.interaction_bindings.bindings.get(&node) else {
-            return Ok(None);
-        };
         // Keep the current conservative callback/effective-driver admission.
         // Indicate also delegates channel arbitration to the ordinary Runtime.
         if self.pending_callback.is_some() {
             return Ok(None);
         }
-        let Some(object) = self.execution_object_id(node) else {
+        let Some(object) = self.interaction_execution_object_id(node) else {
             return Ok(None);
         };
         if self.runtime.object_has_effective_driver(object) {
             return Ok(None);
         }
-        match *binding {
-            SemanticClickAction::Indicate(indication) => self
+        // Historical readers select Indicate from their displayed compiled row,
+        // never the producer's current binding or semantic arena.
+        if let Some(indication) = self.runtime.click_indicate_binding(object) {
+            return self
                 .runtime
                 .prepare_click_indicate(object, indication)
-                .map(|animation| animation.map(PreparedClickAction::Animation))
-                .map_err(ExecutionSessionInputError::Interaction),
+                .map(|animation| animation.map(Box::new).map(PreparedClickAction::Animation))
+                .map_err(ExecutionSessionInputError::Interaction);
+        }
+        let Some(binding) = self.interaction_bindings.bindings.get(&node) else {
+            return Ok(None);
+        };
+        match *binding {
+            SemanticClickAction::Indicate(_) => unreachable!("Indicate lives in compiled history"),
             SemanticClickAction::GlowPulse(binding) => {
                 if !self.runtime.can_prepare_click_glow_pulse(object) {
                     return Ok(None);

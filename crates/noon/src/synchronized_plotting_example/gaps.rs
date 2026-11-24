@@ -6,7 +6,7 @@ use crate::plot_presentation::{number_labels, TimedPlotSample};
 use crate::synchronized_plot_presentation::GappedTimeSeriesPlan;
 use crate::{
     AnimationCompositionRequest as Request, AnimationOptions, ContinuationStep, LiveContinuation,
-    LiveProgram, LiveSession, ManimAxesOptions, ManimGeometryOptions, Mobject, RateFunction, Scene,
+    LiveProgram, ManimAxesOptions, ManimGeometryOptions, Mobject, RateFunction, Scene,
     SemanticAnimationCompositionKind as Kind, Text, TransformToRequest, BLUE, GREEN, ORANGE, WHITE,
 };
 
@@ -32,7 +32,7 @@ pub struct GappedPlayback {
 impl LiveContinuation for GappedPlayback {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         let index = self.next_interval;
         if index == self.durations.len() {
             return Ok(ContinuationStep::Finished);
@@ -42,13 +42,14 @@ impl LiveContinuation for GappedPlayback {
         for drawing in &mut self.drawings {
             match &drawing.strokes[index] {
                 None if drawing.shown => {
-                    live.remove(&drawing.marker).map_err(|e| e.to_string())?;
+                    scene.remove(&drawing.marker).map_err(|e| e.to_string())?;
                     drawing.shown = false;
                 }
                 Some(stroke) if !drawing.shown => {
-                    live.move_to_point(&drawing.marker, stroke.start[0], stroke.start[1])
+                    scene
+                        .move_to_point(&drawing.marker, stroke.start[0], stroke.start[1])
                         .map_err(|e| e.to_string())?;
-                    live.add(&drawing.marker).map_err(|e| e.to_string())?;
+                    scene.add(&drawing.marker).map_err(|e| e.to_string())?;
                     drawing.shown = true;
                 }
                 _ => {}
@@ -81,7 +82,8 @@ impl LiveContinuation for GappedPlayback {
             children,
             options,
         };
-        let segment = live
+        let segment = scene
+            .live()
             .declare_and_activate_composition(&request, options)
             .map_err(|e| e.to_string())?;
         self.next_interval += 1;

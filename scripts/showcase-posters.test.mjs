@@ -15,20 +15,28 @@ test("every showcase card has a retained, source-bound real capture", async () =
   assert.equal(evidence.publication, "captured-preview");
   assert.equal(manifest.publication, "curated");
   assert.equal(evidence.captureRevision, evidence.runtimeBuildIdentity.sourceRevision);
-  const existingEntries = manifest.entries.filter(entry =>
-    !["showcase-cuda-transpose", "showcase-background-music"].includes(entry.id));
-  assert.deepEqual(evidence.posters.slice(0, existingEntries.length).map(poster => poster.id),
-    existingEntries.map(entry => entry.id), "all previously captured source-bound showcase posters must remain");
-  assert.ok(evidence.posters.length === existingEntries.length ||
-    evidence.posters.length === existingEntries.length + 1,
-    "capture evidence must be the original batch or a fully refreshed batch");
-  for (const [index, entry] of existingEntries.entries()) {
-    assertPoster(entry, evidence.posters[index], await read(entry.path), await read(entry.thumbnail));
-  }
-  if (evidence.posters.length > existingEntries.length) {
-    const cuda = manifest.entries.find(entry => entry.id === "showcase-cuda-transpose");
-    assertPoster(cuda, evidence.posters[existingEntries.length],
-      await read(cuda.path), await read(cuda.thumbnail));
+  for (const entry of manifest.entries) {
+    // CUDA has a separate fidelity contract, checked below.
+    if (entry.id === "showcase-cuda-transpose") continue;
+    const source = await read(entry.path), png = await read(entry.thumbnail);
+    const sha = bytes => createHash("sha256").update(bytes).digest("hex");
+    const candidates = [evidence];
+    try {
+      candidates.unshift(JSON.parse(await read(`thumbnails/showcase/${entry.id}-evidence.json`)));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    // A targeted refresh and a later full refresh may supersede one another.
+    // Select evidence for the current bytes, then enforce its complete contract.
+    const capture = candidates.find(capture => capture.posters.some(record =>
+      record.id === entry.id && record.sourceSha256 === sha(source) && record.image.pngSha256 === sha(png)));
+    assert.ok(capture, `${entry.id}: missing current source/image capture`);
+    assert.equal(capture.schema, 1);
+    assert.equal(capture.publication, "captured-preview");
+    assert.match(capture.captureRevision, /^[a-f0-9]{40}$/);
+    assert.equal(capture.captureRevision, capture.runtimeBuildIdentity.sourceRevision);
+    const record = capture.posters.find(record => record.id === entry.id);
+    assertRetainedPoster(entry, record, source, png, capture.runtimeBuildIdentity);
   }
 });
 
@@ -68,9 +76,9 @@ test("a poster copied from another build cannot inherit the global capture ident
   assert.throws(() => assertPoster(entry, missingIdentity, source, png));
 });
 
-test("native-input posters require drag, background no-op, reset, and current source evidence", async () => {
-  const entry = manifest.entries.find(item => item.playback_capability === "nonreplayable-native-input");
-  assert.ok(entry, "native-input lesson is in the showcase manifest");
+test("viewer drag posters require drag, background no-op, reset, and current source evidence", async () => {
+  const entry = manifest.entries.find(item => item.features.includes("set_viewer_draggable"));
+  assert.ok(entry, "viewer drag lesson is in the showcase manifest");
   const source = await read(entry.path);
   // Use an independent showcase PNG to isolate the metadata admission contract.
   const png = await read(manifest.entries[0].thumbnail);
@@ -84,17 +92,18 @@ test("native-input posters require drag, background no-op, reset, and current so
     image: { pngSha256: posterHash, width: png.readUInt32BE(16), height: png.readUInt32BE(20) },
     sample: { requestedTime: entry.thumbnail_time, publishedTime: entry.thumbnail_time },
     interaction: {
-      recipe: "click, drag, then Run",
+      recipe: "click, drag, then restart",
       automaticRestore: true,
       backgroundNoOp: true,
       pointerDrag: true,
+      undoRestoresBase: true,
       changedPixelsOutsideRightSideRoi: 0,
-      runRestoresBase: true,
+      restartRestoresBase: true,
       selectedImage: { pngSha256: posterHash },
     },
   };
   assertPoster(entry, record, source, png);
-  for (const field of ["automaticRestore", "pointerDrag", "backgroundNoOp", "runRestoresBase"]) {
+  for (const field of ["automaticRestore", "pointerDrag", "undoRestoresBase", "backgroundNoOp", "restartRestoresBase"]) {
     const interaction = { ...record.interaction };
     delete interaction[field];
     assert.throws(() => assertPoster(entry, { ...record, interaction }, source, png),
@@ -130,7 +139,7 @@ test("CUDA showcase has exact renderer-derived, source-bound supplementary poste
   for (const mutate of [
     (copy) => { copy.capture.rendererBackend = "CPU"; },
     (copy) => { copy.capture.cudaValidated = true; },
-    (copy) => { copy.capture.artifactId = 0; },
+    (copy) => { copy.capture.script = "unqualified"; },
     (copy) => { copy.capture.authoredDurationSeconds = 81.71; },
     (copy) => { copy.capture.runtimeBuildIdentity.buildId = "wrong"; },
     (copy) => { copy.sample.publishedTime += 1; },

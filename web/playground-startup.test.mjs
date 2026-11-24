@@ -22,7 +22,7 @@ for (const loadGalleryManifest of [
   const nodes = new Map();
   const node = selector => {
     if (!nodes.has(selector)) nodes.set(selector, {
-      dataset: {}, value: "—", textContent: "Loading…", parentElement: {},
+      dataset: {}, value: "—", textContent: "Loading…", parentElement: {}, addEventListener() {},
     });
     return nodes.get(selector);
   };
@@ -43,6 +43,8 @@ for (const loadGalleryManifest of [
     installPreviewFullscreen: () => () => {},
     PresentationRate: class { reset() {} },
     loadGalleryManifest,
+    AuthoringWorkerGeneration: class {},
+    PythonAuthoringClient: class {},
   };
   let failure;
   try {
@@ -64,7 +66,7 @@ for (const loadGalleryManifest of [
 }
 
 const createRuntimeStart = main.indexOf("function createRuntimeClient()");
-const preparationStart = main.indexOf("function ensureRuntimePreparation()", createRuntimeStart);
+const preparationStart = main.indexOf("function ensureRuntimePreparation(", createRuntimeStart);
 const runtimeReadyStart = main.indexOf("async function ensureRuntimeReady({", preparationStart);
 const executionReadyStart = main.indexOf("async function ensureExecutionReady()", runtimeReadyStart);
 assert.ok(
@@ -84,7 +86,7 @@ assert.match(
 );
 assert.match(
   preparationBody,
-  /const ready = candidate\.prepare\(\);/,
+  /candidate\.prepare\(\{ connectRuntimeModule: port => authoringClient\.sendRuntimeModule\(port\) \}\)/,
   "first authored Run must prepare the mode-free render owner before engine selection",
 );
 assert.doesNotMatch(
@@ -104,7 +106,7 @@ assert.doesNotMatch(
 );
 assert.match(
   runtimeReadyBody,
-  /const prepared = preparation \?\? ensureRuntimePreparation\(\);/,
+  /const prepared = preparation \?\? ensureRuntimePreparation\(client\);/,
   "authored startup must consume the candidate prepared in parallel with Python",
 );
 assert.match(
@@ -150,12 +152,12 @@ assert.match(
   "runtime startup must expose its on-demand state for browser diagnostics",
 );
 
-const runSceneStart = main.indexOf("async function runScene()");
+const runSceneStart = main.indexOf("async function runScene(");
 const selectExampleStart = main.indexOf("async function selectExample(", runSceneStart);
 assert.ok(runSceneStart >= 0 && selectExampleStart > runSceneStart, "runScene boundary must exist");
 const runSceneBody = main.slice(runSceneStart, selectExampleStart);
 const preparationCall = runSceneBody.indexOf(
-  "const preparation = player === null ? ensureRuntimePreparation() : null;",
+  "if (player === null) preparation = ensureRuntimePreparation(candidate);",
 );
 const authoringCall = runSceneBody.indexOf("authored = await client.run(source,");
 const ensureRuntimeCall = runSceneBody.indexOf("result = await ensureRuntimeReady({");
@@ -168,12 +170,21 @@ assert.ok(
 );
 assert.match(
   runtimeReadyBody,
-  /await prepared\.ready;\s*if \(runPhaseMetrics !== null\) \{\s*runPhaseMetrics\.renderPreparation = \{\s*startedAtMs: prepared\.startedAtMs,\s*readyAtMs: prepared\.readyAtMs,/,
+  /if \(runPhaseMetrics !== null\) \{\s*runPhaseMetrics\.renderPreparation = \{\s*startedAtMs: prepared\.startedAtMs,\s*readyAtMs: prepared\.readyAtMs,/,
   "cold authored Run must retain render-preparation boundaries alongside its source-run interval",
+);
+// Freshness validation may run after readiness; timing must still describe the
+// actual prepared owner, before engine attachment. Executable attachment tests
+// verify that stale runs publish neither these metrics nor an active player.
+const preparationReady = runtimeReadyBody.indexOf("await prepared.ready;");
+const preparationMetrics = runtimeReadyBody.indexOf("runPhaseMetrics.renderPreparation = {");
+assert.ok(
+  preparationReady >= 0 && preparationMetrics > preparationReady && preparationMetrics < semanticStart,
+  "render-preparation metrics must follow readiness and precede engine attachment",
 );
 assert.match(
   preparationBody,
-  /const startedAtMs = performance\.now\(\);\s*const ready = candidate\.prepare\(\);\s*const preparation = \{ candidate, ready, startedAtMs, readyAtMs: null \};/,
+  /const startedAtMs = performance\.now\(\);\s*const ready = candidate\.prepare\(\{ connectRuntimeModule: [^\n]+\}\);\s*const preparation = \{ candidate, authoringClient, ready, startedAtMs, readyAtMs: null \};/,
   "render-preparation timestamps must bracket the actual candidate.prepare() call",
 );
 assert.match(
@@ -212,13 +223,13 @@ assert.match(
 );
 assert.doesNotMatch(
   bootBody,
-  /ensureAuthoringClient\(|ensureRuntimePreparation\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,
+  /authoringWorkers\.clientForRun\(|ensureRuntimePreparation\(|new AuthoringExecutionClient\(|\.start\(.*objects.*tracks/,
   "initial main boot must not synchronously create Python or GPU runtime resources before the post-paint preload",
 );
 assert.doesNotMatch(
   bootBody,
   /scheduleStartupAutoplay|(?:await|void) runScene\(\)/,
-  "initial main boot must not directly autoplay a Python scene before the post-paint preload",
+  "initial main boot must not directly autoplay a Python scene before the post-paint preload starts",
 );
 assert.match(
   bootBody,
@@ -296,7 +307,7 @@ assert.match(
 );
 assert.match(
   bootBody,
-  /pagehide[\s\S]*stopMetricsPolling\(\)[\s\S]*authoringClient\?\.terminate\(\)[\s\S]*preparation\.candidate\.terminate\(\)[\s\S]*discardEarlyContinuationRuntime\(player\)/,
+  /pagehide[\s\S]*stopMetricsPolling\(\)[\s\S]*authoringWorkers\.activeClient[\s\S]*authoringWorkers\.retire\(activeAuthoringClient\)[\s\S]*preparation\.candidate\.terminate\(\)[\s\S]*discardEarlyContinuationRuntime\(player\)/,
   "page teardown must release metrics, Python, unpublished preparation, and execution resources",
 );
 
@@ -307,7 +318,7 @@ assert.ok(firstBarrier > initializeStart, "startup resources must share one hand
 const initializeBody = worker.slice(initializeStart, firstBarrier);
 for (const [pattern, label] of [
   [
-    /const noonWebReady = measureStartupTask\([\s\S]*?"noonWebInitMs"[\s\S]*?\(\) => initNoonWeb\(\)\);/,
+    /const noonWebReady = measureStartupTask\([\s\S]*?"noonWebInitMs"[\s\S]*?\(\) => runtimeBuildPromise\);/,
     "Noon WASM startup",
   ],
   [

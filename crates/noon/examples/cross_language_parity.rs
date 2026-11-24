@@ -2,16 +2,23 @@
 //! lowering/runtime; the optional codec observes their actual execution frames.
 use noon::{
     diagnostics::execution_frame_value, example_scenes, AnimationOptions, ContinuationStep,
-    LiveContinuation, LiveProgram, LiveProgramStatus, LiveSession, Mobject, RateFunction,
-    RustHostCallbackTable, Scene,
+    LiveContinuation, LiveProgram, LiveProgramStatus, Mobject, RateFunction, RustHostCallbackTable,
+    Scene,
 };
 use serde_json::json;
 
-fn emit<C: LiveContinuation<Error = String>>(
+mod cross_language_parity {
+    pub mod blocking;
+}
+
+fn emit<C: LiveContinuation>(
     name: &str,
     mut program: LiveProgram<C>,
     times: &[f64],
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    C::Error: std::fmt::Display,
+{
     let mut callbacks = RustHostCallbackTable::new();
     let mut frames = Vec::new();
     for &time in times {
@@ -38,6 +45,11 @@ fn emit<C: LiveContinuation<Error = String>>(
                     }
                 }
                 LiveProgramStatus::Finished => break,
+                LiveProgramStatus::PreparingResources => {
+                    return Err(format!(
+                        "{name}: diagnostic host cannot prepare external shaders"
+                    ));
+                }
                 LiveProgramStatus::Terminal => return Err(format!("{name}: terminal program")),
             }
         }
@@ -66,7 +78,8 @@ struct TransformPathArc {
 impl LiveContinuation for TransformPathArc {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut noon::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         match self.stage {
             0 => {
                 self.stage = 1;
@@ -119,6 +132,7 @@ fn transform_path_arc_program() -> Result<LiveProgram<TransformPathArc>, String>
 }
 
 fn main() -> Result<(), String> {
+    cross_language_parity::blocking::emit()?;
     emit(
         "ordinary_affine_play",
         example_scenes::ordinary_affine_continuation_program()?,
@@ -141,8 +155,13 @@ fn main() -> Result<(), String> {
     )?;
     emit(
         "manim_gallery_moving_around",
-        example_scenes::moving_around::program()?,
+        example_scenes::moving_around::program().map_err(|error| error.to_string())?,
         &[0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.25, 3.5, 4.0],
+    )?;
+    emit(
+        "manim_gallery_rotation_updater",
+        example_scenes::live_updater_lifecycle::program().map_err(|error| error.to_string())?,
+        &[0.0, 1.0, 2.0, 3.0, 4.0, 4.5],
     )?;
     emit(
         "ordinary_fade_synchronous_continuation",
@@ -163,8 +182,16 @@ fn main() -> Result<(), String> {
     )?;
     emit(
         "ordinary_family_arrangement",
-        example_scenes::family_arrangement::program()?,
+        example_scenes::family_arrangement::program().map_err(|error| error.to_string())?,
         &[0.0, 0.25, 0.5, 0.75, 1.0],
+    )?;
+    #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
+    emit(
+        "showcase_group_animation",
+        example_scenes::group_animation::program().map_err(|error| error.to_string())?,
+        &[
+            0.0, 0.75, 1.375, 2.0, 2.5, 3.125, 3.75, 4.25, 4.875, 5.5, 6.5,
+        ],
     )?;
     emit(
         "manim_parity_cyclic_replace",

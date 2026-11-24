@@ -446,45 +446,44 @@ fn required_callback_barrier_is_not_bypassed_even_by_unit_zoom() {
 
 #[test]
 fn navigation_during_real_indicate_preserves_midpoint_completion_and_authored_guard() {
-    let (scene, circle, mut session) = fixture();
-    let original = scene.live(&mut session).effective(&circle).unwrap();
-    let segment = scene
-        .live(&mut session)
+    let (scene, circle, session) = fixture();
+    let mut running =
+        crate::integration::scene_execution::consume_with_session(scene, session).unwrap();
+    let original = running.scene().effective(&circle).unwrap();
+    let segment = running
+        .live()
         .declare_and_activate_indicate(
             &circle,
             IndicateOptions::default(),
             AnimationOptions::new().run_time(1.0),
         )
         .unwrap();
-    scene
-        .live(&mut session)
-        .advance_segment_to(segment, 0.5)
-        .unwrap();
-    let midpoint = scene.live(&mut session).effective(&circle).unwrap();
+    running.live().advance_segment_to(segment, 0.5).unwrap();
+    let midpoint = running.scene().effective(&circle).unwrap();
     assert!(midpoint.transform.scale.x > original.transform.scale.x);
     assert_ne!(midpoint.style, original.style);
-    let state = session.frame().clone();
-    let publication = session.publication_context();
-    assert!(scene
-        .live(&mut session)
+    let state = running.session().frame().clone();
+    let publication = running.session().publication_context();
+    assert!(running
+        .scene_mut()
         .set_translation(&circle, 9.0, 0.0)
         .is_err());
-    zoom(&mut session, CENTER, 0.5).unwrap();
-    assert!(scene
-        .live(&mut session)
+    zoom(running.session_mut(), CENTER, 0.5).unwrap();
+    assert!(running
+        .scene_mut()
         .set_translation(&circle, 9.0, 0.0)
         .is_err());
-    assert_eq!(session.frame(), &state);
-    assert_eq!(session.publication_context(), publication);
-    scene
-        .live(&mut session)
+    assert_eq!(running.session().frame(), &state);
+    assert_eq!(running.session().publication_context(), publication);
+    running
+        .live()
         .advance_segment_to(segment, segment.end_time())
         .unwrap();
-    scene.live(&mut session).complete_segment(segment).unwrap();
-    let restored = scene.live(&mut session).effective(&circle).unwrap();
+    running.live().complete_segment(segment).unwrap();
+    let restored = running.scene().effective(&circle).unwrap();
     assert_eq!(restored.transform, original.transform);
     assert_eq!(restored.style, original.style);
-    assert_eq!(session.inspection_camera().unwrap().height, 4.0);
+    assert_eq!(running.session().inspection_camera().unwrap().height, 4.0);
 }
 
 #[test]

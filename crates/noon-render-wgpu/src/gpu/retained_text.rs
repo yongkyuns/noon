@@ -280,6 +280,22 @@ pub enum RetainedPreparedObjectOutcome {
 }
 
 impl PreparedRetainedGpuFrame<'_> {
+    /// Working color profile borrowed from the authored view's publication.
+    pub const fn color_profile(&self) -> noon_core::ViewColorProfile {
+        self.geometry.color_profile
+    }
+
+    pub(super) fn capture_index(&self, object: ObjectId) -> Option<usize> {
+        self.object_indices.get(&object).copied()
+    }
+
+    pub(super) fn capture_rank(&self, object: ObjectId) -> Option<usize> {
+        self.painter_ranks
+            .get(*self.object_indices.get(&object)?)
+            .copied()
+            .filter(|rank| *rank != usize::MAX)
+    }
+
     pub(super) fn capture_items(&self, object: ObjectId) -> Option<&[RetainedRenderItem]> {
         if let Some(item) = self
             .object_indices
@@ -592,6 +608,7 @@ fn sorted_ranges_overlap(ranges: &[std::ops::Range<u32>], target: &std::ops::Ran
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RetainedPrepareError {
+    ColorProfile(crate::ColorProfileError),
     Image(RasterImagePrepareError),
     StalePublication {
         received: PublicationContext,
@@ -613,6 +630,7 @@ pub enum RetainedPrepareError {
 impl std::fmt::Display for RetainedPrepareError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ColorProfile(error) => error.fmt(formatter),
             Self::Image(error) => error.fmt(formatter),
             Self::StalePublication { received, applied } => write!(
                 formatter,
@@ -658,6 +676,12 @@ impl std::error::Error for RetainedPrepareError {}
 impl From<TextPrepareError> for RetainedPrepareError {
     fn from(value: TextPrepareError) -> Self {
         Self::Text(value)
+    }
+}
+
+impl From<crate::ColorProfileError> for RetainedPrepareError {
+    fn from(error: crate::ColorProfileError) -> Self {
+        Self::ColorProfile(error)
     }
 }
 
@@ -1067,6 +1091,8 @@ struct ImageDrawEligibilityPreparation {
 /// outline-required glyphs are materialized as renderer-local paths, and every
 /// emitted painter item keeps the owning retained `ObjectId`.
 pub struct RetainedFramePreparer {
+    color_profile: noon_core::ViewColorProfile,
+    emission_profile_prepared: bool,
     images: RasterImageFramePreparer,
     geometry: FramePreparer,
     text: RetainedTextQuadPreparer,
@@ -1122,6 +1148,8 @@ pub struct RetainedFramePreparer {
 impl Default for RetainedFramePreparer {
     fn default() -> Self {
         Self {
+            color_profile: noon_core::ViewColorProfile::Compatibility,
+            emission_profile_prepared: false,
             images: RasterImageFramePreparer::default(),
             geometry: FramePreparer::for_individual_path_draws(),
             text: RetainedTextQuadPreparer::default(),
@@ -1386,6 +1414,28 @@ impl RetainedFramePreparer {
         self.prepare_with_changes(device, frame, &changes, texts, fonts, geometries, metrics)
     }
 
+    fn admit_color_profile(
+        &mut self,
+        frame: &FrameState,
+        changes: &FrameChanges,
+        profile: noon_core::ViewColorProfile,
+    ) -> Result<(), crate::ColorProfileError> {
+        let changed = self.color_profile != profile;
+        crate::validate_color_profile(
+            frame,
+            changes,
+            profile,
+            changed || !self.emission_profile_prepared,
+        )?;
+        if changed {
+            self.prepared_generation_ready = false;
+            self.scratch_ready = false;
+        }
+        self.emission_profile_prepared = true;
+        self.color_profile = profile;
+        Ok(())
+    }
+
     /// Prepare one coherent runtime publication and retain its applied revision
     /// metadata for later stale-publication rejection.
     pub fn prepare_publication<'a>(
@@ -1402,6 +1452,11 @@ impl RetainedFramePreparer {
             }
         }
 
+        self.admit_color_profile(
+            publication.frame(),
+            publication.changes(),
+            publication.color_profile(),
+        )?;
         if previous.is_none() || publication.changes().is_all() {
             self.set_painter_order(publication.painter_order());
         } else if let Some(range) = publication.changes().painter_order_range() {
@@ -1440,6 +1495,11 @@ impl RetainedFramePreparer {
             }
         }
         validate_visible_object_indices(publication.frame(), visible_object_indices)?;
+        self.admit_color_profile(
+            publication.frame(),
+            publication.changes(),
+            publication.color_profile(),
+        )?;
         if self.last_applied_publication.is_none() || publication.changes().is_all() {
             self.set_painter_order(publication.painter_order());
         } else if let Some(range) = publication.changes().painter_order_range() {
@@ -1486,6 +1546,7 @@ impl RetainedFramePreparer {
         geometries: &(impl GeometryResourceLookup + ?Sized),
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        self.admit_color_profile(frame, changes, noon_core::ViewColorProfile::Compatibility)?;
         self.prepare_with_changes_inner(
             device, frame, changes, texts, fonts, geometries, metrics, None, None,
         )
@@ -1505,6 +1566,7 @@ impl RetainedFramePreparer {
         images: &dyn RasterImageResourceLookup,
         metrics: TextDeviceMetrics,
     ) -> Result<PreparedRetainedGpuFrame<'a>, RetainedPrepareError> {
+        self.admit_color_profile(frame, changes, noon_core::ViewColorProfile::Compatibility)?;
         self.prepare_with_changes_inner(
             device,
             frame,
@@ -1692,9 +1754,15 @@ impl RetainedFramePreparer {
                 device.limits().max_texture_dimension_2d,
             )
             .map_err(RetainedPrepareError::Image)?;
+        // Cold or failed image preparation rebuilds residency even when the
+        // runtime delta is empty or sparse. Rebuild draw eligibility from that
+        // same decision; consumed producer dirtiness is not a renderer baseline.
+        // Successful warm preparation keeps the ordinary sparse path.
+        let reset_changes = rows.reset.then(FrameChanges::all);
+        let eligibility_changes = reset_changes.as_ref().unwrap_or(changes);
         Ok(PreparedImagePublication {
             rows,
-            eligibility: self.stage_image_draw_eligibility(frame, changes),
+            eligibility: self.stage_image_draw_eligibility(frame, eligibility_changes),
             object_count: frame.objects.len(),
         })
     }
@@ -1843,9 +1911,11 @@ impl RetainedFramePreparer {
 
             self.project_mixed_visibility(frame, visible_object_indices);
             let no_changes = FrameChanges::default();
-            let geometry = self
-                .geometry
-                .prepare_incremental(&self.scratch, &no_changes);
+            let geometry = self.geometry.prepare_with_color_profile(
+                &self.scratch,
+                &no_changes,
+                self.color_profile,
+            );
             self.prepared_generation_reuses = self.prepared_generation_reuses.saturating_add(1);
             self.prepared_generation_ready = true;
             let text = PreparedRetainedTextSnapshot {
@@ -1903,9 +1973,13 @@ impl RetainedFramePreparer {
         let geometry = if scratch_reused {
             let no_changes = FrameChanges::default();
             self.geometry
-                .prepare_incremental(&self.scratch, &no_changes)
+                .prepare_with_color_profile(&self.scratch, &no_changes, self.color_profile)
         } else {
-            self.geometry.prepare(&self.scratch)
+            self.geometry.prepare_with_color_profile(
+                &self.scratch,
+                &FrameChanges::all(),
+                self.color_profile,
+            )
         };
         self.render_items.clear();
         rebuild_mixed_order(&mut self.render_items, &self.sources, &geometry);
@@ -2142,8 +2216,15 @@ impl RetainedFramePreparer {
         let geometry = match visible_object_indices {
             Some(indices) => self
                 .geometry
-                .prepare_incremental_visible(frame, changes, indices)?,
-            None => self.geometry.prepare_incremental(frame, changes),
+                .prepare_incremental_visible_with_color_profile(
+                    frame,
+                    changes,
+                    indices,
+                    self.color_profile,
+                )?,
+            None => self
+                .geometry
+                .prepare_with_color_profile(frame, changes, self.color_profile),
         };
         self.geometry_uses_source_indices = true;
         self.scratch_ready = false;
@@ -2206,7 +2287,8 @@ impl RetainedFramePreparer {
         if self.geometry_only_classification != Some(false)
             || !self.scratch_ready
             || !self.prepared_generation_ready
-            || self.snapshot_metrics != Some(metrics)
+            || (self.snapshot_metrics != Some(metrics)
+                && self.snapshot_text_stats.text_objects != 0)
             || changes.is_all()
             || changes.is_structural()
             || changes.is_empty()
@@ -2225,6 +2307,13 @@ impl RetainedFramePreparer {
             let Some(object) = frame.objects.get(index) else {
                 return false;
             };
+            if object.content.composed_source().is_some() {
+                // An effect controller contributes no geometry/text scratch.
+                // Its ordinary parameter row must not rebuild every child.
+                return !frame.is_drawable(index)
+                    && self.scratch_slots.get(index).is_some_and(Option::is_none)
+                    && !self.fast_text_only.get(index).copied().unwrap_or(false);
+            }
             if object.content.image().is_some() {
                 // Image-only updates have no geometry/text scratch rows. A
                 // cross-kind replacement must rebuild those rows before reuse.
@@ -2362,11 +2451,17 @@ impl RetainedFramePreparer {
         self.incremental_stats.scratch_reuses =
             self.incremental_stats.scratch_reuses.saturating_add(1);
         let geometry = if scratch_changes.is_empty() {
-            self.geometry
-                .prepare_incremental(&self.scratch, &FrameChanges::default())
+            self.geometry.prepare_with_color_profile(
+                &self.scratch,
+                &FrameChanges::default(),
+                self.color_profile,
+            )
         } else {
-            self.geometry
-                .prepare_incremental(&self.scratch, &FrameChanges::objects(scratch_changes))
+            self.geometry.prepare_with_color_profile(
+                &self.scratch,
+                &FrameChanges::objects(scratch_changes),
+                self.color_profile,
+            )
         };
         if geometry.stats.full_rebuilds > 0 || text_layout_rebuilt {
             self.render_items.clear();
@@ -2651,13 +2746,17 @@ fn validate_visible_object_indices(
 
 fn requires_general_capture(object: &FrameObjectState, reveal: f32) -> bool {
     object.effects.is_some()
-        && !(matches!(
-            object.geometry(),
-            Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
-        ) && object.style.fill.is_some()
-            && object.fill_paint.is_none()
-            && object.style.stroke.is_none()
-            && reveal == 1.0)
+        && (object
+            .effects
+            .as_ref()
+            .is_some_and(|stack| stack.backdrop_blur().is_some())
+            || !(matches!(
+                object.geometry(),
+                Some(GeometryRef::Circle { .. } | GeometryRef::Rectangle { .. })
+            ) && object.style.fill.is_some()
+                && object.fill_paint.is_none()
+                && object.style.stroke.is_none()
+                && reveal == 1.0))
 }
 
 impl RetainedFramePreparer {
@@ -2716,6 +2815,9 @@ impl RetainedFramePreparer {
             }
 
             match &object.content {
+                ObjectContentRef::Composed(_) => {
+                    geometry_only = false;
+                }
                 ObjectContentRef::Image(_) => {
                     unreachable!("images bypass the geometry/text stream")
                 }
@@ -2868,7 +2970,7 @@ impl RetainedFramePreparer {
         let style = resolved_text_vector_style(object_style, vector);
         let scratch_slot = self.push_geometry(
             object_id,
-            GeometryRef::VectorPath(path),
+            GeometryRef::path(path),
             object_transform,
             style,
             appearance,
@@ -2916,7 +3018,7 @@ impl RetainedFramePreparer {
                 .unwrap_or(Color::WHITE);
             self.push_geometry(
                 object_id,
-                GeometryRef::VectorPath(fill_path),
+                GeometryRef::path(fill_path),
                 object_transform,
                 Style {
                     fill: Some(fill),
@@ -2928,6 +3030,7 @@ impl RetainedFramePreparer {
                     stroke_join: StrokeJoin::Round,
                     stroke_cap: StrokeCap::Round,
                     opacity: object_style.opacity,
+                    emission: object_style.emission,
                 },
                 appearance,
                 reveal,
@@ -2941,7 +3044,7 @@ impl RetainedFramePreparer {
                     .unwrap_or(Color::WHITE);
                 self.push_geometry(
                     object_id,
-                    GeometryRef::VectorPath(stroke_path),
+                    GeometryRef::path(stroke_path),
                     object_transform,
                     Style {
                         fill: Some(color),
@@ -2953,6 +3056,7 @@ impl RetainedFramePreparer {
                         stroke_join: StrokeJoin::Round,
                         stroke_cap: StrokeCap::Round,
                         opacity: object_style.opacity,
+                        emission: object_style.emission,
                     },
                     appearance,
                     reveal,
@@ -2982,6 +3086,7 @@ pub(super) fn resolved_text_vector_style(object_style: Style, vector: &TextVecto
         stroke_join: vector.style.stroke_join,
         stroke_cap: vector.style.stroke_cap,
         opacity: object_style.opacity,
+        emission: object_style.emission,
     }
 }
 
@@ -3151,7 +3256,7 @@ fn resolve_geometry_ref(
     else {
         return Err(RetainedPrepareError::MissingGeometryResource);
     };
-    Ok(GeometryRef::VectorPath(path.as_ref().clone()))
+    Ok(GeometryRef::VectorPath(path.clone()))
 }
 
 /// Invert packed instance ranges once for a structural mixed-painter rebuild.
@@ -3494,6 +3599,15 @@ impl RetainedTextGpuState {
             glyphs: TextGlyphGpuRenderer::new(device, queue, target_format, text_camera(camera)),
             last_uploaded_generation: None,
         }
+    }
+
+    /// Each new source may restart glyph generations and change atlas pages.
+    /// Retain the text pipelines and buffers, but force a complete upload and
+    /// new bindings when the next publication is presented.
+    pub fn reset_retained_source_state(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.last_uploaded_generation = None;
+        self.glyphs.reset_atlas_bindings();
+        self.glyphs.set_inset_cameras(device, queue, &[]);
     }
 }
 
@@ -4036,6 +4150,9 @@ impl GpuRenderer {
                 .is_some_and(|(image_rank, _)| **image_rank < item_rank)
             {
                 let (_, image) = images.next().expect("peeked image draw item");
+                if self.skip_composed_source(image.object_id()) {
+                    continue;
+                }
                 if !excluded.contains(&image.object_id())
                     && self.draw_source_effect(pass, image.object_id(), sample_count == 1)
                 {
@@ -4061,7 +4178,7 @@ impl GpuRenderer {
                     }
                 }
             }
-            if excluded.contains(&item.object_id()) {
+            if excluded.contains(&item.object_id()) || self.skip_composed_source(item.object_id()) {
                 continue;
             }
             if self.draw_source_effect(pass, item.object_id(), sample_count == 1) {
@@ -4146,6 +4263,9 @@ impl GpuRenderer {
             }
         }
         for (_, image) in images {
+            if self.skip_composed_source(image.object_id()) {
+                continue;
+            }
             if !excluded.contains(&image.object_id())
                 && self.draw_source_effect(pass, image.object_id(), sample_count == 1)
             {
@@ -4487,6 +4607,7 @@ mod tests {
             plane: GlyphAtlasPlane::Mask,
             page: 0,
             instance_range: 0..1,
+            object_opacity: 1.0,
         }];
         let source_items = vec![PreparedTextItem::GlyphBatch {
             object_index: 0,
@@ -4499,8 +4620,10 @@ mod tests {
             plane: GlyphAtlasPlane::Mask,
             page: 1,
             instance_range: 0..1,
+            object_opacity: 1.0,
         }];
         let source_quad = GlyphQuadInstance {
+            emission: 0.0,
             origin: [1.0, 2.0],
             axis_x: [3.0, 0.0],
             axis_y: [0.0, 4.0],
@@ -4509,6 +4632,7 @@ mod tests {
             color: [1.0; 4],
         };
         let mut destination_quads = vec![GlyphQuadInstance {
+            emission: 0.0,
             origin: [0.0; 2],
             axis_x: [0.0; 2],
             axis_y: [0.0; 2],
@@ -6103,7 +6227,7 @@ mod tests {
         // for painter interleaving. Construct the compacted geometry state that
         // this defensive boundary protects without changing that policy.
         let mut geometry_preparer = FramePreparer::new();
-        let geometry = geometry_preparer.prepare(&frame);
+        let geometry = geometry_preparer.prepare(&frame).unwrap();
         let text_preparer = RetainedTextQuadPreparer::default();
         let mut applied_publication = None;
         let mut images = RasterImageFramePreparer::default();
@@ -6784,6 +6908,7 @@ pub use family_plan_set_prepare::*;
 /// Mixed-content draw failures preserve their source domain.
 #[derive(Debug)]
 pub enum RetainedDrawError {
+    EffectNotPrepared,
     Text(TextGpuDrawError),
     Image(RasterImageDrawError),
     GradientNotUploaded,
@@ -6804,6 +6929,7 @@ impl From<RasterImageDrawError> for RetainedDrawError {
 impl std::fmt::Display for RetainedDrawError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::EffectNotPrepared => formatter.write_str("nested effect input was not prepared"),
             Self::Text(error) => error.fmt(formatter),
             Self::Image(error) => error.fmt(formatter),
             Self::GradientNotUploaded => formatter.write_str("gradient source was not uploaded"),

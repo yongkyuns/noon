@@ -1,4 +1,4 @@
-// Common encoded-premultiplied reconstruction for bitmap objects and paints.
+// Common working-color premultiplied reconstruction for bitmap objects and paints.
 // Addressing applies to each texel tap, before interpolation.
 fn raster_pixel(image: texture_2d<f32>, point: vec2<f32>, dimensions: vec2<u32>, address: u32, opacity: f32) -> vec4<f32> {
     let size = vec2<f32>(dimensions);
@@ -11,7 +11,7 @@ fn raster_pixel(image: texture_2d<f32>, point: vec2<f32>, dimensions: vec2<u32>,
     p = clamp(p, vec2(0.0), size - vec2(1.0));
     let rgba = textureLoad(image, vec2<i32>(p), 0);
     let alpha = rgba.a * opacity;
-    return vec4(rgba.rgb * alpha, alpha);
+    return vec4(working_color_rgb(rgba.rgb) * alpha, alpha);
 }
 fn raster_cubic(value: f32) -> f32 {
     let x = abs(value);
@@ -19,7 +19,7 @@ fn raster_cubic(value: f32) -> f32 {
     if x < 2.0 { return ((-x+5.0)*x-8.0)*x+4.0; }
     return 0.0;
 }
-fn raster_sample(image: texture_2d<f32>, coordinates: vec2<f32>, dimensions: vec2<u32>, sampling: u32, address: u32, opacity: f32) -> vec4<f32> {
+fn raster_sample_source(image: texture_2d<f32>, coordinates: vec2<f32>, dimensions: vec2<u32>, sampling: u32, address: u32, opacity: f32) -> vec4<f32> {
     var uv = coordinates;
     if address == 2u { uv = fract(uv); }
     let position = uv * vec2<f32>(dimensions) - vec2(0.5);
@@ -41,4 +41,14 @@ fn raster_sample(image: texture_2d<f32>, coordinates: vec2<f32>, dimensions: vec
     }
     color.a = clamp(color.a, 0.0, 1.0);
     return vec4(clamp(color.rgb, vec3(0.0), vec3(color.a)), color.a);
+}
+
+// HDR reconstruction filters intrinsic color/alpha first. Final object opacity
+// then scales the associated result once, including bicubic overshoot clamping.
+// Preserve the existing compatibility reconstruction/opacity order exactly.
+fn raster_sample(image: texture_2d<f32>, coordinates: vec2<f32>, dimensions: vec2<u32>, sampling: u32, address: u32, opacity: f32) -> vec4<f32> {
+    if LINEAR_WORKING_COLOR {
+        return raster_sample_source(image, coordinates, dimensions, sampling, address, 1.0) * opacity;
+    }
+    return raster_sample_source(image, coordinates, dimensions, sampling, address, opacity);
 }

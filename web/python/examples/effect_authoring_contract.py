@@ -1,7 +1,7 @@
-"""Declaration ownership and ordered attachment contract, paired with native Rust.
+"""Declaration ownership and bounded-stack contract, paired with the native Rust example of the same name.
 
-This checks independent handles, atomic rejection, and retirement. The paired
-ordered-effects scene separately qualifies multi-attachment rendering.
+This checks declaration ownership and unsupported-profile rejection, not glow
+rendering. Cleanup demonstrates ordinary source continuation.
 """
 from noon import Circle, Glow, Pixels, RIGHT, Scene, NoonForeignHandleError, NoonUnsupportedError
 
@@ -42,11 +42,6 @@ class EffectAuthoringContract(Scene):
         assert dot.get_effect("accent").authored_definition.radius == Pixels(12)
         assert movement.target.get_effect("accent").authored_definition.intensity == 0.6
 
-        # Multiple named effects are now supported; preserve both handles
-        # through the independent retirement and owner-validation checks.
-        assert dot.get_effect("glow").authored_definition.intensity == 0.25
-        assert dot.get_effect("accent").authored_definition.radius == Pixels(12)
-
         assert dot.remove_effect(original) is dot
         try:
             original.authored_definition
@@ -64,14 +59,26 @@ class EffectAuthoringContract(Scene):
         assert movement.target.get_effect("glow").authored_definition.intensity == 1.4
         dot.remove_effect("accent")
         movement.target.remove_glow().remove_effect("accent")
+        # Finish detached declaration checks before transferring execution.
+        # Eight ordered bindings are supported; a ninth fails atomically in Rust.
+        for index in range(8):
+            dot.add_effect(Glow(intensity=0), name=f"extra-{index}")
+        handles = [dot.get_effect(f"extra-{index}") for index in range(8)]
+        self.live_execution()
+        rejects(NoonUnsupportedError,
+                lambda: dot.add_effect(Glow(intensity=0), name="overflow"))
+        rejects(ValueError, lambda: dot.get_effect("overflow"))
+        for index, handle in enumerate(handles):
+            assert handle.authored_definition.intensity == 0
+            dot.remove_effect(f"extra-{index}")
         self.wait(0.1)
         # After a real completion barrier, setters must use live publication.
         # Rejecting an unsupported source profile must leave normal continuation usable.
-        live = self.live_execution()
-        live.set_scale(dot, 0.0, 1.0)
+        self.live_execution()
+        self.set_scale(dot, 0.0, 1.0)
         rejects(NoonUnsupportedError, lambda: dot.set_glow(intensity=0.5))
         rejects(ValueError, lambda: dot.get_effect("glow"))
-        live.set_scale(dot, 1.0, 1.0)
+        self.set_scale(dot, 1.0, 1.0)
         # An ordinary outline now belongs to the planar capture profile.
         dot.set_glow(intensity=0.5).remove_glow()
         assert tuple(dot.get_center()) == (0.0, 0.0, 0.0)

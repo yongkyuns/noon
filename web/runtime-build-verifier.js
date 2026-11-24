@@ -5,24 +5,54 @@ const EXPECTED_RUNTIME_PATHS = Object.freeze({
   verifier: "./runtime-build-verifier.js",
 });
 
+const sharedModuleKey = Symbol.for(`noon.site.compiled-runtime:${import.meta.url}`);
+
+// The website owns one verified compilation. Embed workers instantiate it
+// independently, with separate interpreter, scene and renderer state.
+export function installEmbeddedRuntimeBuild(documentLike) {
+  let current = null;
+  documentLike[sharedModuleKey] = () => {
+    if (current === null) {
+      const compiling = loadCompiledRuntimeBuild().catch(error => {
+        if (current === compiling) current = null;
+        throw error;
+      });
+      current = compiling;
+    }
+    return current;
+  };
+  return () => { current = null; };
+}
+
+export function loadEmbeddedRuntimeBuild() {
+  if (globalThis.document?.documentElement?.dataset?.noonEmbed !== "true" ||
+      globalThis.parent === globalThis) return null;
+  try {
+    return globalThis.parent?.document?.[sharedModuleKey]?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function loadCompiledRuntimeBuild() {
+  const { identity, wasmBytes } = await loadRuntimeBuild();
+  const wasmModule = await WebAssembly.compile(wasmBytes);
+  return Object.freeze({ identity, wasmModule });
+}
+
 export async function loadRuntimeBuild() {
   const response = await fetch(new URL("./runtime-build-identity.json", import.meta.url), { redirect: "error" });
   if (!response.ok) {
     throw new Error(`Unable to load Noon runtime build identity: HTTP ${response.status}`);
   }
   const identity = await validateRuntimeBuildIdentity(await response.json());
-  const [workerBytes, wasmBytes, glueBytes, verifierBytes] = await Promise.all([
+  // All four assets must match before either worker can use the compiled module.
+  const [, wasmBytes] = await Promise.all([
     fetchVerifiedRuntimeBytes(identity.files.worker),
     fetchVerifiedRuntimeBytes(identity.files.wasm),
     fetchVerifiedRuntimeBytes(identity.files.glue),
     fetchVerifiedRuntimeBytes(identity.files.verifier),
   ]);
-  // The worker/glue/verifier fetches prove the served module graph matches the
-  // recorded build under the controlled runner. The verified WASM bytes are
-  // additionally passed directly to wasm-bindgen by python-worker.js.
-  void workerBytes;
-  void glueBytes;
-  void verifierBytes;
   return Object.freeze({ identity, wasmBytes });
 }
 

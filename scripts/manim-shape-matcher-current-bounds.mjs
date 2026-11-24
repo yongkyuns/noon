@@ -23,14 +23,13 @@ context.bindMobject("1", target);
 context.associateValueTracker(tracker);
 context.bindTrackerPosition(target, context.trackerPosition(tracker, 1, 0, 0, 2));
 context.beginLiveExecution(1);
-const observation = context.queryMobjectLayout(target);
+const bounds = context.mobjectShapeMatcherBounds(target);
 near(target.centerX, 0, "authored center remains independent");
-near(observation.centerX, 3, "current center x");
-near(observation.centerY, 2, "current center y");
+assert.deepEqual([...bounds], [2, 1.5, 4, 2.5]);
+const cross = wasm.WasmManimGeometryOptions.crossLines(bounds, 1.5);
 
-function crossLine(index, expectedStart, expectedEnd) {
-  const candidate = observation.beginCrossLine(index, 1.5);
-  const line = context.liveCreateManimGeometry(candidate);
+function checkCrossLine(index, expectedStart, expectedEnd) {
+  const line = context.createManimGeometry(cross[index]);
   // A debug codec is used only to inspect the retained geometry in this test.
   const geometry = JSON.parse(line.snapshotJson()).geometry.line;
   near(geometry.start.x, expectedStart[0], `line ${index} start x`);
@@ -39,21 +38,20 @@ function crossLine(index, expectedStart, expectedEnd) {
   near(geometry.end.y, expectedEnd[1], `line ${index} end y`);
   line.free();
 }
-crossLine(0, [1.5, 2.75], [4.5, 1.25]);
+checkCrossLine(0, [1.5, 2.75], [4.5, 1.25]);
 // The first publication must not make the second child use a different view.
-crossLine(1, [4.5, 2.75], [1.5, 1.25]);
+checkCrossLine(1, [4.5, 2.75], [1.5, 1.25]);
 for (const candidate of [
-  observation.beginSurroundingRectangle(0, 0, 0),
-  observation.beginBackgroundRectangle(0, 0, 0, 0.75),
+  wasm.WasmManimGeometryOptions.surroundingRectangle(bounds, 0, 0, 0),
+  wasm.WasmManimGeometryOptions.backgroundRectangle(bounds, 0, 0, 0, 0.75),
 ]) {
-  const matcher = context.liveCreateManimGeometry(candidate);
+  const matcher = context.createManimGeometry(candidate);
   near(matcher.centerX, 3, "matcher current center x");
   near(matcher.centerY, 2, "matcher current center y");
   near(matcher.width, 2, "matcher width");
   near(matcher.height, 1, "matcher height");
   matcher.free();
 }
-observation.free();
 context.free();
 tracker.free();
 target.free();

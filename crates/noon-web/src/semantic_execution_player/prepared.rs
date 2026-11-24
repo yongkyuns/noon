@@ -1,0 +1,272 @@
+//! Interpreter-driven preparation uses this player's actual continuation receipt.
+//! Source calls remain with the interpreter; completion, history and identity do not.
+use super::{AuthoringFailure, LiveSegmentReceipt, SemanticExecutionPlayer};
+use noon::{ExecutionSegment, PrefixBatch, PrefixPublisher, PrefixReader};
+
+fn prefix_error(error: noon::PrefixError) -> AuthoringFailure {
+    AuthoringFailure::unclassified("prepared.prefix", &error)
+}
+
+pub(crate) enum PreparedPrefixAdvance {
+    Required(noon::SourceExecutionRequirement),
+    Advanced {
+        segment: ExecutionSegment,
+        publication: noon_core::PublicationContext,
+    },
+}
+
+impl SemanticExecutionPlayer {
+    pub(crate) fn observed_source_execution_requirement(
+        &self,
+    ) -> Option<noon::SourceExecutionRequirement> {
+        self.source
+            .session()
+            .continuation_execution_requirement(noon::ContinuationEffects::Opaque)
+    }
+
+    pub(crate) fn prefix_source_requirement(
+        &self,
+        publisher: &PrefixPublisher,
+        finished: bool,
+    ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
+        if finished {
+            self.completed_prepared_boundary()?;
+        }
+        self.source
+            .session()
+            .preflight_prepared_source(Some(publisher))
+            .map_err(prefix_error)
+    }
+
+    pub(crate) fn begin_observed_prefix_source(
+        &mut self,
+        publisher: &PrefixPublisher,
+        reader: &PrefixReader,
+        playing: bool,
+        finished: bool,
+    ) -> Result<(), AuthoringFailure> {
+        if finished {
+            self.completed_prepared_boundary()?;
+        } else {
+            self.live_segment()?;
+        }
+        if self
+            .source
+            .session_mut()
+            .begin_observed_prefix_source(publisher, reader)
+            .map_err(prefix_error)?
+            .is_none()
+        {
+            return Err("source does not require observed execution".into());
+        }
+        if playing && !finished {
+            self.resume();
+        } else {
+            self.pause_clock();
+        }
+        Ok(())
+    }
+    pub(crate) fn begin_observed_prepared_source(
+        &mut self,
+        effects: noon::ContinuationEffects,
+    ) -> Result<Option<noon::SourceExecutionRequirement>, AuthoringFailure> {
+        self.live_segment()?;
+        // An interpreter invocation may perform arbitrary host work after this
+        // await. Scene replay metadata is not a source-purity proof. Keep its
+        // original stack behind the ordinary observed completion protocol.
+        self.source
+            .session_mut()
+            .begin_observed_prepared_source(effects)
+            .map_err(prefix_error)
+    }
+
+    pub(crate) fn validate_prepared_publisher(
+        &self,
+        publisher: &PrefixPublisher,
+    ) -> Result<(), AuthoringFailure> {
+        self.source
+            .session()
+            .validate_prepared_publisher(publisher)
+            .map_err(prefix_error)
+    }
+
+    /// Complete the pending admitted segment without waiting for presentation.
+    /// This does not resume source, publish a renderer delta or authorize input.
+    /// A rejected source domain leaves its pending segment at the original time.
+    pub(crate) fn live_prepare_segment(&mut self) -> Result<f64, AuthoringFailure> {
+        self.live_prepare_prefix_segment(None)
+    }
+
+    pub(crate) fn live_prepare_prefix_segment(
+        &mut self,
+        publisher: Option<&PrefixPublisher>,
+    ) -> Result<f64, AuthoringFailure> {
+        let (segment, publication) = match self.live_advance_prepared_prefix_segment(publisher)? {
+            PreparedPrefixAdvance::Required(requirement) => {
+                return Err(AuthoringFailure::new(
+                    "unsupported_domain",
+                    "prepared.execution_required",
+                    format!("source requires observed execution: {requirement:?}"),
+                ));
+            }
+            PreparedPrefixAdvance::Advanced {
+                segment,
+                publication,
+            } => (segment, publication),
+        };
+        self.live_complete_prepared_prefix_segment(segment, publication)?;
+        Ok(segment.end_time())
+    }
+
+    pub(crate) fn live_advance_prepared_prefix_segment(
+        &mut self,
+        publisher: Option<&PrefixPublisher>,
+    ) -> Result<PreparedPrefixAdvance, AuthoringFailure> {
+        if let Some(requirement) = self
+            .source
+            .session()
+            .preflight_prepared_source(publisher)
+            .map_err(prefix_error)?
+        {
+            return Ok(PreparedPrefixAdvance::Required(requirement));
+        }
+        let segment = self.live_segment()?;
+        self.live_advance_segment_to(segment.end_time())?;
+        Ok(PreparedPrefixAdvance::Advanced {
+            segment,
+            publication: self.source.session().publication_context(),
+        })
+    }
+
+    pub(crate) fn live_complete_prepared_prefix_segment(
+        &mut self,
+        expected: ExecutionSegment,
+        publication: noon_core::PublicationContext,
+    ) -> Result<f64, AuthoringFailure> {
+        if self.live_segment()? != expected
+            || self.source.session().frame().time != expected.end_time()
+            || self.source.session().publication_context() != publication
+        {
+            return Err(prefix_error(noon::PrefixError::NotReady));
+        }
+        self.live_complete_segment()?;
+        Ok(expected.end_time())
+    }
+
+    fn completed_prepared_boundary(&self) -> Result<ExecutionSegment, AuthoringFailure> {
+        let Some(LiveSegmentReceipt::Completed(segment)) = self.live_segment else {
+            return Err(AuthoringFailure::new(
+                "pending_work",
+                "prepared.segment_pending",
+                "complete the source segment before publishing prepared history",
+            ));
+        };
+        if self.source.session().frame().time != segment.end_time()
+            || !self.source.session().segment_state(segment).is_complete()
+        {
+            return Err(prefix_error(noon::PrefixError::NotReady));
+        }
+        Ok(segment)
+    }
+
+    pub(crate) fn prepare_initial_source_segment(&mut self) -> Result<bool, AuthoringFailure> {
+        self.live_prepare_segment()?;
+        self.source
+            .session()
+            .has_prepared_prefix_interval(self.completed_prepared_boundary()?)
+            .map_err(prefix_error)
+    }
+
+    pub(crate) fn has_finished_static_source_profile(&self) -> bool {
+        self.source.session().frame().time == 0.0
+            && self.source.session().finite_timeline_end_time() == Some(0.0)
+            && !self.source.session().has_audio()
+            && !self.source.session().has_playback_controls()
+    }
+
+    pub(crate) fn create_finished_static_reader(
+        &mut self,
+    ) -> Result<Option<PrefixReader>, AuthoringFailure> {
+        self.require_callback_progression_available()?;
+        if self.live_segment.is_some() {
+            self.completed_prepared_boundary()?;
+        }
+        if !self.has_finished_static_source_profile() {
+            return Err(prefix_error(noon::PrefixError::NotReady));
+        }
+        if self
+            .source
+            .session()
+            .source_execution_requirement()
+            .is_some()
+        {
+            self.source
+                .session_mut()
+                .begin_observed_prepared_source(noon::ContinuationEffects::SceneOnly)
+                .map_err(prefix_error)?;
+            self.pause_clock();
+            return Ok(None);
+        }
+        if !self.source.session().replay_scope_active() {
+            self.source
+                .session_mut()
+                .begin_replay_retention(noon_runtime::ReplayLimits::default())
+                .map_err(|error| {
+                    AuthoringFailure::unclassified("prepared.static_source", &error)
+                })?;
+        }
+        self.source
+            .session_mut()
+            .seal_replay()
+            .map_err(|error| AuthoringFailure::unclassified("prepared.static_source", &error))?;
+        self.source
+            .session()
+            .create_finished_prepared_reader()
+            .map(Some)
+            .map_err(prefix_error)
+    }
+
+    pub(crate) fn create_prepared_prefix(
+        &self,
+    ) -> Result<(PrefixPublisher, PrefixReader), AuthoringFailure> {
+        self.source
+            .session()
+            .create_prepared_prefix(self.completed_prepared_boundary()?)
+            .map_err(prefix_error)
+    }
+
+    pub(crate) fn publish_prepared_prefix(
+        &self,
+        publisher: &mut PrefixPublisher,
+    ) -> Result<PrefixBatch, AuthoringFailure> {
+        self.source
+            .session()
+            .publish_prepared_prefix(self.completed_prepared_boundary()?, publisher)
+            .map_err(prefix_error)
+    }
+
+    /// Explicit source completion is distinct from segment completion/delivery.
+    /// Keep sealing separate from extraction so a foreign publisher cannot seal
+    /// an otherwise live source as an incidental side effect of a rejected call.
+    pub(crate) fn seal_prepared_source(&mut self) -> Result<(), AuthoringFailure> {
+        self.completed_prepared_boundary()?;
+        self.source
+            .session()
+            .validate_prepared_source_domain()
+            .map_err(prefix_error)?;
+        self.source
+            .session_mut()
+            .seal_replay()
+            .map_err(|error| AuthoringFailure::unclassified("prepared.seal", &error))
+    }
+
+    pub(crate) fn finish_prepared_prefix(
+        &self,
+        publisher: &mut PrefixPublisher,
+    ) -> Result<PrefixBatch, AuthoringFailure> {
+        self.source
+            .session()
+            .finish_prepared_prefix(self.completed_prepared_boundary()?, publisher)
+            .map_err(prefix_error)
+    }
+}

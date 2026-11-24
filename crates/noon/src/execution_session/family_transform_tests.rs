@@ -55,6 +55,155 @@ fn family(store: &mut SemanticStore, members: &[SemanticNodeId]) -> SemanticNode
     family
 }
 
+#[test]
+fn multiple_existing_family_targets_require_fixed_topology_before_publication() {
+    for target_count in [1, 2, 3] {
+        for reverse in [false, true] {
+            let mut store = SemanticStore::new();
+            let left = object(&mut store, -2.0);
+            let right = object(&mut store, 2.0);
+            let source = family(&mut store, &[left, right]);
+            let targets = (0..target_count)
+                .map(|i| object(&mut store, 4.0 + f64::from(i)))
+                .collect::<Vec<_>>();
+            let target = family(&mut store, &targets);
+            let peer_leaf = object(&mut store, -4.0);
+            let peer = family(&mut store, &[peer_leaf]);
+            let peer_target_leaf = object(&mut store, -6.0);
+            let peer_target = family(&mut store, &[peer_target_leaf]);
+            let root = family(&mut store, &[source, peer]);
+            let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+            session.take_frame_changes();
+            let context = session.publication_context();
+            let frame = session.frame().clone();
+            let nodes = store.len();
+            let options = AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear);
+            let mut children = vec![
+                SemanticCompositionRequest::FamilyMethodTargetTo {
+                    source,
+                    target_state: target,
+                    options,
+                },
+                SemanticCompositionRequest::FamilyMethodTargetTo {
+                    source: peer,
+                    target_state: peer_target,
+                    options,
+                },
+            ];
+            if reverse {
+                children.reverse();
+            }
+            let result = session.declare_and_activate_composition(
+                &mut store,
+                root,
+                &SemanticCompositionRequest::Composition {
+                    kind: SemanticAnimationCompositionKind::Parallel,
+                    options,
+                    children,
+                },
+                AnimationOptions::new(),
+            );
+            if target_count != 2 {
+                assert!(result.is_err());
+                assert_eq!(store.len(), nodes);
+                assert_eq!(session.publication_context(), context);
+                assert_eq!(session.frame(), &frame);
+                assert!(session.take_frame_changes().is_empty());
+            } else {
+                let segment = result.unwrap();
+                session.advance_segment_to(segment, 1.0).unwrap();
+                session.complete_segment(&mut store, segment).unwrap();
+                assert_eq!(
+                    store
+                        .semantic_object_state_checked(left)
+                        .unwrap()
+                        .transform
+                        .translation
+                        .x,
+                    4.0
+                );
+                assert_eq!(
+                    store
+                        .semantic_object_state_checked(peer_leaf)
+                        .unwrap()
+                        .transform
+                        .translation
+                        .x,
+                    -6.0
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_family_target_composes_with_disjoint_objects() {
+    for (target_count, overlap) in [(1_u32, false), (2, false), (3, false), (2, true)] {
+        let mut store = SemanticStore::new();
+        let left = object(&mut store, -2.0);
+        let right = object(&mut store, 2.0);
+        let source = family(&mut store, &[left, right]);
+        let targets = (0..target_count)
+            .map(|i| object(&mut store, 4.0 + f64::from(i)))
+            .collect::<Vec<_>>();
+        let target = family(&mut store, &targets);
+        let marker = object(&mut store, 0.0);
+        let root = family(&mut store, &[source, marker]);
+        let mut session = ExecutionSession::from_semantic_root(&store, root).unwrap();
+        session.take_frame_changes();
+        let context = session.publication_context();
+        let frame = session.frame().clone();
+        let nodes = store.len();
+        let options = AnimationOptions::new()
+            .run_time(1.0)
+            .rate_func(RateFunction::Linear);
+        let request = SemanticCompositionRequest::Composition {
+            kind: SemanticAnimationCompositionKind::Parallel,
+            options,
+            children: vec![
+                SemanticCompositionRequest::FamilyMethodTargetTo {
+                    source,
+                    target_state: target,
+                    options,
+                },
+                SemanticCompositionRequest::Rotate {
+                    target: if overlap { left } else { marker },
+                    angle: 1.0,
+                    hold_origin: false,
+                    options,
+                },
+            ],
+        };
+        let result = session.declare_and_activate_composition(
+            &mut store,
+            root,
+            &request,
+            AnimationOptions::new(),
+        );
+        if overlap {
+            assert!(result.is_err());
+            assert_eq!(store.len(), nodes);
+            assert_eq!(session.publication_context(), context);
+            assert_eq!(session.frame(), &frame);
+            assert!(session.take_frame_changes().is_empty());
+            continue;
+        }
+        let segment = result.unwrap();
+        session.advance_segment_to(segment, 0.5).unwrap();
+        assert_eq!(session.frame().objects[0].transform.translation.x, 1.0);
+        assert_eq!(session.frame().objects[2].transform.rotation, 0.5);
+        session.advance_segment_to(segment, 1.0).unwrap();
+        session.complete_segment(&mut store, segment).unwrap();
+        let members = store.node(source).unwrap().members();
+        assert_eq!(members.first(), Some(&left));
+        assert_eq!(members.last(), Some(&right));
+        assert_eq!(members.len(), target_count.max(2) as usize);
+        assert_eq!(session.frame().objects.len(), members.len() + 1);
+    }
+}
+
 fn expansion_session() -> (ExecutionSession, ExecutionSegment) {
     let mut store = SemanticStore::new();
     let s0 = object(&mut store, 0.0);
@@ -122,19 +271,36 @@ fn unequal_family_transform_publishes_one_identity_free_expansion_copy() {
         .unwrap()
         .to_vec();
 
+    let signal = store.insert_semantic_input_signal(0.0).unwrap();
+    let options = AnimationOptions::new()
+        .run_time(1.0)
+        .rate_func(RateFunction::Linear);
     let mut session = ExecutionSession::from_semantic_root(&store, source).unwrap();
-    let request = SemanticCompositionRequest::FamilyTransformTo {
-        source,
-        target_state: target,
-        options: AnimationOptions::new()
-            .run_time(1.0)
-            .rate_func(RateFunction::Linear),
+    let request = SemanticCompositionRequest::Composition {
+        kind: SemanticAnimationCompositionKind::Parallel,
+        options,
+        children: vec![
+            SemanticCompositionRequest::FamilyTransformTo {
+                source,
+                target_state: target,
+                options,
+            },
+            SemanticCompositionRequest::ValueTracker {
+                signal,
+                target: 1.0,
+                options,
+            },
+        ],
     };
     let segment = session
         .declare_and_activate_composition(&mut store, source, &request, AnimationOptions::new())
         .unwrap();
 
     session.advance_segment_to(segment, 0.5).unwrap();
+    assert_eq!(
+        session.effective_signal_value(signal),
+        Some(&ReactiveValue::Scalar(0.5))
+    );
     {
         let publication = session.take_renderer_publication();
         assert_eq!(publication.transient_presentations().len(), 1);
@@ -153,6 +319,10 @@ fn unequal_family_transform_publishes_one_identity_free_expansion_copy() {
 
     session.advance_segment_to(segment, 1.0).unwrap();
     session.complete_segment(&mut store, segment).unwrap();
+    assert_eq!(
+        session.effective_signal_value(signal),
+        Some(&ReactiveValue::Scalar(1.0))
+    );
     let persisted = store
         .semantic_family_members_checked(source)
         .unwrap()

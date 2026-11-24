@@ -30,14 +30,14 @@ pub fn session() -> Result<crate::SceneExecution, String> {
         negative_radius.set_color(252.0 / 255.0, 98.0 / 255.0, 85.0 / 255.0, 1.0)?;
 
         scene.add_many(&[(&arc).into(), (&between).into(), (&negative_radius).into()])?;
-        let mut session = scene.execution_session()?;
+        let mut execution = scene.into_execution()?;
         {
-            let mut live = scene.live(&mut session);
+            let mut live = execution.live();
             let wait = live.wait_segment(0.2)?;
             live.advance_segment_to(wait, wait.end_time())?;
             live.complete_segment(wait)?;
         }
-        Ok(scene.into_execution_with_session(session)?)
+        Ok(execution)
     };
     build().map_err(|error| error.to_string())
 }

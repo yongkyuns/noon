@@ -84,6 +84,10 @@ mod authoring_table;
 mod authoring_tangent_line;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 mod background_audio_example;
+#[cfg(all(feature = "blocking-scene", target_arch = "wasm32"))]
+mod blocking_scene;
+#[cfg(all(feature = "blocking-scene", target_arch = "wasm32"))]
+pub use blocking_scene::*;
 #[cfg(any(target_arch = "wasm32", test))]
 mod browser_pointer_input;
 mod canonical_authoring_scene;
@@ -94,6 +98,7 @@ mod canonical_authoring_scene;
 ))]
 mod click_glow_pulse_smoke;
 mod clock;
+mod video_asset;
 #[cfg(any(target_arch = "wasm32", test))]
 mod worker_audio;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
@@ -124,6 +129,8 @@ mod geometry_export;
 #[cfg(all(feature = "renderer", any(target_arch = "wasm32", test)))]
 mod gpu_diagnostics;
 #[cfg(all(feature = "renderer", target_arch = "wasm32"))]
+mod gpu_effect_programs;
+#[cfg(all(feature = "renderer", target_arch = "wasm32"))]
 mod gpu_timestamps;
 mod manim_scale_bridge;
 #[cfg(target_arch = "wasm32")]
@@ -144,6 +151,18 @@ mod plot_error;
     any(debug_assertions, feature = "renderer-smoke")
 ))]
 mod pointer_selection_smoke;
+#[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+mod prepared_canvas_playback;
+#[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+mod prepared_execution_player;
+#[cfg(all(
+    feature = "renderer-smoke",
+    feature = "wgsl-effects",
+    any(target_arch = "wasm32", test)
+))]
+mod shader_worker_smoke;
+#[cfg(all(feature = "prepared-prefix", any(target_arch = "wasm32", test)))]
+pub use prepared_execution_player::PreparedExecutionPlayer;
 #[cfg(all(
     feature = "renderer",
     target_arch = "wasm32",
@@ -179,6 +198,8 @@ mod signal_trains_smoke;
 mod webgl_context_lifecycle;
 mod worker_pointer_presentation;
 pub use worker_pointer_presentation::PointerPresentationView;
+mod export_wire;
+pub use export_wire::export_source_preparation_limit_json;
 mod semantic_execution_player;
 #[cfg(target_arch = "wasm32")]
 mod text_colors;
@@ -280,3 +301,18 @@ pub use text_parts::*;
     )
 ))]
 mod glow_worker_smoke;
+
+#[cfg(all(
+    feature = "prepared-prefix",
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+mod prepared_canvas_smoke;
+#[cfg(all(
+    feature = "prepared-prefix",
+    feature = "renderer",
+    target_arch = "wasm32",
+    any(debug_assertions, feature = "renderer-smoke")
+))]
+pub use prepared_canvas_smoke::*;

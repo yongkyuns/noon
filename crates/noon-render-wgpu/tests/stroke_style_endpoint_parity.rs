@@ -90,13 +90,13 @@ fn renderer_packed_static_and_identity_morph_endpoints_match_for_every_style() {
 
             let mut static_preparer = FramePreparer::new();
             let static_frame = frame(GeometryRef::path(source.clone()), style);
-            let static_prepared = static_preparer.prepare(&static_frame);
+            let static_prepared = static_preparer.prepare(&static_frame).unwrap();
             let expected = stroke_bounds(static_prepared.path_vertices, false);
 
             let morph = source.clone().with_morph_target(source.clone());
             let mut morph_preparer = FramePreparer::new();
             let morph_frame = frame(GeometryRef::path(morph), style);
-            let morph_prepared = morph_preparer.prepare(&morph_frame);
+            let morph_prepared = morph_preparer.prepare(&morph_frame).unwrap();
 
             assert_bounds_close(stroke_bounds(morph_prepared.path_vertices, false), expected);
             assert_bounds_close(stroke_bounds(morph_prepared.path_vertices, true), expected);

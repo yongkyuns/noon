@@ -2,7 +2,85 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts } from "./playground-product-fps.mjs";
+import { productMeasurement, sampleRendererFps, samplePresentationGaps, sampleRendererCosts,
+  freshProductRunSettled } from "./playground-product-fps.mjs";
+
+test("product Run waits for its own generation, not the previous applied patch", () => {
+  let runGeneration = 4, patchGeneration = "4", patchState = "applied", runInFlight = false;
+  let statusState = "ready";
+  const browser = {
+    __noonExampleGallery: {generationDiagnostics: {get runGeneration() { return runGeneration; }},
+      get runInFlight() { return runInFlight; }},
+    document: {querySelector(selector) {
+      if (selector === "#patch-status") return {dataset: {
+        get state() { return patchState; },
+        get runGeneration() { return patchGeneration; },
+      }};
+      if (selector === "#status") return {dataset: {get state() { return statusState; }}};
+      return null;
+    }},
+  };
+  assert.equal(freshProductRunSettled(4, browser), false);
+  runGeneration = 5; runInFlight = true;
+  assert.equal(freshProductRunSettled(4, browser), false, "old applied patch cannot admit the new Run");
+  patchGeneration = "5"; patchState = "running";
+  assert.equal(freshProductRunSettled(4, browser), false);
+  patchState = "applied";
+  assert.equal(freshProductRunSettled(4, browser), true,
+    "the correct new patch is observable while the source continuation is still active");
+  patchState = "error";
+  assert.equal(freshProductRunSettled(4, browser), true,
+    "a true same-generation source error must remain visible");
+  patchState = "running"; statusState = "error"; runInFlight = false;
+  assert.equal(freshProductRunSettled(4, browser), true,
+    "startup failure before patch identity is still reported");
+});
+
+test("baseline applied status requires a completed new source run and exact example identity", () => {
+  let runGeneration = 7, inFlight = true, finished = null;
+  let patchState = "applied", patchGeneration = "6", selectedExampleId = "showcase-first-scene";
+  let runExampleId = "showcase-first-scene";
+  const browser = {
+    __noonExampleGallery: {
+      generationDiagnostics: {get runGeneration() { return runGeneration; }},
+      get runInFlight() { return inFlight; },
+      get selectedExampleId() { return selectedExampleId; },
+      runPhaseMetrics: {
+        get runGeneration() { return runGeneration; },
+        get exampleId() { return runExampleId; },
+        get sourceRunCompletedAtMs() { return finished; },
+      },
+    },
+    document: {querySelector(selector) {
+      if (selector === "#patch-status") return {dataset: {
+        get state() { return patchState; },
+        get runGeneration() { return patchGeneration; },
+        exampleId: "showcase-first-scene",
+      }};
+      if (selector === "#status") return {dataset: {state:"ready"}};
+      return null;
+    }},
+  };
+  const baseline = {previousGeneration: 6, allowLegacyBaseline: true};
+  const candidate = {previousGeneration: 6, allowLegacyBaseline: false};
+  assert.equal(freshProductRunSettled(baseline, browser), false, "old applied status cannot pass during new source");
+  inFlight = false;
+  assert.equal(freshProductRunSettled(baseline, browser), false, "no completion proof");
+  finished = 1234;
+  assert.equal(freshProductRunSettled(candidate, browser), false, "candidate cannot use legacy admission");
+  assert.equal(freshProductRunSettled(baseline, browser), true, "baseline's new completed run is accepted");
+  runExampleId = "different-example";
+  assert.equal(freshProductRunSettled(baseline, browser), false, "mismatched source identity");
+  runExampleId = selectedExampleId;
+  patchState = "running";
+  assert.equal(freshProductRunSettled(baseline, browser), false, "no running patch accepted");
+  patchState = "applied";
+  runGeneration = 6;
+  assert.equal(freshProductRunSettled(baseline, browser), false, "old generation cannot pass");
+  runGeneration = 7;
+  patchGeneration = "7";
+  assert.equal(freshProductRunSettled(candidate, browser), true, "normal current run keeps strict receipt");
+});
 
 function sample({
   now = 0,
@@ -55,6 +133,26 @@ test("product FPS ignores a cold setup session and measures a complete authored 
 test("product FPS rejects a session that never completes the authored pass", () => {
   assert.throws(() => sampleRendererFps(observations({ endTime: 0.9 }), 3),
     /no settled renderer epoch covered/);
+});
+
+test("prepared playback remains measurable after source preparation completes", () => {
+  const live = observations();
+  const prepared = live.map(sample => ({ ...sample,
+    runInFlight: false, playbackControls: "available" }));
+  assert.deepEqual(sampleRendererFps(prepared, 3), sampleRendererFps(live, 3));
+  assert.throws(() => sampleRendererFps(prepared.map(sample => ({ ...sample,
+    playbackControls: "unavailable" })), 3), /not expose enough/);
+});
+
+test("FPS uses the earliest observed bounded crossing without clamping its timestamp", () => {
+  const samples = observations({ endTime: 3.02, endAt: 5_020 });
+  const crossing = samples.at(-1);
+  const later = { ...crossing, metricAt: 1_000, rendererAt: 8_000 };
+  const fps = sampleRendererFps([...samples, later], 3);
+  assert.equal(fps.endTime, 3.02);
+  assert.equal(fps.endRendererAt, 5_020);
+  assert.ok(Math.abs(fps.endDelaySeconds - 0.02) < 1e-10);
+  assert.throws(() => sampleRendererFps(observations({ endTime: 3.2 }), 3), /no settled renderer epoch/);
 });
 
 test("product FPS discards stale and unsettled metric replies", () => {
@@ -226,13 +324,13 @@ test("camera measurement isolates following from setup, restoration, and endpoin
   assert.throws(() => productMeasurement("unqualified-scene"), /unsupported product measurement/);
 });
 
-test("the camera measurement window follows the curated source's authored beats", async () => {
-  const source = await readFile(new URL("../web/python/examples/showcase_camera_follows_path.py", import.meta.url), "utf8");
+test("the camera measurement window follows the preserved callback fixture's authored beats", async () => {
+  const protocol = productMeasurement("showcase-camera-follows-path");
+  const source = await readFile(new URL(`../web/${protocol.sourcePath}`, import.meta.url), "utf8");
   const [setup, following] = source.split("camera_frame.add_updater(follow_point)");
   assert.ok(following, "the measured camera lesson must use its required Python updater");
-  const duration = section => [...section.matchAll(/run_time=([0-9.]+)|await self\.wait\(([0-9.]+)\)/g)]
+  const duration = section => [...section.matchAll(/run_time=([0-9.]+)|self\.wait\(([0-9.]+)\)/g)]
     .reduce((total, match) => total + Number(match[1] ?? match[2]), 0);
-  const protocol = productMeasurement("showcase-camera-follows-path");
   assert.ok(Math.abs(duration(setup) - protocol.windowStartSeconds) < 0.001);
   assert.ok(Math.abs(duration(setup) + duration(following.split("camera_frame.remove_updater")[0]) -
     protocol.windowEndSeconds) < 0.001);

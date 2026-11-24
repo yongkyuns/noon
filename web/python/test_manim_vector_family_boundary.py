@@ -115,7 +115,7 @@ class VectorFamilyBoundaryTests(unittest.TestCase):
         root, _ = self.family()
         context = Mock()
         context.queryFamilyVectorBoundaryPoints3D.return_value = [1., 2.]
-        with patch.object(handles, '_group_live_layout_context', return_value=context):
+        with patch.object(handles, '_group_layout_context', return_value=context):
             self.assertEqual(handles._vector_boundary_points_observation(root), [1., 2.])
             context.queryFamilyVectorBoundaryPoints3D.side_effect = RuntimeError('stale publication')
             with self.assertRaisesRegex(Exception, 'stale publication'):
@@ -130,7 +130,7 @@ class VectorFamilyBoundaryTests(unittest.TestCase):
         owned = Mock(pointCount=4)
         owned.anchors3D.return_value = [-2., 1., 0., 2., 1., 0.]
         root._semantic_family_handle.pathQuery = Mock(return_value=owned)
-        with patch.object(handles, '_live_mutation_context', return_value=None), patch.object(handles, '_live_constructor_context', return_value=None):
+        with patch.object(handles, '_path_authoring_context', return_value=None):
             result = root.get_points_defining_boundary()
         self.assertEqual([list(point) for point in result], [[-2., 1., 0.], [2., 1., 0.], [9., 8., 0.]])
         root._semantic_family_handle.pathQuery.assert_called_once_with()

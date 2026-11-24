@@ -1,44 +1,72 @@
 use super::SemanticExecutionPlayer;
 use crate::AuthoringFailure;
-use noon::effects::{EffectDefinition, EffectSelector, EffectUpdate};
-use noon::Mobject;
+#[cfg(target_arch = "wasm32")]
+use noon::{effects::EffectDefinition, MobjectTarget};
 
 impl SemanticExecutionPlayer {
-    pub(crate) fn live_set_glow(
-        &mut self,
-        object: &Mobject,
-        update: EffectUpdate,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_glow(object, update))
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn require_effect_resource_preparation(&mut self) {
+        self.source
+            .session_mut()
+            .require_effect_resource_preparation();
     }
 
-    pub(crate) fn live_add_effect(
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn prepare_effect_addition<'owner>(
         &mut self,
-        object: &Mobject,
+        object: impl Into<MobjectTarget<'owner>>,
         definition: EffectDefinition,
         name: &str,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.add_effect(object, definition, name))
+    ) -> Result<noon::StagedEffectPublication, AuthoringFailure> {
+        self.source
+            .scene_mut()
+            .prepare_effect_attachments([(object, definition, name)])
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
-    pub(crate) fn live_set_effect(
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn prepare_family_membership(
         &mut self,
-        object: &Mobject,
-        selector: EffectSelector<'_>,
-        update: EffectUpdate,
-    ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.set_effect(object, selector, update))
+        family: MobjectTarget<'_>,
+        members: &[MobjectTarget<'_>],
+    ) -> Result<noon::StagedEffectPublication, AuthoringFailure> {
+        self.require_completed_live_segment()?;
+        self.source
+            .scene_mut()
+            .prepare_family_addition(family, members)
+            .map(|(pending, _)| pending)
+            .map_err(|error| AuthoringFailure::from_scene_mutation(error, true))
     }
 
-    pub(crate) fn live_remove_effect(
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn effect_preparation_bytes(
+        &self,
+        pending: &noon::StagedEffectPublication,
+    ) -> Result<Vec<u8>, String> {
+        crate::retained_resource_transport::shader_programs::encode_shader_preparation(
+            pending.programs(),
+            |program| self.encoder.shader_program_handle(program),
+        )
+    }
+
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn publish_effect_addition(
         &mut self,
-        object: &Mobject,
-        selector: EffectSelector<'_>,
+        staged: noon::StagedEffectPublication,
     ) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.remove_effect(object, selector))
+        if let Some(segment) = self.with_live_session(|live| live.publish_staged_effects(staged))? {
+            self.admit_live_segment(segment);
+        }
+        Ok(())
     }
 
-    pub(crate) fn live_remove_glow(&mut self, object: &Mobject) -> Result<(), AuthoringFailure> {
-        self.with_live_session(|live| live.remove_glow(object))
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn prepare_composition(
+        &mut self,
+        request: &noon::AnimationCompositionRequest<'_>,
+        options: noon_core::AnimationOptions,
+    ) -> Result<noon::StagedEffectPublication, AuthoringFailure> {
+        self.require_completed_live_segment()?;
+        self.with_live_session(|live| live.prepare_composition(request, options))
     }
 }

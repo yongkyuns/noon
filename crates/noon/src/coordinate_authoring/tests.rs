@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveProgramStatus,
-    LiveSession, ManimRotationPivot, RateFunction, RustHostCallbackTable,
+    ManimRotationPivot, RateFunction, RustHostCallbackTable,
 };
 
 fn near(actual: [f64; 2], expected: [f64; 2]) {
@@ -33,6 +33,92 @@ fn resources(scene: &Scene) -> usize {
         .borrow()
         .geometry_resources()
         .len()
+}
+
+#[test]
+fn scene_plane_frames_observe_detached_and_animating_axes() {
+    let mut scene = Scene::new();
+    let plane = scene.polar_plane(&polar_options()).unwrap();
+    let shaft = plane.x_axis().unwrap().shaft().unwrap();
+    let mut target = shaft.target_editor().unwrap();
+    target.set_scale(2.0, 1.0).unwrap();
+    let animation = scene
+        .declare_transform_to(
+            &shaft,
+            &target,
+            AnimationOptions::new()
+                .run_time(1.0)
+                .rate_func(RateFunction::Linear),
+        )
+        .unwrap();
+    let mut running = scene.into_execution().unwrap();
+    let detached = running.scene().effective_polar_plane_frame(&plane).unwrap();
+    near(detached.polar_to_point(1.0, 0.0).unwrap(), [1.0, 0.0]);
+    near(detached.point_to_polar([1.0, 0.0]).unwrap(), [1.0, 0.0]);
+
+    running
+        .scene_mut()
+        .add_many(&[plane.family().into()])
+        .unwrap();
+    let segment = running.live().play_animation(&animation).unwrap();
+    running.live().advance_segment_to(segment, 0.5).unwrap();
+    let publication = running.session().publication_context();
+    let frame = running
+        .scene()
+        .effective_number_plane_frame(&plane)
+        .unwrap();
+    near(frame.coords_to_point(1.0, 0.5).unwrap(), [1.5, 0.5]);
+    near(frame.point_to_coords([1.5, 0.5]).unwrap(), [1.0, 0.5]);
+    assert_eq!(
+        running
+            .scene()
+            .effective_polar_plane_frame(&plane)
+            .unwrap()
+            .axes(),
+        frame
+    );
+    assert_eq!(running.session().publication_context(), publication);
+}
+
+#[test]
+fn scene_plane_frames_reject_unavailable_publications_for_detached_axes() {
+    use crate::{ExecutionSessionCallbackError, ExecutionSessionPublicationError};
+    use noon_core::HostCallbackId;
+
+    let mut scene = Scene::new();
+    let plane = scene.polar_plane(&polar_options()).unwrap();
+    let mut marker = scene.circle(0.2).unwrap();
+    scene.add(&marker).unwrap();
+    let mut transaction = SemanticMutationTransaction::new();
+    transaction.add_updater(marker.node_id(), HostCallbackId::new(9), 0.0, None);
+    transaction
+        .apply(&mut scene.integration_store().borrow_mut())
+        .unwrap();
+    let mut running = scene.into_execution().unwrap();
+    assert!(matches!(
+        running
+            .session_mut()
+            .advance_to_callback_barrier(0.0)
+            .unwrap(),
+        crate::execution_session::CallbackAdvance::HostRequired { .. }
+    ));
+    let publication = running.session().publication_context();
+    assert!(matches!(
+        running.scene().effective_number_plane_frame(&plane),
+        Err(CoordinateAuthoringError::Authoring(
+            AuthoringError::ExecutionCallback(ExecutionSessionCallbackError::Pending(_))
+        ))
+    ));
+    marker.shift(0.0, 1.0).unwrap();
+    assert!(matches!(
+        running.scene().effective_polar_plane_frame(&plane),
+        Err(CoordinateAuthoringError::Authoring(
+            AuthoringError::ExecutionPublication(
+                ExecutionSessionPublicationError::StaleSceneRevision { .. }
+            )
+        ))
+    ));
+    assert_eq!(running.session().publication_context(), publication);
 }
 
 #[test]
@@ -963,7 +1049,8 @@ struct MovingAxes {
 impl LiveContinuation for MovingAxes {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
+        let live = &mut scene.live();
         if self.started {
             return Ok(ContinuationStep::Finished);
         }
@@ -1016,7 +1103,7 @@ fn effective_axis_queries_follow_active_drivers_without_semantic_churn() {
             .unwrap(),
         [0.0, 0.0],
     );
-    let frame = axes.effective_frame(program.session()).unwrap();
+    let frame = program.scene().axes_frame(&axes).unwrap();
     near(frame.coords_to_point(0.0, 0.0).unwrap(), [1.0, 2.0]);
     near(frame.point_to_coords([1.5, 2.25]).unwrap(), [0.5, 0.25]);
     assert_eq!(
@@ -1052,11 +1139,13 @@ fn graph_input_queries_choose_authored_or_effective_axes_without_publication() {
     );
     let calls = std::cell::Cell::new(0);
     near(
-        axes.effective_input_to_graph_point(program.session(), 0.5, |x| {
-            calls.set(calls.get() + 1);
-            x * x
-        })
-        .unwrap(),
+        program
+            .scene()
+            .input_to_graph_point(&axes, 0.5, |x| {
+                calls.set(calls.get() + 1);
+                x * x
+            })
+            .unwrap(),
         [1.5, 2.25],
     );
     assert_eq!(calls.get(), 1);
@@ -1076,8 +1165,8 @@ fn direct_and_forward_effective_coordinate_samples_agree() {
     forward.drive_to(&mut forward_callbacks, 0.25).unwrap();
     forward.drive_to(&mut forward_callbacks, 0.5).unwrap();
     assert_eq!(
-        direct_axes.effective_frame(direct.session()).unwrap(),
-        forward_axes.effective_frame(forward.session()).unwrap(),
+        direct.scene().axes_frame(&direct_axes).unwrap(),
+        forward.scene().axes_frame(&forward_axes).unwrap(),
     );
 }
 

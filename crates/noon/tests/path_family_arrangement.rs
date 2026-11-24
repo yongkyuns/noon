@@ -24,32 +24,14 @@ fn coarse_path_arrangement_uses_anchors_and_grid_uses_dimensions() {
             let unrelated_state = unrelated.state().unwrap();
             scene.add_many(&[(&family).into()]).unwrap();
             let revision = scene.revision();
-            let mut session = scene.execution_session().unwrap();
-            if live_mode {
-                let mut live = scene.live(&mut session);
-                if grid {
-                    live.arrange_family_in_grid_with_options(
-                        &family,
-                        &noon::FamilyGridOptions {
-                            rows: Some(1),
-                            columns: Some(2),
-                            gap: (0.25, 0.25),
-                            ..Default::default()
-                        },
-                    )
-                    .unwrap();
-                } else {
-                    live.arrange_family_with_options(
-                        &family,
-                        &noon::FamilyArrangeOptions::new(1., 0., 0.25, true),
-                    )
-                    .unwrap();
-                }
-                close(
-                    live.effective_layout(&first).unwrap().center.0,
-                    first.center().unwrap().0,
-                );
-            } else if grid {
+            let mut execution;
+            let scene = if live_mode {
+                execution = scene.into_execution().unwrap();
+                execution.scene_mut()
+            } else {
+                &mut scene
+            };
+            if grid {
                 scene
                     .arrange_family_in_grid_with_options(
                         &family,
@@ -68,6 +50,12 @@ fn coarse_path_arrangement_uses_anchors_and_grid_uses_dimensions() {
                         &noon::FamilyArrangeOptions::new(1., 0., 0.25, true),
                     )
                     .unwrap();
+            }
+            if live_mode {
+                close(
+                    scene.effective_layout(&first).unwrap().center.0,
+                    first.center().unwrap().0,
+                );
             }
             let distance = second.center().unwrap().0 - first.center().unwrap().0;
             close(

@@ -3,13 +3,11 @@ mod boundary_profiles;
 mod point_arrays;
 mod point_counts;
 mod point_values;
+pub(crate) use boundary_profiles::authored_content_requires_boundary;
 pub use boundary_profiles::effective_requires_content_boundary;
-pub use point_arrays::{effective_point_array, PointArrayObservation};
-pub use point_counts::effective_mobject_point_count;
-pub use point_values::{
-    effective_all_points_3d, effective_critical_point_3d, effective_path_boundary_points_3d,
-    effective_vector_boundary_points_3d,
-};
+pub use point_arrays::PointArrayObservation;
+pub(crate) use point_counts::effective_mobject_point_count;
+use point_values::effective_vector_boundary_points_3d;
 
 use crate::{
     AuthoringError, ExecutionSession, Mobject, MobjectTarget, UnsupportedAuthoringOperation,
@@ -1238,24 +1236,12 @@ pub fn effective_point_reduction_tree(
         point_reduction_topology(&semantics, target.node_id())?
     };
     point_reduction_tree_from_topology(&topology, &mut |id| {
-        family_point_path_query(store, execution, id)?.points_3d()
-    })
-}
-
-/// Observe current effective points for all object occurrences below a target.
-/// Membership is snapshotted once; each immutable path query reads the same
-/// execution session and preserves Manim's recursive alias multiplicity.
-pub fn effective_all_points(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    target: MobjectTarget<'_>,
-) -> Result<Vec<(f64, f64)>, AuthoringError> {
-    effective_point_array(store, execution, target).map(|array| {
-        array
-            .into_points()
-            .into_iter()
-            .map(SemanticVec3::xy)
-            .collect()
+        captured_path_query(
+            store,
+            Some(execution),
+            &Mobject::from_node(Rc::clone(store), id)?,
+        )?
+        .points_3d()
     })
 }
 
@@ -1302,120 +1288,200 @@ fn effective_point_observation_map<P>(
     let occurrences = observation.nodes(&store.borrow(), target.node_id())?;
     let mut result = Vec::new();
     for id in occurrences {
-        result.extend(point_reader(&family_point_path_query(
-            store, execution, id,
+        let object = Mobject::from_node(Rc::clone(store), id)?;
+        result.extend(point_reader(&captured_path_query(
+            store,
+            Some(execution),
+            &object,
         )?)?);
     }
     Ok(result)
 }
 
-// Membership/coherence is validated once by the recursive observation. A
-// detached node has no live execution value: its current authored path remains
-// queryable without admitting it to the scene. Reachable children still use the
-// same effective runtime publication, including animation/content overrides.
-fn family_point_path_query(
+// The caller checks publication coherence before observing a reachable or detached object.
+pub(crate) fn captured_path_query(
     store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    id: SemanticNodeId,
+    execution: Option<&ExecutionSession>,
+    object: &Mobject,
 ) -> Result<PathQuery, AuthoringError> {
-    let object = Mobject::from_node(Rc::clone(store), id)?;
-    if execution.semantic_object_is_reachable(id) {
-        effective_path_query(store, execution, &object)
+    if let Some(execution) =
+        execution.filter(|session| session.semantic_object_is_reachable(object.node_id()))
+    {
+        effective_path_query(store, execution, object)
     } else {
         object.path_query()
     }
 }
 
-/// Observe effective vector-path boundary anchors for an object. Family targets
-/// keep Mobject's base behavior and return their recursive point arrays.
-pub fn effective_path_boundary_points(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    target: MobjectTarget<'_>,
-) -> Result<Vec<(f64, f64)>, AuthoringError> {
-    match target {
-        MobjectTarget::Object(_) => effective_vector_boundary_points(store, execution, target),
-        MobjectTarget::Family(_) => effective_all_points(store, execution, target),
+impl crate::Scene {
+    /// Capture recursive points projected onto XY, preserving alias multiplicity.
+    pub fn all_points(&self, target: MobjectTarget<'_>) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        Ok(self
+            .all_points_3d(target)?
+            .into_iter()
+            .map(SemanticVec3::xy)
+            .collect())
     }
-}
 
-/// Observe one dimension's vector-path anchor extremum in the current execution.
-pub fn effective_path_boundary_extremum_along_dim(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    target: MobjectTarget<'_>,
-    dim: usize,
-    key: f64,
-) -> Result<f64, AuthoringError> {
-    extremum_for_xyz_points(
-        &effective_path_boundary_points_3d(store, execution, target)?,
-        dim,
-        key,
-    )
-}
+    /// Capture full-coordinate points in recursive order, including repeated aliases.
+    pub fn all_points_3d(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<SemanticVec3>, AuthoringError> {
+        self.point_array(target)
+            .map(PointArrayObservation::into_points)
+    }
 
-/// Observe the effective vector-path boundary anchor farthest along a direction.
-pub fn effective_path_boundary_point(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    target: MobjectTarget<'_>,
-    direction_x: f64,
-    direction_y: f64,
-) -> Result<(f64, f64), AuthoringError> {
-    boundary_point_for_xy_points(
-        &effective_path_boundary_points(store, execution, target)?,
-        direction_x,
-        direction_y,
-    )
-}
+    /// Capture full-coordinate vector anchors in unique family order.
+    pub fn vector_boundary_points_3d(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<SemanticVec3>, AuthoringError> {
+        if let Some(execution) = self.running_execution() {
+            return effective_vector_boundary_points_3d(
+                self.integration_store(),
+                execution,
+                target,
+            );
+        }
+        target.require_store(self.integration_store())?;
+        target.vector_boundary_points_3d()
+    }
 
-/// Observe one dimension's Manim-style extremum from the current execution.
-pub fn effective_extremum_along_dim(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    target: MobjectTarget<'_>,
-    dim: usize,
-    key: f64,
-) -> Result<f64, AuthoringError> {
-    extremum_for_xyz_points(
-        &effective_all_points_3d(store, execution, target)?,
-        dim,
-        key,
-    )
-}
+    /// Capture planar vector anchors in unique family order.
+    pub fn vector_boundary_points(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        if let Some(execution) = self.running_execution() {
+            return effective_vector_boundary_points(self.integration_store(), execution, target);
+        }
+        target.require_store(self.integration_store())?;
+        target.vector_boundary_points()
+    }
 
-/// Observe the average point position from the current execution publication.
-pub fn effective_center_of_mass(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    target: MobjectTarget<'_>,
-) -> Result<(f64, f64), AuthoringError> {
-    center_of_mass_for_xy_points(&effective_all_points(store, execution, target)?)
-}
+    /// Capture owned points and ordered child occurrences in one snapshot.
+    pub fn point_reduction_tree(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<PointReductionTree, AuthoringError> {
+        if let Some(execution) = self.running_execution() {
+            return effective_point_reduction_tree(self.integration_store(), execution, target);
+        }
+        target.require_store(self.integration_store())?;
+        target.point_reduction_tree()
+    }
 
-/// Observe the current boundary point with the greatest directional projection.
-pub fn effective_boundary_point(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    target: MobjectTarget<'_>,
-    direction_x: f64,
-    direction_y: f64,
-) -> Result<(f64, f64), AuthoringError> {
-    boundary_point_for_xy_points(
-        &effective_all_points(store, execution, target)?,
-        direction_x,
-        direction_y,
-    )
-}
+    /// Select retained-content layout when any addressed member has opaque content.
+    pub fn requires_content_boundary(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<bool, AuthoringError> {
+        if let Some(execution) = self.running_execution() {
+            return effective_requires_content_boundary(
+                self.integration_store(),
+                execution,
+                target,
+            );
+        }
+        target.require_store(self.integration_store())?;
+        target.requires_content_boundary()
+    }
 
-/// Observe the current point extent along one coordinate dimension.
-pub fn effective_length_over_dim(
-    store: &Rc<RefCell<SemanticStore>>,
-    execution: &ExecutionSession,
-    target: MobjectTarget<'_>,
-    dim: usize,
-) -> Result<f64, AuthoringError> {
-    length_over_xyz_points(&effective_all_points_3d(store, execution, target)?, dim)
+    /// Read the current critical point from recursive points or unique vector anchors.
+    pub fn critical_point_3d(
+        &self,
+        target: MobjectTarget<'_>,
+        direction: SemanticVec3,
+        vector_boundary: bool,
+    ) -> Result<SemanticVec3, AuthoringError> {
+        let points = if vector_boundary {
+            self.vector_boundary_points_3d(target)?
+        } else {
+            self.all_points_3d(target)?
+        };
+        point_values::critical_point_for_xyz_points(&points, direction)
+    }
+
+    /// Read the min, midpoint, or max of the current points along one dimension.
+    pub fn extremum_along_dim(
+        &self,
+        target: MobjectTarget<'_>,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringError> {
+        extremum_for_xyz_points(&self.all_points_3d(target)?, dim, key)
+    }
+
+    /// Read the arithmetic mean of the current planar points.
+    pub fn center_of_mass(&self, target: MobjectTarget<'_>) -> Result<(f64, f64), AuthoringError> {
+        center_of_mass_for_xy_points(&self.all_points(target)?)
+    }
+
+    /// Read the current point with the greatest projection along a planar direction.
+    pub fn boundary_point(
+        &self,
+        target: MobjectTarget<'_>,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringError> {
+        boundary_point_for_xy_points(&self.all_points(target)?, direction_x, direction_y)
+    }
+
+    /// Read the extent of the current points along one dimension.
+    pub fn length_over_dim(
+        &self,
+        target: MobjectTarget<'_>,
+        dim: usize,
+    ) -> Result<f64, AuthoringError> {
+        length_over_xyz_points(&self.all_points_3d(target)?, dim)
+    }
+
+    /// Capture planar vector anchors for one object or recursive points for a family.
+    pub fn path_boundary_points(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<(f64, f64)>, AuthoringError> {
+        match target {
+            MobjectTarget::Object(_) => self.vector_boundary_points(target),
+            MobjectTarget::Family(_) => self.all_points(target),
+        }
+    }
+
+    /// Capture full-coordinate vector anchors for one object or recursive points for a family.
+    pub fn path_boundary_points_3d(
+        &self,
+        target: MobjectTarget<'_>,
+    ) -> Result<Vec<SemanticVec3>, AuthoringError> {
+        match target {
+            MobjectTarget::Object(_) => self.vector_boundary_points_3d(target),
+            MobjectTarget::Family(_) => self.all_points_3d(target),
+        }
+    }
+
+    /// Read a path-boundary extremum along one dimension.
+    pub fn path_boundary_extremum_along_dim(
+        &self,
+        target: MobjectTarget<'_>,
+        dim: usize,
+        key: f64,
+    ) -> Result<f64, AuthoringError> {
+        extremum_for_xyz_points(&self.path_boundary_points_3d(target)?, dim, key)
+    }
+
+    /// Read the path boundary point with greatest projection along a planar direction.
+    pub fn path_boundary_point(
+        &self,
+        target: MobjectTarget<'_>,
+        direction_x: f64,
+        direction_y: f64,
+    ) -> Result<(f64, f64), AuthoringError> {
+        boundary_point_for_xy_points(
+            &self.path_boundary_points(target)?,
+            direction_x,
+            direction_y,
+        )
+    }
 }
 
 /// Reduce caller-supplied flattened point rows in Rust, using Manim's key rule:
@@ -1716,9 +1782,9 @@ fn effective_geometry_path(
 
 /// Observe one object's exact current path from an existing coherent execution.
 ///
-/// This is explicit low-level integration over the existing Semantic Scene and Runtime
-/// authorities. It owns no scene/session state and performs no publication.
-pub fn effective_path_query(
+/// Shared implementation for Scene observations and internal execution algorithms.
+/// It owns no scene/session state and performs no publication.
+pub(crate) fn effective_path_query(
     store: &Rc<RefCell<SemanticStore>>,
     execution: &ExecutionSession,
     object: &Mobject,
@@ -1776,8 +1842,68 @@ impl Mobject {
 }
 
 #[cfg(test)]
-mod point_equality_tests {
+mod tests {
     use super::*;
+
+    #[test]
+    fn empty_family_point_observations_validate_the_execution_publication() {
+        use crate::{MobjectFamily, Scene};
+
+        fn snapshots(
+            scene: &Scene,
+            execution: &crate::ExecutionSession,
+            family: &MobjectFamily,
+        ) -> [Result<(), crate::AuthoringError>; 3] {
+            let store = scene.integration_store();
+            [
+                point_arrays::effective_point_array(store, execution, family.into()).map(|_| ()),
+                effective_vector_boundary_points(store, execution, family.into()).map(|_| ()),
+                effective_point_reduction_tree(store, execution, family.into()).map(|_| ()),
+            ]
+        }
+
+        let mut scene = Scene::new();
+        let empty = scene.family(&[]).unwrap();
+        let left = scene.family(&[(&empty).into()]).unwrap();
+        let right = scene.family(&[(&empty).into()]).unwrap();
+        let aliased = scene.family(&[(&left).into(), (&right).into()]).unwrap();
+        let mut circle = scene.circle(1.0).unwrap();
+        scene.add(&circle).unwrap();
+        let execution = scene.execution_session().unwrap();
+        let publication = execution.publication_context();
+        let revision = scene.revision();
+        for family in [&empty, &aliased] {
+            assert!(snapshots(&scene, &execution, family)
+                .into_iter()
+                .all(|r| r.is_ok()));
+        }
+        assert_eq!(scene.revision(), revision);
+        assert_eq!(execution.publication_context(), publication);
+
+        circle.set_object_opacity(0.5).unwrap();
+        for family in [&empty, &aliased] {
+            for result in snapshots(&scene, &execution, family) {
+                assert!(matches!(
+                    result,
+                    Err(crate::AuthoringError::ExecutionPublication(
+                        crate::ExecutionSessionPublicationError::StaleSceneRevision { .. }
+                    ))
+                ));
+            }
+        }
+        assert_eq!(execution.publication_context(), publication);
+
+        let other = Scene::new();
+        let foreign_execution = other.execution_session().unwrap();
+        for result in snapshots(&scene, &foreign_execution, &empty) {
+            assert!(matches!(
+                result,
+                Err(crate::AuthoringError::ExecutionPublication(
+                    crate::ExecutionSessionPublicationError::ForeignSemanticStore
+                ))
+            ));
+        }
+    }
 
     #[test]
     fn point_equality_matches_manim_absolute_relative_and_nonfinite_rules() {

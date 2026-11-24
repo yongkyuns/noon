@@ -22,6 +22,7 @@ on:
       - "scripts/browser-test-server.mjs"
       - "scripts/showcase-posters.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
+      - "scripts/playground-browser-matrix-smoke.test.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "scripts/playground-gallery-runtime-smoke.mjs"
@@ -30,6 +31,8 @@ on:
       - "scripts/playground-stress-observation.test.mjs"
       - "scripts/gallery-shards.mjs"
       - "scripts/gallery-shards.test.mjs"
+      - "scripts/playground-profile-expectations.mjs"
+      - "scripts/playground-profile-expectations.test.mjs"
       - "scripts/ci-install-playwright-browser.sh"
       - "scripts/test_ci_install_playwright_browser.py"
       - "scripts/playground-gallery-selection-smoke.mjs"
@@ -77,6 +80,7 @@ on:
       - "scripts/browser-test-server.mjs"
       - "scripts/showcase-posters.mjs"
       - "scripts/playground-browser-matrix-smoke.mjs"
+      - "scripts/playground-browser-matrix-smoke.test.mjs"
       - "scripts/playground-example-browser-smoke.mjs"
       - "scripts/playground-main-thread-mobile-smoke.mjs"
       - "scripts/playground-gallery-runtime-smoke.mjs"
@@ -85,6 +89,8 @@ on:
       - "scripts/playground-stress-observation.test.mjs"
       - "scripts/gallery-shards.mjs"
       - "scripts/gallery-shards.test.mjs"
+      - "scripts/playground-profile-expectations.mjs"
+      - "scripts/playground-profile-expectations.test.mjs"
       - "scripts/ci-install-playwright-browser.sh"
       - "scripts/test_ci_install_playwright_browser.py"
       - "scripts/playground-gallery-selection-smoke.mjs"
@@ -158,16 +164,24 @@ jobs:
         with:
           tool: wasm-pack@0.15.0
           fallback: none
+      # WebKit previously crashed while loading two unoptimized ~221 MiB
+      # runtime modules on its macOS shard. Build the same optimized release
+      # code as the deployed viewer, retaining the renderer-smoke fixtures.
+      - name: Install pinned wasm-opt
+        uses: ./.github/actions/install-wasm-opt
       - name: Verify gallery inventory, dependency setup and edit observations
         run: |
-          node --test --test-concurrency=2 scripts/gallery-shards.test.mjs scripts/playground-stress-observation.test.mjs
+          node --test --test-concurrency=2 scripts/gallery-shards.test.mjs scripts/playground-stress-observation.test.mjs scripts/playground-browser-matrix-smoke.test.mjs
           python3 -S scripts/test_ci_install_reference_deps.py
           python3 -S scripts/test_ci_install_playwright_browser.py
       - name: Build browser package
         env:
-          NOON_WASM_SKIP_OPT: "1"
+          NOON_WASM_PROFILE: "release"
+          NOON_WASM_SKIP_OPT: "0"
           NOON_RENDERER_SMOKE: "1"
-        run: bash scripts/build-web-demo.sh
+        run: |
+          bash scripts/build-web-demo.sh
+          node -e "const fs=require('fs'); const n=fs.statSync('web/pkg/noon_web_bg.wasm').size; console.log('Optimized cross-browser WASM:',n,'bytes'); if(!n || n >= 100*1024*1024) process.exit(1)"
       - name: Upload browser runtime assets
         uses: actions/upload-artifact@v7
         with:
@@ -471,13 +485,27 @@ jobs:
       - name: Install Playwright browser and system dependencies
         timeout-minutes: 15
         run: bash scripts/ci-install-playwright-browser.sh ${{ matrix.browser }}
+      - name: Start headless Firefox audio sink
+        if: matrix.browser == 'firefox'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends pulseaudio pulseaudio-utils
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=noon_ci rate=48000
+          pactl set-default-sink noon_ci
+          pactl info
+          pactl list short sinks
       - name: Qualify the full gallery shard, including portable no-JSPI controls
-        timeout-minutes: 20
+        timeout-minutes: ${{ matrix.browser == 'firefox' && 25 || 20 }}
         env:
           NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
           NOON_GALLERY_SHARD_INDEX: "${{ matrix.shard }}"
           NOON_GALLERY_SHARD_COUNT: "3"
+          NOON_SHOWCASE_PROFILE_GATE: strict
+          NOON_GALLERY_PREPARATION_TIMING: ${{ matrix.browser == 'firefox' && '1' || '0' }}
           NOON_PLAYGROUND_MATRIX_ARTIFACTS: browser-smoke-artifacts/playground-gallery/${{ matrix.browser }}/shard-${{ matrix.shard }}
         run: ${{ matrix.display }} node scripts/playground-gallery-runtime-smoke.mjs
       # Keep exact shard evidence on failures, not on every passing run.

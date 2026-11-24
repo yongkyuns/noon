@@ -6,15 +6,15 @@ from pathlib import Path
 from _noon_errors import engine_call
 import noon as _base
 import _manim_compat as _compat
-from _manim_semantic_handles import _attach_shared_family, _live_constructor_context
+from _manim_semantic_handles import _attach_shared_family, _path_authoring_context
 from _manim_typst import NativeFontFace, Text
 
 try:
-    from js import noonCodeOptions as _new_code_options
-    from js import noonCreateAuthoringCodeHandle as _create_code
-    from js import noonCodeFromFamily as _code_from_family
-    from js import noonCodeStylesList as _code_styles_list
-    from js import noonCodeLanguagesList as _code_languages_list
+    from _noon_host import noonCodeOptions as _new_code_options
+    from _noon_host import noonCreateAuthoringCodeHandle as _create_code
+    from _noon_host import noonCodeFromFamily as _code_from_family
+    from _noon_host import noonCodeStylesList as _code_styles_list
+    from _noon_host import noonCodeLanguagesList as _code_languages_list
 except ImportError:
     _new_code_options = _create_code = _code_from_family = None
     _code_styles_list = _code_languages_list = None
@@ -108,7 +108,7 @@ class Code(_compat.VGroup):
         fill = panel["fill_color"]
         if fill is not None:
             fill = _compat._as_color("fill_color", fill)
-        context = _live_constructor_context("Code", allow_unstarted=True)
+        context = _path_authoring_context()
         options = engine_call(_new_code_options, language, source_path, formatter_style,
                               tab_width, add_line_numbers, line_numbers_from, background)
         try:

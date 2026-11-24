@@ -117,16 +117,20 @@ try {
         assert.deepEqual(events.filter(event => event.kind !== "move").map(event => [event.kind, event.button]),
           [["press", 0], ["press", 2], ["release", 2], ["release", 0]]);
       });
-      await run("trusted viewport exit", "trusted-browser-mouse", async page => {
+      await run("trusted release outside the canvas", "trusted-browser-mouse", async page => {
         await page.mouse.move(200, 150); await page.mouse.down();
         await page.mouse.move(800, 500); await page.mouse.up();
       }, ({ events, faults, raw }) => {
         assert.deepEqual(faults, []);
         assert.ok(raw.every(event => event.trusted));
-        assert.ok(events.some(event => event.kind === "cancel"));
-        assert.equal(events.filter(event => event.kind === "release").length, 0);
+        const press = events.find(event => event.kind === "press");
+        const release = events.find(event => event.kind === "release");
+        assert.equal(release?.source_id, press?.source_id);
+        assert.equal(release?.surface_x, 780);
+        assert.equal(release?.surface_y, 470);
+        assert.equal(events.slice(0, events.indexOf(release)).some(event => event.kind === "cancel"), false);
       });
-      await run("trusted held re-entry remains cancelled", "trusted-browser-mouse", async page => {
+      await run("trusted held re-entry stays captured", "trusted-browser-mouse", async page => {
         await page.mouse.move(200, 150); await page.mouse.down();
         await page.mouse.move(800, 500); await page.mouse.move(200, 150); await page.mouse.up();
         await page.mouse.click(200, 150);
@@ -134,9 +138,8 @@ try {
         assert.deepEqual(faults, []);
         assert.ok(raw.every(event => event.trusted));
         const edges = events.filter(event => event.kind !== "move");
-        assert.deepEqual(edges.map(event => event.kind), ["press", "cancel", "press", "release"]);
-        assert.ok(edges[2].source_id > edges[0].source_id);
-        assert.equal(edges[2].source_id, edges[3].source_id);
+        assert.deepEqual(edges.map(event => event.kind), ["press", "release", "press", "release"]);
+        assert.ok(edges.every(event => event.source_id === edges[0].source_id));
       });
       await run("coalesced excursion replaces summary", "injected-coalesced-pointer-events", page =>
         page.evaluate(() => {
@@ -165,15 +168,16 @@ try {
           assert.equal(events.length, 1); assert.equal(faults.length, 1);
           assert.match(faults[0], /capacity/);
         });
-      await run("view change cancels rather than releasing", "injected-pointer-events-real-layout", page =>
-        page.evaluate(() => {
-          pointerProbe.emit("pointerdown");
-          document.querySelector("#scene").style.width = "600px";
-          pointerProbe.emit("pointerup");
-        }), ({ events, faults }) => {
-          assert.deepEqual(faults, []);
-          assert.deepEqual(events.map(event => event.kind), ["press", "cancel"]);
-        });
+      await run("a view change cancels a captured press", "trusted-browser-mouse", async page => {
+        await page.mouse.move(200, 150);
+        await page.mouse.down();
+        await page.locator("#scene").evaluate(canvas => { canvas.style.width = "600px"; });
+        await page.mouse.move(210, 150);
+        await page.mouse.up();
+      }, ({ events, faults }) => {
+        assert.deepEqual(faults, []);
+        assert.deepEqual(events.filter(event => event.kind !== "move").map(event => event.kind), ["press", "cancel"]);
+      });
       await run("retired attachment does not inspect packets", "injected-coalesced-pointer-events", page =>
         page.evaluate(() => {
           pointerProbe.emit("pointerdown"); pointerProbe.retire();

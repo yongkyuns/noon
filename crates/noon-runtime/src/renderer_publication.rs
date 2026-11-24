@@ -1,3 +1,8 @@
+mod spatial_queries;
+mod viewer_indication;
+pub use spatial_queries::{PainterPrefixGeometryQuery, PainterPrefixGeometryQueryError};
+pub use viewer_indication::{ViewerIndication, ViewerPresentation};
+
 use std::{collections::BTreeSet, sync::Arc};
 
 use noon_core::{
@@ -7,6 +12,59 @@ use noon_core::{
 };
 
 use crate::{FrameChanges, FrameState, RetainedPlannedFamilyFrame};
+
+/// Borrow authored/static view metadata from the existing Runtime execution
+/// projection, on the same publication lifetime as the effective frame.
+pub trait ViewColorProfileLookup {
+    fn view_color_profile(
+        &self,
+        object: noon_core::ObjectId,
+    ) -> Option<noon_core::ViewColorProfile>;
+}
+impl ViewColorProfileLookup for crate::SceneInstance {
+    fn view_color_profile(
+        &self,
+        object: noon_core::ObjectId,
+    ) -> Option<noon_core::ViewColorProfile> {
+        self.compiled
+            .object_index(object)
+            .and_then(|index| self.compiled.objects()[index as usize].view_color_profile)
+    }
+}
+impl crate::SceneInstance {
+    pub fn view_color_profile(
+        &self,
+        object: noon_core::ObjectId,
+    ) -> Option<noon_core::ViewColorProfile> {
+        ViewColorProfileLookup::view_color_profile(self, object)
+    }
+}
+
+/// Borrow the publisher's existing identity index. Derived captures resolve
+/// their local inputs without scanning the frame or retaining another index.
+pub trait ObjectIndexLookup {
+    fn object_index(&self, object: noon_core::ObjectId) -> Option<usize>;
+    fn painter_rank(&self, index: usize) -> Option<usize>;
+    fn viewer_group(&self, _object: noon_core::ObjectId) -> Option<noon_core::SemanticNodeId> {
+        None
+    }
+}
+
+impl ObjectIndexLookup for crate::SceneInstance {
+    fn viewer_group(&self, object: noon_core::ObjectId) -> Option<noon_core::SemanticNodeId> {
+        self.compiled.viewer_group(object)
+    }
+
+    fn painter_rank(&self, index: usize) -> Option<usize> {
+        self.painter_rank(index).map(|rank| rank as usize)
+    }
+
+    fn object_index(&self, object: noon_core::ObjectId) -> Option<usize> {
+        self.compiled
+            .object_index(object)
+            .map(|index| index as usize)
+    }
+}
 
 /// One identity-free effective visual row for transient renderer presentation.
 ///
@@ -221,15 +279,121 @@ pub struct RendererPublication<'a> {
     planned_family_frame: RetainedPlannedFamilyFrame<'a>,
     painter_order: &'a [u32],
     derived_display_objects: &'a [DerivedDisplayObject],
+    object_indices: &'a dyn ObjectIndexLookup,
+    primary_view: Option<noon_core::ObjectId>,
+    view_color_profiles: Option<&'a dyn ViewColorProfileLookup>,
+    spatial_index: Option<&'a crate::ExecutionSpatialIndex>,
+    viewer_indications: &'a [ViewerIndication],
+    viewer_rows_changed: bool,
 }
 
-impl RendererPublication<'_> {
+impl<'a> RendererPublication<'a> {
+    /// Select the compiler-derived primary camera for this publication. The
+    /// profile itself remains borrowed from the current execution revision.
+    pub fn with_primary_view(mut self, camera: Option<noon_core::ObjectId>) -> Self {
+        self.primary_view = camera;
+        self
+    }
+
+    /// The working color profile of the selected authored view. Publications
+    /// without a 2D view controller keep the ordinary compatibility profile.
+    pub const fn primary_view(&self) -> Option<noon_core::ObjectId> {
+        self.primary_view
+    }
+
+    /// Effective attachment values on the selected authored camera, borrowed
+    /// from the ordinary frame row. No separate view-effects state is retained.
+    pub fn view_effects(&self) -> Option<&noon_compile::CompiledEffectStack> {
+        let camera = self.primary_view?;
+        self.view_color_profile(camera)?;
+        self.frame.objects[self.object_index(camera)?]
+            .effects
+            .as_deref()
+    }
+
+    pub fn color_profile(&self) -> noon_core::ViewColorProfile {
+        self.primary_view
+            .and_then(|camera| self.view_color_profile(camera))
+            .unwrap_or_default()
+    }
+
+    /// Borrow static camera metadata from the publishing execution projection,
+    /// including validated installed data at a genuine transport boundary.
+    pub fn with_view_color_profiles(mut self, profiles: &'a dyn ViewColorProfileLookup) -> Self {
+        self.view_color_profiles = Some(profiles);
+        self
+    }
+    pub fn view_color_profile(
+        &self,
+        object: noon_core::ObjectId,
+    ) -> Option<noon_core::ViewColorProfile> {
+        self.object_index(object)?;
+        self.view_color_profiles?.view_color_profile(object)
+    }
+
     pub const fn context(&self) -> PublicationContext {
         self.context
     }
 
+    /// This typed publication updates viewer rows at the same authored epoch.
+    pub const fn viewer_rows_changed(&self) -> bool {
+        self.viewer_rows_changed
+    }
+
     pub const fn frame(&self) -> &FrameState {
         self.frame
+    }
+
+    pub fn object_index(&self, object: noon_core::ObjectId) -> Option<usize> {
+        self.object_indices.object_index(object).filter(|&index| {
+            self.frame
+                .objects
+                .get(index)
+                .is_some_and(|row| row.id == object)
+        })
+    }
+
+    pub fn object_bounds(&self, index: usize) -> Option<Rect> {
+        crate::frame_object_conservative_bounds_with_resources(
+            self.frame,
+            index,
+            self.geometry_resources,
+        )
+    }
+
+    /// Preserve indexed bounds for stable rows and use the drawn bounds of
+    /// sparse viewer overrides for effect footprints.
+    pub fn indexed_object_bounds(&self, index: usize) -> Option<Rect> {
+        let row = self.frame.objects.get(index)?;
+        if self
+            .viewer_indications
+            .binary_search_by_key(&row.id, |sample| sample.object)
+            .is_ok()
+        {
+            return self.object_bounds(index);
+        }
+        self.spatial_index?.bounds_for_object(row.id)
+    }
+
+    pub fn viewer_group(&self, object: noon_core::ObjectId) -> Option<noon_core::SemanticNodeId> {
+        self.object_indices.viewer_group(object)
+    }
+
+    pub fn painter_rank(&self, index: usize) -> Option<usize> {
+        self.object_indices.painter_rank(index).filter(|&rank| {
+            self.painter_order
+                .get(rank)
+                .copied()
+                .map(|row| row as usize)
+                == Some(index)
+        })
+    }
+
+    /// Execution-owned broad-phase geometry bounds for this exact publication.
+    /// Filters may additionally contribute outside these bounds; the renderer
+    /// must expand that declared source closure before capturing a prefix.
+    pub const fn spatial_index(&self) -> Option<&crate::ExecutionSpatialIndex> {
+        self.spatial_index
     }
 
     pub const fn changes(&self) -> &FrameChanges {
@@ -287,6 +451,15 @@ impl RendererPublication<'_> {
 }
 
 impl<'a> RendererPublication<'a> {
+    /// Borrow the caller's synchronized execution index. The session or validated
+    /// transport receiver must update it to this publication before borrowing it.
+    /// This adds no renderer-owned object bounds or identity allocator.
+    #[doc(hidden)]
+    pub fn with_spatial_index(mut self, index: &'a crate::ExecutionSpatialIndex) -> Self {
+        self.spatial_index = Some(index);
+        self
+    }
+
     /// Attach identity-free transient presentation rows to the exact publication
     /// that owns the effective stable frame they were derived from.
     ///
@@ -331,6 +504,7 @@ impl<'a> RendererPublication<'a> {
         family_animation_plans: &'a [RetainedFamilyAnimationPlan],
         active_family_animation_indices: &'a BTreeSet<usize>,
         painter_order: &'a [u32],
+        object_indices: &'a dyn ObjectIndexLookup,
     ) -> Self {
         let mut publication = Self::new(
             context,
@@ -343,6 +517,7 @@ impl<'a> RendererPublication<'a> {
             family_animation_plans,
             active_family_animation_indices,
             painter_order,
+            object_indices,
         );
         publication.planned_family_frame = planned_family_frame;
         publication
@@ -360,6 +535,7 @@ impl<'a> RendererPublication<'a> {
         family_animation_plans: &'a [RetainedFamilyAnimationPlan],
         active_family_animation_indices: &'a BTreeSet<usize>,
         painter_order: &'a [u32],
+        object_indices: &'a dyn ObjectIndexLookup,
     ) -> Self {
         Self {
             context,
@@ -378,6 +554,12 @@ impl<'a> RendererPublication<'a> {
             },
             painter_order,
             derived_display_objects: &[],
+            object_indices,
+            primary_view: None,
+            view_color_profiles: None,
+            spatial_index: None,
+            viewer_indications: &[],
+            viewer_rows_changed: false,
         }
     }
 }

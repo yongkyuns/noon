@@ -1,7 +1,6 @@
 //! Shared Rust counterpart of the Manim-compatible ApplyMatrix shear example.
 use crate::{
-    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, LiveSession, Mobject,
-    RateFunction, Scene,
+    AnimationOptions, ContinuationStep, LiveContinuation, LiveProgram, Mobject, RateFunction, Scene,
 };
 
 pub struct ApplyMatrix {
@@ -12,44 +11,50 @@ pub struct ApplyMatrix {
 impl LiveContinuation for ApplyMatrix {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         match self.stage {
             0 => {
-                let target = live
+                let target = scene
                     .target_editor(&self.square)
                     .map_err(|e| e.to_string())?;
-                live.set_translation(&target, 1.0, 1.0)
+                scene
+                    .set_translation(&target, 1.0, 1.0)
                     .map_err(|e| e.to_string())?;
                 self.stage = 1;
-                live.declare_and_activate_transform_to(
-                    &self.square,
-                    &target,
-                    AnimationOptions::new()
-                        .run_time(0.25)
-                        .rate_func(RateFunction::Linear),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(|e| e.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(
+                        &self.square,
+                        &target,
+                        AnimationOptions::new()
+                            .run_time(0.25)
+                            .rate_func(RateFunction::Linear),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(|e| e.to_string())
             }
             1 => {
-                let target = live
+                let target = scene
                     .target_editor(&self.square)
                     .map_err(|e| e.to_string())?;
-                live.apply_matrix(&target, &[1.0, 1.0, 0.0, 1.0], 2, 2, 0.0, 0.0)
+                scene
+                    .apply_matrix(&target, &[1.0, 1.0, 0.0, 1.0], 2, 2, 0.0, 0.0)
                     .map_err(|e| e.to_string())?;
                 self.stage = 2;
-                live.declare_and_activate_transform_to(
-                    &self.square,
-                    &target,
-                    AnimationOptions::new()
-                        .run_time(3.0)
-                        .rate_func(RateFunction::Smooth),
-                )
-                .map(ContinuationStep::Await)
-                .map_err(|e| e.to_string())
+                scene
+                    .live()
+                    .declare_and_activate_transform_to(
+                        &self.square,
+                        &target,
+                        AnimationOptions::new()
+                            .run_time(3.0)
+                            .rate_func(RateFunction::Smooth),
+                    )
+                    .map(ContinuationStep::Await)
+                    .map_err(|e| e.to_string())
             }
             2 => {
-                let layout = live
+                let layout = scene
                     .effective_layout(&self.square)
                     .map_err(|e| e.to_string())?;
                 if (layout.center.0 - 2.0).abs() > 1.0e-5

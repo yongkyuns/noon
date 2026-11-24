@@ -1,29 +1,20 @@
 //! Genuine worker input envelope; the collection receipt is never refreshed here.
-use crate::browser_pointer_input::{
-    BrowserPointerAdmissionError, BrowserPointerInput, BrowserPointerTarget,
-};
-use crate::worker_pointer_presentation::WorkerPointerReceipt;
+#[cfg(test)]
+use crate::browser_pointer_input::BrowserPointerInput;
+use crate::browser_pointer_input::{BrowserPointerAdmissionError, BrowserPointerTarget};
 use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameError,
     PointerFrameSnapshot, PointerFrameView,
 };
-use noon::ExecutionSession;
+use noon::SceneExecution;
 use noon_core::{NativePointerId, NativePointerInput, Vec2};
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct WorkerPointerInput {
-    pub input: BrowserPointerInput,
-    pub presentation: Option<WorkerPointerReceipt>,
-}
-
-/// Borrowed input adapter for one player-owned semantic store/session pair.
+/// Borrowed input adapter for the player's Scene execution.
 /// It owns no pointer policy, target set, or source state: all occurrences
 /// enter the existing session drag policy, whose empty target set preserves
 /// ordinary native pointer behavior.
 pub(super) struct PlayerPointerTarget<'a> {
-    pub(super) session: &'a mut ExecutionSession,
-    pub(super) semantics: &'a std::rc::Rc<std::cell::RefCell<noon_core::SemanticStore>>,
+    pub(super) source: &'a mut SceneExecution,
     pub(super) translation_drag_undo: &'a mut Option<noon::TranslationDragUndo>,
     /// The same committed input receipt, observed only after the shared
     /// transaction returns. No target or click is inferred by this adapter.
@@ -31,23 +22,88 @@ pub(super) struct PlayerPointerTarget<'a> {
 }
 
 impl BrowserPointerTarget for PlayerPointerTarget<'_> {
+    fn default_viewer_selection(&self) -> bool {
+        self.source.session().default_viewer_selection()
+    }
+
+    fn cancel_planar_viewer_pointer(&mut self) {
+        self.source.session_mut().cancel_planar_viewer_pointer();
+    }
+
+    fn submit_planar_viewer_pointer(
+        &mut self,
+        pointer: NativePointerId,
+        kind: noon::PlanarViewerPointer,
+        displayed: Option<&noon::PlanarPickFrame>,
+    ) {
+        self.source
+            .session_mut()
+            .submit_planar_viewer_pointer(pointer, kind, displayed);
+    }
+
+    fn cancel_spatial_pointer_gestures(&mut self) {
+        self.source.session_mut().cancel_spatial_pointer_gestures();
+    }
+
     fn observe_pointer_frame(
         &mut self,
         frame: &noon::integration::PointerFrameSnapshot,
     ) -> Result<(), noon::integration::PointerFrameError> {
-        self.session
+        self.source
+            .session_mut()
             .refresh_pointer_hover(frame, frame.view())
             .map(|_| ())
     }
-    fn session(&self) -> &ExecutionSession {
-        self.session
+    fn has_native_pointer_subscribers(&self) -> bool {
+        self.source.session().has_native_pointer_subscribers()
+    }
+    fn translation_drag_active(&self) -> bool {
+        self.source.session().translation_drag_active()
+    }
+    fn inspection_camera(
+        &self,
+    ) -> Result<noon_core::Camera2DState, noon::integration::PointerFrameError> {
+        self.source.session().inspection_camera()
+    }
+    fn validate_pointer_frame(
+        &self,
+        frame: &noon::integration::PointerFrameSnapshot,
+        view: noon::integration::PointerFrameView,
+        validation: crate::browser_pointer_input::PointerFrameValidation,
+    ) -> Result<(), noon::integration::PointerFrameError> {
+        match validation {
+            crate::browser_pointer_input::PointerFrameValidation::Input => {
+                frame.validate_current(self.source.session(), view)
+            }
+            crate::browser_pointer_input::PointerFrameValidation::Presentation => {
+                frame.validate_presentation(self.source.session(), view)
+            }
+            crate::browser_pointer_input::PointerFrameValidation::CapturedGesture => {
+                frame.validate_captured_gesture(self.source.session(), view)
+            }
+        }
+    }
+    fn pointer_input_token_for_frame(
+        &self,
+        frame: &noon::integration::PointerFrameSnapshot,
+        view: noon::integration::PointerFrameView,
+    ) -> Result<NativePointerInputToken, noon::integration::PointerFrameError> {
+        frame.input_token(self.source.session(), view)
     }
 
     fn capture_pointer_frame(
         &mut self,
         view: PointerFrameView,
     ) -> Result<PointerFrameSnapshot, PointerFrameError> {
-        self.session.capture_pointer_frame(view)
+        self.source.session_mut().capture_pointer_frame(view)
+    }
+
+    fn supports_compatible_pointer_receipts(&self) -> bool {
+        true
+    }
+
+    fn pointer_frame_needs_refresh(&self, frame: &PointerFrameSnapshot) -> bool {
+        frame.needs_input_refresh(self.source.session())
     }
 
     fn validate_pointer_position(
@@ -57,7 +113,7 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         surface: Vec2,
     ) -> Result<(), BrowserPointerAdmissionError> {
         frame
-            .validate_position(self.session, view, surface)
+            .validate_position(self.source.session_mut(), view, surface)
             .map_err(Into::into)
     }
 
@@ -68,7 +124,7 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         surface: Vec2,
     ) -> Result<NativePointerInputToken, BrowserPointerAdmissionError> {
         frame
-            .input_token_at(self.session, view, surface)
+            .input_token_at(self.source.session_mut(), view, surface)
             .map_err(Into::into)
     }
 
@@ -77,13 +133,15 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         pointer: NativePointerId,
         view: u64,
     ) -> Result<NativePointerInputToken, String> {
-        self.session
+        self.source
+            .session_mut()
             .configure_native_pointer_input(pointer, view)
             .map_err(|error| error.to_string())
     }
 
     fn pointer_token(&self) -> Result<NativePointerInputToken, String> {
-        self.session
+        self.source
+            .session()
             .native_pointer_input_token()
             .map_err(|error| error.to_string())
     }
@@ -95,7 +153,8 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         surface: Vec2,
         delta_pixels: f64,
     ) -> Result<bool, String> {
-        self.session
+        self.source
+            .session_mut()
             .scroll_inspection_view(frame, view, surface, delta_pixels)
             .map_err(|error| error.to_string())
     }
@@ -106,8 +165,8 @@ impl BrowserPointerTarget for PlayerPointerTarget<'_> {
         input: NativePointerInput,
     ) -> Result<NativePointerInputPublication, String> {
         let receipt = self
-            .session
-            .submit_translation_drag_input(&mut self.semantics.borrow_mut(), token, input)
+            .source
+            .submit_translation_drag_input(token, input)
             .map_err(|error| error.to_string())?;
         if let Some(undo) = receipt.undo {
             *self.translation_drag_undo = Some(undo);
@@ -149,7 +208,7 @@ fn submit_test_frame(
     let view = PointerFrameView::new(
         input.view_revision,
         viewport,
-        target.session().camera().map_err(|e| e.to_string())?,
+        target.inspection_camera().map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
     let frame = target
@@ -164,11 +223,7 @@ fn submit_test_frame(
 impl SemanticExecutionPlayer {
     fn submit_test_frame_input(&mut self, input: BrowserPointerInput) -> Result<(), String> {
         let mut target = PlayerPointerTarget {
-            session: &mut self.session,
-            semantics: self
-                .semantics
-                .as_ref()
-                .ok_or("execution player lost its semantic store")?,
+            source: &mut self.source,
             translation_drag_undo: &mut self.translation_drag_undo,
             control_publication: None,
         };

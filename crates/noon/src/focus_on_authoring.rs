@@ -7,7 +7,7 @@ use noon_core::{
 };
 
 /// A fixed focus point and the appearance of its transient spotlight.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FocusOnOptions {
     pub point: (f64, f64),
     pub opacity: f64,

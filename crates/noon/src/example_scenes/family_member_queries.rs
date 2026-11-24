@@ -1,7 +1,7 @@
 //! Retained member queries select one shared scene through live publications.
 use crate::{
-    Color, CompositeEntryHandle, ContinuationStep, LiveContinuation, LiveProgram, LiveSession,
-    LiveSessionError, MobjectFamily, Scene,
+    Color, CompositeEntryHandle, ContinuationStep, LiveContinuation, LiveProgram, LiveSessionError,
+    MobjectFamily, Scene,
 };
 
 pub struct FamilyMemberQueries {
@@ -16,7 +16,7 @@ pub struct FamilyMemberQueries {
 impl FamilyMemberQueries {
     fn show(
         &mut self,
-        live: &mut LiveSession<'_>,
+        scene: &mut Scene,
         selected: Vec<CompositeEntryHandle>,
     ) -> Result<(), LiveSessionError> {
         let old = self
@@ -24,12 +24,12 @@ impl FamilyMemberQueries {
             .iter()
             .map(CompositeEntryHandle::as_target)
             .collect::<Vec<_>>();
-        live.remove_family_members(&self.visible, &old)?;
+        scene.remove_family_members(&self.visible, &old)?;
         let new = selected
             .iter()
             .map(CompositeEntryHandle::as_target)
             .collect::<Vec<_>>();
-        live.add_family_members(&self.visible, &new)?;
+        scene.add_family_members(&self.visible, &new)?;
         self.shown = selected;
         Ok(())
     }
@@ -38,7 +38,7 @@ impl FamilyMemberQueries {
 impl LiveContinuation for FamilyMemberQueries {
     type Error = String;
 
-    fn resume(&mut self, live: &mut LiveSession<'_>) -> Result<ContinuationStep, String> {
+    fn resume(&mut self, scene: &mut crate::ContinuationScene) -> Result<ContinuationStep, String> {
         if self.stage == 3 {
             return Ok(ContinuationStep::Finished);
         }
@@ -49,10 +49,10 @@ impl LiveContinuation for FamilyMemberQueries {
                     let first = self.root.split_at(0)?.expect("three current children");
                     let second = self.root.split_at(1)?.expect("three current children");
                     assert_eq!([&first, &second], [&self.children[0], &self.children[1]]);
-                    self.show(live, vec![first, second])?;
+                    self.show(scene, vec![first, second])?;
                 }
                 2 => {
-                    live.set_family_points_f64(&self.root, &self.points)?;
+                    scene.set_family_points_f64(&self.root, &self.points)?;
                     let own = CompositeEntryHandle::Family(self.root.clone());
                     assert_eq!(self.root.get_num_points()?, 16);
                     assert_eq!(self.root.split_count()?, 4);
@@ -60,12 +60,12 @@ impl LiveContinuation for FamilyMemberQueries {
                     expected.extend(self.children.iter().cloned());
                     assert_eq!(self.root.split_members()?, expected);
                     assert_eq!(self.root.split_at(0)?, Some(own.clone()));
-                    self.show(live, vec![own])?;
+                    self.show(scene, vec![own])?;
                 }
                 _ => unreachable!("three held query selections"),
             }
             self.stage += 1;
-            live.wait_segment(0.25).map(ContinuationStep::Await)
+            scene.live().wait_segment(0.25).map(ContinuationStep::Await)
         })();
         step.map_err(|error| error.to_string())
     }

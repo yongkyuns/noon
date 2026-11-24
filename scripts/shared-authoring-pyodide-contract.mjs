@@ -68,6 +68,9 @@ try {
     noonEffectUpdate: (...args) => new wasm.WasmEffectUpdate(...args),
     noonGlow: (update) => wasm.WasmEffectDefinition.glow(update),
     noonBlur: (update) => wasm.WasmEffectDefinition.blur(update),
+    noonBackdropBlur: (update) => wasm.WasmEffectDefinition.backdropBlur(update),
+    noonNoiseDissolve: (update) => wasm.WasmEffectDefinition.noiseDissolve(update),
+    noonPixelate: (update) => wasm.WasmEffectDefinition.pixelate(update),
     noonShadow: (update) => wasm.WasmEffectDefinition.shadow(update),
     noonResolveAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveAnimationOptions, ...args),
     noonResolveCreateAnimationOptions: (...args) => resolveAnimationOptionsPlain(wasm.resolveCreateAnimationOptions, ...args),
@@ -92,7 +95,7 @@ import json
 import _manim_scene as operations
 import _manim_semantic_handles as handles
 from js import noonForeignGeometryFactory
-from noon import Scene, Square, Transform
+from noon import NoonForeignHandleError, Scene, Square, Transform
 ordinary_factory = handles._create_geometry_handle
 try:
     handles._create_geometry_handle = noonForeignGeometryFactory
@@ -118,8 +121,8 @@ operations._begin_async_continuation_construct(rejected_scene)
 try:
     try:
         rejected_scene.play(Transform(rejected_source, foreign_target), run_time=1)
-    except ValueError as error:
-        assert "another authoring store" in str(error), str(error)
+    except NoonForeignHandleError as error:
+        assert error.code == "authoring.foreign_store", error.code
     else:
         raise AssertionError("foreign composition target was accepted")
 finally:
@@ -296,7 +299,7 @@ _result_json = json.dumps({"object_count": len(scene.mobjects), "time": scene.ti
   assert.equal(report.observed.object_count, 1);
   assert.ok(Math.abs(report.observed.time - 0.1) < 1e-9);
   assert.equal(report.observed.ownership, "active");
-  assert.deepEqual(report.observed.center, [0, 0]);
+  assert.deepEqual(report.observed.center, [0, 0, 0]);
   report.result = "PASS";
   console.log(JSON.stringify(report, null, 2));
 } catch (error) {

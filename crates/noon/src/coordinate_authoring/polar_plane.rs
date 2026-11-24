@@ -99,13 +99,6 @@ impl ManimPolarPlane {
     pub fn authored_polar_frame(&self) -> Result<PolarFrame, CoordinateAuthoringError> {
         Ok(PolarFrame::new(self.authored_frame()?))
     }
-
-    pub fn effective_polar_frame(
-        &self,
-        execution: &ExecutionSession,
-    ) -> Result<PolarFrame, CoordinateAuthoringError> {
-        Ok(PolarFrame::new(self.effective_frame(execution)?))
-    }
 }
 
 impl Scene {
@@ -122,23 +115,30 @@ impl Scene {
         )?)
     }
 
+    /// Observe this coordinate family through the Scene in setup or playback.
+    pub fn polar_plane_frame(
+        &self,
+        coordinates: &ManimPolarPlane,
+    ) -> Result<PolarFrame, CoordinateAuthoringError> {
+        crate::MobjectTarget::from(coordinates.family()).require_store(self.integration_store())?;
+        if self.running_execution().is_some() {
+            self.effective_polar_plane_frame(coordinates)
+        } else {
+            coordinates.authored_polar_frame()
+        }
+    }
+
     pub fn effective_polar_plane_frame(
         &self,
         plane: &ManimPolarPlane,
     ) -> Result<PolarFrame, CoordinateAuthoringError> {
-        let axes = AxesFrame::new(
-            plane
-                .x_axis()?
-                .snapshot_with(&mut |shaft| self.effective_path_query(shaft))?,
-            plane
-                .y_axis()?
-                .snapshot_with(&mut |shaft| self.effective_path_query(shaft))?,
-        );
-        Ok(PolarFrame::new(axes))
+        Ok(PolarFrame::new(
+            self.effective_number_plane_frame(&plane.grid)?,
+        ))
     }
 }
 
-pub(crate) fn prepare_polar_plane(
+fn prepare_polar_plane(
     options: &ManimPolarPlaneOptions,
 ) -> Result<(SemanticMutationTransaction, SemanticLocalNodeToken), CoordinateAuthoringError> {
     if !options.radius_max.is_finite()

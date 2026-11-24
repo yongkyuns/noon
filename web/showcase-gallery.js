@@ -34,6 +34,7 @@ export function normalizeShowcaseManifest(manifest) {
     if (primaryFeatures.has(entry.primary_feature)) throw new Error(`${entry.id}: duplicated primary learning outcome`);
     if (entry.thumbnail !== `thumbnails/showcase/${entry.id}.png`) throw new Error(`${entry.id}: poster must be a local captured PNG`);
     if (!Number.isFinite(entry.duration) || entry.duration <= 0) throw new Error(`${entry.id}: duration must be positive`);
+    if (entry.loop != null && typeof entry.loop !== "boolean") throw new Error(`${entry.id}: loop must be a boolean`);
     if (!Number.isFinite(entry.thumbnail_time) || entry.thumbnail_time <= 0 || entry.thumbnail_time > entry.duration) throw new Error(`${entry.id}: invalid poster time`);
     if (!Array.isArray(entry.features) || entry.features.length === 0 || entry.features.some((feature) => typeof feature !== "string" || !feature.trim())) throw new Error(`${entry.id}: expected feature tags`);
     if (!Array.isArray(entry.beats) || entry.beats.length < 3 || entry.beats.some((beat) =>
@@ -41,8 +42,16 @@ export function normalizeShowcaseManifest(manifest) {
     )) throw new Error(`${entry.id}: expected at least three review beats within the scene`);
     if (entry.interaction != null && entry.interaction.type !== "pointer-fill-selection") throw new Error(`${entry.id}: unsupported host interaction`);
     if (entry.interaction != null && (typeof entry.host_setup !== "string" || !entry.host_setup.trim())) throw new Error(`${entry.id}: interactive scenes must disclose their host setup`);
-    if (entry.inspection_zoom != null && typeof entry.inspection_zoom !== "boolean") throw new Error(`${entry.id}: inspection_zoom must be a boolean`);
-    if (entry.inspection_zoom === true && (typeof entry.host_setup !== "string" || !entry.host_setup.trim())) throw new Error(`${entry.id}: inspection zoom must disclose its host setup`);
+    const credits = entry.credits ?? [];
+    if (!Array.isArray(credits) || credits.some((credit) => {
+      if (typeof credit?.label !== "string" || !credit.label.trim() || typeof credit.url !== "string") return true;
+      try {
+        const url = new URL(credit.url);
+        return url.protocol !== "https:" || Boolean(url.username || url.password);
+      } catch {
+        return true;
+      }
+    })) throw new Error(`${entry.id}: source credits require a label and a public HTTPS URL`);
     const playbackCapability = entry.playback_capability ?? REPLAYABLE_SHOWCASE;
     if (![REPLAYABLE_SHOWCASE, ...NONREPLAYABLE_SHOWCASE_CAPABILITIES].includes(playbackCapability)) {
       throw new Error(`${entry.id}: unsupported playback capability ${playbackCapability}`);
@@ -65,6 +74,7 @@ export function normalizeShowcaseManifest(manifest) {
       path: `./${entry.path}`,
       category: entry.category,
       features: [...entry.features],
+      credits: credits.map(({ label, url }) => ({ label, url })),
       upstream: null,
       reuse: "noon-authored-showcase",
       parityStatus: "noon-showcase",
@@ -74,8 +84,8 @@ export function normalizeShowcaseManifest(manifest) {
       thumbnailTime: entry.thumbnail_time,
       order: ids.size,
       interaction: entry.interaction ? { type: entry.interaction.type, maxMovement: 4 } : null,
-      inspectionZoom: entry.inspection_zoom === true,
       performance: entry.performance === true,
+      loop: entry.loop !== false,
       playbackCapability,
       playbackLimitation: entry.playback_limitation ?? null,
     };

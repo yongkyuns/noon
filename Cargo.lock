@@ -2035,9 +2035,11 @@ dependencies = [
  "noon-typst",
  "num-bigint",
  "pollster",
+ "serde",
  "serde_json",
  "swash",
  "syntect",
+ "tempfile",
  "two-face 0.5.2+bat-0.26.1",
  "typst-assets",
  "usvg 0.48.1",
@@ -2057,6 +2059,7 @@ dependencies = [
 name = "noon-core"
 version = "0.1.0"
 dependencies = [
+ "naga",
  "serde",
 ]
 
@@ -2070,6 +2073,7 @@ dependencies = [
  "pollster",
  "serde",
  "serde_json",
+ "tempfile",
  "wgpu",
 ]
 
@@ -2088,12 +2092,29 @@ name = "noon-native"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "half",
  "noon",
  "noon-core",
+ "noon-export",
  "noon-render-wgpu",
  "pollster",
+ "serde_json",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "noon-python"
+version = "0.1.0"
+dependencies = [
+ "noon",
+ "noon-core",
+ "noon-export",
+ "noon-geometry",
+ "noon-native",
+ "png",
+ "pyo3",
+ "pyo3-build-config",
 ]
 
 [[package]]
@@ -2101,6 +2122,7 @@ name = "noon-render-wgpu"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "half",
  "noon-compile",
  "noon-core",
  "noon-geometry",
@@ -2108,6 +2130,7 @@ dependencies = [
  "noon-text",
  "noon-typst",
  "pollster",
+ "serde_json",
  "swash",
  "wgpu",
 ]
@@ -2955,6 +2978,63 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
+name = "pyo3"
+version = "0.29.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b"
+dependencies = [
+ "libc",
+ "once_cell",
+ "portable-atomic",
+ "pyo3-build-config",
+ "pyo3-ffi",
+ "pyo3-macros",
+]
+
+[[package]]
+name = "pyo3-build-config"
+version = "0.29.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f41027e41b4bd03f6e60f9f417fe24a6341a6bb744edd62b6f709f2a52ea30e9"
+dependencies = [
+ "target-lexicon",
+]
+
+[[package]]
+name = "pyo3-ffi"
+version = "0.29.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e591a95526fead067432c3b3a33fc74770b87b1e04e73671090d9c2055a2b327"
+dependencies = [
+ "libc",
+ "pyo3-build-config",
+]
+
+[[package]]
+name = "pyo3-macros"
+version = "0.29.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73225868fc1cd84eef2c3c230ddb91273bf1de46aeb8a4248da76d32a0924a1c"
+dependencies = [
+ "proc-macro2",
+ "pyo3-macros-backend",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "pyo3-macros-backend"
+version = "0.29.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "571575aa3749fa6216757dd47d2a3e7ef360f329a40f0666a9fbd14889024952"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3653,6 +3733,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "target-lexicon"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
+
+[[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "getrandom 0.4.3",
+ "once_cell",
+ "rustix 1.1.5",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "termcolor"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3792,9 +3891,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.54.0"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0c168a474b95bfecfe908a65d4bdffc523144b649a74c09c286afb35d53e0bc"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "pin-project-lite",
 ]
