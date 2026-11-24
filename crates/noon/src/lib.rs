@@ -264,6 +264,7 @@ pub mod plot_presentation;
 mod point_matching;
 mod point_promotion;
 pub use point_promotion::{PointAlignment, PointAlignmentSide};
+mod rig_2d;
 mod rotation_authoring;
 mod rounded_rectangle_authoring;
 mod sample_space;
@@ -474,6 +475,9 @@ pub use path_queries::{
     reduce_point_extremum, PathQuery, PointArrayObservation, PointReductionTree,
 };
 pub use plot_authoring::PlotAuthoringError;
+pub use rig_2d::{
+    Joint2d, JointAttachment2d, JointMapping2d, JointTrack2d, RetargetedRig2d, RigPose2d,
+};
 pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;
 pub use sample_space::{SampleSpace, SampleSpaceError, SampleSpaceOptions};
@@ -570,6 +574,7 @@ pub mod prelude {
     #[cfg(feature = "image-decode")]
     pub use crate::{ImageDecodeError, ImageDecodeLimits};
     pub use crate::{ImageMobjectOptions, RasterImageSampling, DEFAULT_IMAGE_SCALE_TO_RESOLUTION};
+    pub use crate::{Joint2d, JointAttachment2d, JointTrack2d};
 }
 
 pub use family_gradient::color_gradient;

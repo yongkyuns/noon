@@ -381,7 +381,15 @@ class VMobject(Mobject):
 
     def get_subcurve(self, a, b):
         from _manim_semantic_handles import _clone_mobject
-        return _clone_mobject(self, subcurve=(float(a), float(b)))
+        from _noon_errors import engine_call
+
+        a, b = float(a), float(b)
+
+        def prepare_copy(context, handle):
+            return (engine_call(context.subcurve, handle, a, b) if context is not None
+                    else engine_call(handle.subcurve, a, b))
+
+        return _clone_mobject(self, prepare_copy=prepare_copy)
 
     def get_subpaths(self):
         from _manim_path_queries import subpaths

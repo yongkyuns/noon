@@ -88,7 +88,8 @@ impl SignalSamples {
         self.kind.value_kind()
     }
 
-    pub(super) fn sample(&self, input: f32) -> ReactiveValue {
+    /// Evaluate the retained table at a finite input value.
+    pub fn sample(&self, input: f32) -> ReactiveValue {
         let stride = self.kind.stride();
         let key_count = self.data.len() / stride;
         // Find the first key strictly past input. A held sample changes at

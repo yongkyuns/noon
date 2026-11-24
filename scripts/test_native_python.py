@@ -1,4 +1,5 @@
 """Real CPython extension and native GPU proof; run with PYTHONPATH=build/python."""
+import ast
 import asyncio
 import json
 import os
@@ -845,6 +846,240 @@ class Demo(Scene):
             endpoint = view.capture(time=view.duration, width=320, height=180)
             self.assertNotEqual(start, endpoint)
             self.assertEqual(start, view.capture(time=0.0, width=320, height=180))
+        finally:
+            view.close()
+
+    def test_character_rigs_prepare_their_full_authored_timeline(self):
+        path = ROOT / "web/python/examples/showcase_character_rigs.py"
+        source = path.read_text()
+        artwork = (ROOT / "crates/noon/assets/paper_birds.svg").read_text()
+        self.assertEqual(source.split('ARTWORK = r"""', 1)[1].split('"""', 1)[0], artwork.rstrip())
+        scene = asyncio.run(run_source(source, filename=str(path), retain_history=True))
+        view = prepare_view(scene)
+        try:
+            self.assertAlmostEqual(view.duration, 7.2)
+            wave = view.capture(time=3.25, width=320, height=180)
+            self.assertNotEqual(wave, view.capture(time=0.85, width=320, height=180))
+            self.assertEqual(wave, view.capture(time=3.25, width=320, height=180))
+        finally:
+            view.close()
+
+    def test_shape_characters_retarget_joint_motion_into_the_outline(self):
+        examples = ROOT / "web/python/examples"
+        path = examples / "showcase_shape_characters.py"
+        source = path.read_text()
+
+        def clip(text, name):
+            return ast.literal_eval(next(
+                item.value for item in ast.parse(text).body
+                if isinstance(item, ast.Assign) and
+                any(isinstance(target, ast.Name) and target.id == name for target in item.targets)))
+
+        birds = (examples / "showcase_character_rigs.py").read_text()
+        self.assertEqual(clip(birds, "WING_CLIP"), clip(source, "SOURCE_CLIP"))
+        scene = asyncio.run(run_source(source, filename=str(path), retain_history=True))
+        view = prepare_view(scene)
+        try:
+            self.assertAlmostEqual(view.duration, 7.2)
+            rest = view.capture(time=0, width=320, height=180)
+            bent = view.capture(time=2.85, width=320, height=180)
+            self.assertEqual(rest, view.capture(time=6.5, width=320, height=180))
+            self.assertEqual(bent, view.capture(time=2.85, width=320, height=180))
+
+            def circle_pixels(frame):
+                return {divmod(offset // 4, 320) for offset in range(0, len(frame), 4)
+                        if frame[offset + 1] - frame[offset] >= 22
+                        and frame[offset + 1] - frame[offset + 2] >= 10}
+
+            at_rest, in_bend = circle_pixels(rest), circle_pixels(bent)
+            floor = max(y for y, _ in at_rest)
+            self.assertEqual({p for p in at_rest if p[0] >= floor - 4},
+                             {p for p in in_bend if p[0] >= floor - 4})
+            changed_outline = {point for point in at_rest ^ in_bend if point[0] < floor - 25}
+            self.assertGreater(len(changed_outline), 100)
+        finally:
+            view.close()
+
+    def test_rig_pose_target_preserves_compound_path_and_style(self):
+        source = """from noon import *
+
+class CompoundPath(Scene):
+    def construct(self):
+        artwork = VMobject(stroke_color=WHITE, stroke_width=3.5, stroke_opacity=0.8)
+        for corners in [
+            [(-1, -1), (1, -1), (1, 1), (-1, 1)],
+            [(-0.4, -0.3), (-0.4, 0.4), (0.4, 0.4), (0.4, -0.3)],
+        ]:
+            artwork.start_new_path((*corners[0], 0))
+            for point in corners[1:]:
+                artwork.add_line_to((*point, 0))
+            artwork.close_path()
+        artwork.start_new_path((-0.65, 1.25, 0))
+        artwork.add_cubic_bezier_curve_to((-0.3, 1.55, 0), (0.3, 1.1, 0), (0.65, 1.25, 0))
+        artwork.set_fill(LinearGradient([(0, BLUE), (1, GREEN)]), opacity=0.75)
+        artwork.set_stroke(BLACK, width=5, background=True)
+        artwork.stretch(1.3, 0).rotate(0.2).shift((0.25, 0.1, 0))
+        artwork.set_z_index(3)
+        self.add(artwork)
+        contours = [list(map(tuple, path)) for path in artwork.get_subpaths()]
+        assert len(contours) == 3
+        rig = self.retarget_rig_2d(
+            joints=[("base", None, (0, -0.8), 0), ("bend", "base", (0, 1.4), 0)],
+            tracks={"bend": [(0, 0), (1, -0.55)]},
+        )
+        pose = rig.pose(1)
+        chain = ("base", "bend")
+        target = pose.target_for(artwork)
+        explicit = pose.target_for(artwork, chain=chain)
+        assert target.get_fill_opacity() == artwork.get_fill_opacity()
+        for background in (False, True):
+            assert target.get_stroke_width(background) == artwork.get_stroke_width(background)
+            assert target.get_stroke_opacity(background) == artwork.get_stroke_opacity(background)
+            assert target.get_stroke_color(background) == artwork.get_stroke_color(background)
+        assert target not in self.mobjects and target.z_index == artwork.z_index
+        deformed = [list(map(tuple, path)) for path in target.get_subpaths()]
+        assert [list(map(tuple, path)) for path in explicit.get_subpaths()] == deformed
+        assert [list(map(tuple, path)) for path in artwork.get_subpaths()] == contours
+        assert [len(path) for path in deformed] == [len(path) for path in contours]
+        assert deformed != contours
+        for before, after in zip(contours, deformed):
+            expected = pose.deform_points(chain, before)
+            assert all(abs(a - b) < 1e-6 for p, q in zip(after, expected) for a, b in zip(p, q))
+        # Present the gradient-filled copy through ordinary membership. The
+        # geometry-morph compiler supports solid fills for the round trip.
+        self.wait(0.25)
+        self.remove(artwork)
+        self.add(target)
+        self.wait(0.25)
+        self.remove(target)
+        artwork.set_fill(BLUE, opacity=0.75)
+        solid_bend = pose.target_for(artwork)
+        rest = rig.pose(0).target_for(artwork)
+        self.add(artwork)
+        self.wait(0.25)
+        self.play(Transform(artwork, solid_bend), run_time=0.5)
+        self.play(Transform(artwork, rest), run_time=0.5)
+        self.wait(0.25)
+"""
+        scene = asyncio.run(run_source(source, retain_history=True))
+        view = prepare_view(scene)
+        try:
+            gradient, gradient_bend, rest, bent = [
+                view.capture(time=time, width=160, height=90) for time in (0.125, 0.375, 0.625, 1.25)
+            ]
+            self.assertNotEqual(gradient, gradient_bend)
+            for frame in (gradient, gradient_bend):
+                hues = {(frame[i + 1], frame[i + 2]) for i in range(0, len(frame), 4)
+                        if frame[i + 1] - frame[i] > 45 and frame[i + 2] - frame[i] > 35}
+                self.assertGreater(len(hues), 30)
+            self.assertNotEqual(rest, bent)
+            self.assertEqual(rest, view.capture(time=1.875, width=160, height=90))
+            self.assertEqual(bent, view.capture(time=1.25, width=160, height=90))
+        finally:
+            view.close()
+
+    def test_rig_pose_target_preserves_nested_family_and_painter_order(self):
+        source = """from math import sin
+from noon import *
+
+class NestedPose(Scene):
+    def construct(self):
+        def spot(x, radius, color, z=0):
+            return (Circle(radius=radius, fill=color, fill_opacity=1, stroke=None)
+                    .move_to((x, 0, 0)).set_z_index(z))
+
+        shell = Square(side_length=3, fill="#253D57", fill_opacity=1,
+                       stroke_color=WHITE, stroke_width=2.5)
+        front = spot(0, 0.26, "#FDD065", z=3)
+        back = spot(0, 0.43, "#C74755")
+        first = spot(1, 0.31, "#C74755")
+        last = spot(1, 0.22, "#5DC8EC")
+        body = VGroup(shell, VGroup(front, back, VGroup(first, last)))
+        body.reference = Square(side_length=1).shift((2, 1, 0))
+
+        rig = self.retarget_rig_2d(
+            joints=[("root", None, (0, 0), 0)],
+            tracks={"root": [(0, 0), (1, 0.6)]},
+        )
+        pose = rig.pose(1)
+        target = pose.target_for(body, chain=("root",))
+        assert isinstance(target[1], VGroup) and isinstance(target[1][2], VGroup)
+        assert [len(target), len(target[1]), len(target[1][2])] == [2, 3, 2]
+        assert target[0] is not shell and target[0].get_stroke_width() == shell.get_stroke_width()
+        assert target[1][0].z_index == front.z_index > target[1][1].z_index
+        assert target.reference is not body.reference
+        assert tuple(target.reference.get_center()) == tuple(body.reference.get_center())
+        assert target not in self.mobjects
+
+        alias_target = pose.target_for(VGroup(VGroup(shell), VGroup(shell)))
+        assert alias_target[0][0] is alias_target[1][0]
+        assert alias_target[0][0] is not shell
+
+        owned = VGroup(shell).set_points([(0, 0), (1/3, 0), (2/3, 0), (1, 0)])
+        owned_target = pose.target_for(owned)
+        assert len(owned_target) == len(owned)
+        assert owned_target.get_num_points() == owned.get_num_points()
+        assert abs(float(owned_target.get_end()[1]) - sin(0.6)) < 1e-6
+
+        rest = rig.pose(0).target_for(body)
+        self.add(body)
+        self.wait(0.25)
+        self.play(Transform(body, target), run_time=0.5)
+        self.wait(0.25)
+        self.play(Transform(body, rest), run_time=0.5)
+        self.wait(0.25)
+"""
+        scene = asyncio.run(run_source(source, retain_history=True))
+        view = prepare_view(scene)
+        try:
+            rest, bent = [
+                view.capture(time=time, width=320, height=180) for time in (0.125, 0.875)
+            ]
+
+            def pixel(frame, x, y):
+                offset = (y * 320 + x) * 4
+                return tuple(frame[offset:offset + 3])
+
+            self.assertEqual(pixel(rest, 160, 90), (253, 208, 101))
+            self.assertEqual(pixel(bent, 160, 90), (253, 208, 101))
+            self.assertEqual(pixel(rest, 182, 90), (93, 200, 236))
+            self.assertEqual(pixel(bent, 178, 77), (93, 200, 236))
+            self.assertNotEqual(rest, bent)
+            self.assertEqual(rest, view.capture(time=1.625, width=320, height=180))
+            self.assertEqual(bent, view.capture(time=0.875, width=320, height=180))
+        finally:
+            view.close()
+
+    def test_retargeted_gloves_turn_edge_on_and_respect_torso_order(self):
+        path = ROOT / "web/python/examples/showcase_retarget_hand.py"
+        scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
+        view = prepare_view(scene)
+
+        def gold(frame):
+            counts = [0, 0]
+            for y in range(38, 105):
+                for x in range(320):
+                    offset = (y * 320 + x) * 4
+                    r, g, b = frame[offset:offset + 3]
+                    if r >= 233 and 145 <= g <= 222 and 68 <= b <= 142:
+                        counts[x >= 160] += 1
+            return counts
+
+        try:
+            self.assertEqual(view.duration, 6.75)
+            rest, edge, folded = [
+                view.capture(time=time, width=320, height=180) for time in (0.5, 2.25, 3.5)
+            ]
+            for full, thin in zip(gold(rest), gold(edge)):
+                self.assertGreater(full, 50)
+                self.assertLess(thin, full / 2)
+                self.assertGreater(thin, 8)
+            front, behind = gold(folded)
+            self.assertGreater(front, 50)
+            self.assertLess(behind, front / 3)
+            self.assertEqual(rest, view.capture(time=6.5, width=320, height=180))
+            self.assertEqual(edge, view.capture(time=2.25, width=320, height=180))
+            self.assertEqual(folded, view.capture(time=3.5, width=320, height=180))
         finally:
             view.close()
 

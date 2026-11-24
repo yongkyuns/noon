@@ -3908,6 +3908,7 @@ mod wasm {
     mod camera_profile;
     mod matrix_family;
     mod numbers;
+    mod rig_2d;
     mod sample_space;
     mod spatial;
     mod video;
