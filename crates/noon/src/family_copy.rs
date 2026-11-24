@@ -591,16 +591,25 @@ impl Scene {
         references: &[MobjectTarget<'_>],
         from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
     ) -> Result<SemanticCopy<R>, AuthoringError> {
+        let (transaction, pending) = self.prepare_target_copy(source, references, |_, _| Ok(()))?;
+        let result = self.apply_semantic_transaction(transaction)?;
+        pending.resolve(&result, from_node)
+    }
+
+    /// Observe the exact object states being copied, before the caller publishes the copy.
+    pub(crate) fn prepare_target_copy(
+        &self,
+        source: MobjectTarget<'_>,
+        references: &[MobjectTarget<'_>],
+        observe: impl FnMut(&Mobject, &SemanticObjectState) -> Result<(), AuthoringError>,
+    ) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), AuthoringError> {
         source.require_store(self.integration_store())?;
         let Some(execution) = self.running_execution() else {
-            return authored_copy(source, references, from_node);
+            return prepare_authored_copy_observing(source, references, observe);
         };
         let store = self.integration_store();
         crate::effective_capture::require_target_capture(execution, &store.borrow())?;
-        let (transaction, pending) =
-            prepare_running_copy(store, execution, source, references, |_, _| {})?;
-        let result = self.apply_semantic_transaction(transaction)?;
-        pending.resolve(&result, from_node)
+        prepare_running_copy(store, execution, source, references, observe)
     }
 }
 
@@ -609,7 +618,7 @@ pub(crate) fn prepare_running_copy(
     execution: &ExecutionSession,
     source: MobjectTarget<'_>,
     references: &[MobjectTarget<'_>],
-    mut observe: impl FnMut(&Mobject, &SemanticObjectState),
+    mut observe: impl FnMut(&Mobject, &SemanticObjectState) -> Result<(), AuthoringError>,
 ) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), AuthoringError> {
     prepare_semantic_copy(
         source,
@@ -618,7 +627,7 @@ pub(crate) fn prepare_running_copy(
             let state = crate::effective_capture::capture_mobject_state_with_graph_dependency(
                 store, execution, mobject, graph_row,
             )?;
-            observe(mobject, &state);
+            observe(mobject, &state)?;
             Ok(state)
         },
         |store, source, style| {
@@ -650,10 +659,22 @@ pub(crate) fn prepare_authored_copy(
     source: MobjectTarget<'_>,
     references: &[MobjectTarget<'_>],
 ) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), AuthoringError> {
+    prepare_authored_copy_observing(source, references, |_, _| Ok(()))
+}
+
+fn prepare_authored_copy_observing(
+    source: MobjectTarget<'_>,
+    references: &[MobjectTarget<'_>],
+    mut observe: impl FnMut(&Mobject, &SemanticObjectState) -> Result<(), AuthoringError>,
+) -> Result<(SemanticMutationTransaction, PendingSemanticCopy), AuthoringError> {
     prepare_semantic_copy(
         source,
         references,
-        |mobject, _| mobject.state(),
+        |mobject, _| {
+            let state = mobject.state()?;
+            observe(mobject, &state)?;
+            Ok(state)
+        },
         |_, _, _| Ok(()),
         |store, source, target, transaction| {
             store

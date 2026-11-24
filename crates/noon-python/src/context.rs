@@ -149,6 +149,103 @@ pub struct MembershipBatch {
     bindings: Vec<Mobject>,
     spatial_domain: Option<noon::integration::spatial_input::SpatialMembershipPolicy>,
 }
+
+#[derive(Default)]
+#[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
+pub struct Rig2dBatch {
+    joints: Vec<noon::Joint2d>,
+    tracks: Vec<noon::JointTrack2d>,
+    attachments: Vec<noon::JointAttachment2d>,
+    mapping: Vec<noon::JointMapping2d>,
+}
+
+#[pymethods]
+impl Rig2dBatch {
+    #[pyo3(signature = (name, x, y, rest_angle, parent=None))]
+    fn joint(&mut self, name: String, x: f64, y: f64, rest_angle: f64, parent: Option<String>) {
+        self.joints.push(noon::Joint2d {
+            name,
+            parent,
+            offset: [x, y],
+            rest_angle,
+        });
+    }
+
+    fn track(&mut self, joint: String, keys: Vec<f32>) -> PyResult<()> {
+        let (keys, remainder) = keys.as_chunks::<2>();
+        if !remainder.is_empty() {
+            return Err(engine_error("2D rig keys require pairs"));
+        }
+        self.tracks.push(noon::JointTrack2d {
+            joint,
+            keys: keys.to_vec(),
+        });
+        Ok(())
+    }
+
+    #[pyo3(name = "mapTrack")]
+    fn map_track(&mut self, source: String, target: String, gain: f32) {
+        self.mapping.push(noon::JointMapping2d {
+            source,
+            target,
+            gain,
+        });
+    }
+
+    fn prepare(&mut self) -> PyResult<NativeRetargetedRig2d> {
+        noon::RetargetedRig2d::new(
+            std::mem::take(&mut self.joints),
+            &self.tracks,
+            &self.mapping,
+        )
+        .map(NativeRetargetedRig2d)
+        .map_err(engine_error)
+    }
+
+    fn attach(&mut self, joint: String, object: &MobjectHandle, x: f64, y: f64) {
+        self.attachments.push(noon::JointAttachment2d {
+            joint,
+            object: object.handle.clone(),
+            offset: [x, y],
+        });
+    }
+}
+
+#[pyclass(skip_from_py_object, module = "_noon_native")]
+pub struct NativeRetargetedRig2d(noon::RetargetedRig2d);
+
+#[pymethods]
+impl NativeRetargetedRig2d {
+    fn pose(&self, phase: f32) -> PyResult<NativeRigPose2d> {
+        self.0
+            .pose(phase)
+            .map(NativeRigPose2d)
+            .map_err(engine_error)
+    }
+}
+
+#[pyclass(skip_from_py_object, module = "_noon_native")]
+pub struct NativeRigPose2d(noon::RigPose2d);
+
+#[pymethods]
+impl NativeRigPose2d {
+    fn joint(&self, name: &str) -> PyResult<[f64; 3]> {
+        self.0.joint(name).map_err(engine_error)
+    }
+
+    #[pyo3(name = "deformPoints")]
+    fn deform_points(&self, chain: Vec<String>, points: Vec<f64>) -> PyResult<Vec<f64>> {
+        let (points, remainder) = points.as_chunks::<2>();
+        if !remainder.is_empty() {
+            return Err(engine_error("2D rig points require pairs"));
+        }
+        self.0
+            .deform_points(&chain, points)
+            .map(|points| points.into_flattened())
+            .map_err(engine_error)
+    }
+}
+
 enum NativeFamilyMember {
     Object(Mobject),
     Family(noon::MobjectFamily),
@@ -1277,6 +1374,74 @@ impl Context {
         self.same_store(target)?;
         self.scene
             .bind_sampled(&target.handle, &tracker.value, channel, linear, rows)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "beginRig2d")]
+    fn begin_rig_2d(&self) -> Rig2dBatch {
+        Rig2dBatch::default()
+    }
+
+    #[pyo3(name = "rigPoseTarget", signature = (pose, source, chain=None))]
+    fn rig_pose_target(
+        &mut self,
+        pose: &NativeRigPose2d,
+        source: &MobjectHandle,
+        chain: Option<Vec<String>>,
+    ) -> PyResult<MobjectHandle> {
+        self.same_store(source)?;
+        self.require_active()?;
+        let chain = chain
+            .as_ref()
+            .map(|names| names.iter().map(String::as_str).collect::<Vec<_>>());
+        pose.0
+            .target_for(&mut self.scene, &source.handle, chain.as_deref())
+            .map(MobjectHandle::from_semantic_mobject)
+            .map_err(AuthoringFailure::from_scene_capture)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "rigPoseFamilyTarget", signature = (pose, source, references, chain=None))]
+    fn rig_pose_family_target(
+        &mut self,
+        pose: &NativeRigPose2d,
+        source: &crate::family::FamilyHandle,
+        references: &MembershipBatch,
+        chain: Option<Vec<String>>,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.same_family_store(source)?;
+        self.require_active()?;
+        let chain = chain
+            .as_ref()
+            .map(|names| names.iter().map(String::as_str).collect::<Vec<_>>());
+        pose.0
+            .target_for_family_with_references(
+                &mut self.scene,
+                &source.family,
+                &references.add_targets()?,
+                chain.as_deref(),
+            )
+            .map(|copied| crate::family::FamilyCopy {
+                copied: copied.into_entry_copy(),
+            })
+            .map_err(AuthoringFailure::from_scene_capture)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "bindRig2d")]
+    fn bind_rig_2d(
+        &mut self,
+        tracker: &crate::signals::ValueTrackerHandle,
+        batch: &Rig2dBatch,
+    ) -> PyResult<()> {
+        self.available()?;
+        self.scene
+            .bind_rig_2d(
+                &tracker.value,
+                &batch.joints,
+                &batch.tracks,
+                &batch.attachments,
+            )
             .map_err(engine_error)
     }
 

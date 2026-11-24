@@ -617,7 +617,7 @@ def _copy_nested_mobject(
 
 
 def _clone_mobject(
-    self: _base.Mobject, *, target_state: bool = False, subcurve=None,
+    self: _base.Mobject, *, target_state: bool = False, prepare_copy=None,
     context_override: object | None = None, memo: dict[int, object] | None = None,
 ) -> _base.Mobject:
     memo = {} if memo is None else memo
@@ -639,11 +639,8 @@ def _clone_mobject(
     clone._raw = None
     clone._scene = None
     clone._object = None
-    if subcurve is not None:
-        clone._semantic_handle = (
-            engine_call(context.subcurve, handle, *subcurve)
-            if context is not None else engine_call(handle.subcurve, *subcurve)
-        )
+    if prepare_copy is not None:
+        clone._semantic_handle = prepare_copy(context, handle)
     elif context is not None:
         clone._semantic_handle = engine_call(context.targetEditor, handle)
     else:
@@ -3487,9 +3484,10 @@ def _group_target_context(value: object) -> object | None:
 
 
 def _group_copy_operation(
-    self: _base.Mobject, *, cyclic_replace: bool, promote_own_points: bool = False
+    self: _base.Mobject, *, cyclic_replace: bool, promote_own_points: bool = False,
+    context_override=None, prepare_copy=None,
 ) -> _base.Mobject:
-    context = _group_target_context(self)
+    context = context_override if context_override is not None else _group_target_context(self)
 
     def excluded_fields(value):
         excluded = {
@@ -3511,7 +3509,9 @@ def _group_copy_operation(
 
     clone, pairs, family_members = _compat.prepare_family_wrapper_copy(self, excluded_fields)
     references = _family_membership_batch(context, "add", tuple(source for source, _ in pairs))
-    if promote_own_points:
+    if prepare_copy is not None:
+        copied = prepare_copy(context, self, references)
+    elif promote_own_points:
         copied = _membership_call(
             self, context, "promoteFamilyOwnPoints", "promoteMobjectOwnPoints",
             "promoteOwnPoints", references,
