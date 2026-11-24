@@ -23,7 +23,7 @@ fn configure(reader: &mut PrefixReader, selection: bool) {
         )
         .unwrap();
 }
-fn displayed(reader: &PrefixReader) -> (PointerFrameSnapshot, PointerFrameView) {
+fn displayed(reader: &mut PrefixReader) -> (PointerFrameSnapshot, PointerFrameView) {
     let view = reader
         .inspection_pointer_view(1, Vec2::new(200.0, 200.0))
         .unwrap();
@@ -172,7 +172,7 @@ fn prefix_pointer_future_delivery_preserves_press_and_uses_displayed_generation(
     reader.seek(0.5).unwrap();
     configure(&mut reader, true);
     submit(&mut reader, 0, true);
-    let (snapshot, view) = displayed(&reader);
+    let (snapshot, view) = displayed(&mut reader);
     let token = reader
         .pointer_input_token_for_frame(&snapshot, view)
         .unwrap();
@@ -225,7 +225,7 @@ fn prefix_pointer_unavailable_seek_and_stale_input_are_atomic() {
     reader.seek(0.5).unwrap();
     configure(&mut reader, true);
     submit(&mut reader, 0, true);
-    let (snapshot, view) = displayed(&reader);
+    let (snapshot, view) = displayed(&mut reader);
     let token = reader
         .pointer_input_token_for_frame(&snapshot, view)
         .unwrap();
@@ -275,7 +275,7 @@ fn prefix_pointer_foreign_reader_cannot_reuse_presented_input() {
     right.seek(0.5).unwrap();
     configure(&mut left, true);
     configure(&mut right, true);
-    let (snapshot, view) = displayed(&left);
+    let (snapshot, view) = displayed(&mut left);
     let token = left.pointer_input_token_for_frame(&snapshot, view).unwrap();
     let query = left.query_viewport(noon_core::Rect::new(
         Vec2::new(-2.0, -2.0),
@@ -311,7 +311,7 @@ fn prefix_pointer_stationary_hover_follows_selected_history_not_received_rows() 
     let (mut publisher, mut reader) = source.bootstrap();
     reader.seek(0.5).unwrap();
     configure(&mut reader, true);
-    let (snapshot, view) = displayed(&reader);
+    let (snapshot, view) = displayed(&mut reader);
     let token = reader
         .pointer_input_token_for_frame(&snapshot, view)
         .unwrap();
@@ -323,7 +323,7 @@ fn prefix_pointer_stationary_hover_follows_selected_history_not_received_rows() 
         NativePointerInputKind::Move(snapshot.position(Vec2::new(100.0, 100.0)).unwrap()),
     );
     reader.submit_native_pointer_input(&token, motion).unwrap();
-    let (snapshot, view) = displayed(&reader);
+    let (snapshot, view) = displayed(&mut reader);
     let enter = reader
         .refresh_pointer_hover(&snapshot, view)
         .unwrap()
@@ -340,14 +340,14 @@ fn prefix_pointer_stationary_hover_follows_selected_history_not_received_rows() 
     assert_eq!(reader.hovered_pointer_target(), Some(old));
     reader.advance_to(1.5).unwrap();
     assert!(reader.refresh_pointer_hover(&snapshot, view).is_err());
-    let (absent, view) = displayed(&reader);
+    let (absent, view) = displayed(&mut reader);
     let leave = reader
         .refresh_pointer_hover(&absent, view)
         .unwrap()
         .unwrap();
     assert_eq!((leave.previous, leave.current), (Some(old), None));
     reader.advance_to(2.5).unwrap();
-    let (present, view) = displayed(&reader);
+    let (present, view) = displayed(&mut reader);
     let enter = reader
         .refresh_pointer_hover(&present, view)
         .unwrap()
@@ -375,7 +375,7 @@ fn prefix_pointer_inspection_zoom_preserves_effect_and_survives_seek() {
     let frame = reader.frame().clone();
     let context = reader.publication_context();
     let before = reader.inspection_camera().unwrap();
-    let (snapshot, view) = displayed(&reader);
+    let (snapshot, view) = displayed(&mut reader);
     assert!(reader
         .zoom_inspection_view(&snapshot, view, Vec2::new(100.0, 100.0), 0.5)
         .unwrap());

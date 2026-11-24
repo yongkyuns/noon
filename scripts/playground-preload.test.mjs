@@ -19,6 +19,7 @@ function pageDouble(initialGlobals = {}) {
   const calls = [];
   const routes = [];
   const page = {
+    isClosed: () => false,
     async addInitScript(callback, argument) {
       calls.push(["init", argument]);
       runInNewContext(`(${callback.toString()})(${JSON.stringify(argument)})`, realm);

@@ -464,7 +464,14 @@ impl ExecutionSession {
         let mut action = None;
         if !suppress_click_action {
             let authored_click = selection.click.filter(|click| {
-                !self.default_viewer_selection() || click.target() == selection.viewer_target
+                !self.default_viewer_selection()
+                    || click.target() == selection.viewer_target
+                    // Playback buttons use the painter-ordered filled hit. A
+                    // stroke-only icon can receive default viewer feedback but
+                    // must not intercept the authored control underneath it.
+                    || click.target().is_some_and(|target| {
+                        self.interaction_bindings.is_playback_control(target)
+                    })
             });
             action = self.prepare_click_action(authored_click)?;
             if action.is_none() {

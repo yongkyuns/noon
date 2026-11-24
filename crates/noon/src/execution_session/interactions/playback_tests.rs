@@ -170,7 +170,14 @@ fn playback_uses_painter_correct_pick_and_background_does_not_dispatch() {
         object(4.0, Some(PlaybackControl::NextSection)),
     );
     let occluder = attach(&mut store, root, object(4.0, None));
+    let mut icon = object(0.0, None);
+    icon.style.fill = None;
+    icon.style.stroke = Some(noon_core::SemanticPaint::Solid(noon_core::Color::WHITE));
+    icon.style.stroke_width = 0.2;
+    let icon = attach(&mut store, root, icon);
     let mut session = session(&store, root);
+    session.enable_default_viewer_selection();
+    assert_eq!(session.pick_viewer_target(Vec2::ZERO), Some(icon));
     let receipt = click(&mut store, &mut session, 1, 0.0);
     assert_eq!(receipt.selection_click().unwrap().target(), Some(front));
     assert_eq!(receipt.playback_control(), Some(PlaybackControl::Restart));
