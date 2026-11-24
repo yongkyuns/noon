@@ -800,11 +800,9 @@ mod tests {
         for time in [0.0, 0.37, 1.0, 0.37, 0.0] {
             session.seek(time).unwrap();
             let frame = session.frame();
-            for (pair, (x, length, rest)) in frame
-                .objects
-                .chunks_exact(2)
-                .zip([(-2.0, 1.0, 0.0), (2.0, 1.8, 0.3)])
-            {
+            assert_eq!(frame.objects.len(), 4);
+            let (pairs, _) = frame.objects.as_chunks::<2>();
+            for (pair, (x, length, rest)) in pairs.iter().zip([(-2.0, 1.0, 0.0), (2.0, 1.8, 0.3)]) {
                 let shoulder = rest + time as f32 * FRAC_PI_2;
                 let elbow = Vec2::new(x, 0.0) + length * Vec2::new(shoulder.cos(), shoulder.sin());
                 let forearm_angle: f32 = rest + 0.2;
