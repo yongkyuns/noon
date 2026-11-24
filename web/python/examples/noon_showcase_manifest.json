@@ -1115,11 +1115,11 @@
     {
       "id": "showcase-retarget-hand",
       "title": "One fold, two reaches",
-      "lesson": "Two characters reuse an inward arm fold. The glove turns edge-on and passes in front of one torso and behind the other.",
+      "lesson": "Two characters with different arm lengths and glove shapes reuse an inward fold and the same hand-pose cues. The gloves turn edge-on and pass in front of one torso and behind the other.",
       "primary_feature": "retargeted-hand-turn",
       "category": "Motion",
       "path": "python/examples/showcase_retarget_hand.py",
-      "features": ["joint retargeting", "authored hand views", "painter order"],
+      "features": ["joint retargeting", "named artwork cues", "painter order"],
       "duration": 6.75,
       "thumbnail_time": 3.45,
       "thumbnail": "thumbnails/showcase/showcase-retarget-hand.png",
@@ -1133,6 +1133,28 @@
         { "time": 6.5, "label": "Both arms return to rest" }
       ],
       "still_intervals": [[0, 0.75], [2.25, 2.5], [3.25, 4], [6.25, 6.75]],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
+      "id": "showcase-retarget-blink",
+      "title": "One blink, two faces",
+      "lesson": "Two characters share one blink cue sequence. Each eyelid has its own outline and follows a different anchor as the head tilts.",
+      "primary_feature": "retargeted-eyelid-blink",
+      "category": "Motion",
+      "path": "python/examples/showcase_retarget_blink.py",
+      "features": ["joint retargeting", "named artwork cues"],
+      "duration": 5.25,
+      "thumbnail_time": 0.3,
+      "thumbnail": "thumbnails/showcase/showcase-retarget-blink.png",
+      "thumbnail_alt": "Two smiling faces with open eyes, one round and mint green and the other square and peach.",
+      "beats": [
+        { "time": 0.3, "label": "Compare the two eye shapes and their positions" },
+        { "time": 1.25, "label": "Both faces reach the half-open cue as their heads tilt" },
+        { "time": 2.25, "label": "The eyelids close and keep their positions on the tilted faces" },
+        { "time": 3.25, "label": "The eyes reopen through the same half-open cue" },
+        { "time": 4.95, "label": "The eyes open and the heads return to their first pose" }
+      ],
+      "still_intervals": [[0, 0.5], [2, 2.5], [4.75, 5.25]],
       "playback_capability": "deterministic-retained-replay"
     }
   ]
