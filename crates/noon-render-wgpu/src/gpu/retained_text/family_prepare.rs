@@ -512,6 +512,7 @@ impl RetainedFramePreparer {
                             stroke_width_mode: StrokeWidthMode::ScaleWithObject,
                             stroke_join: StrokeJoin::Round,
                             stroke_cap: StrokeCap::Round,
+                            sketch_stroke: None,
                             opacity: object.style.opacity,
                             emission: object.style.emission,
                         },

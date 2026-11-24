@@ -581,6 +581,7 @@ pub(super) fn draw_border_style(
             stroke_width_mode: StrokeWidthMode::ScreenSpace,
             stroke_join: StrokeJoin::Miter,
             stroke_cap: StrokeCap::Butt,
+            sketch_stroke: object_style.sketch_stroke,
             opacity: object_style.opacity,
             emission: object_style.emission,
         },
@@ -631,6 +632,7 @@ pub(super) fn draw_border_style(
                 stroke_width_mode,
                 stroke_join,
                 stroke_cap,
+                sketch_stroke: object_style.sketch_stroke,
                 opacity: object_style.opacity,
                 emission: object_style.emission,
             }

@@ -351,6 +351,34 @@ impl StrokeCap {
     }
 }
 
+/// Seeded foreground stroke geometry, in local scene units.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SketchStroke {
+    roughness: f32,
+    seed: u32,
+}
+
+impl SketchStroke {
+    pub fn new(roughness: f64, seed: u32) -> Option<Self> {
+        (0.0..=2.0).contains(&roughness).then_some(Self {
+            roughness: roughness as f32,
+            seed,
+        })
+    }
+
+    pub fn roughness(self) -> f32 {
+        self.roughness
+    }
+
+    pub fn seed(self) -> u32 {
+        self.seed
+    }
+
+    pub fn is_valid(self) -> bool {
+        (0.0..=2.0).contains(&self.roughness)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Style {
     pub fill: Option<Color>,
@@ -368,6 +396,8 @@ pub struct Style {
     pub stroke_join: StrokeJoin,
     #[serde(default)]
     pub stroke_cap: StrokeCap,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sketch_stroke: Option<SketchStroke>,
     pub opacity: f32,
     /// Checked material radiance; projected explicitly at the draw boundary.
     #[serde(default, skip_serializing_if = "Emission::is_neutral")]
@@ -401,6 +431,7 @@ impl Default for Style {
             stroke_width_mode: StrokeWidthMode::ScaleWithObject,
             stroke_join: StrokeJoin::Round,
             stroke_cap: StrokeCap::Round,
+            sketch_stroke: None,
             opacity: 1.0,
             emission: Emission::NONE,
         }

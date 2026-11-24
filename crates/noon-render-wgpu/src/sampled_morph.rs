@@ -123,6 +123,7 @@ impl FramePreparer {
             background_stroke_width_bits: super::effective_background_stroke_width(style).to_bits(),
             stroke_join: style.stroke_join,
             stroke_cap: style.stroke_cap,
+            sketch_stroke: super::sketch_stroke_key(style),
             fill_enabled: style.fill.is_some(),
             mesh,
             bounds: None,

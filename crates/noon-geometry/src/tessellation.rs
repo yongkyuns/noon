@@ -206,6 +206,7 @@ pub fn tessellate_styled_with_fill(
 ) -> Result<TessellatedPath, GeometryError> {
     tessellate_styled_with_fill_impl(
         path,
+        path,
         stroke_width,
         stroke_join,
         stroke_cap,
@@ -219,6 +220,27 @@ pub fn tessellate_styled_with_fill(
 /// style.
 pub fn tessellate_styled_with_background_stroke(
     path: &VectorPath,
+    stroke_width: f32,
+    background_stroke_width: f32,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
+    fill_enabled: bool,
+) -> Result<TessellatedPath, GeometryError> {
+    tessellate_with_stroke_outline(
+        path,
+        path,
+        stroke_width,
+        background_stroke_width,
+        stroke_join,
+        stroke_cap,
+        fill_enabled,
+    )
+}
+
+/// Use a separate foreground outline while fill and background stroke retain the source path.
+pub fn tessellate_with_stroke_outline(
+    path: &VectorPath,
+    outline: &VectorPath,
     stroke_width: f32,
     background_stroke_width: f32,
     stroke_join: StrokeJoin,
@@ -241,7 +263,19 @@ pub fn tessellate_styled_with_background_stroke(
             tessellate_styled_with_fill(path, width, stroke_join, stroke_cap, fill)
         }
     };
-    let mut foreground = tessellate(stroke_width, fill_enabled)?;
+    let mut foreground = if std::ptr::eq(path, outline) {
+        tessellate(stroke_width, fill_enabled)?
+    } else {
+        tessellate_styled_with_fill_impl(
+            path,
+            outline,
+            stroke_width,
+            stroke_join,
+            stroke_cap,
+            fill_enabled,
+            false,
+        )?
+    };
     if background_stroke_width == 0.0 {
         return Ok(foreground);
     }
@@ -764,6 +798,7 @@ pub fn tessellate_styled_with_fill_preserving_morph_order(
 ) -> Result<TessellatedPath, GeometryError> {
     tessellate_styled_with_fill_impl(
         path,
+        path,
         stroke_width,
         stroke_join,
         stroke_cap,
@@ -774,6 +809,7 @@ pub fn tessellate_styled_with_fill_preserving_morph_order(
 
 fn tessellate_styled_with_fill_impl(
     path: &VectorPath,
+    outline: &VectorPath,
     stroke_width: f32,
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
@@ -794,9 +830,9 @@ fn tessellate_styled_with_fill_impl(
             preserve_morph_order,
         );
     }
-    let reveal_points = build_reveal_points(path)?;
+    let reveal_points = build_reveal_points(outline)?;
     let fill_path = build_lyon_path(path)?;
-    let stroke_path = build_lyon_path_with_manim_progress(path)?;
+    let stroke_path = build_lyon_path_with_manim_progress(outline)?;
     let mut buffers = VertexBuffers::new();
 
     if fill_enabled {
@@ -866,7 +902,7 @@ fn tessellate_styled_with_fill_impl(
         morphing: false,
         polygonal_stroke: stroke_join != StrokeJoin::Round
             && stroke_cap != StrokeCap::Round
-            && path.commands().iter().all(|command| {
+            && outline.commands().iter().all(|command| {
                 matches!(
                     command,
                     PathCommand::MoveTo { .. } | PathCommand::LineTo { .. } | PathCommand::Close

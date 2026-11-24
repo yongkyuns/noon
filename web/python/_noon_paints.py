@@ -37,6 +37,26 @@ class LinearGradient:
         return self
 
 
+class SketchStroke:
+    """Seeded foreground outline for a shape's `stroke=` argument.
+
+    Roughness ranges from 0 to 2. A fixed seed keeps the two pen passes
+    consistent across playback and export.
+    """
+    __slots__ = ("_color", "_roughness", "_seed")
+
+    def __init__(self, color=None, *, roughness=1, seed=0):
+        from operator import index
+        from _manim_compat import _as_color
+        from noon import WHITE
+
+        self._color = WHITE if color is None else _as_color("sketch stroke color", color)
+        self._roughness = _number(roughness, "sketch roughness")
+        self._seed = index(seed)
+        if not 0 <= self._seed <= 0xFFFFFFFF:
+            raise ValueError("sketch seed must be an unsigned 32-bit integer")
+
+
 class HatchPaint:
     """Parallel or crossed lines anchored to the object's local origin.
 

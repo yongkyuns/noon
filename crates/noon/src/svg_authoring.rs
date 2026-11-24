@@ -843,6 +843,7 @@ fn prepare_style(path: &usvg::Path) -> Result<SemanticStyle, SvgAuthoringError> 
         stroke_width_mode: StrokeWidthMode::ScreenSpace,
         stroke_join,
         stroke_cap,
+        sketch_stroke: None,
         object_opacity: 1.0,
         emission: noon_core::Emission::NONE,
     })
