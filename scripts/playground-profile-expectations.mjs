@@ -61,7 +61,7 @@ const rows = [
   ['showcase-drip-fill-gauge','showcase_drip_fill_gauge.py','6e1582c8432dc9fd88de0df2e54e4f1bf07131f20dae93def3393938abbb76e8','incremental','ordinary',[], 'finite-complete', true],
   ['showcase-character-rigs','showcase_character_rigs.py','8f4450139597368def1bd3c17cc17cb8fee09d7ccfd3fcb641d85b2ce1146f8b','observed','observed-replay',[], 'observed-complete'],
   ['showcase-shape-characters','showcase_shape_characters.py','aff850534219adffeb89f6e3d5222931b75df8f16b7073ba4ae61159ad6b04df','observed','observed-replay',[], 'observed-complete'],
-  ['showcase-retarget-hand','showcase_retarget_hand.py','8c90c2cd66ec12baef6753987177b852829125401b01a319e410adcc6fbf166e','observed','observed-replay',[], 'observed-complete'],
+  ['showcase-retarget-hand','showcase_retarget_hand.py','95dbc32f30a214c6000147f97dc38d12f2a46f567bc67b859c4dc51b2af259d9','observed','observed-replay',[], 'observed-complete'],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
