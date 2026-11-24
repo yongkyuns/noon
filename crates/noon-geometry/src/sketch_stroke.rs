@@ -33,6 +33,26 @@ pub fn sketch_outline(path: &VectorPath, stroke: SketchStroke) -> VectorPath {
     draw_pass(path, first, closed, -amplitude, &mut random)
 }
 
+/// A closed, filled tip with its apex and shaft attachment fixed.
+pub fn sketch_arrow_tip([apex, first, second]: [Vec2; 3], stroke: SketchStroke) -> VectorPath {
+    let axis = apex - (first * 0.5 + second * 0.5);
+    let length = axis.x.hypot(axis.y);
+    let roughness = stroke.roughness();
+    let mut path = VectorPath::new().move_to(apex);
+    if length == 0.0 || roughness == 0.0 {
+        return path.line_to(first).line_to(second).close();
+    }
+
+    let mut random = SketchRandom(stroke.seed());
+    let tilt = random.signed();
+    let skew = axis * (roughness * (0.12 + 0.06 * tilt.abs()).copysign(tilt));
+    let first = first + skew;
+    let second = second - skew;
+    let amplitude = length * (roughness * 0.16);
+    path = bow_line(path, apex, first, amplitude, &mut random).line_to(second);
+    bow_line(path, second, apex, -amplitude, &mut random).close()
+}
+
 fn draw_pass(
     outline: &VectorPath,
     mut path: VectorPath,

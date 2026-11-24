@@ -10,7 +10,8 @@ use crate::{AuthoringError, ManimGeometryOptions, Mobject, MobjectFamily};
 use noon_core::{
     Color, SemanticArrowShaftRole, SemanticGraphArrowPolicy, SemanticMutationTransaction,
     SemanticMutationTransactionResult, SemanticNodeCreation, SemanticNodeId, SemanticObjectRole,
-    SemanticObjectState, SemanticPaint, SemanticStore, StoredGeometry, Vec2, VectorPath,
+    SemanticObjectState, SemanticPaint, SemanticStore, SketchStroke, StoredGeometry, Vec2,
+    VectorPath,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -211,14 +212,16 @@ impl ManimArrowOptions {
             geometry.stroke_width(initial_stroke_width, self.max_stroke_width_to_length_ratio);
 
         let tip_color = manim_visible_color(&shaft.style);
-        let end_tip = triangle_tip_path(visible_end, direction, effective_tip_length)?;
+        let sketch = shaft.style.sketch_stroke;
+        let end_tip = tip_path(visible_end, direction, effective_tip_length, sketch)?;
         let start_tip = self
             .start_tip
             .then(|| {
-                triangle_tip_path(
+                tip_path(
                     visible_start,
                     (-direction.0, -direction.1),
                     effective_tip_length,
+                    sketch,
                 )
             })
             .transpose()?;
@@ -508,18 +511,25 @@ fn tip_state(
     state
 }
 
-fn triangle_tip_path(
+fn tip_path(
     apex: (f64, f64),
     direction: (f64, f64),
     length: f64,
+    sketch: Option<SketchStroke>,
 ) -> Result<VectorPath, AuthoringError> {
     let [apex, first_base, second_base] =
         noon_geometry::arrow_tip_vertices(apex, direction, length);
-    Ok(VectorPath::new()
-        .move_to(lower_point("arrow tip apex", apex)?)
-        .line_to(lower_point("arrow tip base 1", first_base)?)
-        .line_to(lower_point("arrow tip base 2", second_base)?)
-        .close())
+    let apex = lower_point("arrow tip apex", apex)?;
+    let first = lower_point("arrow tip base 1", first_base)?;
+    let second = lower_point("arrow tip base 2", second_base)?;
+    Ok(match sketch {
+        Some(stroke) => noon_geometry::sketch_arrow_tip([apex, first, second], stroke),
+        None => VectorPath::new()
+            .move_to(apex)
+            .line_to(first)
+            .line_to(second)
+            .close(),
+    })
 }
 
 fn manim_visible_color(style: &noon_core::SemanticStyle) -> Color {
@@ -682,6 +692,45 @@ mod tests {
                 arrow.start_tip().unwrap().node_id()
             ]
         );
+    }
+
+    #[test]
+    fn sketch_arrow_tips_are_seeded_and_keep_their_anchors() {
+        use noon_core::PathCommand::{Close, CubicTo, LineTo, MoveTo};
+
+        let scene = Scene::new();
+        let mut options = ManimArrowOptions::double_arrow(-2.0, 0.0, 2.0, 0.0).unwrap();
+        options.set_buff(0.0).unwrap();
+        let prepare = |roughness, seed| {
+            let mut options = options.clone();
+            options
+                .set_sketch_stroke(crate::YELLOW, roughness, seed)
+                .unwrap();
+            let arrow = options
+                .prepare(&mut scene.integration_store().borrow_mut())
+                .unwrap();
+            [arrow.end_tip, arrow.start_tip.unwrap()]
+        };
+        let plain = prepare(0.0, 7);
+        let sketch = prepare(1.4, 7);
+        assert_eq!(sketch, prepare(1.4, 7));
+        assert_ne!(sketch, prepare(1.4, 8));
+        for (plain, sketch) in plain.iter().zip(sketch.iter()) {
+            let [MoveTo { to: apex }, LineTo { to: first }, LineTo { to: second }, Close] =
+                plain.commands()
+            else {
+                panic!("expected an ordinary triangular tip");
+            };
+            let [MoveTo { to: sketch_apex }, CubicTo {
+                to: sketch_first, ..
+            }, LineTo { to: sketch_second }, CubicTo { to: end, .. }, Close] = sketch.commands()
+            else {
+                panic!("expected a filled tip with curved sides");
+            };
+            assert_eq!(sketch_apex, apex);
+            assert_eq!(end, apex);
+            assert!(((*sketch_first + *sketch_second) - (*first + *second)).length() < 1e-6);
+        }
     }
 
     #[test]
