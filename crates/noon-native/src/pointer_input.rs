@@ -11,6 +11,10 @@ use noon::integration::{
     NativePointerInputKind, NativePointerInputToken, PointerFrameError, PointerFrameSnapshot,
     PointerFrameView,
 };
+use noon::{
+    PlanarPickCache, PlanarPickFrame, PlanarViewerPointer, SpatialPickCache, SpatialPickFrame,
+    SpatialPointerInput, SpatialPointerPhase,
+};
 use noon_core::{NativeInputValue, NativeStateSource, Vec2};
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton};
@@ -25,6 +29,11 @@ const WINDOW_CURSOR: NativePointerId = NativePointerId {
     pointer: 0,
 };
 
+pub(super) enum ViewerPickFrame {
+    Planar(PlanarPickFrame),
+    Spatial(SpatialPickFrame),
+}
+
 /// Collector lifetime, the last valid OS cursor sample and one presentation
 /// receipt are retained. A pending render is never installed as a receipt.
 /// The session owns sampled button values, event counters and publications.
@@ -35,6 +44,11 @@ pub(super) struct PointerCollector {
     surface: Option<Vec2>,
     pub(super) modifiers: ModifiersState,
     pub(super) presented: Option<PointerFrameSnapshot>,
+    pub(super) presented_viewer: Option<ViewerPickFrame>,
+    spatial_cache: SpatialPickCache,
+    spatial_button: Option<u8>,
+    viewer_cache: PlanarPickCache,
+
     pub(super) refresh_pending: bool,
 }
 
@@ -108,6 +122,152 @@ impl NativeApp {
             .session()
             .capture_pointer_frame(view)
             .map_err(|error| NativeHostError::Platform(error.to_string()))
+    }
+
+    fn uses_planar_viewer_pointer(&self) -> bool {
+        let session = self.execution.session();
+        !session.has_native_pointer_subscribers() && matches!(session.camera_3d(), Ok(None))
+    }
+
+    fn uses_spatial_viewer_pointer(&self) -> bool {
+        let session = self.execution.session();
+        !session.has_native_pointer_subscribers() && matches!(session.camera_3d(), Ok(Some(_)))
+    }
+
+    pub(super) fn capture_viewer_pick_frame(
+        &mut self,
+        mapping: &PointerFrameSnapshot,
+        spatial_camera: Option<noon_core::SemanticCamera3D>,
+        snapshot: bool,
+    ) -> Option<ViewerPickFrame> {
+        if self.execution.session().has_native_pointer_subscribers() {
+            self.pointer.viewer_cache = PlanarPickCache::default();
+            self.pointer.spatial_cache = SpatialPickCache::default();
+            return None;
+        }
+        let publication = self.execution.session().resource_publication();
+        if let Some(frame) =
+            self.pointer
+                .spatial_cache
+                .capture(&publication, spatial_camera, snapshot)
+        {
+            self.pointer.viewer_cache = PlanarPickCache::default();
+            return Some(ViewerPickFrame::Spatial(frame));
+        }
+        let view = mapping.view();
+        let world_units_per_pixel = f64::from(view.camera().height) / f64::from(view.viewport().y);
+        Some(ViewerPickFrame::Planar(self.pointer.viewer_cache.capture(
+            &publication,
+            snapshot,
+            world_units_per_pixel,
+        )))
+    }
+
+    fn dispatch_viewer_button(
+        &mut self,
+        state: ElementState,
+        surface: Vec2,
+        logical: Vec2,
+    ) -> Result<PointerDispatch, NativeHostError> {
+        let Some((frame, ViewerPickFrame::Planar(pick))) = self
+            .pointer
+            .presented
+            .as_ref()
+            .zip(self.pointer.presented_viewer.as_ref())
+        else {
+            self.cancel_viewer_pointer()?;
+            self.pointer.refresh_pending = true;
+            return Ok(PointerDispatch::AwaitingPresentation);
+        };
+        let current = self
+            .execution
+            .session()
+            .capture_pointer_frame(self.pointer_frame_view(logical)?)?;
+        if !frame.same_inspection_attachment(&current) {
+            self.cancel_viewer_pointer()?;
+            self.pointer.refresh_pending = true;
+            return Ok(PointerDispatch::AwaitingPresentation);
+        }
+        let input = match state {
+            ElementState::Pressed => PlanarViewerPointer::Press {
+                surface,
+                scene: frame.position(surface)?.scene(),
+            },
+            ElementState::Released => PlanarViewerPointer::Release(surface),
+        };
+        self.execution
+            .submit_planar_viewer_pointer(WINDOW_CURSOR, input, Some(pick));
+        Ok(PointerDispatch::Admitted)
+    }
+
+    fn dispatch_spatial_pointer(
+        &mut self,
+        phase: SpatialPointerPhase,
+        surface: Vec2,
+        logical: Vec2,
+        pan: bool,
+    ) -> Result<PointerDispatch, NativeHostError> {
+        let input = SpatialPointerInput {
+            id: 0,
+            phase,
+            position: surface * (1.0 / logical.y),
+            view_revision: self.pointer.view_revision,
+            viewport_height: logical.y,
+            timestamp_ms: self.interaction_wall_origin.elapsed().as_secs_f64() * 1_000.0,
+            touch: false,
+            pan,
+        };
+        let displayed = if phase == SpatialPointerPhase::Press {
+            let Some((mapping, ViewerPickFrame::Spatial(pick))) = self
+                .pointer
+                .presented
+                .as_ref()
+                .zip(self.pointer.presented_viewer.as_ref())
+            else {
+                self.pointer.refresh_pending = true;
+                return Ok(PointerDispatch::AwaitingPresentation);
+            };
+            let current = self
+                .execution
+                .session()
+                .capture_pointer_frame(self.pointer_frame_view(logical)?)?;
+            if !mapping.same_inspection_attachment(&current) {
+                self.pointer.refresh_pending = true;
+                return Ok(PointerDispatch::AwaitingPresentation);
+            }
+            Some(pick)
+        } else {
+            None
+        };
+        let changed = self.execution.submit_spatial_pointer(
+            input,
+            displayed,
+            f64::from(logical.x) / f64::from(logical.y),
+        )?;
+        self.pointer.refresh_pending |= changed;
+        Ok(PointerDispatch::Admitted)
+    }
+
+    fn cancel_viewer_pointer(&mut self) -> Result<(), NativeHostError> {
+        self.execution.submit_planar_viewer_pointer(
+            WINDOW_CURSOR,
+            PlanarViewerPointer::Cancel,
+            None,
+        );
+        if self.pointer.spatial_button.take().is_some()
+            || matches!(
+                self.pointer.presented_viewer,
+                Some(ViewerPickFrame::Spatial(_))
+            )
+        {
+            self.dispatch_spatial_pointer(
+                SpatialPointerPhase::Cancel,
+                Vec2::ZERO,
+                Vec2::new(1.0, 1.0),
+                false,
+            )?;
+        }
+        Ok(())
     }
 
     fn pointer_frame_view(&self, logical: Vec2) -> Result<PointerFrameView, NativeHostError> {
@@ -207,7 +367,23 @@ impl NativeApp {
         }
         let outcome =
             self.dispatch_presented_pointer(surface, logical, NativePointerInputKind::Move)?;
+        let viewer_pointer =
+            outcome == PointerDispatch::Unsubscribed && self.uses_planar_viewer_pointer();
+        if viewer_pointer {
+            self.execution.submit_planar_viewer_pointer(
+                WINDOW_CURSOR,
+                PlanarViewerPointer::Move(surface),
+                None,
+            );
+        }
+        let spatial_pointer =
+            outcome == PointerDispatch::Unsubscribed && self.uses_spatial_viewer_pointer();
+        if spatial_pointer && self.pointer.spatial_button.is_some() {
+            self.dispatch_spatial_pointer(SpatialPointerPhase::Move, surface, logical, false)?;
+        }
         if outcome == PointerDispatch::Admitted
+            || viewer_pointer
+            || spatial_pointer
             || (outcome == PointerDispatch::Unsubscribed && self.config.inspection_zoom)
         {
             // Rejected samples must not supply coordinates to a later edge.
@@ -239,6 +415,36 @@ impl NativeApp {
             self.cancel_pointer(NativePointerCancellation::Cancelled)?;
             return Ok(PointerDispatch::Cancelled);
         };
+        if button <= 2 && self.uses_spatial_viewer_pointer() {
+            return match (state, self.pointer.spatial_button) {
+                (ElementState::Pressed, None) => {
+                    let pan = button != 0 || self.pointer.modifiers.shift_key();
+                    let outcome = self.dispatch_spatial_pointer(
+                        SpatialPointerPhase::Press,
+                        surface,
+                        logical,
+                        pan,
+                    )?;
+                    if outcome == PointerDispatch::Admitted {
+                        self.pointer.spatial_button = Some(button);
+                    }
+                    Ok(outcome)
+                }
+                (ElementState::Released, Some(held)) if held == button => {
+                    self.pointer.spatial_button = None;
+                    self.dispatch_spatial_pointer(
+                        SpatialPointerPhase::Release,
+                        surface,
+                        logical,
+                        false,
+                    )
+                }
+                _ => Ok(PointerDispatch::Unsubscribed),
+            };
+        }
+        if button == 0 && self.uses_planar_viewer_pointer() {
+            return self.dispatch_viewer_button(state, surface, logical);
+        }
         self.dispatch_presented_pointer(surface, logical, |position| {
             if state == ElementState::Pressed {
                 NativePointerInputKind::Press { position, button }
@@ -249,6 +455,7 @@ impl NativeApp {
     }
 
     fn cancel_pointer(&mut self, reason: NativePointerCancellation) -> Result<(), NativeHostError> {
+        self.cancel_viewer_pointer()?;
         if self.pointer.configured {
             let token = self.execution.native_pointer_input_token()?;
             self.admit_pointer_kind(&token, NativePointerInputKind::Cancel(reason))?;
@@ -283,9 +490,13 @@ impl NativeApp {
                 .configure_native_pointer_input(WINDOW_CURSOR, next)?;
         }
         // Only successful session rebinding invalidates the local coordinate cache.
+        self.cancel_viewer_pointer()?;
         self.pointer.view_revision = next;
         self.pointer.surface = None;
         self.pointer.presented = None;
+        self.pointer.presented_viewer = None;
+        self.pointer.viewer_cache = PlanarPickCache::default();
+        self.pointer.spatial_cache = SpatialPickCache::default();
         // A size/scale/surface change needs a new presentation even when no
         // authored object or native viewport signal became dirty.
         self.pointer.refresh_pending = true;

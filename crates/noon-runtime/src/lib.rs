@@ -574,9 +574,17 @@ impl SceneInstance {
     }
 
     fn publication_with_changes(&self, changes: FrameChanges) -> RendererPublication<'_> {
+        self.publication_for_frame(&self.frame, changes)
+    }
+
+    fn publication_for_frame<'a>(
+        &'a self,
+        frame: &'a FrameState,
+        changes: FrameChanges,
+    ) -> RendererPublication<'a> {
         RendererPublication::new(
             self.publication,
-            &self.frame,
+            frame,
             changes,
             self,
             self.compiled.font_resources(),
