@@ -65,20 +65,6 @@ def head(x, coat, shade):
                   ink_line((x-0.04, 1.37), (x+0.09, 1.37), shade, 1.35))
 
 
-def arm_rig(scene, x, upper, forearm):
-    return scene.retarget_rig_2d(
-        joints=[
-            Joint2D("shoulder", offset=(x + 0.46, 0.47), rest_angle=-0.25),
-            Joint2D("elbow", parent="shoulder", offset=(upper, 0)),
-            Joint2D("wrist", parent="elbow", offset=(forearm, 0)),
-        ],
-        tracks={
-            "shoulder": [(phase, shoulder) for phase, shoulder, _, _ in GESTURE],
-            "elbow": [(phase, elbow) for phase, _, elbow, _ in GESTURE],
-        },
-    )
-
-
 def hand_points(view, place):
     # Equal cubic topology for all three drawings. The lip at the thumb side
     # flattens at the edge view, then reappears on the opposite side.
@@ -123,6 +109,19 @@ def arm_drawing(rig, key, sleeve_color):
 
 
 class RetargetHand(Scene):
+    def _arm_rig(self, x, upper, forearm):
+        return self.retarget_rig_2d(
+            joints=[
+                Joint2D("shoulder", offset=(x + 0.46, 0.47), rest_angle=-0.25),
+                Joint2D("elbow", parent="shoulder", offset=(upper, 0)),
+                Joint2D("wrist", parent="elbow", offset=(forearm, 0)),
+            ],
+            tracks={
+                "shoulder": [(phase, shoulder) for phase, shoulder, _, _ in GESTURE],
+                "elbow": [(phase, elbow) for phase, _, elbow, _ in GESTURE],
+            },
+        )
+
     def construct(self):
         self.add(Rectangle(width=14.4, height=8.3, fill=PAPER, fill_opacity=1, stroke=None))
         self.add(Text("One fold, two reaches", font_size=39, color=color_from_hex(INK))
@@ -133,7 +132,7 @@ class RetargetHand(Scene):
             (-3.76, 0.76, 1.27, "#4B8279", "#2B585D", "#78AA93", True),
             (2.20, 0.57, 1.13, "#B95F56", "#873F47", "#DB8875", False),
         ]:
-            rig = arm_rig(self, x, upper, forearm)
+            rig = self._arm_rig(x, upper, forearm)
             arm = arm_drawing(rig, 0, sleeve)
             body = torso(x, coat, seam)
             self.add(*((body, arm) if front else (arm, body)))

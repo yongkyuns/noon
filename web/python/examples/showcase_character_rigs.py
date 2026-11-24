@@ -149,51 +149,50 @@ def part(name):
     return SVGMobject.from_string(source, should_center=False, height=None)
 
 
-def bird(scene, clock, species, facing, origin, shoulder, upper, rest,
-         head, eye, eye_radius, tilt, gaze, blink_at):
-    joints = [
-        Joint2D("body", offset=origin),
-        Joint2D("shoulder", parent="body", offset=shoulder,
-                rest_angle=rest if facing == 1 else pi - rest),
-        Joint2D("wrist", parent="shoulder", offset=(upper, 0), rest_angle=-2.48 * facing),
-        Joint2D("head", parent="body", offset=head),
-        Joint2D("eye", parent="head", offset=eye),
-        Joint2D("gaze", parent="eye", rest_angle=0 if facing == 1 else pi),
-    ]
-    tracks = {joint: eased(keys, facing) for joint, keys in WING_CLIP.items()}
-    tracks["head"] = eased(ATTENTION, facing * tilt)
-    tracks["gaze"] = eased(ATTENTION, facing * gaze)
-    attachments = []
-    for layer, joint in [("body", "body"), ("primaries", "wrist"),
-                         ("forewing", "shoulder"), ("head", "head")]:
-        group = part(f"{species}-{layer}")
-        scene.add(group)
-        for leaf in group:
-            if facing == -1 and joint in ("shoulder", "wrist"):
-                scene.set_scale(leaf, 1, -1)
-            attachments.append((joint, leaf, (0, 0)))
-
-    outline, white = disk(eye_radius + 0.026, INK), disk(eye_radius, EYE_WHITE)
-    pupil, gleam = disk(eye_radius * 0.53, INK), disk(eye_radius * 0.16, EYE_WHITE)
-    scene.add(outline, white, pupil, gleam)
-    attachments.extend([
-        ("eye", outline, (0, 0)), ("eye", white, (0, 0)),
-        ("gaze", pupil, (eye_radius * 0.34, 0)),
-        ("gaze", gleam, (eye_radius * 0.19, eye_radius * 0.15 * facing)),
-    ])
-    scene.bind_rig_2d(clock, joints=joints, tracks=tracks, attachments=attachments)
-    closed = [(0, 1)]
-    gleam_visibility = [(0, 1)]
-    for time in blink_at:
-        closed.extend([(time - 0.10, 1), (time, 0.055), (time + 0.12, 1)])
-        gleam_visibility.extend([(time - 0.08, 1), (time - 0.04, 0),
-                                 (time + 0.05, 0), (time + 0.10, 1)])
-    for item, aspect in [(outline, 0.79), (white, 0.79), (pupil, 0.87), (gleam, 1)]:
-        scene.bind_sampled(item, clock, "scale", [(t, 1, aspect * openness) for t, openness in closed])
-    scene.bind_sampled(gleam, clock, "opacity", gleam_visibility)
-
-
 class CharacterRigs(Scene):
+    def _add_bird(self, clock, species, facing, origin, shoulder, upper, rest,
+                  head, eye, eye_radius, tilt, gaze, blink_at):
+        joints = [
+            Joint2D("body", offset=origin),
+            Joint2D("shoulder", parent="body", offset=shoulder,
+                    rest_angle=rest if facing == 1 else pi - rest),
+            Joint2D("wrist", parent="shoulder", offset=(upper, 0), rest_angle=-2.48 * facing),
+            Joint2D("head", parent="body", offset=head),
+            Joint2D("eye", parent="head", offset=eye),
+            Joint2D("gaze", parent="eye", rest_angle=0 if facing == 1 else pi),
+        ]
+        tracks = {joint: eased(keys, facing) for joint, keys in WING_CLIP.items()}
+        tracks["head"] = eased(ATTENTION, facing * tilt)
+        tracks["gaze"] = eased(ATTENTION, facing * gaze)
+        attachments = []
+        for layer, joint in [("body", "body"), ("primaries", "wrist"),
+                             ("forewing", "shoulder"), ("head", "head")]:
+            group = part(f"{species}-{layer}")
+            self.add(group)
+            for leaf in group:
+                if facing == -1 and joint in ("shoulder", "wrist"):
+                    self.set_scale(leaf, 1, -1)
+                attachments.append((joint, leaf, (0, 0)))
+
+        outline, white = disk(eye_radius + 0.026, INK), disk(eye_radius, EYE_WHITE)
+        pupil, gleam = disk(eye_radius * 0.53, INK), disk(eye_radius * 0.16, EYE_WHITE)
+        self.add(outline, white, pupil, gleam)
+        attachments.extend([
+            ("eye", outline, (0, 0)), ("eye", white, (0, 0)),
+            ("gaze", pupil, (eye_radius * 0.34, 0)),
+            ("gaze", gleam, (eye_radius * 0.19, eye_radius * 0.15 * facing)),
+        ])
+        self.bind_rig_2d(clock, joints=joints, tracks=tracks, attachments=attachments)
+        closed = [(0, 1)]
+        gleam_visibility = [(0, 1)]
+        for time in blink_at:
+            closed.extend([(time - 0.10, 1), (time, 0.055), (time + 0.12, 1)])
+            gleam_visibility.extend([(time - 0.08, 1), (time - 0.04, 0),
+                                     (time + 0.05, 0), (time + 0.10, 1)])
+        for item, aspect in [(outline, 0.79), (white, 0.79), (pupil, 0.87), (gleam, 1)]:
+            self.bind_sampled(item, clock, "scale", [(t, 1, aspect * openness) for t, openness in closed])
+        self.bind_sampled(gleam, clock, "opacity", gleam_visibility)
+
     def construct(self):
         paper = NoisePaint(color_from_hex(PAPER_LIGHT), color_from_hex(PAPER_DARK),
                            seed=31, frequency=(122, 154))
@@ -208,10 +207,10 @@ class CharacterRigs(Scene):
                 self.set_scale(shadow, width / 2, height / 2)
 
         clock = self.value_tracker(0)
-        bird(self, clock, "heron", 1, (-4.02, -0.96), (0.58, 0.13), 1.45, -0.52,
-             (0.64, 2.24), (0.56, 0.105), 0.205, -0.20, -0.66, (0.81, 5.97))
-        bird(self, clock, "sparrow", -1, (3.46, -1.89), (-0.60, 0.19), 0.66, -0.20,
-             (-0.17, 0.74), (-0.425, 0.106), 0.235, 0.24, 0.96, (0.91, 5.87))
+        self._add_bird(clock, "heron", 1, (-4.02, -0.96), (0.58, 0.13), 1.45, -0.52,
+                       (0.64, 2.24), (0.56, 0.105), 0.205, -0.20, -0.66, (0.81, 5.97))
+        self._add_bird(clock, "sparrow", -1, (3.46, -1.89), (-0.60, 0.19), 0.66, -0.20,
+                       (-0.17, 0.74), (-0.425, 0.106), 0.235, 0.24, 0.96, (0.91, 5.87))
 
         halo = disk(0.37, GOLD, 0.14).move_to(TARGET)
         spot = disk(0.136, GOLD).move_to(TARGET)

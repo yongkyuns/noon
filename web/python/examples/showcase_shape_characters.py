@@ -17,20 +17,6 @@ CREAM = "#FFF5DD"
 FLOOR = -2.30
 
 
-def bind_outline(scene, body):
-    bottom = body.get_bottom()[1]
-    height = body.get_top()[1] - bottom
-    return scene.retarget_rig_2d(
-        joints=[
-            Joint2D("base", offset=(0, bottom + 0.21 * height)),
-            Joint2D("lower", parent="base", offset=(0, 0.37 * height)),
-            Joint2D("upper", parent="lower", offset=(0, 0.36 * height)),
-        ],
-        tracks=SOURCE_CLIP,
-        mapping={"shoulder": ("lower", -0.44), "wrist": ("upper", -0.15)},
-    )
-
-
 def oval(width, height, x, y, fill, border=None):
     shape = Ellipse(width=width, height=height, fill=fill, fill_opacity=1, stroke=border)
     if border is not None:
@@ -82,6 +68,19 @@ def character(body, x_offset, colors, pose):
 
 
 class ShapeCharacters(Scene):
+    def _bind_outline(self, body):
+        bottom = body.get_bottom()[1]
+        height = body.get_top()[1] - bottom
+        return self.retarget_rig_2d(
+            joints=[
+                Joint2D("base", offset=(0, bottom + 0.21 * height)),
+                Joint2D("lower", parent="base", offset=(0, 0.37 * height)),
+                Joint2D("upper", parent="lower", offset=(0, 0.36 * height)),
+            ],
+            tracks=SOURCE_CLIP,
+            mapping={"shoulder": ("lower", -0.44), "wrist": ("upper", -0.15)},
+        )
+
     def construct(self):
         paper = NoisePaint(color_from_hex("#FCF3DF"), color_from_hex("#F1E7D0"),
                            seed=48, frequency=(135, 170))
@@ -98,7 +97,7 @@ class ShapeCharacters(Scene):
             body.insert_n_curves(28).set_fill(main, opacity=1).set_stroke(deep, width=2.2)
             self.add(oval(2.35, 0.13, x, FLOOR - 0.07, "#A38662").set_fill(opacity=0.24))
 
-        rigs = [bind_outline(self, body) for body, _, _ in cast]
+        rigs = [self._bind_outline(body) for body, _, _ in cast]
         def poses_at(time):
             return [character(*appearance, rig.pose(time)) for appearance, rig in zip(cast, rigs)]
 

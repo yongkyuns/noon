@@ -28,7 +28,7 @@ import _manim_rate_functions as _rate_functions
 import _manim_reactive as _reactive
 import _manim_semantic_handles as _semantic_handles
 from _manim_source_execution import (
-    PORTABLE_REACTIVE_METHODS,
+    PORTABLE_SCENE_METHODS,
     PORTABLE_SPATIAL_METHODS,
     PORTABLE_VECTOR_METHODS,
     cooperative_source_yield_active,
@@ -954,7 +954,7 @@ def _portable_scene_methods(scene: _base.Scene, used_names=()) -> dict[str, obje
         "set_viewer_draggable": _base.Scene.set_viewer_draggable,
         "next_section": _base.Scene.next_section,
     }
-    for name in PORTABLE_REACTIVE_METHODS.intersection(used_names):
+    for name in PORTABLE_SCENE_METHODS.intersection(used_names):
         methods[name] = getattr(_base.Scene, name)
     spatial_names = PORTABLE_SPATIAL_METHODS.intersection(used_names)
     if spatial_names:
