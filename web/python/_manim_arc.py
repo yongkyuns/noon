@@ -24,10 +24,7 @@ def _finish_candidate(
     options: dict[str, Any],
 ) -> None:
     color = options.pop("color", None)
-    _shared._apply_shared_constructor_options(candidate, options)
-    if color is not None:
-        parsed = _shared._compat._as_color("color", color)
-        _shared._apply_constructor_color(candidate, parsed)
+    _shared._apply_shared_constructor_options(candidate, options, color=color)
     _shared._attach_geometry_options(owner, candidate, name)
 
 

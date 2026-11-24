@@ -28,7 +28,7 @@ class BooleanGeometryTests(unittest.TestCase):
         for cls in (geometry.Union, geometry.Intersection, geometry.Difference, geometry.Exclusion):
             obj = cls(*self.operands, fill_opacity=0.5)
             self.host.booleanGeometry.assert_called_with(cls.__name__, self.selection)
-            self.mocks[3].assert_called_with(self.options, {"fill_opacity": 0.5})
+            self.mocks[3].assert_called_with(self.options, {"fill_opacity": 0.5}, color=None)
             self.mocks[4].assert_called_with(obj, self.options, cls.__name__, context=None)
         self.assertEqual(self.selection.free.call_count, 4)
 

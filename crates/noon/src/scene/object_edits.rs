@@ -185,7 +185,15 @@ impl Scene {
         object: &Mobject,
         update: crate::StyleUpdate,
     ) -> Result<(), AuthoringError> {
-        self.edit_object_style(object, |style| update.apply(style))
+        self.require_object(object)?;
+        let mut state = object.state()?;
+        update
+            .for_object(
+                &state,
+                self.integration_store().borrow().geometry_resources(),
+            )?
+            .apply(&mut state.style)?;
+        self.publish_object_style(object, state.style)
     }
 
     /// Set an immutable linear fill and optional fill opacity.

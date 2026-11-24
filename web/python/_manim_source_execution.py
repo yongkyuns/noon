@@ -3232,12 +3232,7 @@ class _SceneOnlySource(ast.NodeVisitor):
                     or not set(keywords) <= {"font_size", "color", "opacity", "stroke", "stroke_width"}):
                 raise _OpaqueSource(node, "unproven_text_compiler")
             stroke = keywords.get("stroke")
-            if stroke is not None and (
-                not isinstance(stroke, ast.Call)
-                or not isinstance(stroke.func, ast.Name)
-                or stroke.func.id != "SketchStroke"
-                or not self._trusted_noon_binding("SketchStroke")
-            ):
+            if stroke is not None and not self._trusted_sketch_call(stroke):
                 raise _OpaqueSource(stroke, "unproven_text_compiler_option")
             stroke_width = keywords.get("stroke_width")
             if stroke_width is not None and (
@@ -3595,24 +3590,34 @@ class _SceneOnlySource(ast.NodeVisitor):
             return cls._numeric_expression(node.operand, names)
         return (isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow))
                 and cls._numeric_expression(node.left, names) and cls._numeric_expression(node.right, names))
+
+    def _trusted_sketch_call(self, node):
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "SketchStroke" and self._trusted_noon_binding("SketchStroke"))
+
     def _prepare_svg_from_string(self, node):
         if (len(node.args) != 1 or isinstance(node.args[0], ast.Starred)
                 or not self._is_module_svg_text(node.args[0])
                 or any(keyword.arg is None for keyword in node.keywords)):
             raise _OpaqueSource(node, "unproven_svg_source")
-        options = {}
+        options = set()
+        allowed = {"height", "width", "should_center", "stroke", "stroke_width"}
         for keyword in node.keywords:
-            if keyword.arg not in {"height", "width", "should_center"} or keyword.arg in options:
+            if keyword.arg not in allowed or keyword.arg in options:
                 raise _OpaqueSource(keyword, "unproven_svg_option")
             value = keyword.value
             if keyword.arg == "should_center":
                 valid = isinstance(value, ast.Constant) and type(value.value) is bool
+            elif keyword.arg == "stroke":
+                valid = self._trusted_sketch_call(value)
+            elif keyword.arg == "stroke_width":
+                valid = self._finite_number(value) and isinstance(value, ast.Constant) and value.value >= 0
             else:
                 valid = (isinstance(value, ast.Constant) and type(value.value) in (int, float)
                          and _finite_source_number(value.value) and value.value > 0)
             if not valid:
                 raise _OpaqueSource(value, "unproven_svg_option")
-            options[keyword.arg] = value.value
+            options.add(keyword.arg)
 
     def _is_module_svg_text(self, node):
         if isinstance(node, ast.Constant) and type(node.value) is str:

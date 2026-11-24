@@ -2,7 +2,7 @@
 from __future__ import annotations
 import math
 from _noon_errors import engine_call
-from _manim_typst import _RetainedTextMobject
+from _manim_typst import _RetainedTextMobject, _text_sketch_arguments
 import _manim_semantic_handles as _semantic
 import _manim_compat as _compat
 import noon as _base
@@ -38,6 +38,7 @@ class DecimalNumber(_RetainedTextMobject):
         self._numeric_handle = engine_call(_from_mobject, self._semantic_handle)
     def __init__(self, number: float = 0, *, num_decimal_places: int = 2, include_sign: bool = False, group_with_commas: bool = True, show_ellipsis: bool = False, unit: str | None = None, font_size: float = 48.0, color: _base.Color = _base.WHITE, **kwargs):
         opacity = float(kwargs.pop("opacity", 1.0))
+        sketch = _text_sketch_arguments(kwargs)
         if kwargs: raise NotImplementedError("unsupported DecimalNumber option(s): " + ", ".join(sorted(kwargs)))
         if _create_decimal is None: raise RuntimeError("DecimalNumber requires Noon's shared Rust authoring runtime")
         value = float(number)
@@ -51,6 +52,8 @@ class DecimalNumber(_RetainedTextMobject):
         self._numeric_handle = handle
         semantic = engine_call(handle.mobject)
         self._initialize_text(engine_call(handle.text), float(font_size), semantic, color, opacity)
+        if sketch is not None:
+            self.set_stroke(*sketch)
     @property
     def font_size(self) -> float:
         context = _semantic._object_authoring_context(self) if self._scene is not None else None

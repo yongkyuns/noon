@@ -10410,22 +10410,24 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = setTextSketchStroke)]
+        #[wasm_bindgen(js_name = setSketchStroke)]
         #[allow(clippy::too_many_arguments)]
-        pub fn set_text_sketch_stroke(
+        pub fn set_sketch_stroke(
             &mut self,
             target: &crate::WasmAuthoringMobjectHandle,
             roughness: f64,
             seed: u32,
-            width: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
             red: f32,
             green: f32,
             blue: f32,
             alpha: f32,
         ) -> Result<(), JsValue> {
-            let update = noon::StyleUpdate::text_sketch_stroke(
+            let update = noon::StyleUpdate::sketch_stroke(
                 noon_core::Color::rgba(red, green, blue, alpha),
                 width,
+                opacity,
                 roughness,
                 seed,
             )
@@ -10435,29 +10437,38 @@ mod wasm {
                 .map_err(typed_js_error)
         }
 
-        #[wasm_bindgen(js_name = setFamilyTextSketchStroke)]
+        #[wasm_bindgen(js_name = setFamilySketchStroke)]
         #[allow(clippy::too_many_arguments)]
-        pub fn set_family_text_sketch_stroke(
+        pub fn set_family_sketch_stroke(
             &mut self,
             target: &crate::WasmAuthoringFamilyHandle,
             roughness: f64,
             seed: u32,
-            width: f64,
+            width: Option<f64>,
+            opacity: Option<f64>,
             red: f32,
             green: f32,
             blue: f32,
             alpha: f32,
+            family: bool,
         ) -> Result<(), JsValue> {
-            let family = target.semantic_family()?;
-            let update = noon::StyleUpdate::text_sketch_stroke(
+            let target = target.semantic_family()?;
+            let update = noon::StyleUpdate::sketch_stroke(
                 noon_core::Color::rgba(red, green, blue, alpha),
                 width,
+                opacity,
                 roughness,
                 seed,
             )
             .map_err(typed_js_error)?;
             self.inner
-                .edit_scene(|scene| scene.set_family_style(&family, update))
+                .edit_scene(|scene| {
+                    if family {
+                        scene.set_family_style(&target, update)
+                    } else {
+                        scene.set_family_own_style(&target, update)
+                    }
+                })
                 .map(|_| ())
                 .map_err(typed_js_error)
         }

@@ -38,7 +38,7 @@ class Dot(_compat.Circle):
         self,
         point: object = _base.ORIGIN,
         radius: float = DEFAULT_DOT_RADIUS,
-        stroke_width: float = 0.0,
+        stroke_width: float | None = None,
         fill_opacity: float = 1.0,
         color: _base.Color = _base.WHITE,
         **kwargs: Any,
@@ -110,9 +110,7 @@ class TangentLine(_compat.Line):
         values = dict(kwargs)
         color = values.pop("color", None)
         try:
-            shared._apply_shared_constructor_options(options, values)
-            if color is not None:
-                shared._apply_constructor_color(options, _compat._as_color("color", color))
+            shared._apply_shared_constructor_options(options, values, color=color)
         except BaseException:
             options.free()
             raise

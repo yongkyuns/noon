@@ -26,9 +26,7 @@ def _finish(self, method, args, kwargs):
     color = values.pop("color", None)
     candidate = engine_call(getattr(_shared._geometry_options, method), *args)
     resolved_start_angle = getattr(candidate, "resolvedStartAngle", None)
-    _shared._apply_shared_constructor_options(candidate, values)
-    if color is not None:
-        _shared._apply_constructor_color(candidate, _compat._as_color("color", color))
+    _shared._apply_shared_constructor_options(candidate, values, color=color)
     _shared._attach_geometry_options(self, candidate, type(self).__name__)
     return resolved_start_angle
 

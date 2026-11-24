@@ -76,6 +76,7 @@ pub(crate) trait PaintStyleEdit {
     fn set_sketch_stroke(&mut self, sketch: noon_core::SketchStroke);
     fn has_fill(&self) -> bool;
     fn has_stroke(&self) -> bool;
+    fn has_stroke_width(&self) -> bool;
     fn has_background_stroke(&self) -> bool;
     fn manim_color(&self) -> Result<Color, AuthoringError>;
     fn set_fill_color(&mut self, color: Color, opacity_when_enabled: f64);
@@ -142,6 +143,9 @@ impl PaintStyleEdit for SemanticStyle {
 
     fn has_stroke(&self) -> bool {
         self.stroke.is_some()
+    }
+    fn has_stroke_width(&self) -> bool {
+        self.stroke_width > 0.0
     }
 
     fn has_background_stroke(&self) -> bool {
@@ -236,6 +240,9 @@ impl PaintStyleEdit for Style {
 
     fn has_stroke(&self) -> bool {
         self.stroke.is_some()
+    }
+    fn has_stroke_width(&self) -> bool {
+        self.stroke_width > 0.0
     }
 
     fn has_background_stroke(&self) -> bool {

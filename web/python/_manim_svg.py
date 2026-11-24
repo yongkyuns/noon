@@ -155,6 +155,7 @@ class SVGMobject(_compat.VGroup):
         opacity: float | None = None,
         fill_color: object | None = None,
         fill_opacity: float | None = None,
+        stroke: object | None = None,
         stroke_color: object | None = None,
         stroke_opacity: float | None = None,
         stroke_width: float | None = None,
@@ -170,6 +171,8 @@ class SVGMobject(_compat.VGroup):
             raise NotImplementedError(
                 "unsupported SVGMobject constructor option(s): " + ", ".join(sorted(kwargs))
             )
+        from _manim_semantic_handles import _as_sketch_stroke
+        stroke = _as_sketch_stroke(stroke)
         _validate_parser_options(path_string_config)
         normalized_svg_default, has_custom_svg_default = _normalize_svg_default(svg_default)
         if not use_svg_cache:
@@ -223,7 +226,12 @@ class SVGMobject(_compat.VGroup):
         # while fill/stroke-specific arguments mutate the imported family.
         if fill_color is not None or fill_opacity is not None:
             self.set_fill(fill_color, fill_opacity)
-        if stroke_color is not None or stroke_opacity is not None or stroke_width is not None:
+        if stroke is not None:
+            if stroke_color is not None:
+                from _noon_paints import SketchStroke
+                stroke = SketchStroke(stroke_color, roughness=stroke._roughness, seed=stroke._seed)
+            self.set_stroke(stroke, stroke_width, stroke_opacity)
+        elif stroke_color is not None or stroke_opacity is not None or stroke_width is not None:
             self.set_stroke(stroke_color, stroke_width, stroke_opacity)
 
     @classmethod

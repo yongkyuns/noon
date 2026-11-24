@@ -1215,7 +1215,14 @@ class _FamilyMethods:
     def set_fill(self, value: Any) -> Group:
         return _set_group_metadata(self, "fill", value)
 
-    def set_stroke(self, value: Any) -> Group:
+    def set_stroke(self, value: Any, width=None, opacity=None, family=True) -> Group:
+        from _noon_paints import SketchStroke
+
+        if isinstance(value, SketchStroke):
+            from _manim_semantic_handles import _set_sketch_stroke
+            return _set_sketch_stroke(self, value, width, opacity, family)
+        if width is not None or opacity is not None or not family:
+            raise TypeError("Group.set_stroke style options require a SketchStroke")
         return _set_group_metadata(self, "stroke", value)
 
     def set_opacity(self, value: Any) -> Group:
@@ -1334,10 +1341,18 @@ class VGroup(VMobject):
     match_style = VMobject.match_style
     set_style = VMobject.set_style
 
-    def __init__(self, *mobjects, z_index=0, color=_base.WHITE, shade_in_3d=False):
+    def __init__(self, *mobjects, z_index=0, color=_base.WHITE, shade_in_3d=False,
+                 stroke=None, stroke_width=None):
+        from _manim_semantic_handles import _as_sketch_stroke
+
+        stroke = _as_sketch_stroke(stroke)
+        if stroke is None and stroke_width is not None:
+            raise TypeError("VGroup stroke_width requires a SketchStroke")
         if shade_in_3d is not False:
             raise NotImplementedError("3D-shaded vector rendering is not supported")
         _FamilyMethods.__init__(self, *mobjects, z_index=z_index, color=color)
+        if stroke is not None:
+            self.set_stroke(stroke, stroke_width)
 
     def get_point_mobject(self, center=None):
         if center is None:

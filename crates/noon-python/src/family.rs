@@ -491,26 +491,34 @@ impl FamilyHandle {
         .map_err(engine_error)?;
         self.family.set_style(update).map_err(engine_error)
     }
-    #[pyo3(name = "setTextSketchStroke")]
+    #[pyo3(name = "setSketchStroke", signature = (roughness, seed, width, opacity, red, green, blue, alpha, family))]
     #[allow(clippy::too_many_arguments)]
-    fn set_text_sketch_stroke(
+    fn set_sketch_stroke(
         &mut self,
         roughness: f64,
         seed: u32,
-        width: f64,
+        width: Option<f64>,
+        opacity: Option<f64>,
         red: f32,
         green: f32,
         blue: f32,
         alpha: f32,
+        family: bool,
     ) -> PyResult<()> {
-        let update = noon::StyleUpdate::text_sketch_stroke(
+        let update = noon::StyleUpdate::sketch_stroke(
             noon_core::Color::rgba(red, green, blue, alpha),
             width,
+            opacity,
             roughness,
             seed,
         )
         .map_err(engine_error)?;
-        self.family.set_style(update).map_err(engine_error)
+        if family {
+            self.family.set_style(update)
+        } else {
+            self.family.set_own_style(update)
+        }
+        .map_err(engine_error)
     }
 
     #[pyo3(name = "worldFamilyCenter")]

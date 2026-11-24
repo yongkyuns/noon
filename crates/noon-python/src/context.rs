@@ -2532,14 +2532,15 @@ impl Context {
         self.edit_scene(|scene| scene.set_family_own_stroke_cap(&source.family, cap))
     }
 
-    #[pyo3(name = "setTextSketchStroke")]
+    #[pyo3(name = "setSketchStroke", signature = (target, roughness, seed, width, opacity, red, green, blue, alpha))]
     #[allow(clippy::too_many_arguments)]
-    fn set_text_sketch_stroke(
+    fn set_sketch_stroke(
         &mut self,
         target: &MobjectHandle,
         roughness: f64,
         seed: u32,
-        width: f64,
+        width: Option<f64>,
+        opacity: Option<f64>,
         red: f32,
         green: f32,
         blue: f32,
@@ -2547,9 +2548,10 @@ impl Context {
     ) -> PyResult<()> {
         self.available()?;
         self.same_store(target)?;
-        let update = noon::StyleUpdate::text_sketch_stroke(
+        let update = noon::StyleUpdate::sketch_stroke(
             noon_core::Color::rgba(red, green, blue, alpha),
             width,
+            opacity,
             roughness,
             seed,
         )
@@ -2557,29 +2559,40 @@ impl Context {
         self.edit_scene(|scene| scene.set_style(&target.handle, update))
     }
 
-    #[pyo3(name = "setFamilyTextSketchStroke")]
+    #[pyo3(name = "setFamilySketchStroke", signature = (target, roughness, seed, width, opacity, red, green, blue, alpha, family))]
     #[allow(clippy::too_many_arguments)]
-    fn set_family_text_sketch_stroke(
+    fn set_family_sketch_stroke(
         &mut self,
         target: &crate::family::FamilyHandle,
         roughness: f64,
         seed: u32,
-        width: f64,
+        width: Option<f64>,
+        opacity: Option<f64>,
         red: f32,
         green: f32,
         blue: f32,
         alpha: f32,
+        family: bool,
     ) -> PyResult<()> {
         self.available()?;
         self.same_family_store(target)?;
-        let update = noon::StyleUpdate::text_sketch_stroke(
+        let update = noon::StyleUpdate::sketch_stroke(
             noon_core::Color::rgba(red, green, blue, alpha),
             width,
+            opacity,
             roughness,
             seed,
         )
         .map_err(engine_error)?;
-        self.edit_scene(|scene| scene.set_family_style(&target.family, update).map(|_| ()))
+        self.edit_scene(|scene| {
+            if family {
+                scene.set_family_style(&target.family, update).map(|_| ())
+            } else {
+                scene
+                    .set_family_own_style(&target.family, update)
+                    .map(|_| ())
+            }
+        })
     }
 
     #[pyo3(name = "setStrokeCap")]

@@ -170,8 +170,7 @@ def _coordinate_style(options, color, kwargs):
     unknown = sorted(set(values) - allowed)
     if unknown:
         raise TypeError("unsupported coordinate option(s): " + ", ".join(unknown))
-    _shared._apply_shared_constructor_options(options, values)
-    _shared._apply_constructor_color(options, color)
+    _shared._apply_shared_constructor_options(options, values, color=color)
 
 
 def _coordinate_constructor_context():
@@ -520,6 +519,7 @@ class NumberLine(_compat.Group):
                  tip_shape=None, label_constructor=None,
                  decimal_number_config=None,
                  color=None, **kwargs):
+        stroke = _shared._as_sketch_stroke(kwargs.pop("stroke", None))
         values = () if x_range is None else tuple(x_range)
         if x_range is not None and len(values) not in (2, 3):
             raise ValueError("NumberLine x_range requires two or three values")
@@ -580,6 +580,8 @@ class NumberLine(_compat.Group):
             include_tip=bool(include_tip),
             exclude_origin_tick=bool(exclude_origin_tick),
         )
+        if stroke is not None:
+            self.set_stroke(stroke, kwargs.get("stroke_width"), kwargs.get("stroke_opacity"))
         self.tip_width = tip_width
         self.tip_height = tip_height
         self.scaling = scaling if scaling is not None else LinearBase()
@@ -852,6 +854,7 @@ class Axes(_compat.Group):
     def __init__(self, x_range=None, y_range=None, *, x_length=None, y_length=None, tips=True,
                  include_ticks=True, tick_size=0.1, axis_config=None,
                  x_axis_config=None, y_axis_config=None, color=None, **kwargs):
+        stroke = _shared._as_sketch_stroke(kwargs.pop("stroke", None))
         x_options, x_scale, y_options, y_scale = _axes_scalings(
             axis_config, x_axis_config, y_axis_config
         )
@@ -894,6 +897,8 @@ class Axes(_compat.Group):
             axis.scaling = config["scaling"] if config["scaling"] is not None else LinearBase()
             members.append(axis)
         _coordinate_family(self, handle, members)
+        if stroke is not None:
+            self.set_stroke(stroke, kwargs.get("stroke_width"), kwargs.get("stroke_opacity"))
         self.axes = _compat.VGroup(*members)
         for axis, (_, config, _, range_values) in zip(members, axis_setups):
             _configure_axes_numeric_labels(axis, config, range_values)
@@ -1633,8 +1638,7 @@ def _evaluate(plan, function, use_smoothing, *, parametric):
 
 def _curve(wrapper, options, color, kwargs, *, context=None):
     try:
-        _shared._apply_shared_constructor_options(options, kwargs)
-        _shared._apply_constructor_color(options, color)
+        _shared._apply_shared_constructor_options(options, kwargs, color=color)
     except BaseException:
         options.free()
         raise

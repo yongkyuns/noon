@@ -52,7 +52,7 @@ pub fn program(backend: &mut impl LatexBackend) -> Result<LiveProgram<SketchText
     scene.shift(&title, Vec2::new(0.0, 1.35))?;
     scene.set_style(
         &title,
-        StyleUpdate::text_sketch_stroke(TEAL, 0.035, 1.1, 7)?,
+        StyleUpdate::sketch_stroke(TEAL, Some(0.035), None, 1.1, 7)?,
     )?;
     let equation = scene.math_tex_parts(
         MathTex::new(r"\frac{a^2+b^2}{2}")?
@@ -63,7 +63,7 @@ pub fn program(backend: &mut impl LatexBackend) -> Result<LiveProgram<SketchText
     )?;
     scene.set_family_style(
         equation.family(),
-        StyleUpdate::text_sketch_stroke(YELLOW, 0.028, 1.1, 12)?,
+        StyleUpdate::sketch_stroke(YELLOW, Some(0.028), None, 1.1, 12)?,
     )?;
     Ok(scene.into_live_program(SketchText {
         title,

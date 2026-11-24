@@ -423,7 +423,7 @@ def tokens(value):
 
             class Outline(Scene):
                 def construct(self):
-                    imported = SVGMobject.from_string(SVG_SOURCE, height=4)
+                    imported = SVGMobject.from_string(SVG_SOURCE, height=4, stroke=SketchStroke(TEAL), stroke_width=3)
                     contours = []
                     for member in imported.family_members_with_points():
                         for control_points in member.get_subpaths():
@@ -437,6 +437,7 @@ def tokens(value):
         self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
 
         unsafe = (
+            source.replace("stroke=SketchStroke(TEAL)", "stroke=BLUE"),
             # Path-based SVG construction and nonliteral resource acquisition stay opaque.
             'from noon import *\nclass Outline(Scene):\n'
             '    def construct(self):\n        imported = SVGMobject("outline.svg")\n',
