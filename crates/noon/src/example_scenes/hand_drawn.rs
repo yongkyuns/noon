@@ -73,7 +73,7 @@ pub fn program() -> Result<LiveProgram<HandDrawnDiagram>, ScriptError> {
         .expect("valid demo fill"),
         Some(0.55),
     )?;
-    let mut circle = pen(ManimGeometryOptions::circle(0.82)?, 1.45, 20, BLUE)?;
+    let mut circle = pen(ManimGeometryOptions::circle(0.82)?, 1.15, 20, BLUE)?;
     circle.set_translation(2.25, 0.0)?;
     let underline = pen(
         ManimGeometryOptions::line(-3.55, -1.12, -1.45, -1.12)?,
@@ -81,10 +81,10 @@ pub fn program() -> Result<LiveProgram<HandDrawnDiagram>, ScriptError> {
         25,
         TEAL,
     )?;
-    let mut arrow = ManimArrowOptions::arrow(-0.9, 0.0, 1.15, 0.0)?;
+    let mut arrow = ManimArrowOptions::arrow(-1.0, 0.0, 1.25, 0.0)?;
     arrow.set_buff(0.0)?;
-    arrow.set_stroke_width(0.05)?;
-    arrow.set_tip_length(0.26)?;
+    arrow.set_stroke_width(0.055)?;
+    arrow.set_tip_length(0.29)?;
     arrow.set_sketch_stroke(YELLOW, 1.4, 23920)?;
     let arrow = scene.manim_arrow(arrow)?;
     let mut frame = scene.rectangle(8.8, 3.7)?;

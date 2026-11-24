@@ -9,9 +9,9 @@ class HandDrawnDiagram(Scene):
         panel.shift((-2.5, 0, 0)).set_fill(
             HatchPaint(TEAL, spacing=0.24, width=0.028), opacity=0.55
         )
-        arrow = Arrow((-0.9, 0), (1.15, 0), buff=0, stroke_width=5, tip_length=0.26,
+        arrow = Arrow((-1, 0), (1.25, 0), buff=0, stroke_width=5.5, tip_length=0.29,
                       stroke=SketchStroke(YELLOW, roughness=1.4, seed=23920))
-        circle = Circle(0.82, stroke=SketchStroke(BLUE, roughness=1.45, seed=20))
+        circle = Circle(0.82, stroke=SketchStroke(BLUE, roughness=1.15, seed=20))
         circle.shift((2.25, 0, 0))
         underline = Line((-3.55, -1.12), (-1.45, -1.12), stroke=SketchStroke(TEAL, seed=25))
         frame = Rectangle(8.8, 3.7, color=WHITE, stroke_opacity=0.25)
