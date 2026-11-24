@@ -475,7 +475,7 @@ mod tests {
         let a = blur(10, 1.0);
         let b = blur(11, 2.0);
         let mut runtime = runtime(
-            stack([a, b]),
+            stack([a.clone(), b.clone()]),
             &[radius_track(1, a, 5.0), radius_track(2, b, 10.0)],
         );
         runtime.seek(1.0).unwrap();
