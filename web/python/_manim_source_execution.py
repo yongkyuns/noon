@@ -43,7 +43,7 @@ Scene Circle Ellipse Square Rectangle RoundedRectangle Triangle Polygon RegularP
 Dot Line Arrow DoubleArrow DashedLine Underline VMobject VGroup Group Text MarkupText Code MathTypst FunctionGraph
 Intersection Union Exclusion Difference
 Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform AudioSource VideoSource
-ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint Axes ThreeDScene MovingCameraScene LinearTransformationScene
+ImageMobject ImagePaint ImageMapping RadialGradient NoisePaint HatchPaint SketchStroke Axes ThreeDScene MovingCameraScene LinearTransformationScene
 ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedStart
 LaggedStartMap SpinInFromNothing ShrinkToCenter
 TransformMatchingShapes TransformMatchingTex Rotate MoveAlongPath Restore GrowArrow

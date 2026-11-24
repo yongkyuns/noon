@@ -192,6 +192,7 @@ pub(crate) fn target_style_from_effective(
         stroke_width_mode: effective.stroke_width_mode,
         stroke_join: effective.stroke_join,
         stroke_cap: effective.stroke_cap,
+        sketch_stroke: effective.sketch_stroke,
         object_opacity: if authored.object_opacity as f32 == effective.opacity {
             authored.object_opacity
         } else {

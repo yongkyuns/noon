@@ -344,6 +344,8 @@ pub struct SemanticStyle {
     pub stroke_join: StrokeJoin,
     #[serde(default)]
     pub stroke_cap: StrokeCap,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sketch_stroke: Option<crate::SketchStroke>,
     pub object_opacity: f64,
     #[serde(default, skip_serializing_if = "crate::Emission::is_neutral")]
     pub emission: crate::Emission,
@@ -363,6 +365,7 @@ impl Default for SemanticStyle {
             stroke_width_mode: StrokeWidthMode::ScaleWithObject,
             stroke_join: StrokeJoin::Round,
             stroke_cap: StrokeCap::Round,
+            sketch_stroke: None,
             object_opacity: 1.0,
             emission: crate::Emission::NONE,
         }
@@ -463,7 +466,8 @@ impl SemanticStyle {
             )
             | None => true,
         };
-        paint(self.fill.as_ref())
+        self.sketch_stroke.is_none_or(crate::SketchStroke::is_valid)
+            && paint(self.fill.as_ref())
             && paint(self.stroke.as_ref())
             && paint(self.background_stroke.as_ref())
             && self.fill_opacity.is_finite()
@@ -489,6 +493,7 @@ impl SemanticStyle {
             stroke_width_mode: style.stroke_width_mode,
             stroke_join: style.stroke_join,
             stroke_cap: style.stroke_cap,
+            sketch_stroke: style.sketch_stroke,
             object_opacity: style.opacity as f64,
             emission: style.emission,
         }
@@ -513,6 +518,7 @@ impl SemanticStyle {
             stroke_width_mode: StrokeWidthMode::ScaleWithObject,
             stroke_join: StrokeJoin::Round,
             stroke_cap: StrokeCap::Auto,
+            sketch_stroke: None,
             object_opacity: 1.0,
             emission: crate::Emission::NONE,
         }

@@ -323,6 +323,25 @@ impl WasmManimArrowOptions {
             .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = setSketchStroke)]
+    pub fn set_sketch_stroke(
+        &mut self,
+        roughness: f64,
+        seed: u32,
+        red: f32,
+        green: f32,
+        blue: f32,
+        alpha: f32,
+    ) -> Result<(), JsValue> {
+        self.arrow_options_mut()?
+            .set_sketch_stroke(
+                noon_core::Color::rgba(red, green, blue, alpha),
+                roughness,
+                seed,
+            )
+            .map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = setStrokeCap)]
     pub fn set_stroke_cap(&mut self, value: &str) -> Result<(), JsValue> {
         self.arrow_options_mut()?

@@ -14,20 +14,14 @@ pub(crate) fn temporary_style_path(
     reveal: f32,
     style: Style,
 ) -> Option<(AnalyticRevealKey, VectorPath)> {
+    if style.sketch_stroke.is_some() {
+        let key = analytic_outline_key(geometry)?;
+        return Some((key, noon_geometry::canonical_outline_path(geometry)?));
+    }
     if super::effective_background_stroke_width(style) <= 0.0 {
         return temporary_reveal_path(geometry, reveal);
     }
-    let key = match geometry {
-        GeometryRef::Rectangle { .. } => analytic_reveal_key(geometry)?,
-        GeometryRef::Circle { radius } => AnalyticRevealKey::Circle(radius.to_bits()),
-        GeometryRef::Line { start, end } => AnalyticRevealKey::Line([
-            start.x.to_bits(),
-            start.y.to_bits(),
-            end.x.to_bits(),
-            end.y.to_bits(),
-        ]),
-        GeometryRef::VectorPath(_) | GeometryRef::External(_) => return None,
-    };
+    let key = analytic_outline_key(geometry)?;
     let path = noon_geometry::canonical_outline_path(geometry)?;
     let path = if reveal < 1.0 {
         noon_geometry::pointwise_partial_path(&path, 0.0, reveal.clamp(0.0, 1.0))
@@ -35,6 +29,23 @@ pub(crate) fn temporary_style_path(
         path
     };
     Some((key, path))
+}
+
+pub(crate) fn analytic_outline_key(geometry: &GeometryRef) -> Option<AnalyticRevealKey> {
+    match geometry {
+        GeometryRef::Rectangle { size } => Some(AnalyticRevealKey::Rectangle(
+            size.x.to_bits(),
+            size.y.to_bits(),
+        )),
+        GeometryRef::Circle { radius } => Some(AnalyticRevealKey::Circle(radius.to_bits())),
+        GeometryRef::Line { start, end } => Some(AnalyticRevealKey::Line([
+            start.x.to_bits(),
+            start.y.to_bits(),
+            end.x.to_bits(),
+            end.y.to_bits(),
+        ])),
+        GeometryRef::VectorPath(_) | GeometryRef::External(_) => None,
+    }
 }
 
 pub(crate) fn analytic_reveal_key(geometry: &GeometryRef) -> Option<AnalyticRevealKey> {
@@ -163,6 +174,31 @@ mod replacement_tests {
             assert!(prepared.path_dirty_ranges.is_empty());
             assert_eq!(prepared.stats.instances_repacked, 0);
         }
+    }
+
+    #[test]
+    fn sketch_reveal_reuses_its_mesh_and_the_seed_distinguishes_meshes() {
+        let mut state = frame(1.0);
+        let stroke = |seed| noon_core::SketchStroke::new(1.25, seed).unwrap();
+        state.objects[1].style = Style {
+            stroke: Some(Color::WHITE),
+            stroke_width: 0.04,
+            sketch_stroke: Some(stroke(8)),
+            ..Style::default()
+        };
+        let mut retained = FramePreparer::new();
+        let initial_vertices = retained.prepare(&state).unwrap().path_vertices.to_vec();
+        let changed = FrameChanges::objects(vec![1]);
+        for reveal in [0.25, 0.9, 0.25, 1.0] {
+            state.reveals[1] = reveal;
+            let frame = retained.prepare_incremental(&state, &changed).unwrap();
+            assert_eq!(frame.stats.geometry_cache_misses, 0);
+            assert!(!frame.path_geometry_dirty);
+            assert_eq!(frame.path_vertices, initial_vertices);
+        }
+        state.objects[1].style.sketch_stroke = Some(stroke(9));
+        let changed_seed = retained.prepare_incremental(&state, &changed).unwrap();
+        assert_ne!(changed_seed.path_vertices, initial_vertices);
     }
 
     #[test]
