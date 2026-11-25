@@ -334,7 +334,6 @@ def _apply_shared_constructor_options(
         parsed = stroke._color if stroke_color in (_CONSTRUCTOR_MISSING, None) else _compat._as_color("stroke_color", stroke_color)
         engine_call(handle.setSketchStroke, stroke._roughness, stroke._seed,
                     parsed.red, parsed.green, parsed.blue, parsed.alpha)
-        engine_call(handle.setStrokeOpacity, parsed.alpha)
         stroke = _CONSTRUCTOR_MISSING
         stroke_color = _CONSTRUCTOR_MISSING
     if stroke_color is not _CONSTRUCTOR_MISSING and stroke_color is not None:
