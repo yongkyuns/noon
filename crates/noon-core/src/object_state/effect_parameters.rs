@@ -149,6 +149,7 @@ pub enum EffectParameter {
     Softness,
     Seed,
     Size,
+    Radial(crate::RadialParameter),
     Shader(u8),
 }
 
@@ -164,6 +165,7 @@ pub enum EffectParameterError {
     InvalidSoftness,
     InvalidView,
     InvalidShaderParameter(u8),
+    InvalidRadialParameter(crate::RadialParameter),
     InvalidShaderParameters,
     ShaderProgramMismatch,
     DiscreteTransition(EffectParameter),
@@ -185,6 +187,9 @@ impl std::fmt::Display for EffectParameterError {
             Self::InvalidProgress => f.write_str("effect progress must be finite and in [0, 1]"),
             Self::InvalidSoftness => f.write_str("effect softness must be finite and in [0, 1]"),
             Self::InvalidShaderParameter(index) => write!(f, "invalid shader parameter {index}"),
+            Self::InvalidRadialParameter(parameter) => {
+                write!(f, "invalid radial reveal {parameter:?} parameter")
+            }
             Self::InvalidShaderParameters => {
                 f.write_str("shader updates require at most 16 distinct checked parameter keys")
             }
@@ -232,6 +237,7 @@ pub struct EffectUpdate {
     pub softness: Option<f64>,
     pub seed: Option<u32>,
     pub size: Option<EffectRadius>,
+    pub radial: crate::RadialUpdate,
     pub shader: Option<Arc<Vec<ShaderParameterWrite>>>,
 }
 
@@ -242,6 +248,34 @@ pub struct ShaderParameterWrite {
 }
 
 impl EffectUpdate {
+    pub fn radial_value(mut self, value: crate::RadialValue) -> Self {
+        self.radial.set(value);
+        self
+    }
+    pub fn reveal_center(self, value: [f64; 2]) -> Self {
+        self.radial_value(crate::RadialValue::Center(value))
+    }
+    pub fn reveal_axes(self, value: [f64; 2]) -> Self {
+        self.radial_value(crate::RadialValue::Axes(value))
+    }
+    pub fn reveal_roughness(self, value: f64) -> Self {
+        self.radial_value(crate::RadialValue::Roughness(value))
+    }
+    pub fn reveal_frequency(self, value: f64) -> Self {
+        self.radial_value(crate::RadialValue::Frequency(value))
+    }
+    pub fn reveal_rim_width(self, value: f64) -> Self {
+        self.radial_value(crate::RadialValue::RimWidth(value))
+    }
+    pub fn reveal_inner_color(self, value: Color) -> Self {
+        self.radial_value(crate::RadialValue::InnerColor(value))
+    }
+    pub fn reveal_outer_color(self, value: Color) -> Self {
+        self.radial_value(crate::RadialValue::OuterColor(value))
+    }
+    pub fn reveal_hole(self, value: bool) -> Self {
+        self.radial_value(crate::RadialValue::Hole(value))
+    }
     pub fn shader_parameter(mut self, key: &ShaderParameterKey, value: ShaderValue) -> Self {
         let values = Arc::make_mut(self.shader.get_or_insert_with(|| Arc::new(Vec::new())));
         if let Some(write) = values.iter_mut().find(|w| w.key == *key) {
@@ -275,6 +309,9 @@ impl EffectUpdate {
 
     /// Validate supplied fields before choosing a finite definition.
     pub fn validate(&self) -> Result<(), EffectParameterError> {
+        for value in self.radial.values() {
+            value.validate()?;
+        }
         let shader = self.shader_parameters();
         if shader.len() > 16
             || shader
@@ -397,6 +434,11 @@ impl EffectUpdate {
         .into_iter()
         .filter(move |parameter| self.writes(*parameter))
         .chain(
+            self.radial
+                .values()
+                .map(|v| EffectParameter::Radial(v.parameter())),
+        )
+        .chain(
             self.shader_parameters()
                 .iter()
                 .map(|w| EffectParameter::Shader(w.key.index() as u8)),
@@ -415,6 +457,7 @@ impl EffectUpdate {
             EffectParameter::Softness => self.softness.is_some(),
             EffectParameter::Seed => self.seed.is_some(),
             EffectParameter::Size => self.size.is_some(),
+            EffectParameter::Radial(parameter) => self.radial.get(parameter).is_some(),
             EffectParameter::Shader(index) => self
                 .shader_parameters()
                 .iter()

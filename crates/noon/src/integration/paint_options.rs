@@ -83,6 +83,15 @@ pub fn noise_paint(
     phase: &[f64],
     colors: &[f64],
 ) -> Result<Arc<NoisePaint>, AuthoringFailure> {
+    checked_noise_paint(seed, frequency, phase, colors).map(Arc::new)
+}
+
+fn checked_noise_paint(
+    seed: f64,
+    frequency: &[f64],
+    phase: &[f64],
+    colors: &[f64],
+) -> Result<NoisePaint, AuthoringFailure> {
     let invalid =
         |message: &str| AuthoringFailure::new("invalid_input", "paint.invalid_noise", message);
     if !seed.is_finite() || seed < 0.0 || seed > f64::from(u32::MAX) || seed.fract() != 0.0 {
@@ -115,9 +124,39 @@ pub fn noise_paint(
             colors[7] as f32,
         ),
     ];
-    NoisePaint::new(seed as u32, frequency, phase, colors)
-        .map(Arc::new)
-        .map_err(|e| invalid(&e.to_string()))
+    NoisePaint::new(seed as u32, frequency, phase, colors).map_err(|e| invalid(&e.to_string()))
+}
+
+/// Shared checked projection of the optional high-level fractal factory.
+/// `detail` contains octave count, frequency multiplier and amplitude decay.
+pub fn fractal_noise_paint(
+    seed: f64,
+    frequency: &[f64],
+    phase: &[f64],
+    colors: &[f64],
+    detail: &[f64],
+    stops: Option<&[f64]>,
+) -> Result<Arc<NoisePaint>, AuthoringFailure> {
+    let invalid =
+        |message: &str| AuthoringFailure::new("invalid_input", "paint.invalid_noise", message);
+    if detail.len() != 3
+        || !detail[0].is_finite()
+        || detail[0].fract() != 0.0
+        || !(1.0..=f64::from(NoisePaint::MAX_OCTAVES)).contains(&detail[0])
+    {
+        return Err(invalid(
+            "fractal detail requires an integer octave count in [1, 8], lacunarity and gain",
+        ));
+    }
+    let mut value = checked_noise_paint(seed, frequency, phase, colors)?
+        .with_detail(detail[0] as u8, detail[1], detail[2])
+        .map_err(|e| invalid(&e.to_string()))?;
+    if let Some(stops) = stops {
+        value = value
+            .with_stops(gradient_stops(stops)?)
+            .map_err(|e| invalid(&e.to_string()))?;
+    }
+    Ok(Arc::new(value))
 }
 
 pub fn hatch_paint(

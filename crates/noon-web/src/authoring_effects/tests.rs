@@ -183,3 +183,63 @@ fn parsed_target_updates_share_copy_isolation_and_ordinary_declaration() {
         .objects
         .is_empty());
 }
+
+#[test]
+fn radial_boundary_preserves_omission_and_rejects_bad_shapes_before_mutation() {
+    use noon::integration::{radial_edge, radial_parameters};
+    let value = radial_parameters(
+        EffectUpdate::default().progress(0.0).seed(u32::MAX),
+        &[0.2, 0.8],
+        &[],
+        Some(0.0),
+        None,
+        None,
+        &[],
+        &[],
+        Some(false),
+    )
+    .unwrap();
+    assert_eq!(value.radial.center, Some([0.2, 0.8]));
+    assert_eq!(value.radial.axes, None);
+    assert_eq!(value.radial.roughness, Some(0.0));
+    let mask = noon_core::RadialMask::default()
+        .with_update(value, radial_edge(Some("burn")).unwrap())
+        .unwrap();
+    assert_eq!(
+        (mask.progress(), mask.seed(), mask.roughness()),
+        (0.0, u32::MAX, 0.0)
+    );
+    assert_eq!(mask.rim_width(), noon_core::RadialMask::burn().rim_width());
+    assert!(radial_edge(Some("unknown")).is_err());
+    for invalid in [
+        vec![0.5],
+        vec![0.5, 0.5, 0.5],
+        vec![f64::NAN, 0.5],
+        vec![-0.01, 0.5],
+    ] {
+        assert!(radial_parameters(
+            EffectUpdate::default(),
+            &invalid,
+            &[],
+            None,
+            None,
+            None,
+            &[],
+            &[],
+            None
+        )
+        .is_err());
+    }
+    assert!(radial_parameters(
+        EffectUpdate::default(),
+        &[],
+        &[],
+        None,
+        None,
+        None,
+        &[1.0 + f64::EPSILON, 0.0, 0.0, 1.0],
+        &[],
+        None
+    )
+    .is_err());
+}

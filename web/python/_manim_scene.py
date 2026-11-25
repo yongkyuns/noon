@@ -2834,15 +2834,18 @@ def _build_canonical_composition_candidate_steps(
                         str(reservation.object.id), member._semantic_handle
                     )
             return
-        from _noon_effects import Dissolve
-        if isinstance(animation, Dissolve):
+        from _noon_effects import Dissolve, RadialReveal, _update as _effect_update
+        if isinstance(animation, (Dissolve, RadialReveal)):
+            from contextlib import nullcontext
+            radial = isinstance(animation, RadialReveal)
+            animation_name = "RadialReveal" if radial else "Dissolve"
             target = animation.mobject
             family = _semantic_handles._is_shared_family(target)
             leaves = _compat._leaf_mobjects(target) if family else [target]
             if not leaves or any(getattr(member, "_semantic_handle", None) is None for member in leaves):
-                raise NotImplementedError("Dissolve requires shared semantic handles")
+                raise NotImplementedError(f"{animation_name} requires shared semantic handles")
             if any(member._scene not in (None, self) for member in leaves):
-                raise ValueError("Dissolve target belongs to another Scene")
+                raise ValueError(f"{animation_name} target belongs to another Scene")
             child = _options.resolve_transform(
                 builder_args=_options.builder_args(animation), default_lag_ratio=0.0,
                 play_run_time=child_kwargs.get("run_time", child_kwargs.get("duration")),
@@ -2850,22 +2853,33 @@ def _build_canonical_composition_candidate_steps(
                 play_lag_ratio=child_kwargs.get("lag_ratio"), play_path_arc=child_kwargs.get("path_arc"),
             )
             if child.path_arc != 0.0 or child.lag_ratio != 0.0:
-                raise NotImplementedError("Dissolve supports a single scope clock without path arcs or member lag")
-            parameters = (animation.direction, animation.seed, animation.softness,
-                animation.introducer, animation.remover, float(child.run_time), str(child.rate_func),
-                float(child.lag_ratio), bool(child.reverse_rate_function))
+                raise NotImplementedError(f"{animation_name} supports a single scope clock without path arcs or member lag")
             detached = [member for member in leaves if member._scene is None]
-            if family:
-                builder.appendDissolveFamily(target._semantic_family_handle, *parameters)
-                if detached:
-                    family_registrations.append(target)
-                for member in detached:
-                    reservation = reserve(member)
-                    if not reservation.reuse_existing_identity:
-                        builder.appendDissolveFamilyEntering(str(reservation.object.id), member._semantic_handle)
-            else:
-                reservation = reserve(target) if detached else None
-                builder.appendDissolveMobject("" if reservation is None else str(reservation.object.id), target._semantic_handle, *parameters)
+            update_context = _effect_update(
+                seed=animation.seed, softness=animation.softness,
+                center=animation.center, axes=animation.axes,
+                roughness=animation.roughness, frequency=animation.frequency,
+                rim_width=animation.rim_width, inner_color=animation.inner_color,
+                outer_color=animation.outer_color,
+            ) if radial else nullcontext(None)
+            with update_context as update:
+                style = (update, animation.edge) if radial else (animation.seed, animation.softness)
+                parameters = (animation.direction, *style, animation.introducer,
+                    animation.remover, float(child.run_time), str(child.rate_func),
+                    float(child.lag_ratio), bool(child.reverse_rate_function))
+                if family:
+                    append = builder.appendRadialRevealFamily if radial else builder.appendDissolveFamily
+                    append(target._semantic_family_handle, *parameters)
+                    if detached:
+                        family_registrations.append(target)
+                    for member in detached:
+                        reservation = reserve(member)
+                        if not reservation.reuse_existing_identity:
+                            builder.appendDissolveFamilyEntering(str(reservation.object.id), member._semantic_handle)
+                else:
+                    reservation = reserve(target) if detached else None
+                    append = builder.appendRadialRevealMobject if radial else builder.appendDissolveMobject
+                    append("" if reservation is None else str(reservation.object.id), target._semantic_handle, *parameters)
             removes = animation.remover if animation.remover is not None else animation.direction == "out"
             if removes:
                 removals.extend(leaves)

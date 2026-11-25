@@ -79,6 +79,8 @@ on:
       - "scripts/ordered-effects-qualification.mjs"
       - "scripts/composed-effects-qualification.mjs"
       - "scripts/noise-dissolve-qualification.mjs"
+      - "scripts/radial-reveal-qualification.mjs"
+      - "scripts/radial-mask-*.mjs"
       - "scripts/dissolve-qualification.mjs"
       - "scripts/dissolve-mask-*.mjs"
       - "scripts/scope-opacity-qualification.mjs"
@@ -111,6 +113,11 @@ on:
       - "scripts/noise-paint-qualification.mjs"
       - "scripts/noise-paint-reference.mjs"
       - "scripts/noise-paint-reference.test.mjs"
+      - "scripts/fractal-noise-qualification.mjs"
+      - "crates/noon-core/src/object_state/noise_paint*"
+      - "crates/noon-core/src/object_state/noise_paint/**"
+      - "crates/noon-core/src/object_state/radial_mask*"
+      - "crates/noon-core/src/object_state/radial_mask/**"
       - "scripts/hatch-paint-*.mjs"
       - "crates/noon-core/src/object_state/hatch_paint*"
       - "crates/noon-core/src/object_state/hatch_paint/**"
@@ -132,10 +139,15 @@ on:
       - "crates/noon/tests/linear_gradient_raster.rs"
       - "crates/noon/tests/radial_gradient_raster.rs"
       - "crates/noon/tests/noise_paint_raster.rs"
+      - "crates/noon/tests/fractal_noise_raster.rs"
+      - "crates/noon/tests/radial_reveal_raster.rs"
+      - "crates/noon/tests/semantic_visual_efficiency.rs"
       - "crates/noon/tests/noise_reference/**"
       - "crates/noon/tests/hatch_paint_raster.rs"
       - "crates/noon/tests/hatch_reference/**"
       - "crates/noon/examples/glow_scene_playback.rs"
+      - "crates/noon-native/examples/fractal_noise.rs"
+      - "crates/noon-native/examples/radial_reveal.rs"
       - "crates/noon/src/effect_authoring*"
       - "crates/noon/src/effect_authoring/**"
       - "crates/noon/src/live_session.rs"
@@ -372,6 +384,19 @@ jobs:
         run: |
           cargo test -p noon --test noise_paint_raster -- --ignored --nocapture --test-threads=1
           cargo test -p noon --test glow_scene_raster public_noise_fill -- --ignored --nocapture --test-threads=1
+      - name: Qualify public Rust fractal noise paint on native GPU
+        env:
+          NOON_FRACTAL_NATIVE_ARTIFACTS: ${{ github.workspace }}/browser-smoke-artifacts/fractal-noise-native
+        run: cargo test -p noon --test fractal_noise_raster --all-features --locked -- --ignored --nocapture --test-threads=1
+      - name: Qualify public Rust radial reveal on native GPU
+        env:
+          NOON_RADIAL_NATIVE_ARTIFACTS: ${{ github.workspace }}/browser-smoke-artifacts/radial-reveal-native
+        run: cargo test -p noon --test radial_reveal_raster --all-features --locked -- --ignored --nocapture --test-threads=1
+      - name: Qualify semantic visual locality and retained resources
+        shell: bash
+        run: |
+          mkdir -p browser-smoke-artifacts/semantic-visual-efficiency
+          cargo test -p noon --test semantic_visual_efficiency --all-features --locked -- --ignored --nocapture --test-threads=1 2>&1 | tee browser-smoke-artifacts/semantic-visual-efficiency/native.log
       - name: Qualify public Rust hatch paint on native GPU
         # A missing GPU fails the required raster test, rather than skipping it.
         run: |
@@ -425,6 +450,9 @@ jobs:
             prefix-raster-artifacts
             glass-lens-native-artifacts
             backdrop-coordinator-raster-artifacts
+            browser-smoke-artifacts/fractal-noise-native
+            browser-smoke-artifacts/radial-reveal-native
+            browser-smoke-artifacts/semantic-visual-efficiency
           if-no-files-found: warn
           retention-days: 3
 
@@ -736,6 +764,8 @@ jobs:
         run: node scripts/dissolve-qualification.mjs
       - name: Qualify composed seeded masks through Rust and Python
         run: node scripts/noise-dissolve-qualification.mjs
+      - name: Qualify paired radial reveal on WebGPU and WebGL2
+        run: node scripts/radial-reveal-qualification.mjs
       - name: Qualify paired Rust and Python image paints on WebGPU and WebGL2
         run: node scripts/image-fill-qualification.mjs
       - name: Qualify retained worker glow images and recovery
@@ -750,6 +780,8 @@ jobs:
         run: node scripts/radial-gradient-qualification.mjs
       - name: Qualify paired procedural noise paint authoring
         run: node scripts/noise-paint-qualification.mjs
+      - name: Qualify paired fractal noise paint on WebGPU and WebGL2
+        run: node scripts/fractal-noise-qualification.mjs
       - name: Qualify paired hatch paint authoring
         run: node scripts/hatch-paint-qualification.mjs
       - name: Qualify G4 authoring and rendered cold-pass admission
@@ -802,5 +834,7 @@ jobs:
             browser-smoke-artifacts/effect-resource-recovery
             browser-smoke-artifacts/dissolve
             browser-smoke-artifacts/noise-dissolve
+            browser-smoke-artifacts/radial-reveal
+            browser-smoke-artifacts/fractal-noise-authoring
           if-no-files-found: warn
           retention-days: 3

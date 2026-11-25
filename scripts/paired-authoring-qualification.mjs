@@ -253,7 +253,15 @@ export async function qualifyPairedAuthoring({ cases, artifactDirectory, port = 
             if (rust.png.data[i] !== python.png.data[i] || rust.png.data[i + 1] !== python.png.data[i + 1] ||
                 rust.png.data[i + 2] !== python.png.data[i + 2] || rust.png.data[i + 3] !== python.png.data[i + 3]) differingPixels++;
           }
-          assert.ok(foregroundPixels > 1000, "blank images cannot qualify paired authoring");
+          if (fixture.expectedBlank === true) {
+            assert.equal(foregroundPixels, 0, "hidden endpoint must have no foreground");
+            for (const image of [rust.png, python.png]) {
+              assert.ok(image.data.every((value, index) => index % 4 === 3 || value === 0),
+                "hidden endpoint must be exactly black, including faint residuals");
+            }
+          } else {
+            assert.ok(foregroundPixels > 1000, "blank images cannot qualify paired authoring");
+          }
           result.static[fixture.id] = { rust: rust.metrics, python: python.metrics, foregroundPixels, differingPixels };
           if (fixture.pythonFrameTimes) result.static[fixture.id].pythonSourceReused = python.sourceReused;
           assert.equal(differingPixels, 0, "Rust/WASM and Python must produce identical pixels on the same backend");

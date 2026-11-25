@@ -190,3 +190,138 @@ fn frequency_animation_preserves_unchanged_subnormal_and_extreme_phase() {
         assert_eq!(from.interpolate(&to, progress).unwrap().phase(), phase);
     }
 }
+
+#[test]
+fn fractal_factory_matches_explicit_detail_and_one_octave_is_the_original_field() {
+    let basic = NoisePaint::new(0, [8.0; 2], [0.0; 2], [Color::BLACK, Color::WHITE]).unwrap();
+    let default = NoisePaint::fractal(Color::BLACK, Color::WHITE).unwrap();
+    assert_eq!(default, basic.clone().with_detail(4, 2.0, 0.5).unwrap());
+    let single = default.with_detail(1, 2.0, 0.5).unwrap();
+    for point in [[0.0, 0.0], [0.173, 0.789], [1.0, 1.0]] {
+        for width in [[0.0; 2], [0.17, 0.51], [1.5; 2], [3.0; 2]] {
+            assert_eq!(
+                single.sample_filtered_premultiplied(point, width),
+                basic.sample_filtered_premultiplied(point, width)
+            );
+        }
+    }
+}
+
+#[test]
+fn fractal_normalizes_weights_filters_each_octave_and_uses_distinct_seeds() {
+    let f = NoisePaint::fractal(Color::BLACK, Color::WHITE)
+        .unwrap()
+        .with_seed(u32::MAX)
+        .with_frequency([3.0, 5.0])
+        .unwrap()
+        .with_phase([-0.173, 0.231])
+        .unwrap();
+    for point in [[0.13, 0.27], [0.55, 0.81]] {
+        for footprint in [[0.0; 2], [0.2, 0.4], [1.2, 0.1], [3.0; 2]] {
+            let mut expected = 0.0;
+            for i in 0..4 {
+                let scale = 2.0_f64.powi(i);
+                let single = NoisePaint::new(
+                    u32::MAX.wrapping_add((i as u32).wrapping_mul(0x9e37_79b9)),
+                    [3.0 * scale, 5.0 * scale],
+                    [-0.173 * scale, 0.231 * scale],
+                    [Color::BLACK, Color::WHITE],
+                )
+                .unwrap();
+                expected += 0.5_f64.powi(i)
+                    * single
+                        .sample_filtered_premultiplied(point, footprint.map(|v| v * scale))
+                        .unwrap()[0];
+            }
+            expected /= 1.875;
+            let actual = f.sample_filtered_premultiplied(point, footprint).unwrap();
+            assert!(
+                (actual[0] - expected).abs() < 1e-10,
+                "{point:?} {footprint:?}: {actual:?} != {expected}"
+            );
+            assert_eq!(actual[3], 1.0);
+        }
+    }
+}
+
+#[test]
+fn fractal_ramp_and_transitions_retain_alpha_topology_and_shared_unchanged_stops() {
+    let f = NoisePaint::fractal(Color::BLACK, Color::WHITE)
+        .unwrap()
+        .with_stops([
+            GradientStop::new(0.0, Color::rgba(1.0, 0.0, 0.0, 0.0)).unwrap(),
+            GradientStop::new(0.5, Color::rgb(0.0, 0.0, 1.0)).unwrap(),
+            GradientStop::new(1.0, Color::WHITE).unwrap(),
+        ])
+        .unwrap();
+    assert_eq!(f.color_at(0.0), [0.0; 4]);
+    assert_eq!(f.color_at(0.25), [0.0, 0.0, 0.5, 0.5]);
+    assert_eq!(f.color_at(0.5), [0.0, 0.0, 1.0, 1.0]);
+    let target = f.clone().with_phase([1.5, -0.5]).unwrap();
+    let middle = f.interpolate(&target, 0.5).unwrap();
+    assert_eq!(middle.phase(), [0.75, -0.25]);
+    match (&middle.stops, &f.stops) {
+        (NoiseStops::Shared(a), NoiseStops::Shared(b)) => {
+            assert!(
+                Arc::ptr_eq(a, b),
+                "phase-only animation shares the larger ramp"
+            );
+        }
+        _ => panic!("larger ramps retain shared storage"),
+    }
+    assert_eq!(f.interpolate(&target, 0.0).unwrap(), f);
+    assert_eq!(f.interpolate(&target, 1.0).unwrap(), target);
+    assert_eq!(
+        f.interpolate(&f.clone().with_detail(3, 2.0, 0.5).unwrap(), 0.5),
+        Err(NoisePaintError::DifferentDetail)
+    );
+    assert_eq!(
+        f.interpolate(&f.clone().with_detail(4, 1.5, 0.5).unwrap(), 0.5),
+        Err(NoisePaintError::DifferentDetail)
+    );
+    assert_eq!(
+        f.interpolate(
+            &NoisePaint::fractal(Color::BLACK, Color::WHITE).unwrap(),
+            0.5
+        ),
+        Err(NoisePaintError::DifferentStopCounts)
+    );
+}
+
+#[test]
+fn fractal_invalid_detail_and_ramp_are_rejected_and_extreme_phase_stays_finite() {
+    let base = NoisePaint::fractal(Color::BLACK, Color::WHITE).unwrap();
+    for octaves in [0, 9, u8::MAX] {
+        assert_eq!(
+            base.clone().with_detail(octaves, 2.0, 0.5),
+            Err(NoisePaintError::InvalidOctaves)
+        );
+    }
+    for scale in [0.0, 0.9, 4.1, f64::INFINITY, f64::NAN] {
+        assert_eq!(
+            base.clone().with_detail(4, scale, 0.5),
+            Err(NoisePaintError::InvalidLacunarity)
+        );
+    }
+    for gain in [-0.1, 1.1, f64::INFINITY, f64::NAN] {
+        assert_eq!(
+            base.clone().with_detail(4, 2.0, gain),
+            Err(NoisePaintError::InvalidGain)
+        );
+    }
+    assert!(base.clone().with_stops([]).is_err());
+    let value = base.with_phase([f64::MAX, -f64::MAX]).unwrap();
+    for octave in 0..4 {
+        let (cell, fraction) = value.octave_phase_parts(octave).unwrap();
+        assert!(cell.into_iter().all(|v| v < 65536));
+        assert!(fraction
+            .into_iter()
+            .all(|v| v.is_finite() && (0.0..1.0).contains(&v)));
+    }
+    assert!(value.octave_phase_parts(4).is_none());
+    assert!(value
+        .sample_premultiplied([0.17, 0.39])
+        .unwrap()
+        .into_iter()
+        .all(f64::is_finite));
+}

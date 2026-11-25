@@ -26,16 +26,39 @@ impl SemanticTransformEffectSnapshot {
         source: Vec<SemanticAnimationEffectSnapshot>,
         target: Vec<SemanticAnimationEffectSnapshot>,
     ) -> Option<Box<Self>> {
-        // Visibility is a lifecycle role owned by Dissolve, rather than an
-        // authored appearance target. Ordinary motion/Transform must neither
-        // capture its temporary generation nor copy its progress back later.
+        // Ordinary motion must not capture visibility owned by a timed gesture.
+        // An explicitly edited persistent RadialMask target is an ordinary
+        // appearance animation and retains its exact source/copy correspondence.
+        let radial_visibility = source
+            .iter()
+            .find(|effect| effect.name.is_visibility())
+            .filter(|effect| effect.definition.as_radial_mask().is_some())
+            .and_then(|source| {
+                target
+                    .iter()
+                    .find(|effect| effect.name.is_visibility())
+                    .filter(|effect| effect.definition.as_radial_mask().is_some())
+                    .filter(|target| match target.copy_provenance.as_ref() {
+                        Some(copy) if copy.source_attachment() == source.attachment => {
+                            copy.has_parameter_writes()
+                        }
+                        _ => target.definition != source.definition,
+                    })
+                    .map(|target| (source.attachment, target.attachment))
+            });
         let source: Vec<_> = source
             .into_iter()
-            .filter(|effect| !effect.name.is_visibility())
+            .filter(|effect| {
+                !effect.name.is_visibility()
+                    || radial_visibility.is_some_and(|(source, _)| source == effect.attachment)
+            })
             .collect();
         let target: Vec<_> = target
             .into_iter()
-            .filter(|effect| !effect.name.is_visibility())
+            .filter(|effect| {
+                !effect.name.is_visibility()
+                    || radial_visibility.is_some_and(|(_, target)| target == effect.attachment)
+            })
             .collect();
         if source.is_empty() && target.is_empty() {
             return None;

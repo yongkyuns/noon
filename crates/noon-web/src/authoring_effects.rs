@@ -26,6 +26,34 @@ mod wasm {
 
     #[wasm_bindgen]
     impl WasmEffectUpdate {
+        #[wasm_bindgen(js_name = setRadial)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn set_radial(
+            &mut self,
+            center: &[f64],
+            axes: &[f64],
+            roughness: Option<f64>,
+            frequency: Option<f64>,
+            rim_width: Option<f64>,
+            inner_color: &[f64],
+            outer_color: &[f64],
+            hole: Option<bool>,
+        ) -> Result<(), JsValue> {
+            let value = noon::integration::radial_parameters(
+                self.value.clone(),
+                center,
+                axes,
+                roughness,
+                frequency,
+                rim_width,
+                inner_color,
+                outer_color,
+                hole,
+            )
+            .map_err(js_error)?;
+            self.value = value;
+            Ok(())
+        }
         #[wasm_bindgen(js_name = setThreshold)]
         pub fn set_threshold(&mut self, threshold: f64) -> Result<(), JsValue> {
             let update = self.value.clone().threshold(threshold);
@@ -98,12 +126,22 @@ mod wasm {
                 ))
             })
         }
-        fn mask_value(&self) -> Result<noon_core::NoiseDissolve, JsValue> {
-            self.value.as_noise_dissolve().ok_or_else(|| {
+        fn mask_value(&self) -> Result<&noon_core::EffectDefinition, JsValue> {
+            self.value
+                .is_visibility_mask()
+                .then_some(&self.value)
+                .ok_or_else(|| {
+                    js_error(noon::AuthoringError::from(
+                        EffectParameterError::UnsupportedParameter(
+                            noon_core::EffectParameter::Progress,
+                        ),
+                    ))
+                })
+        }
+        fn radial_value(&self) -> Result<noon_core::RadialMask, JsValue> {
+            self.value.as_radial_mask().ok_or_else(|| {
                 js_error(noon::AuthoringError::from(
-                    EffectParameterError::UnsupportedParameter(
-                        noon_core::EffectParameter::Progress,
-                    ),
+                    EffectParameterError::IncompatibleDefinition,
                 ))
             })
         }
@@ -211,6 +249,20 @@ mod wasm {
                 .map_err(noon::AuthoringError::from)
                 .map_err(js_error)
         }
+        #[wasm_bindgen(js_name = radialMask)]
+        pub fn radial_mask(
+            update: &WasmEffectUpdate,
+            edge: Option<String>,
+        ) -> Result<WasmEffectDefinition, JsValue> {
+            let edge = noon::integration::radial_edge(edge.as_deref()).map_err(js_error)?;
+            noon_core::RadialMask::default()
+                .with_update(update.value.clone(), edge)
+                .map(|value| Self {
+                    value: value.into(),
+                })
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name=noiseDissolve)]
         pub fn noise_dissolve(update: &WasmEffectUpdate) -> Result<WasmEffectDefinition, JsValue> {
             update
@@ -224,19 +276,67 @@ mod wasm {
         }
         #[wasm_bindgen(getter)]
         pub fn progress(&self) -> Result<f64, JsValue> {
-            Ok(self.mask_value()?.progress())
+            Ok(self
+                .mask_value()?
+                .visibility_progress()
+                .expect("checked mask"))
         }
         #[wasm_bindgen(getter)]
         pub fn softness(&self) -> Result<f64, JsValue> {
-            Ok(self.mask_value()?.softness())
+            Ok(self
+                .mask_value()?
+                .visibility_softness()
+                .expect("checked mask"))
         }
         #[wasm_bindgen(getter)]
         pub fn seed(&self) -> Result<u32, JsValue> {
-            self.value
-                .as_shader()
-                .map_or_else(|| self.mask_value().map(|v| v.seed()), |v| Ok(v.seed()))
+            self.value.as_shader().map_or_else(
+                || {
+                    self.mask_value()
+                        .map(|v| v.visibility_seed().expect("checked mask"))
+                },
+                |v| Ok(v.seed()),
+            )
         }
 
+        #[wasm_bindgen(getter, js_name = revealCenter)]
+        pub fn reveal_center(&self) -> Result<Vec<f64>, JsValue> {
+            Ok(self.radial_value()?.center().to_vec())
+        }
+        #[wasm_bindgen(getter, js_name = revealAxes)]
+        pub fn reveal_axes(&self) -> Result<Vec<f64>, JsValue> {
+            Ok(self.radial_value()?.axes().to_vec())
+        }
+        #[wasm_bindgen(getter, js_name = revealRoughness)]
+        pub fn reveal_roughness(&self) -> Result<f64, JsValue> {
+            Ok(self.radial_value()?.roughness())
+        }
+        #[wasm_bindgen(getter, js_name = revealFrequency)]
+        pub fn reveal_frequency(&self) -> Result<f64, JsValue> {
+            Ok(self.radial_value()?.frequency())
+        }
+        #[wasm_bindgen(getter, js_name = revealRimWidth)]
+        pub fn reveal_rim_width(&self) -> Result<f64, JsValue> {
+            Ok(self.radial_value()?.rim_width())
+        }
+        #[wasm_bindgen(getter, js_name = revealHole)]
+        pub fn reveal_hole(&self) -> Result<bool, JsValue> {
+            Ok(self.radial_value()?.hole())
+        }
+        #[wasm_bindgen(getter, js_name = revealInnerColor)]
+        pub fn reveal_inner_color(&self) -> Result<Vec<f64>, JsValue> {
+            Ok({
+                let c = self.radial_value()?.inner_color();
+                vec![c.red.into(), c.green.into(), c.blue.into(), c.alpha.into()]
+            })
+        }
+        #[wasm_bindgen(getter, js_name = revealOuterColor)]
+        pub fn reveal_outer_color(&self) -> Result<Vec<f64>, JsValue> {
+            Ok({
+                let c = self.radial_value()?.outer_color();
+                vec![c.red.into(), c.green.into(), c.blue.into(), c.alpha.into()]
+            })
+        }
         #[wasm_bindgen(getter, js_name = offsetX)]
         pub fn offset_x(&self) -> Result<f64, JsValue> {
             Ok(self.shadow_value()?.offset().value()[0])
@@ -263,6 +363,7 @@ mod wasm {
                 EffectDefinition::BackdropBlur(_) => "backdrop_blur",
                 EffectDefinition::Shadow(_) => "shadow",
                 EffectDefinition::NoiseDissolve(_) => "noise_dissolve",
+                EffectDefinition::RadialMask(_) => "radial_mask",
             }
             .into()
         }
@@ -324,6 +425,25 @@ mod wasm {
     // An alias is the same Rust object identity, never a copied appearance.
     #[wasm_bindgen]
     impl WasmAuthoringMobjectHandle {
+        #[wasm_bindgen(js_name = setReveal)]
+        pub fn set_reveal(
+            &self,
+            update: &WasmEffectUpdate,
+            edge: Option<String>,
+        ) -> Result<(), JsValue> {
+            let edge = noon::integration::radial_edge(edge.as_deref()).map_err(js_error)?;
+            self.semantic_mobject()
+                .clone()
+                .set_reveal_with_edge(update.value.clone(), edge)
+                .map_err(js_error)
+        }
+        #[wasm_bindgen(js_name = removeReveal)]
+        pub fn remove_reveal(&self) -> Result<(), JsValue> {
+            self.semantic_mobject()
+                .clone()
+                .remove_reveal()
+                .map_err(js_error)
+        }
         #[wasm_bindgen(js_name = setGlow)]
         pub fn set_glow(&self, update: &WasmEffectUpdate) -> Result<(), JsValue> {
             self.semantic_mobject()

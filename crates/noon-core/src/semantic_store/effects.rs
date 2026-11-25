@@ -22,6 +22,7 @@ pub enum EffectDefinition {
     BackdropBlur(BackdropBlur),
     Shadow(Shadow),
     NoiseDissolve(NoiseDissolve),
+    RadialMask(crate::RadialMask),
     Pixelate(Pixelate),
     Shader(crate::ShaderEffect),
 }
@@ -51,6 +52,12 @@ impl From<BackdropBlur> for EffectDefinition {
 impl From<Pixelate> for EffectDefinition {
     fn from(value: Pixelate) -> Self {
         Self::Pixelate(value)
+    }
+}
+
+impl From<crate::RadialMask> for EffectDefinition {
+    fn from(value: crate::RadialMask) -> Self {
+        Self::RadialMask(value)
     }
 }
 
@@ -85,6 +92,50 @@ impl From<crate::ShaderEffect> for EffectDefinition {
 }
 
 impl EffectDefinition {
+    pub const fn as_radial_mask(&self) -> Option<crate::RadialMask> {
+        if let Self::RadialMask(value) = self {
+            Some(*value)
+        } else {
+            None
+        }
+    }
+    pub const fn is_visibility_mask(&self) -> bool {
+        matches!(self, Self::NoiseDissolve(_) | Self::RadialMask(_))
+    }
+    pub const fn visibility_progress(&self) -> Option<f64> {
+        match self {
+            Self::NoiseDissolve(v) => Some(v.progress()),
+            Self::RadialMask(v) => Some(v.progress()),
+            _ => None,
+        }
+    }
+    pub const fn visibility_softness(&self) -> Option<f64> {
+        match self {
+            Self::NoiseDissolve(v) => Some(v.softness()),
+            Self::RadialMask(v) => Some(v.softness()),
+            _ => None,
+        }
+    }
+    pub const fn visibility_seed(&self) -> Option<u32> {
+        match self {
+            Self::NoiseDissolve(v) => Some(v.seed()),
+            Self::RadialMask(v) => Some(v.seed()),
+            _ => None,
+        }
+    }
+    pub fn visibility_update(&self) -> Option<EffectUpdate> {
+        match self {
+            Self::NoiseDissolve(v) => Some(
+                EffectUpdate::default()
+                    .progress(v.progress())
+                    .softness(v.softness())
+                    .seed(v.seed()),
+            ),
+            Self::RadialMask(v) => Some(v.update()),
+            _ => None,
+        }
+    }
+
     pub fn as_shader(&self) -> Option<&crate::ShaderEffect> {
         if let Self::Shader(value) = self {
             Some(value)
@@ -133,7 +184,9 @@ impl EffectDefinition {
             Self::Blur(v) => Some(v.radius()),
             Self::BackdropBlur(v) => Some(v.radius()),
             Self::Shadow(v) => Some(v.radius()),
-            Self::NoiseDissolve(_) | Self::Pixelate(_) | Self::Shader(_) => None,
+            Self::NoiseDissolve(_) | Self::RadialMask(_) | Self::Pixelate(_) | Self::Shader(_) => {
+                None
+            }
         }
     }
     pub fn is_neutral(&self) -> bool {
@@ -144,6 +197,7 @@ impl EffectDefinition {
             Self::BackdropBlur(v) => v.is_neutral(),
             Self::Shadow(v) => v.is_neutral(),
             Self::NoiseDissolve(v) => v.is_neutral(),
+            Self::RadialMask(v) => v.is_neutral(),
             Self::Pixelate(v) => v.is_neutral(),
             Self::Shader(_) => false,
         }
@@ -163,6 +217,7 @@ impl EffectDefinition {
             | Self::Blur(_)
             | Self::BackdropBlur(_)
             | Self::NoiseDissolve(_)
+            | Self::RadialMask(_)
             | Self::Pixelate(_)
             | Self::Shader(_) => None,
         }
@@ -229,6 +284,13 @@ impl EffectDefinition {
                 EffectParameter::Seed => previous.seed() != next.seed(),
                 _ => false,
             },
+            (Self::RadialMask(a), Self::RadialMask(b)) => match parameter {
+                EffectParameter::Progress => a.progress() != b.progress(),
+                EffectParameter::Softness => a.softness() != b.softness(),
+                EffectParameter::Seed => a.seed() != b.seed(),
+                EffectParameter::Radial(p) => a.parameters().get(p) != b.parameters().get(p),
+                _ => false,
+            },
             (Self::Pixelate(a), Self::Pixelate(b)) => {
                 parameter == EffectParameter::Size && a.size() != b.size()
             }
@@ -253,6 +315,9 @@ impl EffectDefinition {
         match self {
             Self::Glow(value) => EffectUpdate::default().source(value.source()),
             Self::NoiseDissolve(value) => EffectUpdate::default().seed(value.seed()),
+            Self::RadialMask(value) => EffectUpdate::default()
+                .seed(value.seed())
+                .reveal_hole(value.hole()),
             Self::Shader(value) => {
                 let mut update = if value.program().schema().dependencies.seed {
                     EffectUpdate::default().seed(value.seed())
@@ -290,6 +355,7 @@ impl EffectValue for EffectDefinition {
             Self::BackdropBlur(v) => update.apply_to(v).map(Self::BackdropBlur),
             Self::Shadow(v) => update.apply_to(v).map(Self::Shadow),
             Self::NoiseDissolve(v) => update.apply_to(v).map(Self::NoiseDissolve),
+            Self::RadialMask(v) => update.apply_to(v).map(Self::RadialMask),
             Self::Pixelate(v) => update.apply_to(v).map(Self::Pixelate),
             Self::Shader(v) => update.apply_to(v).map(Self::Shader),
         }
@@ -297,6 +363,7 @@ impl EffectValue for EffectDefinition {
     fn validate_effect_value_update(&self, target: &Self) -> Result<(), EffectParameterError> {
         match (self, target) {
             (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => a.validate_effect_value_update(b),
+            (Self::RadialMask(a), Self::RadialMask(b)) => a.validate_effect_value_update(b),
             (Self::Pixelate(a), Self::Pixelate(b)) => a.validate_effect_value_update(b),
             (Self::Shader(a), Self::Shader(b)) => a.validate_effect_value_update(b),
             (previous, next) => previous.validate_effect_transition(next),
@@ -310,6 +377,7 @@ impl EffectValue for EffectDefinition {
             (Self::BackdropBlur(a), Self::BackdropBlur(b)) => a.validate_effect_transition(b),
             (Self::Shadow(a), Self::Shadow(b)) => a.validate_effect_transition(b),
             (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => a.validate_effect_transition(b),
+            (Self::RadialMask(a), Self::RadialMask(b)) => a.validate_effect_transition(b),
             (Self::Pixelate(a), Self::Pixelate(b)) => a.validate_effect_transition(b),
             (Self::Shader(a), Self::Shader(b)) => a.validate_effect_transition(b),
             _ => Err(EffectParameterError::IncompatibleDefinition),
@@ -332,6 +400,9 @@ impl EffectValue for EffectDefinition {
             (Self::NoiseDissolve(a), Self::NoiseDissolve(b)) => {
                 a.sample_effect_parameters(b, request, alpha)
             }
+            (Self::RadialMask(a), Self::RadialMask(b)) => {
+                a.sample_effect_parameters(b, request, alpha)
+            }
             (Self::Pixelate(a), Self::Pixelate(b)) => a.sample_effect_parameters(b, request, alpha),
             (Self::Shader(a), Self::Shader(b)) => a.sample_effect_parameters(b, request, alpha),
             _ => Err(EffectParameterError::IncompatibleDefinition),
@@ -347,7 +418,7 @@ impl EffectValue for EffectDefinition {
 pub struct SemanticEffectCopyProvenance {
     source_attachment: SemanticNodeId,
     copied_definition: EffectDefinition,
-    written_parameters: u32,
+    written_parameters: u64,
 }
 
 impl SemanticEffectCopyProvenance {
@@ -375,6 +446,12 @@ impl SemanticEffectCopyProvenance {
         self.written_parameters & effect_parameter_bit(parameter) != 0
     }
 
+    /// A copied target records intentional parameter writes, including a
+    /// same-valued edit. Merely copying a visibility binding records none.
+    pub const fn has_parameter_writes(&self) -> bool {
+        self.written_parameters != 0
+    }
+
     fn with_update(mut self, update: &EffectUpdate) -> Self {
         for parameter in update.parameters() {
             self.written_parameters |= effect_parameter_bit(parameter);
@@ -383,7 +460,7 @@ impl SemanticEffectCopyProvenance {
     }
 }
 
-const fn effect_parameter_bit(parameter: EffectParameter) -> u32 {
+const fn effect_parameter_bit(parameter: EffectParameter) -> u64 {
     match parameter {
         EffectParameter::Color => 1,
         EffectParameter::Radius => 2,
@@ -395,6 +472,7 @@ const fn effect_parameter_bit(parameter: EffectParameter) -> u32 {
         EffectParameter::Seed => 128,
         EffectParameter::Size => 256,
         EffectParameter::Threshold => 512,
+        EffectParameter::Radial(parameter) => 1 << (26 + parameter as u8),
         EffectParameter::Shader(index) if index < 16 => 1 << (10 + index),
         EffectParameter::Shader(_) => 0,
     }

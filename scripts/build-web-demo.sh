@@ -56,9 +56,13 @@ if [[ "$skip_web_preflight" != "1" ]]; then
   node --check scripts/linear-gradient-qualification.mjs
   node --check scripts/radial-gradient-qualification.mjs
   node --check scripts/noise-paint-qualification.mjs
+  node --check scripts/fractal-noise-qualification.mjs
   node --check scripts/ordered-effects-qualification.mjs
   node --check scripts/composed-effects-qualification.mjs
   node --check scripts/noise-dissolve-qualification.mjs
+  node --check scripts/radial-reveal-qualification.mjs
+  node --check scripts/radial-mask-reference.mjs
+  node --test scripts/radial-mask-reference.test.mjs
   node --check scripts/dissolve-qualification.mjs
   node --check scripts/noise-paint-reference.mjs
   node --test scripts/noise-paint-reference.test.mjs

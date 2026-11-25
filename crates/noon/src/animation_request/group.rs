@@ -151,6 +151,11 @@ impl FamilyMethodTarget {
                     authoring_render_f64("family affine", *value)?;
                 }
                 Method::SetFill(_) | Method::SetColor(_) => {}
+                Method::SetFillNoise(_) => {
+                    return Err(LiveSessionError::Mobject(
+                        "noise paint animation requires a supported planar leaf".into(),
+                    ));
+                }
             }
             for state in states.values_mut() {
                 match method {
@@ -172,6 +177,11 @@ impl FamilyMethodTarget {
                         color.alpha.into(),
                     )?,
                     Method::SetFill(_) => fill.expect("fill edit").apply(&mut state.style)?,
+                    Method::SetFillNoise(_) => {
+                        return Err(LiveSessionError::Mobject(
+                            "noise paint animation requires a supported planar leaf".into(),
+                        ));
+                    }
                     Method::Scale(factor) => {
                         FamilyAffine::Scale(*factor, *factor, ManimRotationPivot::Center)
                             .apply_to_state(&store, state, center, 0.0)?

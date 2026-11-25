@@ -53,6 +53,7 @@ noonPlotSamplingPlan = _native.PlotSamplingPlan
 noonLinearGradient = _native.LinearGradient
 noonRadialGradient = _native.RadialGradient
 noonNoisePaint = _native.NoisePaint
+noonFractalNoisePaint = _native.NoisePaint.fractal
 noonHatchPaint = _native.HatchPaint
 noonShaderParameter = _native.ShaderParameter
 noonShaderSchema = _native.ShaderSchema
@@ -65,6 +66,7 @@ noonBackdropBlur = _native.EffectDefinition.backdropBlur
 noonShadow = _native.EffectDefinition.shadow
 noonPixelate = _native.EffectDefinition.pixelate
 noonNoiseDissolve = _native.EffectDefinition.noiseDissolve
+noonRadialMask = _native.EffectDefinition.radialMask
 
 noonAuthoringMeshOptions = _native.MeshInput
 noonAuthoringMeshFamilyOptions = _native.MeshFamilyInput

@@ -462,6 +462,7 @@ pub enum Property {
     EffectSoftness,
     EffectSeed,
     EffectSize,
+    EffectRadial(crate::RadialParameter),
     /// A schema field on one exact shader attachment generation.
     EffectShader(u8),
 }
@@ -496,6 +497,7 @@ impl Property {
             | Self::EffectSoftness
             | Self::EffectSeed
             | Self::EffectSize
+            | Self::EffectRadial(_)
             | Self::EffectShader(_) => ValueKind::Effect,
             Self::Presence => ValueKind::Bool,
             Self::ZIndex => ValueKind::ZIndex,
@@ -537,6 +539,7 @@ pub enum EffectTrackValue {
     /// seeds cannot interpolate; successive intervals may choose another seed.
     Seed(u32),
     Size(crate::EffectRadius),
+    Radial(crate::RadialValue),
     Shader {
         parameter: u8,
         value: crate::ShaderValue,
@@ -552,27 +555,25 @@ impl EffectTrackValue {
             Property::EffectColor => definition.color().map(Self::Color),
             Property::EffectOffset => definition.as_shadow().map(|v| Self::Offset(v.offset())),
             Property::EffectRadius => definition.radius().map(Self::Radius),
-            Property::EffectProgress => definition
-                .as_noise_dissolve()
-                .map(|v| Self::Progress(v.progress())),
-            Property::EffectSoftness => definition
-                .as_noise_dissolve()
-                .map(|v| Self::Softness(v.softness())),
+            Property::EffectProgress => definition.visibility_progress().map(Self::Progress),
+            Property::EffectSoftness => definition.visibility_softness().map(Self::Softness),
             Property::EffectSize => definition.as_pixelate().map(|v| Self::Size(v.size())),
+            Property::EffectRadial(parameter) => definition
+                .as_radial_mask()?
+                .parameters()
+                .get(parameter)
+                .map(Self::Radial),
             Property::EffectShader(parameter) => definition
                 .as_shader()?
                 .values()
                 .get(usize::from(parameter))
                 .map(|&value| Self::Shader { parameter, value }),
-            Property::EffectSeed => definition
-                .as_noise_dissolve()
-                .map(|v| Self::Seed(v.seed()))
-                .or_else(|| {
-                    definition
-                        .as_shader()
-                        .filter(|v| v.program().schema().dependencies.seed)
-                        .map(|v| Self::Seed(v.seed()))
-                }),
+            Property::EffectSeed => definition.visibility_seed().map(Self::Seed).or_else(|| {
+                definition
+                    .as_shader()
+                    .filter(|v| v.program().schema().dependencies.seed)
+                    .map(|v| Self::Seed(v.seed()))
+            }),
             Property::EffectIntensity => definition.intensity().map(Self::Intensity),
             Property::EffectThreshold => definition.threshold().map(Self::Threshold),
             _ => None,
@@ -590,6 +591,7 @@ impl EffectTrackValue {
             Self::Softness(_) => Property::EffectSoftness,
             Self::Seed(_) => Property::EffectSeed,
             Self::Size(_) => Property::EffectSize,
+            Self::Radial(value) => Property::EffectRadial(value.parameter()),
             Self::Shader { parameter, .. } => Property::EffectShader(parameter),
         }
     }
@@ -605,6 +607,7 @@ impl EffectTrackValue {
             Self::Softness(_) => crate::EffectParameter::Softness,
             Self::Seed(_) => crate::EffectParameter::Seed,
             Self::Size(_) => crate::EffectParameter::Size,
+            Self::Radial(value) => crate::EffectParameter::Radial(value.parameter()),
             Self::Shader { parameter, .. } => crate::EffectParameter::Shader(parameter),
         }
     }
@@ -647,6 +650,7 @@ impl EffectTrackValue {
             Self::Softness(value) => crate::EffectUpdate::default().softness(value),
             Self::Seed(value) => crate::EffectUpdate::default().seed(value),
             Self::Size(value) => crate::EffectUpdate::default().size(value),
+            Self::Radial(value) => crate::EffectUpdate::default().radial_value(value),
             Self::Shader { .. } => return None,
         })
     }
@@ -702,6 +706,9 @@ impl EffectTrackValue {
             (Self::Progress(a), Self::Progress(b)) => Self::Progress(mix(a, b, alpha)),
             (Self::Softness(a), Self::Softness(b)) => Self::Softness(mix(a, b, alpha)),
             (Self::Seed(a), Self::Seed(b)) if a == b => Self::Seed(a),
+            (Self::Radial(a), Self::Radial(b)) => {
+                Self::Radial(a.interpolate(b, alpha).ok_or_else(invalid)?)
+            }
             (
                 Self::Shader {
                     parameter,

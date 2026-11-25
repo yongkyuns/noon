@@ -32,6 +32,14 @@ class EffectFacadeTests(unittest.TestCase):
         js.noonShadow = self.make_shadow
         self.make_mask = Mock(return_value=types.SimpleNamespace(kind="noise_dissolve", seed=7, softness=0.08, progress=0.4))
         js.noonNoiseDissolve = self.make_mask
+        self.make_radial = Mock(return_value=types.SimpleNamespace(
+            kind="radial_mask", seed=7, softness=0.02, progress=0.4,
+            revealCenter=(0.25, 0.75), revealAxes=(1.0, 0.5),
+            revealRoughness=0.08, revealFrequency=12.0, revealRimWidth=0.03,
+            revealInnerColor=(1.0, 0.7, 0.1, 1.0),
+            revealOuterColor=(0.25, 0.05, 0.01, 0.8), revealHole=True,
+        ))
+        js.noonRadialMask = self.make_radial
         self.make_pixelate = Mock(return_value=types.SimpleNamespace(kind="pixelate", size=12.0, sizePixels=True))
         js.noonPixelate = self.make_pixelate
         ffi = types.ModuleType("pyodide.ffi")
@@ -248,6 +256,87 @@ class EffectFacadeTests(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             noon.NoiseDissolve(seed=1.5)
         self.assertIs(caught.exception, failure)
+
+    def test_radial_definition_uses_rust_defaults_and_shared_snapshot_queries(self):
+        mask = noon.RadialMask(edge="burn")
+        self.make_radial.assert_called_once_with(self.request, "burn")
+        self.request.setRadial.assert_not_called()
+        self.assertEqual((mask.progress, mask.seed, mask.softness), (0.4, 7, 0.02))
+        self.assertEqual((mask.center, mask.axes), ((0.25, 0.75), (1.0, 0.5)))
+        self.assertEqual((mask.roughness, mask.frequency, mask.rim_width), (0.08, 12.0, 0.03))
+        self.assertTrue(mask.hole)
+        self.assertEqual(mask.inner_color.alpha, 1.0)
+        self.assertEqual(mask.outer_color.alpha, 0.8)
+        self.assertIs(copy.deepcopy(mask), mask)
+        with self.assertRaises(AttributeError):
+            mask.progress = 0.0
+        self.object.add_effect(mask, name="opening")
+        self.handle.addEffect.assert_called_once_with(mask._definition, "opening")
+        self.handle.getEffect.return_value.authoredDefinition.return_value = mask._definition
+        self.assertIsInstance(self.object.get_effect("opening").authored_definition, noon.RadialMask)
+
+    def test_radial_partial_updates_preserve_omission_and_explicit_zero_false(self):
+        self.assertIs(self.object.set_reveal(progress=0, roughness=0, hole=False), self.object)
+        self.make_update.assert_called_once_with((), None, False, None, None, (), False, 0.0, None, None)
+        self.request.setRadial.assert_called_once_with((), (), 0.0, None, None, (), (), False)
+        self.handle.setReveal.assert_called_once_with(self.request, None)
+        self.request.free.assert_called_once_with()
+        self.context = Mock()
+        self.object.set_reveal(edge="burn", center=(0.25, 0.75), axes=(1, 0.5))
+        self.context.setReveal.assert_called_once_with(self.handle, self.request, "burn")
+        self.assertIs(self.object.remove_reveal(), self.object)
+        self.context.removeReveal.assert_called_once_with(self.handle)
+        self.assertFalse(hasattr(self.object, "_effects"))
+
+    def test_radial_generic_parameters_use_the_same_rust_update(self):
+        self.object.set_effect("opening", center=(0.25, 0.75), axes=(1, 0.5),
+                               roughness=0.08, frequency=12, rim_width=0.03,
+                               inner_color=noon.Color(1, 0.7, 0.1, 1),
+                               outer_color=noon.Color(0.25, 0.05, 0.01, 0.8), hole=True)
+        self.request.setRadial.assert_called_once_with(
+            (0.25, 0.75), (1.0, 0.5), 0.08, 12.0, 0.03,
+            (1, 0.7, 0.1, 1), (0.25, 0.05, 0.01, 0.8), True,
+        )
+        self.handle.setEffect.assert_called_once_with("opening", self.request)
+
+    def test_radial_shape_errors_and_rust_rejection_preserve_existing_attachment(self):
+        for fields in ({"center": (1,)}, {"axes": (1, 2, 3)}, {"hole": 1},
+                       {"roughness": True}, {"frequency": "12"}, {"edge": 1}):
+            with self.subTest(fields=fields), self.assertRaises((TypeError, ValueError)):
+                self.object.set_reveal(**fields)
+        self.make_update.assert_not_called()
+        self.request.setRadial.side_effect = ValueError("shared radial bounds rejection")
+        with self.assertRaisesRegex(ValueError, "shared radial bounds rejection"):
+            self.object.set_reveal(axes=(-1, 1))
+        self.handle.setReveal.assert_not_called()
+        self.request.free.assert_called_once_with()
+
+    def test_radial_composed_scope_routes_one_family_operation(self):
+        family = types.SimpleNamespace(_semantic_family_handle=Mock())
+        self.context = Mock()
+        with patch.object(handles, "_is_shared_family", return_value=True):
+            self.assertIs(effects.set_reveal(family, edge="burn", scope="composed"), family)
+            effects.remove_reveal(family)
+        self.context.setFamilyReveal.assert_called_once_with(
+            family._semantic_family_handle, self.request, "burn")
+        self.context.removeFamilyReveal.assert_called_once_with(family._semantic_family_handle)
+
+    def test_radial_animation_construction_is_inert_and_copies_language_arguments(self):
+        center = [0.25, 0.75]
+        with patch.object(effects, "_update", side_effect=AssertionError("must remain inert")):
+            animation = noon.RadialReveal(self.object, edge="burn", center=center,
+                                          seed=7, remover=False, run_time=2)
+        center[0] = 1.0
+        self.assertIs(animation.mobject, self.object)
+        self.assertEqual((animation.direction, animation.edge, animation.center),
+                         ("in", "burn", (0.25, 0.75)))
+        self.assertEqual(animation.anim_args, {"run_time": 2})
+        self.assertIs(animation.remover, False)
+        self.make_update.assert_not_called()
+        self.handle.setReveal.assert_not_called()
+        for fields in ({"direction": "sideways"}, {"introducer": 1}, {"edge": False}):
+            with self.subTest(fields=fields), self.assertRaises((TypeError, ValueError)):
+                noon.RadialReveal(self.object, **fields)
         self.make_mask.assert_not_called()
 
     def test_pulse_constructor_is_inert_and_carries_only_intensity_and_timing(self):

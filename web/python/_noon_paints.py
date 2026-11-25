@@ -122,6 +122,40 @@ class NoisePaint:
         self._definition = engine_call(noonNoisePaint, _number(seed, "noise seed"),
                                        pair(frequency), pair(phase), to_js(colors))
 
+    @classmethod
+    def fractal(cls, low, high, *, seed=0, frequency=(8.0, 8.0),
+                phase=(0.0, 0.0), octaves=4, lacunarity=2.0, gain=0.5,
+                stops=None):
+        """A bounded multiscale field with useful four-octave defaults.
+
+        Rust filters each octave and normalizes the weighted field before its
+        color ramp. ``stops`` optionally replaces the two-color ramp with ordered
+        ``(position, color)`` pairs. Frequency/phase, gain and matching ramps
+        animate through ordinary ``set_fill``; seed, octave count and lacunarity
+        changes are immediate edits. At most eight octaves and sixteen stops
+        fit the declared rendering profile, with at most 256 cells per axis at
+        the highest octave. This value allocates no scene or GPU resources.
+        """
+        from _manim_compat import _as_color
+        from _noon_host import noonFractalNoisePaint, array_value as to_js
+        colors = []
+        for color in (low, high):
+            c = _as_color("noise color", color)
+            colors.extend((c.red, c.green, c.blue, c.alpha))
+        ramp = []
+        for position, color in (() if stops is None else stops):
+            c = _as_color("noise stop color", color)
+            ramp.extend((_number(position, "noise stop position"), c.red, c.green, c.blue, c.alpha))
+        pair = lambda values: to_js([_number(v, "noise coordinate") for v in values])
+        value = object.__new__(cls)
+        value._definition = engine_call(
+            noonFractalNoisePaint, _number(seed, "noise seed"), pair(frequency),
+            pair(phase), to_js(colors),
+            to_js([_number(octaves, "noise octaves"), _number(lacunarity, "noise lacunarity"),
+                   _number(gain, "noise gain")]), to_js(ramp), stops is not None,
+        )
+        return value
+
     def __copy__(self):
         return self
 

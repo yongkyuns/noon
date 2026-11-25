@@ -818,7 +818,7 @@ impl SemanticMutationTransaction {
     pub fn create_visibility_effect(
         &mut self,
         owner: impl Into<SemanticTransactionNodeRef>,
-        definition: crate::NoiseDissolve,
+        definition: impl Into<crate::EffectDefinition>,
     ) -> SemanticLocalNodeToken {
         self.create_node(SemanticNodeCreation::Effect {
             owner: owner.into(),
@@ -3901,7 +3901,7 @@ impl SemanticMutationTransaction {
                                 },
                             );
                         }
-                        if name.is_visibility() && definition.as_noise_dissolve().is_none() {
+                        if name.is_visibility() && !definition.is_visibility_mask() {
                             return Err(
                                 SemanticMutationTransactionError::InvalidEffectAttachment {
                                     index,

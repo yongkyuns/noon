@@ -110,6 +110,56 @@ fn glow_transaction(
     Ok(tx)
 }
 
+fn reveal_transaction(
+    object: MobjectTarget<'_>,
+    update: EffectUpdate,
+    edge: Option<noon_core::RadialEdge>,
+) -> Result<SemanticMutationTransaction, AuthoringError> {
+    object.validate()?;
+    let store = object.integration_store().borrow();
+    let existing = store.visibility_effect(object.node_id())?;
+    let mut tx = SemanticMutationTransaction::new();
+    if let Some(effect) = existing {
+        let previous = store
+            .semantic_effect_state(effect)?
+            .definition()
+            .as_radial_mask()
+            .ok_or(noon_core::EffectParameterError::IncompatibleDefinition)?;
+        let update = match edge {
+            Some(edge) => edge.resolve(update),
+            None => update,
+        };
+        update.apply_to(previous)?;
+        tx.update_effect(effect, update);
+    } else {
+        tx.create_visibility_effect(
+            object.node_id(),
+            noon_core::RadialMask::default().with_update(update, edge)?,
+        );
+    }
+    Ok(tx)
+}
+
+fn remove_reveal_transaction(
+    object: MobjectTarget<'_>,
+) -> Result<SemanticMutationTransaction, AuthoringError> {
+    object.validate()?;
+    let store = object.integration_store().borrow();
+    let mut tx = SemanticMutationTransaction::new();
+    if let Some(effect) = store.visibility_effect(object.node_id())? {
+        if store
+            .semantic_effect_state(effect)?
+            .definition()
+            .as_radial_mask()
+            .is_none()
+        {
+            return Err(noon_core::EffectParameterError::IncompatibleDefinition.into());
+        }
+        tx.remove_node(effect);
+    }
+    Ok(tx)
+}
+
 fn add_transaction(
     object: MobjectTarget<'_>,
     definition: EffectDefinition,
@@ -178,6 +228,26 @@ fn remove_glow_transaction(
 }
 
 impl Mobject {
+    /// Edit the one canonical radial visibility mask. Omitted fields persist.
+    pub fn set_reveal(&mut self, update: EffectUpdate) -> Result<(), AuthoringError> {
+        self.set_reveal_with_edge(update, None)
+    }
+    pub fn set_reveal_with_edge(
+        &mut self,
+        update: EffectUpdate,
+        edge: Option<noon_core::RadialEdge>,
+    ) -> Result<(), AuthoringError> {
+        reveal_transaction((&*self).into(), update, edge)?
+            .apply(&mut self.integration_store().borrow_mut())?;
+        Ok(())
+    }
+    /// Remove the canonical radial mask; absence is an idempotent no-op.
+    pub fn remove_reveal(&mut self) -> Result<(), AuthoringError> {
+        remove_reveal_transaction((&*self).into())?
+            .apply(&mut self.integration_store().borrow_mut())?;
+        Ok(())
+    }
+
     /// Edit authored glow on this handle. Use [`Scene::set_glow`] during playback.
     pub fn set_glow(&mut self, update: EffectUpdate) -> Result<(), AuthoringError> {
         glow_transaction((&*self).into(), update)?
@@ -227,6 +297,26 @@ impl Mobject {
 }
 
 impl MobjectFamily {
+    /// Edit the one canonical radial visibility mask. Omitted fields persist.
+    pub fn set_reveal(&mut self, update: EffectUpdate) -> Result<(), AuthoringError> {
+        self.set_reveal_with_edge(update, None)
+    }
+    pub fn set_reveal_with_edge(
+        &mut self,
+        update: EffectUpdate,
+        edge: Option<noon_core::RadialEdge>,
+    ) -> Result<(), AuthoringError> {
+        reveal_transaction((&*self).into(), update, edge)?
+            .apply(&mut self.integration_store().borrow_mut())?;
+        Ok(())
+    }
+    /// Remove the canonical radial mask; absence is an idempotent no-op.
+    pub fn remove_reveal(&mut self) -> Result<(), AuthoringError> {
+        remove_reveal_transaction((&*self).into())?
+            .apply(&mut self.integration_store().borrow_mut())?;
+        Ok(())
+    }
+
     /// Author an isolated family treatment before execution. Descendants never
     /// receive copied per-leaf attachments. Use `Scene::add_effect` during playback.
     pub fn add_effect(
@@ -276,6 +366,35 @@ impl MobjectFamily {
 }
 
 impl Scene {
+    /// Publish a local partial radial edit through the canonical transaction path.
+    pub fn set_reveal<'owner>(
+        &mut self,
+        object: impl Into<MobjectTarget<'owner>>,
+        update: EffectUpdate,
+    ) -> Result<(), AuthoringError> {
+        self.set_reveal_with_edge(object, update, None)
+    }
+    pub fn set_reveal_with_edge<'owner>(
+        &mut self,
+        object: impl Into<MobjectTarget<'owner>>,
+        update: EffectUpdate,
+        edge: Option<noon_core::RadialEdge>,
+    ) -> Result<(), AuthoringError> {
+        let object = object.into();
+        object.require_store(self.integration_store())?;
+        self.apply_semantic_transaction(reveal_transaction(object, update, edge)?)?;
+        Ok(())
+    }
+    pub fn remove_reveal<'owner>(
+        &mut self,
+        object: impl Into<MobjectTarget<'owner>>,
+    ) -> Result<(), AuthoringError> {
+        let object = object.into();
+        object.require_store(self.integration_store())?;
+        self.apply_semantic_transaction(remove_reveal_transaction(object)?)?;
+        Ok(())
+    }
+
     /// Declare a glow on an object or isolated family through the normal scene transaction.
     pub fn set_glow<'owner>(
         &mut self,
@@ -406,3 +525,27 @@ mod tests;
 
 #[cfg(all(test, feature = "wgsl-effects"))]
 mod shader_tests;
+
+impl crate::ScriptScene {
+    pub fn set_reveal<'owner>(
+        &self,
+        object: impl Into<MobjectTarget<'owner>>,
+        update: EffectUpdate,
+    ) -> Result<(), crate::ScriptError> {
+        self.with_scene(|scene| Ok(scene.set_reveal(object, update)?))
+    }
+    pub fn set_reveal_with_edge<'owner>(
+        &self,
+        object: impl Into<MobjectTarget<'owner>>,
+        update: EffectUpdate,
+        edge: Option<noon_core::RadialEdge>,
+    ) -> Result<(), crate::ScriptError> {
+        self.with_scene(|scene| Ok(scene.set_reveal_with_edge(object, update, edge)?))
+    }
+    pub fn remove_reveal<'owner>(
+        &self,
+        object: impl Into<MobjectTarget<'owner>>,
+    ) -> Result<(), crate::ScriptError> {
+        self.with_scene(|scene| Ok(scene.remove_reveal(object)?))
+    }
+}

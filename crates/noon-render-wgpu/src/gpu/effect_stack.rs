@@ -77,6 +77,7 @@ impl PassFilter {
             }
             EffectDefinition::Shadow(_) => Self::Shadow(Box::default()),
             EffectDefinition::NoiseDissolve(_)
+            | EffectDefinition::RadialMask(_)
             | EffectDefinition::Pixelate(_)
             | EffectDefinition::Shader(_) => Self::Sample(Box::default()),
         }
@@ -93,6 +94,7 @@ impl PassFilter {
                 | (
                     Self::Sample(_),
                     EffectDefinition::NoiseDissolve(_)
+                        | EffectDefinition::RadialMask(_)
                         | EffectDefinition::Pixelate(_)
                         | EffectDefinition::Shader(_)
                 )
@@ -228,6 +230,7 @@ impl EffectStackScope {
                     (matches!(
                         effect,
                         EffectDefinition::NoiseDissolve(_)
+                            | EffectDefinition::RadialMask(_)
                             | EffectDefinition::Pixelate(_)
                             | EffectDefinition::Shader(_)
                     ) && self
@@ -261,6 +264,7 @@ impl EffectStackScope {
             let filter = if matches!(
                 effect,
                 EffectDefinition::NoiseDissolve(_)
+                    | EffectDefinition::RadialMask(_)
                     | EffectDefinition::Pixelate(_)
                     | EffectDefinition::Shader(_)
             ) {
@@ -510,6 +514,7 @@ impl EffectStackFilter {
                     (
                         PassFilter::Sample(filter),
                         definition @ (EffectDefinition::NoiseDissolve(_)
+                        | EffectDefinition::RadialMask(_)
                         | EffectDefinition::Pixelate(_)
                         | EffectDefinition::Shader(_)),
                     ) => self.sample.prepare_encode(
@@ -748,6 +753,7 @@ fn preflight(
                 .checked_mul(cost)
                 .ok_or(EffectPrepareError::ScratchBudgetExceeded)?;
             if let definition @ (EffectDefinition::NoiseDissolve(_)
+            | EffectDefinition::RadialMask(_)
             | EffectDefinition::Pixelate(_)
             | EffectDefinition::Shader(_)) = effect
             {

@@ -10,7 +10,9 @@ use crate::semantic_mobject::{
 };
 use crate::{
     CompositeEntryHandle, ExecutionSegment, LiveSession, LiveSessionError, Mobject, MobjectFamily,
+    NoisePaint,
 };
+use std::sync::Arc;
 
 mod group;
 pub(crate) use group::{
@@ -39,6 +41,7 @@ enum RequestKind {
     Animate(Animate),
     Create(Create),
     FadeOut(FadeOut),
+    RadialReveal(Box<RadialReveal>),
     Parallel {
         children: Vec<AnimationRequest>,
         options: AnimationOptions,
@@ -55,6 +58,7 @@ impl AnimationRequest {
             RequestKind::Animate(request) => request.options = options,
             RequestKind::Create(request) => request.options = options,
             RequestKind::FadeOut(request) => request.options = options,
+            RequestKind::RadialReveal(request) => request.options = options,
             RequestKind::Parallel {
                 options: current, ..
             } => *current = options,
@@ -90,6 +94,16 @@ impl AnimationRequest {
                     target: request.target.node_id(),
                     direction: SemanticFadeDirection::Out,
                     endpoint: SemanticFadeEndpoint::default(),
+                    options: request.options,
+                }
+            }
+            RequestKind::RadialReveal(request) => {
+                live.require_membership_root(request.target.as_target())?;
+                SemanticCompositionRequest::Dissolve {
+                    target: request.target.node_id(),
+                    direction: request.direction,
+                    style: noon_core::DissolveStyle::radial(request.update, request.edge)
+                        .map_err(crate::AuthoringError::from)?,
                     options: request.options,
                 }
             }
@@ -198,6 +212,7 @@ pub struct Animate {
 enum Method {
     Shift(Vec2),
     SetFill(Color),
+    SetFillNoise(Arc<NoisePaint>),
     SetColor(Color),
     Scale(f64),
     Rotate(f64),
@@ -245,6 +260,16 @@ impl Animate {
     /// Set fill RGB and opacity from this RGBA color, preserving the stroke.
     pub fn set_fill(mut self, color: Color) -> Self {
         self.methods.push(Method::SetFill(color));
+        self
+    }
+
+    /// Animate a local noise paint through the ordinary Fill channel.
+    ///
+    /// Fill opacity is preserved. Matching seed, octave count, lacunarity and
+    /// ramp size are checked at play admission. This edit supports planar
+    /// leaves, the same scope as persistent noise fills.
+    pub fn set_fill_noise(mut self, paint: impl Into<Arc<NoisePaint>>) -> Self {
+        self.methods.push(Method::SetFillNoise(paint.into()));
         self
     }
 
@@ -369,6 +394,9 @@ impl Animate {
                         f64::from(color.blue),
                         f64::from(color.alpha),
                     )?,
+                    Method::SetFillNoise(paint) => {
+                        target.style.fill = Some(noon_core::SemanticPaint::Noise(paint));
+                    }
                     Method::Scale(factor) => {
                         let center = state_center(&store, &target)?;
                         scale_state_about_center(&store, &mut target, factor, factor, center)?;
@@ -481,6 +509,66 @@ impl From<FadeOut> for AnimationRequest {
     fn from(request: FadeOut) -> Self {
         Self {
             kind: RequestKind::FadeOut(request),
+        }
+    }
+}
+
+/// Reveal an object or composed family through an expanding radial iris.
+///
+/// A target-only request enters detached content and uses a clean edge. `out()`
+/// removes content through an expanding hole, with ordinary lifecycle options.
+/// Values remain inert until `scene.play`; one canonical mask is reused across
+/// repeated gestures and persistent `set_reveal` edits.
+#[derive(Clone, Debug)]
+#[must_use = "animation requests do nothing until passed to scene.play"]
+pub struct RadialReveal {
+    target: CompositeEntryHandle,
+    direction: noon_core::DissolveDirection,
+    update: noon_core::EffectUpdate,
+    edge: Option<noon_core::RadialEdge>,
+    options: AnimationOptions,
+}
+impl RadialReveal {
+    pub fn new<'a>(target: impl Into<crate::MobjectTarget<'a>>) -> Self {
+        let target = match target.into() {
+            crate::MobjectTarget::Object(value) => CompositeEntryHandle::Mobject(value.clone()),
+            crate::MobjectTarget::Family(value) => CompositeEntryHandle::Family(value.clone()),
+        };
+        Self {
+            target,
+            direction: noon_core::DissolveDirection::In,
+            update: noon_core::EffectUpdate::default(),
+            edge: None,
+            options: AnimationOptions::new(),
+        }
+    }
+    pub fn out(mut self) -> Self {
+        self.direction = noon_core::DissolveDirection::Out;
+        self
+    }
+    pub fn direction(mut self, direction: noon_core::DissolveDirection) -> Self {
+        self.direction = direction;
+        self
+    }
+    pub fn edge(mut self, edge: noon_core::RadialEdge) -> Self {
+        self.edge = Some(edge);
+        self
+    }
+    /// Advanced fields are checked at play admission by the same Rust operation
+    /// as the language wrappers; omitted fields preserve the existing style.
+    pub fn parameters(mut self, update: noon_core::EffectUpdate) -> Self {
+        self.update = update;
+        self
+    }
+    pub fn with_options(mut self, options: AnimationOptions) -> Self {
+        self.options = options;
+        self
+    }
+}
+impl From<RadialReveal> for AnimationRequest {
+    fn from(request: RadialReveal) -> Self {
+        Self {
+            kind: RequestKind::RadialReveal(Box::new(request)),
         }
     }
 }

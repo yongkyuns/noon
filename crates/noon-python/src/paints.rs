@@ -43,6 +43,28 @@ impl NoisePaint {
             .map(|value| Self { value })
             .map_err(engine_error)
     }
+
+    #[staticmethod]
+    fn fractal(
+        seed: f64,
+        frequency: Vec<f64>,
+        phase: Vec<f64>,
+        colors: Vec<f64>,
+        detail: Vec<f64>,
+        stops: Vec<f64>,
+        has_stops: bool,
+    ) -> PyResult<Self> {
+        noon::integration::fractal_noise_paint(
+            seed,
+            &frequency,
+            &phase,
+            &colors,
+            &detail,
+            has_stops.then_some(stops.as_slice()),
+        )
+        .map(|value| Self { value })
+        .map_err(engine_error)
+    }
 }
 
 #[pyclass(unsendable, module = "_noon_native")]

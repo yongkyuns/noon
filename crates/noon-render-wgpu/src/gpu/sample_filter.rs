@@ -28,6 +28,10 @@ struct Uniform {
     control: [f32; 4],
     domain: [f32; 4],
     seed: [u32; 4],
+    radial: [f32; 4],
+    edge: [f32; 4],
+    inner: [f32; 4],
+    outer: [f32; 4],
 }
 #[derive(Debug)]
 struct Resources {
@@ -155,6 +159,10 @@ fn checked_uniform(
     if parameters.definition.as_pixelate().is_some() && size.into_iter().any(|v| v > 65536) {
         return Err(EffectPrepareError::ExtentExceedsDevice);
     }
+    let mut radial = [0.0; 4];
+    let mut edge = [0.0; 4];
+    let mut inner = [0.0; 4];
+    let mut outer = [0.0; 4];
     let (control, domain, seed) = match parameters.definition {
         noon_core::EffectDefinition::NoiseDissolve(v) => (
             [
@@ -166,6 +174,34 @@ fn checked_uniform(
             checked_domain(size, parameters.source_bounds)?,
             [v.seed(), 0, 0, 0],
         ),
+        noon_core::EffectDefinition::RadialMask(v) => {
+            radial = [
+                v.center()[0] as f32,
+                v.center()[1] as f32,
+                v.axes()[0] as f32,
+                v.axes()[1] as f32,
+            ];
+            edge = [
+                v.roughness() as f32,
+                v.frequency() as f32,
+                v.rim_width() as f32,
+                if v.hole() { 1.0 } else { 0.0 },
+            ];
+            let c = v.inner_color();
+            inner = [c.red, c.green, c.blue, c.alpha];
+            let c = v.outer_color();
+            outer = [c.red, c.green, c.blue, c.alpha];
+            (
+                [
+                    v.progress() as f32,
+                    v.softness() as f32,
+                    parameters.scope_opacity,
+                    2.0,
+                ],
+                checked_domain(size, parameters.source_bounds)?,
+                [v.seed(), 0, 0, 0],
+            )
+        }
         noon_core::EffectDefinition::Pixelate(v) => {
             let cell =
                 checked_cell_size(v, parameters.output_height, parameters.world_view_height)?;
@@ -183,6 +219,10 @@ fn checked_uniform(
         control,
         domain,
         seed,
+        radial,
+        edge,
+        inner,
+        outer,
     })
 }
 

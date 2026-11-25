@@ -96,6 +96,7 @@ impl DynamicProperties {
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSize
+            | Property::EffectRadial(_)
             | Property::EffectShader(_)
             | Property::EffectSeed => self.effect = true,
             Property::Presence => self.presence = true,
@@ -194,10 +195,19 @@ impl CompiledEffect {
 
     /// Bounded attachment-local fields, borrowed from the immutable schema.
     pub fn parameter_properties(&self) -> impl Iterator<Item = Property> + '_ {
-        Self::BUILTIN_PARAMETER_PROPERTIES.into_iter().chain(
-            (0..self.definition.as_shader().map_or(0, |v| v.values().len()))
-                .map(|index| Property::EffectShader(index as u8)),
-        )
+        Self::BUILTIN_PARAMETER_PROPERTIES
+            .into_iter()
+            .chain(
+                self.definition
+                    .as_radial_mask()
+                    .into_iter()
+                    .flat_map(|_| noon_core::RadialParameter::ALL)
+                    .map(Property::EffectRadial),
+            )
+            .chain(
+                (0..self.definition.as_shader().map_or(0, |v| v.values().len()))
+                    .map(|index| Property::EffectShader(index as u8)),
+            )
     }
 
     /// Lower a captured parameter request to ordinary independent timeline values.
@@ -217,7 +227,8 @@ impl CompiledEffect {
             + usize::from(update.progress.is_some())
             + usize::from(update.softness.is_some())
             + usize::from(update.size.is_some())
-            + update.shader_parameters().len();
+            + update.shader_parameters().len()
+            + update.radial.values().count();
         let mut channels = Vec::with_capacity(count);
         for (requested, property) in [
             (update.color.is_some(), Property::EffectColor),
@@ -230,6 +241,13 @@ impl CompiledEffect {
             (update.size.is_some(), Property::EffectSize),
         ]
         .into_iter()
+        .chain(
+            update
+                .radial
+                .values()
+                .filter(|v| v.parameter() != noon_core::RadialParameter::Hole)
+                .map(|v| (true, Property::EffectRadial(v.parameter()))),
+        )
         .chain(
             update
                 .shader_parameters()
@@ -1565,6 +1583,7 @@ impl CompiledScene {
                         | Property::EffectProgress
                         | Property::EffectSoftness
                         | Property::EffectSize
+                        | Property::EffectRadial(_)
                         | Property::EffectShader(_)
                         | Property::EffectSeed
                 )
@@ -3029,6 +3048,7 @@ impl CompiledScene {
                             | Property::EffectProgress
                             | Property::EffectSoftness
                             | Property::EffectSize
+                            | Property::EffectRadial(_)
                             | Property::EffectShader(_)
                             | Property::EffectSeed
                     )
@@ -3284,15 +3304,16 @@ pub(crate) fn validate_effect_track_attachment(
                 attachment,
             });
         };
-        if let (noon_core::EffectTrackValue::Seed(a), noon_core::EffectTrackValue::Seed(b)) =
-            (from, to)
-        {
-            return if a == b
-                && noon_core::EffectTrackValue::from_definition(
-                    Property::EffectSeed,
-                    &effect.definition,
-                )
-                .is_some()
+        if matches!(
+            from,
+            noon_core::EffectTrackValue::Seed(_)
+                | noon_core::EffectTrackValue::Radial(noon_core::RadialValue::Hole(_))
+        ) {
+            // Discrete style is held constant throughout one visibility gesture.
+            // Its activation value may differ from a prior neutral endpoint.
+            return if from == to
+                && noon_core::EffectTrackValue::from_definition(track.property, &effect.definition)
+                    .is_some()
             {
                 Ok(())
             } else {
@@ -3883,6 +3904,7 @@ const fn property_rank(property: Property) -> u16 {
         Property::EffectThreshold => 23,
         Property::Emission => 24,
         Property::EffectShader(index) => 25 + index as u16,
+        Property::EffectRadial(parameter) => 41 + parameter as u16,
     }
 }
 

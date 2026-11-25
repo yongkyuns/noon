@@ -32,6 +32,29 @@ impl CanonicalAuthoringSceneContext {
         })
     }
 
+    #[wasm_bindgen(js_name = setFamilyReveal)]
+    pub fn set_family_reveal(
+        &mut self,
+        object: &WasmAuthoringFamilyHandle,
+        update: &WasmEffectUpdate,
+        edge: Option<String>,
+    ) -> Result<(), JsValue> {
+        let edge = noon::integration::radial_edge(edge.as_deref()).map_err(js_error)?;
+        self.inner
+            .edit_scene(|scene| {
+                scene.set_reveal_with_edge(object.semantic_family_ref(), update.value.clone(), edge)
+            })
+            .map_err(js_error)
+    }
+    #[wasm_bindgen(js_name = removeFamilyReveal)]
+    pub fn remove_family_reveal(
+        &mut self,
+        object: &WasmAuthoringFamilyHandle,
+    ) -> Result<(), JsValue> {
+        self.inner
+            .edit_scene(|scene| scene.remove_reveal(object.semantic_family_ref()))
+            .map_err(js_error)
+    }
     #[wasm_bindgen(js_name = setFamilyGlow)]
     pub fn set_family_glow(
         &mut self,

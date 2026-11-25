@@ -1,6 +1,8 @@
 //! Optional language coercion into the shared immutable Rust paint value.
 #[cfg(any(test, target_arch = "wasm32"))]
-use noon::integration::{hatch_paint, linear_gradient, noise_paint, radial_gradient};
+use noon::integration::{
+    fractal_noise_paint, hatch_paint, linear_gradient, noise_paint, radial_gradient,
+};
 #[cfg(test)]
 use noon::Color;
 #[cfg(target_arch = "wasm32")]
@@ -70,6 +72,30 @@ mod wasm {
             noise_paint(seed, frequency, phase, colors)
                 .map(|value| Self { value })
                 .map_err(js_error)
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmNoisePaint {
+        pub fn fractal(
+            seed: f64,
+            frequency: &[f64],
+            phase: &[f64],
+            colors: &[f64],
+            detail: &[f64],
+            stops: &[f64],
+            has_stops: bool,
+        ) -> Result<WasmNoisePaint, JsValue> {
+            fractal_noise_paint(
+                seed,
+                frequency,
+                phase,
+                colors,
+                detail,
+                has_stops.then_some(stops),
+            )
+            .map(|value| Self { value })
+            .map_err(js_error)
         }
     }
 
@@ -191,6 +217,61 @@ mod tests {
         let mut invalid = colors;
         invalid[0] = 1.0 + f64::EPSILON;
         assert!(noise_paint(7.0, &[8.0; 2], &[0.0; 2], &invalid).is_err());
+    }
+
+    #[test]
+    fn fractal_boundary_rejects_fractional_counts_and_preserves_ramp_values() {
+        let colors = [1.0, 0.0, 0.0, 0.5, 0.0, 0.0, 1.0, 1.0];
+        let stops = [
+            0.0, 1.0, 0.0, 0.0, 0.0, 0.4, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0,
+        ];
+        let value = fractal_noise_paint(
+            f64::from(u32::MAX),
+            &[4.0, 5.0],
+            &[-0.173, 0.231],
+            &colors,
+            &[5.0, 2.0, 0.6],
+            Some(&stops),
+        )
+        .unwrap();
+        assert_eq!(value.seed(), u32::MAX);
+        assert_eq!(value.octaves(), 5);
+        assert_eq!(value.gain(), 0.6);
+        assert_eq!(value.stops().len(), 3);
+        assert_eq!(value.stops()[1].position(), 0.4);
+        for detail in [
+            [0.0, 2.0, 0.5],
+            [2.5, 2.0, 0.5],
+            [9.0, 2.0, 0.5],
+            [f64::NAN, 2.0, 0.5],
+            [4.0, 0.5, 0.5],
+            [4.0, 2.0, 1.1],
+        ] {
+            assert!(
+                fractal_noise_paint(7.0, &[8.0; 2], &[0.0; 2], &colors, &detail, None).is_err()
+            );
+        }
+        assert!(fractal_noise_paint(7.0, &[8.0; 2], &[0.0; 2], &colors, &[4.0], None).is_err());
+        assert!(fractal_noise_paint(
+            7.0,
+            &[8.0; 2],
+            &[0.0; 2],
+            &colors,
+            &[4.0, 2.0, 0.5],
+            Some(&[]),
+        )
+        .is_err());
+        let mut invalid = stops;
+        invalid[7] = 1.0 + f64::EPSILON;
+        assert!(fractal_noise_paint(
+            7.0,
+            &[8.0; 2],
+            &[0.0; 2],
+            &colors,
+            &[4.0, 2.0, 0.5],
+            Some(&invalid),
+        )
+        .is_err());
     }
     #[test]
     fn boundary_checks_shape_and_f64_channels_before_narrowing() {

@@ -159,18 +159,10 @@ impl PaintTransition {
         if let Some(template) = noise(&from).or_else(|| noise(&to)) {
             let promote = |paint: &Option<SemanticPaint>| match paint {
                 Some(SemanticPaint::Noise(value)) => Ok(value.clone()),
-                Some(SemanticPaint::Solid(color)) => Ok(Arc::new(NoisePaint::new(
-                    template.seed(),
-                    template.frequency(),
-                    template.phase(),
-                    [*color; 2],
-                )?)),
-                None => Ok(Arc::new(NoisePaint::new(
-                    template.seed(),
-                    template.frequency(),
-                    template.phase(),
-                    [Color::TRANSPARENT; 2],
-                )?)),
+                Some(SemanticPaint::Solid(color)) => {
+                    Ok(Arc::new(template.with_constant_color(*color)?))
+                }
+                None => Ok(Arc::new(template.with_constant_color(Color::TRANSPARENT)?)),
                 _ => Err(PaintTransitionError::UnsupportedPaint),
             };
             let values = [promote(&from)?, promote(&to)?];

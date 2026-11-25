@@ -2,8 +2,8 @@
 //! no clock, semantic identity allocator, source capture or frontend state.
 use super::{affine::SemanticAnimationCompletion, glow_target::EffectTargetLoweringError};
 use noon_core::{
-    DissolveDirection, DissolveStyle, EffectTrackEndBehavior, EffectTrackValue, NoiseDissolve,
-    Property, SemanticAnimationEffectSnapshot, TrackTiming, TrackValues,
+    DissolveDirection, DissolveStyle, EffectTrackEndBehavior, EffectTrackValue, Property,
+    SemanticAnimationEffectSnapshot, TrackTiming, TrackValues,
 };
 
 pub(super) fn channels(
@@ -22,33 +22,47 @@ pub(super) fn channels(
     let initial = effective
         .and_then(|values| values.get(binding.attachment))
         .map_or_else(
-            || binding.definition.as_noise_dissolve(),
-            |value| value.definition.as_noise_dissolve(),
-        )
-        .ok_or(EffectTargetLoweringError::UnsupportedTopology)?;
+            || binding.definition.clone(),
+            |value| value.definition.clone(),
+        );
     let target = style
-        .resolve(initial)
-        .with_progress(match direction {
+        .resolve_definition(&initial, direction)
+        .map_err(|_| EffectTargetLoweringError::UnsupportedTopology)?;
+    let target = noon_core::EffectUpdate::default()
+        .progress(match direction {
             DissolveDirection::In => 0.0,
             DissolveDirection::Out => 1.0,
         })
+        .apply_to(target)
         .expect("finite dissolve endpoint");
     let pairs = [
         (
-            EffectTrackValue::Progress(initial.progress()),
-            EffectTrackValue::Progress(target.progress()),
+            EffectTrackValue::Progress(initial.visibility_progress().expect("visibility progress")),
+            EffectTrackValue::Progress(target.visibility_progress().expect("visibility progress")),
         ),
         (
-            EffectTrackValue::Softness(target.softness()),
-            EffectTrackValue::Softness(target.softness()),
+            EffectTrackValue::Softness(target.visibility_softness().expect("visibility softness")),
+            EffectTrackValue::Softness(target.visibility_softness().expect("visibility softness")),
         ),
         (
-            EffectTrackValue::Seed(target.seed()),
-            EffectTrackValue::Seed(target.seed()),
+            EffectTrackValue::Seed(target.visibility_seed().expect("visibility seed")),
+            EffectTrackValue::Seed(target.visibility_seed().expect("visibility seed")),
         ),
     ];
     let channels: Vec<_> = pairs
         .into_iter()
+        .chain(
+            target
+                .as_radial_mask()
+                .into_iter()
+                .flat_map(|v| v.parameters().values())
+                .map(|value| {
+                    (
+                        EffectTrackValue::Radial(value),
+                        EffectTrackValue::Radial(value),
+                    )
+                }),
+        )
         .map(|(from, to)| {
             (
                 from.property(),
@@ -68,8 +82,9 @@ pub(super) fn channels(
     else {
         unreachable!("progress channel")
     };
-    let endpoint: NoiseDissolve = target
-        .with_progress(progress)
+    let endpoint = noon_core::EffectUpdate::default()
+        .progress(progress)
+        .apply_to(target)
         .expect("checked terminal progress");
     Ok((
         channels,

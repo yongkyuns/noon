@@ -1062,6 +1062,7 @@ pub(super) fn preflight_transaction_with_resources(
                             | Property::EffectProgress
                             | Property::EffectSoftness
                             | Property::EffectSize
+                            | Property::EffectRadial(_)
                             | Property::EffectShader(_)
                             | Property::EffectSeed
                     )

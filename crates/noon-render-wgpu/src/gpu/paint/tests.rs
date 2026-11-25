@@ -539,3 +539,70 @@ fn continuous_gradient_pixels_match_literal_encoded_ldr_reference() {
         }
     }
 }
+
+#[test]
+fn fractal_phase_and_gain_updates_reuse_one_uniform_and_program_among_100k_objects() {
+    let (device, queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
+    let objects = (0..100_000)
+        .map(|index| {
+            CompiledObject::new(
+                ObjectId::new(index),
+                GeometryRef::circle(1.0),
+                Transform2D::IDENTITY,
+                Style::default(),
+            )
+        })
+        .collect();
+    let mut runtime = SceneInstance::new(CompiledScene::compile_objects(objects, &[]).unwrap());
+    let mut preparer = FramePreparer::new();
+    let mut renderer = GpuRenderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+    renderer.upload(&device, &queue, &preparer.prepare(runtime.frame()).unwrap());
+    runtime.take_frame_changes();
+    assert!(renderer.fill_paints.is_none());
+    let id = ObjectId::new(50_000);
+    let mut first_program = std::ptr::null();
+    for iteration in 0..4 {
+        let noise = noon_core::NoisePaint::fractal(Color::BLACK, Color::WHITE)
+            .unwrap()
+            .with_seed(7)
+            .with_phase([f64::from(iteration) * 0.173, -0.231])
+            .unwrap()
+            .with_detail(4, 2.0, 0.2 + f64::from(iteration) * 0.2)
+            .unwrap();
+        runtime
+            .apply_execution_patch(&ExecutionPatch::SetStyle {
+                object: id,
+                style: runtime.frame().objects[50_000].style,
+                fill_paint: Some(Arc::new(noon_core::SemanticPaint::Noise(Arc::new(noise)))),
+            })
+            .unwrap();
+        let changes = runtime.take_frame_changes();
+        assert_eq!(changes.object_indices(), &[50_000]);
+        let prepared = preparer
+            .prepare_incremental(runtime.frame(), &changes)
+            .unwrap();
+        assert_eq!(prepared.paint_changes, &[id]);
+        assert_eq!(prepared.stats.instances_repacked, 1);
+        assert_eq!(prepared.stats.full_rebuilds, 0);
+        assert_eq!(prepared.stats.geometry_cache_misses, 0);
+        assert_eq!(prepared.stats.render_order_positions_visited, 0);
+        let upload = renderer.upload(&device, &queue, &prepared);
+        assert_eq!(upload.bytes_uploaded, size_of::<PaintUniform>());
+        assert_eq!(upload.buffer_reallocations, usize::from(iteration == 0));
+        let program = renderer.fill_paints.as_deref().unwrap();
+        assert_eq!(program.residents.len(), 1);
+        if iteration == 0 {
+            first_program = std::ptr::from_ref(program);
+        } else {
+            assert_eq!(std::ptr::from_ref(program), first_program);
+        }
+        let settled = preparer
+            .prepare_incremental(runtime.frame(), &FrameChanges::default())
+            .unwrap();
+        assert!(settled.paint_changes.is_empty());
+        assert_eq!(
+            renderer.upload(&device, &queue, &settled),
+            UploadStats::default()
+        );
+    }
+}

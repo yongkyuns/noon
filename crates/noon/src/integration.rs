@@ -216,11 +216,13 @@ pub fn radial_gradient_colors(
 }
 
 mod effect_options;
-pub use effect_options::{effect_color, effect_update, mask_parameters};
+pub use effect_options::{
+    effect_color, effect_update, mask_parameters, radial_edge, radial_parameters,
+};
 
 mod paint_options;
 pub use paint_options::{
-    hatch_paint, image_mapping, linear_gradient, noise_paint, radial_gradient,
+    fractal_noise_paint, hatch_paint, image_mapping, linear_gradient, noise_paint, radial_gradient,
 };
 
 mod plot_error;

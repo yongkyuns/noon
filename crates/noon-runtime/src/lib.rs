@@ -1519,6 +1519,7 @@ impl SceneInstance {
                 | Property::EffectProgress
                 | Property::EffectSoftness
                 | Property::EffectSize
+                | Property::EffectRadial(_)
                 | Property::EffectShader(_)
                 | Property::EffectSeed => {
                     // Reset only the edited channel; independent glow/motion lanes
@@ -2835,6 +2836,7 @@ fn apply_group_to_row(
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSize
+            | Property::EffectRadial(_)
             | Property::EffectShader(_)
             | Property::EffectSeed
             | Property::Presence

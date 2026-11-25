@@ -65,7 +65,7 @@ impl CompiledEffectStack {
             attachments.last() != Some(&id)
                 || definitions
                     .last()
-                    .is_none_or(|definition| definition.as_noise_dissolve().is_none())
+                    .is_none_or(|definition| !definition.is_visibility_mask())
         }) {
             return Err(CompiledEffectStackError::InvalidVisibilityRole);
         }
@@ -155,10 +155,7 @@ impl CompiledEffectStack {
         if self.definitions[index].input_role() != effect.definition.input_role() {
             return false;
         }
-        if self.visibility
-            && index + 1 == self.len()
-            && effect.definition.as_noise_dissolve().is_none()
-        {
+        if self.visibility && index + 1 == self.len() && !effect.definition.is_visibility_mask() {
             return false;
         }
         self.definitions[index] = effect.definition;

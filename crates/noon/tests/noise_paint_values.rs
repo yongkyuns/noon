@@ -20,6 +20,12 @@ fn checked_noise_codec_preserves_seed_precision_and_rejects_unchecked_fields() {
         ("seed", serde_json::json!(0.5)),
         ("frequency", serde_json::json!([0.0, 8.0])),
         ("phase", serde_json::json!([null, 0])),
+        ("octaves", serde_json::json!(0)),
+        ("octaves", serde_json::json!(9)),
+        ("octaves", serde_json::json!(2.5)),
+        ("lacunarity", serde_json::json!(0.5)),
+        ("gain", serde_json::json!(1.1)),
+        ("stops", serde_json::json!([])),
         ("colors", serde_json::json!([])),
         ("extra", serde_json::json!(true)),
     ] {
@@ -28,6 +34,6 @@ fn checked_noise_codec_preserves_seed_precision_and_rejects_unchecked_fields() {
         assert!(serde_json::from_value::<NoisePaint>(invalid).is_err());
     }
     let mut invalid = encoded;
-    invalid["colors"][0]["red"] = serde_json::json!(1.0001);
+    invalid["stops"][0]["color"]["red"] = serde_json::json!(1.0001);
     assert!(serde_json::from_value::<NoisePaint>(invalid).is_err());
 }

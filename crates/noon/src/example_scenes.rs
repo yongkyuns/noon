@@ -42,6 +42,7 @@ pub mod first_lesson;
 pub mod following_graph_camera;
 pub mod foreground_matching;
 pub mod foreground_membership;
+pub mod fractal_noise;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod glass_lens;
 pub mod glow_churn;
@@ -86,6 +87,8 @@ pub mod point_promotion;
 pub mod pointer_input_trace;
 pub mod polar_plane;
 pub mod radial_gradient;
+pub mod radial_reveal;
+pub mod radial_reveal_composed;
 pub mod raster_image;
 pub mod renderer_fixtures;
 pub mod renderer_recovery;

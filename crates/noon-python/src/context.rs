@@ -3401,6 +3401,24 @@ impl Context {
         self.place(|scene| scene.set_fill_hatch(&target.handle, paint.value.clone(), opacity))
     }
 
+    #[pyo3(name="setReveal", signature=(target,update,edge=None))]
+    fn set_reveal(
+        &mut self,
+        target: &MobjectHandle,
+        update: &crate::effects::EffectUpdate,
+        edge: Option<String>,
+    ) -> PyResult<()> {
+        self.same_store(target)?;
+        let edge = noon::integration::radial_edge(edge.as_deref()).map_err(engine_error)?;
+        self.edit_scene(|scene| {
+            scene.set_reveal_with_edge(&target.handle, update.value.clone(), edge)
+        })
+    }
+    #[pyo3(name = "removeReveal")]
+    fn remove_reveal(&mut self, target: &MobjectHandle) -> PyResult<()> {
+        self.same_store(target)?;
+        self.edit_scene(|scene| scene.remove_reveal(&target.handle))
+    }
     #[pyo3(name = "setGlow")]
     fn _set_glow(
         &mut self,
@@ -3468,6 +3486,24 @@ impl Context {
         self.edit_scene(|scene| scene.remove_effect(&target.handle, &handle.handle))
     }
 
+    #[pyo3(name="setFamilyReveal", signature=(target,update,edge=None))]
+    fn set_family_reveal(
+        &mut self,
+        target: &crate::family::FamilyHandle,
+        update: &crate::effects::EffectUpdate,
+        edge: Option<String>,
+    ) -> PyResult<()> {
+        self.same_family_store(target)?;
+        let edge = noon::integration::radial_edge(edge.as_deref()).map_err(engine_error)?;
+        self.edit_scene(|scene| {
+            scene.set_reveal_with_edge(&target.family, update.value.clone(), edge)
+        })
+    }
+    #[pyo3(name = "removeFamilyReveal")]
+    fn remove_family_reveal(&mut self, target: &crate::family::FamilyHandle) -> PyResult<()> {
+        self.same_family_store(target)?;
+        self.edit_scene(|scene| scene.remove_reveal(&target.family))
+    }
     #[pyo3(name = "setFamilyGlow")]
     fn family_set_glow(
         &mut self,

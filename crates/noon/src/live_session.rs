@@ -1668,7 +1668,10 @@ impl<'a> LiveSession<'a> {
         mobject.validate().map_err(Into::into)
     }
 
-    fn require_membership_root(&self, root: MobjectTarget<'_>) -> Result<(), LiveSessionError> {
+    pub(crate) fn require_membership_root(
+        &self,
+        root: MobjectTarget<'_>,
+    ) -> Result<(), LiveSessionError> {
         match root {
             MobjectTarget::Object(object) => self.require_mobject(object),
             MobjectTarget::Family(family) => self.require_family(family),

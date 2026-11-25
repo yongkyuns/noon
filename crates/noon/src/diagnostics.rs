@@ -24,6 +24,12 @@ fn effect_json(effect: &noon_compile::CompiledEffect) -> Value {
         noon_core::EffectDefinition::BackdropBlur(blur) => {
             json!({ "kind": "backdrop_blur", "radius": blur.radius() })
         }
+        noon_core::EffectDefinition::RadialMask(v) => {
+            json!({"kind":"radial_mask", "progress":v.progress(), "softness":v.softness(),
+                "seed":v.seed(), "center":v.center(), "axes":v.axes(), "roughness":v.roughness(),
+                "frequency":v.frequency(), "rim_width":v.rim_width(), "inner_color":v.inner_color(),
+                "outer_color":v.outer_color(), "hole":v.hole()})
+        }
         noon_core::EffectDefinition::NoiseDissolve(mask) => {
             json!({"kind":"noise_dissolve","seed":mask.seed(),"softness":mask.softness(),"progress":mask.progress()})
         }

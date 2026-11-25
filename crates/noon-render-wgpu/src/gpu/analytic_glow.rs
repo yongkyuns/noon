@@ -320,9 +320,7 @@ impl GpuRenderer {
             },
             observation,
             super::glow_filter::CaptureDemand::default(),
-            effect
-                .visibility()
-                .and_then(|effect| effect.definition.as_noise_dissolve()),
+            effect.visibility().map(|effect| effect.definition),
         )
     }
 
@@ -381,7 +379,7 @@ impl GpuRenderer {
         request: EffectCaptureRequest<'_>,
         observation: crate::PreparedGeometryObjectObservation,
         demand: super::glow_filter::CaptureDemand,
-        visibility: Option<noon_core::NoiseDissolve>,
+        visibility: Option<noon_core::EffectDefinition>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         // Prefix roles must enter through the explicit backdrop coordinator;
         // ordinary object/group capture must never reinterpret their input.
@@ -477,7 +475,7 @@ impl GpuRenderer {
         composed: Option<Arc<noon_core::ComposedSource>>,
         recapture: bool,
         demand: super::glow_filter::CaptureDemand,
-        visibility: Option<noon_core::NoiseDissolve>,
+        visibility: Option<noon_core::EffectDefinition>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         // Prefix roles must enter through the explicit backdrop coordinator;
         // ordinary object/group capture must never reinterpret their input.
@@ -648,7 +646,7 @@ impl GpuRenderer {
         opacity: f32,
         text: Option<&super::retained_text::RetainedTextGpuState>,
         demand: super::glow_filter::CaptureDemand,
-        visibility: Option<noon_core::NoiseDissolve>,
+        visibility: Option<noon_core::EffectDefinition>,
     ) -> Result<EffectCaptureStats, EffectPrepareError> {
         if self.target_format == wgpu::TextureFormat::Rgba16Float
             && (visibility.is_some()
@@ -824,11 +822,11 @@ impl GpuRenderer {
         {
             super::sample_filter::checked_sample_origin(source_bounds)?;
         }
-        if request.definitions.iter().any(|definition| {
-            definition
-                .as_noise_dissolve()
-                .is_some_and(|value| !value.is_neutral())
-        }) {
+        if request
+            .definitions
+            .iter()
+            .any(|definition| definition.is_visibility_mask() && !definition.is_neutral())
+        {
             // Check the final high-water capture domain before taking or
             // mutating any retained scope. A rejected tiny source must keep the
             // previous coherent outputs, including unrelated captures.
@@ -1160,7 +1158,9 @@ impl GpuRenderer {
             // authored paint filters. It shares the painted mask's source domain
             // and operator; final scope opacity still belongs to placement.
             scope.original_masked = demand.original_by_parent
-                && visibility.is_some_and(|definition| !definition.is_neutral());
+                && visibility
+                    .as_ref()
+                    .is_some_and(|definition| !definition.is_neutral());
             let capture = GlowCapture {
                 source: &scope.source.texture,
                 silhouette: scope.silhouette.as_ref().map(|s| &s.texture),
@@ -1227,7 +1227,7 @@ impl GpuRenderer {
                     },
                     super::SampleParameters {
                         shader: None,
-                        definition: visibility.expect("active private visibility").into(),
+                        definition: visibility.expect("active private visibility"),
                         output_height: parameters.output_height,
                         world_view_height: parameters.world_view_height,
                         source_bounds,

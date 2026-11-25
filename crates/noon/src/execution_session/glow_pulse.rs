@@ -227,7 +227,7 @@ const fn parameter_bit(parameter: EffectParameter) -> u16 {
         EffectParameter::Seed => 128,
         EffectParameter::Size => 256,
         EffectParameter::Threshold => 512,
-        EffectParameter::Shader(_) => 0,
+        EffectParameter::Shader(_) | EffectParameter::Radial(_) => 0,
     }
 }
 

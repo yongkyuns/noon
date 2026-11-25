@@ -16,6 +16,8 @@ mod gradient;
 mod hatch_paint;
 mod linear_gradient;
 mod noise_dissolve;
+mod radial_mask;
+pub use radial_mask::{RadialEdge, RadialMask, RadialParameter, RadialUpdate, RadialValue};
 mod pixelate;
 pub use pixelate::Pixelate;
 mod noise_paint;

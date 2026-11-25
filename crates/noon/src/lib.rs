@@ -182,7 +182,8 @@ pub mod effects {
     pub use noon_core::{
         BackdropBlur, Bloom, Blur, DissolveDirection, DissolveStyle, EffectDefinition,
         EffectOffset, EffectParameterError, EffectRadius, EffectUpdate, Glow, GlowSource,
-        NoiseDissolve, NoiseDissolveError, Pixelate, Pixels, ShaderCoordinates, ShaderDependencies,
+        NoiseDissolve, NoiseDissolveError, Pixelate, Pixels, RadialEdge, RadialMask,
+        RadialParameter, RadialUpdate, RadialValue, ShaderCoordinates, ShaderDependencies,
         ShaderEffect, ShaderParameterDefinition, ShaderParameterKey, ShaderParameterType,
         ShaderProfile, ShaderProgramError, ShaderSchema, ShaderUnit, ShaderValue, Shadow,
         WgslEffectProgram,
@@ -301,7 +302,7 @@ mod zoomed_scene;
 
 pub use animation_authoring::DeclaredAnimation;
 pub use animation_request::{
-    parallel, Animate, AnimationRequest, Create, FadeOut, IntoAnimationRequest,
+    parallel, Animate, AnimationRequest, Create, FadeOut, IntoAnimationRequest, RadialReveal,
 };
 pub use arc_authoring::ArcAuthoringError;
 pub use arrow_authoring::{
@@ -543,8 +544,8 @@ pub mod prelude {
     };
     pub use crate::{
         parallel, Animate, AnimationRequest, BlockingScene, Create, FadeOut, IntoAnimationRequest,
-        SceneScript, ScriptBoundary, ScriptError, ScriptScene, UpdaterFrame, UpdaterRegistration,
-        UpdaterTarget,
+        RadialReveal, SceneScript, ScriptBoundary, ScriptError, ScriptScene, UpdaterFrame,
+        UpdaterRegistration, UpdaterTarget,
     };
     pub use crate::{
         AnimationOptions, ArrowScaleError, ArrowVectorFieldAuthoringError, AuthoringError,

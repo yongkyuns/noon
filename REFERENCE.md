@@ -362,9 +362,49 @@ self.play(treated.animate.set_effect("soften", radius=Pixels(2))
           .set_effect("glow", intensity=1.6), run_time=2, rate_func=smooth)
 ```
 
+#### Radial openings and burn edges
+
+A target-only animation opens an iris over an object, image, or isolated group:
+
+```python
+self.play(RadialReveal(panel))
+self.play(RadialReveal(panel, direction="out", edge="burn", seed=7))
+```
+
+The first call introduces detached content. The second removes its scene
+membership when finished; use `remover=False` to keep a hidden object for a later
+`RadialReveal(panel)`. Ordinary `run_time`, `rate_func`, sequences and parallel
+motion/fades use the existing playback APIs. Rust has the same inert request:
+
+```rust
+scene.play(RadialReveal::new(&panel)).await?;
+scene.play(RadialReveal::new(&panel).out().edge(RadialEdge::Burn)
+    .parameters(EffectUpdate::default().seed(7))).await?;
+```
+
+For persistent control, `panel.set_reveal(progress=0.25, edge="burn")` addresses
+one canonical visibility attachment. Repeated partial calls preserve omitted
+fields; `panel.animate.set_reveal(progress=0.75)` uses ordinary parameter tracks.
+`panel.remove_reveal()` removes that treatment. A low-level independent treatment
+is `panel.add_effect(RadialMask(progress=0.25), name="iris")`, animated with
+`set_effect`. Rust uses `Scene::set_reveal`, `EffectUpdate::progress` and
+`RadialMask::new` through the same semantic operations.
+
+Removal progress is always `0` for the complete original source and `1` for
+hidden content; it is not a fraction of pixel area. `direction="in"` retains
+inside an expanding iris, while `"out"` removes inside an expanding hole.
+`center=(0.5,0.5)` and `axes=(0.5,0.5)` use the upright normalized captured-source
+bounds after transforms. A group uses one composed box, including transparent
+holes and overlap, without copying a mask to each child. Equal axes therefore
+form an ellipse in a nonsquare box. The optional two-color burn rim tints only
+existing source coverage. See [radial reveal fixtures](tests/visual-effects/README.md#radial-reveal)
+for advanced fields, checked limits and rendering qualifications, and the paired
+[Python](web/python/examples/radial_reveal_composed.py) and
+[Rust](crates/noon/src/example_scenes/radial_reveal_composed.rs) image/group lesson.
+
 | Implemented profile | Use | Boundaries |
 | --- | --- | --- |
-| Compatibility 2D | Image/linear/radial/noise/hatch fills; ordered Glow, Blur, Shadow, Pixelate and seeded dissolve | Composed effects require supported painter isolation; backdrop sampling uses an explicit bounded painter prefix |
+| Compatibility 2D | Image/linear/radial/noise/hatch fills; ordered Glow, Blur, Shadow, Pixelate, seeded dissolve and radial reveal | Composed effects require supported painter isolation; backdrop sampling uses an explicit bounded painter prefix |
 | Linear HDR | Checked material emission, camera Bloom and qualified composed Blur | Primary planar view; float blending/MSAA support and target budget required; unsupported HDR operators, insets and spatial rows reject |
 | `PaintedPointwiseV1` WGSL | Reusable material color/coverage with typed controls, declared coordinates, authored time and seed | Compatibility output; composed scopes use scene/output-pixel coordinates; source point morphs and arbitrary render/compute passes are excluded |
 
@@ -382,6 +422,13 @@ before replacing published output. Native Rust, direct Rust/WASM and browser Pyo
 have separate execution evidence; native CPython integration and the remaining
 performance/promotion gates stay open in [#1897](https://github.com/yongkyuns/noon/issues/1897)
 and [#2015](https://github.com/yongkyuns/noon/issues/2015).
+
+For multiscale textures, `NoisePaint.fractal(low, high, seed=7)` supplies
+bounded defaults through ordinary `set_fill` and `.animate.set_fill`.
+Optional `octaves`, `lacunarity`, `gain` and ordered `stops` refine the same
+paint value. Rust uses `NoisePaint::fractal(low, high)?` with checked builders.
+See the [paired example](web/python/examples/fractal_noise.py) and
+[filtering/animation contract](tests/visual-effects/README.md#fractal-noise-and-scalar-color-ramps).
 
 ### Code blocks
 

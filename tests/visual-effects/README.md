@@ -284,6 +284,80 @@ reference, full u32 seed, phase-wrap and minification profiles on WebGPU/WebGL2.
 Executed source/build evidence and unfinished promotion gates belong to the
 owning PR/#1897; these are correctness/resource checks, not frame-pacing claims.
 
+## Fractal noise and scalar color ramps
+
+`NoisePaint.fractal(low, high, seed=0)` makes a useful four-octave local paint
+through the same `set_fill` / `.animate.set_fill` operations. Rust uses
+`NoisePaint::fractal(low, high)?`, followed by checked `with_frequency`,
+`with_phase`, `with_detail` and `with_stops` builders or `with_seed`. These
+factories create the same immutable paint value as explicit configuration;
+they allocate no scene, clock, program or texture. The paired creator example
+is `fractal_noise.py` / `noon::example_scenes::fractal_noise`, with a native
+`fractal_noise` entry point. It combines a default cloud field, a customized
+paper ramp, reuse on an independent swatch, and ordinary movement plus phase
+animation. The Rust version uses `Scene::script`, `scene.set_fill_noise`, and
+`scene.play_with(sky.animate().shift(...).set_fill_noise(...), options).await`.
+
+Defaults are frequency `(8, 8)`, phase `(0, 0)`, four octaves, lacunarity `2`,
+and gain `0.5`. Octave count is an integer in `[1, 8]`, lacunarity is in `[1, 4]`,
+and gain is in `[0, 1]`. Octave `i` uses frequency and phase scaled by
+`lacunarity**i`, amplitude `gain**i`, and seed
+`(seed + i * 0x9e3779b9) mod 2**32`. The sum is divided by the sum of amplitudes,
+so the field remains in `[0, 1]`. A zero gain is exactly the base octave.
+Every octave uses the existing quintic field and physical-pixel filtering,
+including fade to the coarse mean. Phase is reduced and split in f64 before
+GPU narrowing independently for each octave; large phase does not multiply
+into an infinite value or contaminate the other axis.
+
+Optional ordered `(position, color)` stops map the scalar result through the
+existing encoded-premultiplied gradient convention. The renderer admits at
+most sixteen stops and at most 256 cells per axis at the highest octave.
+An explicit empty ramp is rejected; omitting it selects the two boundary colors.
+This profile filters each scalar field before the color ramp; it does not
+claim exact footprint integration of an arbitrary nonlinear/discontinuous
+ramp. Preserve the specified profile when comparing quality and performance.
+
+Matching-seed, matching-octave-count and matching-lacunarity targets interpolate
+frequency, phase, gain and compatible color ramps through the ordinary Fill
+channel. Stop counts must match, and moving stop gaps must remain representable
+through the full sweep. Seeds, octave count and lacunarity are immediate edits.
+Solid/absent endpoints promote to the existing ramp and detail for intermediate
+samples; exact endpoints retain their original paint kinds. Source coverage,
+fill opacity and final object/group opacity remain independent.
+
+The basic and fractal constructors store their two stops inline; these
+constructors, cloning and two-color interpolation allocate no palette storage.
+Larger unchanged ramps
+share immutable storage during phase, frequency or gain animation.
+
+The retained renderer keeps the existing single-scale branch unchanged. Fractal
+paints use the same material draw, pipelines and uniform size. Derived octave
+phases occupy otherwise unused aligned stop-position lanes; continuous updates
+reuse one resident parameter buffer. No offscreen filter, extra texture or host
+callback is introduced. Static fields have no time dependency. The structural
+100,000-object test checks one changed row, one uniform write, program reuse,
+no later buffer allocation and clean-frame zero upload. These counters are
+locality evidence, not physical frame-pacing evidence.
+
+`fractal_noise_raster` checks independent per-octave integer/quadrature references,
+color/alpha, one/eight-octave profiles, minification, rotation/nonuniform scale,
+phase/gain and ramp animation, exact rewind and clean uploads. A separate native
+comparison uses four ordinary one-scale paints with the same seed progression,
+frequency, phase, filters and geometric extent. For this opaque black/white
+affine ramp, layer `i` uses opacity `weight_i / sum(weight_0..weight_i)`; source-over
+then yields the same normalized field before source quantization. Each route
+is checked against its own independent quantized reference because four LDR
+source quantizations can differ from one final quantization. This excludes
+nonlinear palettes, which map the scalar only after accumulation. It compares
+interior pixels after source quantization, dirty-row and phase-upload counts,
+and paused uploads. Those counters describe retained work and resources, not
+hardware frame pacing or a measured GPU speedup.
+`scripts/fractal-noise-qualification.mjs`
+uses the existing paired-authoring harness for direct Rust/WASM and Python on
+WebGPU/WebGL2, including the creator example and an independent scalar/ramp
+oracle. Executed source/build/backend evidence and remaining promotion gates
+belong in #2715/#1897; runnable qualification sources alone are not a pass.
+
 ## Scene-unit stripes and crosshatching
 
 `HatchPaint` fills an ordinary planar circle, rectangle or vector path with
@@ -2177,3 +2251,115 @@ spread second, and restoration. Neither path adds a shader clock or host engine.
 The shared recovery matrix covers completed shader and HDR/Bloom worker replay.
 Broader composed/input/capability, native Python, physical/performance and required
 CI gates remain necessary before promotion.
+
+
+## Radial reveal
+
+`RadialReveal(target)` introduces supported detached geometry, an image, or an
+isolated family through an expanding clean iris. `RadialReveal(target,
+direction="out", edge="burn", seed=7)` removes it through an expanding hole.
+Use `remover=False` to retain a fully hidden target and reopen it later. Rust
+uses `scene.play(RadialReveal::new(&target))` and the fluent `.out()`, `.edge(...)`,
+`.parameters(...)`, `.with_options(...)` methods. Definitions and requests are
+inert; construction creates no attachment, texture, clock or scene membership.
+
+`set_reveal(progress=...)` creates or edits one private trailing visibility
+attachment. Omitted fields preserve existing values, including explicit zero.
+An omitted edge preserves the prior treatment; `edge="clean"` or `"burn"`
+selects checked defaults, then explicit fields override those defaults. The
+same canonical binding survives repeated edits and visible completion, where
+it is neutral and the renderer bypasses it. `remove_reveal` is idempotent when
+absent; a timed removal retires the mask. A canonical NoiseDissolve binding
+rejects radial editing atomically instead of stacking or changing kinds.
+
+An explicit `RadialMask` can also be named, copied, edited with `set_effect`, and
+animated through ordinary targets. An intentional `.animate.set_reveal` edit
+of an existing canonical radial binding participates in those same channels;
+ordinary copied motion leaves private visibility alone. Same-valued writes
+retain conflict meaning. A timed gesture and an independent motion can share a
+target, while competing progress writes reject through the normal scheduler.
+No frontend interpolates or schedules radial state.
+
+### Coordinates, edge and finite profile
+
+Progress means removal: exactly zero returns the complete incoming premultiplied
+image; exactly one returns transparent. Neither value depends on edge softness,
+roughness, tint or orientation. Intermediate progress is a radial frontier,
+not removed pixel area. `hole=False` keeps the inside; `hole=True` keeps the
+outside. Timed `in` and `out` choose those orientations respectively. A timed
+orientation change is legal at the equivalent fully visible/hidden endpoints;
+changing it midway rejects instead of teleporting coverage. Immediate persistent
+edits may intentionally change discrete orientation or seed.
+
+Coordinates are upright normalized captured-source bounds, after the source's
+transform. Group coordinates describe the one final composed source; overlapping
+children are composited before masking. Axes align with that capture box, so
+rotating a source changes the box rather than promising intrinsic group-local
+coordinates. Equal normalized axes form an ellipse on a nonsquare source.
+
+| Field | Default | Checked domain |
+| --- | --- | --- |
+| `progress` | `0` | finite `[0,1]` |
+| `center` | `(0.5,0.5)` | each finite `[0,1]` |
+| `axes` | `(0.5,0.5)` | each finite `[0.05,4]` |
+| `softness` | `0.02` | finite `[0,1]`, radial distance units |
+| `roughness` | `0` | finite `[0,1]`, radial distance amplitude |
+| `frequency` | `12` | finite `[1,64]` cells per normalized axis |
+| `rim_width` | `0` | finite `[0,1]`, retained-side radial band |
+| `inner_color` | RGBA `(1,0.85,0.24,1)` | finite encoded RGBA `[0,1]` |
+| `outer_color` | RGBA `(0.24,0.035,0.01,1)` | finite encoded RGBA `[0,1]` |
+| `seed` | `0` | integer `[0,4294967295]` |
+| `hole` | `False` | Boolean, discrete |
+
+The burn preset sets roughness `0.10`, rim width `0.12` and softness `0.025`.
+The band runs from bright inner color at the frontier to dark outer color on
+the retained side. Tint colors interpolate in encoded premultiplied space; their
+alpha controls tint strength, never new coverage. Transparent image texels and
+holes stay transparent. Final object/group opacity is applied once after capture.
+
+One seeded value-noise evaluation perturbs radial distance. Its cubic lattice
+interpolation uses explicit unsigned hash arithmetic shared in meaning across
+native/WebGPU/WebGL2. Physical-pixel footprint is derived from the capture domain;
+it lower-bounds the soft edge and fades under-resolved roughness to zero between
+one half and one noise cell per pixel. The shader needs no derivative in divergent
+control flow and no diagnostic suppression. It uses the existing compatibility
+RGBA8 sample operator and capture planner. HDR/spatial/inset/source isolation
+restrictions remain those of the current effect profile.
+
+### Qualification and retained work
+
+The `radial_reveal` pair demonstrates target-only in, burn out with retained
+membership, and in again preserving authored defaults (3.75 seconds).
+`radial_reveal_composed` combines a nearest RGBA image with hidden/half-alpha
+texels, two overlapping translucent group members, clean/burn transitions,
+ordinary motion and final group fade (2.5 seconds). Both run as typed native and
+direct Rust/WASM programs; Python reaches the same shared semantics.
+
+`radial_reveal` structural tests cover canonical generation reuse, omissions,
+invalid rollback, kind conflicts, explicit target animation, composed scope
+identity, discrete orientation, sequential activation, and backward seek.
+`radial_reveal_raster` compares 24 source/pose/edge/orientation profiles at six
+progress values against a separate scalar field and premultiplied tint reference,
+including non-square transformed bounds and image/group alpha. Its predeclared
+byte tolerance is two for successive LDR quantization; hidden endpoints and
+same-backend repeated images are exact. `NOON_RADIAL_NATIVE_ARTIFACTS` stores
+representative PNGs when the image-decode feature is enabled.
+An additional minified fixture checks that under-resolved roughness converges
+to a seed-independent field without new geometry uploads.
+
+The retained sample test verifies one shared pipeline, one output texture and
+one uniform buffer per active scope. A progress edit reuses these and uploads
+one 112-byte parameter block; an unchanged frame uploads/encodes nothing.
+Capture reuse, unrelated content and clean-scene geometry uploads are checked
+separately. These establish bounded work/reuse, not physical-device frame pacing.
+
+Run the native ignored raster with `cargo test -p noon --test
+radial_reveal_raster --all-features --locked -- --ignored --nocapture`.
+`node --test scripts/radial-mask-reference.test.mjs` checks fixed hash vectors,
+endpoints, monotonic removal, source-alpha limits and finite pixel filtering.
+`scripts/radial-reveal-qualification.mjs` samples both paired scenes through real
+Python-worker and direct Rust/WASM execution on the existing WebGPU/WebGL2 gate,
+compares exact paired pixels and independently evaluates source, edge and alpha.
+Explicit hidden fixtures assert exactly black output; other fixtures retain the
+standard nonblank threshold. Browser results must be reported separately from
+native software-adapter tests and require executing that qualification script.

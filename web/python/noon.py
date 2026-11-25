@@ -1179,6 +1179,21 @@ class Mobject:
         from _noon_effects import set_glow
         return set_glow(self, color=color, radius=radius, intensity=intensity, source=source, scope=scope)
 
+    def set_reveal(self, *, progress=None, center=None, axes=None, roughness=None,
+                   frequency=None, softness=None, rim_width=None, inner_color=None,
+                   outer_color=None, seed=None, hole=None, edge=None, scope=None) -> Mobject:
+        """Update the canonical radial visibility mask; zero progress is visible."""
+        from _noon_effects import set_reveal
+        return set_reveal(self, progress=progress, center=center, axes=axes,
+                          roughness=roughness, frequency=frequency, softness=softness,
+                          rim_width=rim_width, inner_color=inner_color,
+                          outer_color=outer_color, seed=seed, hole=hole, edge=edge,
+                          scope=scope)
+
+    def remove_reveal(self) -> Mobject:
+        from _noon_effects import remove_reveal
+        return remove_reveal(self)
+
     def add_effect(self, definition, *, name, scope=None) -> Mobject:
         from _noon_effects import add_effect
         return add_effect(self, definition, name=name, scope=scope)
@@ -1187,9 +1202,9 @@ class Mobject:
         from _noon_effects import get_effect
         return get_effect(self, name)
 
-    def set_effect(self, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None) -> Mobject:
+    def set_effect(self, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None, center=None, axes=None, roughness=None, frequency=None, rim_width=None, inner_color=None, outer_color=None, hole=None) -> Mobject:
         from _noon_effects import set_effect
-        return set_effect(self, selector, color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size, parameters=parameters, threshold=threshold)
+        return set_effect(self, selector, color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size, parameters=parameters, threshold=threshold, center=center, axes=axes, roughness=roughness, frequency=frequency, rim_width=rim_width, inner_color=inner_color, outer_color=outer_color, hole=hole)
 
     def remove_effect(self, selector) -> Mobject:
         from _noon_effects import remove_effect
@@ -2069,6 +2084,8 @@ _PUBLIC_EXPORTS = {
     "BackdropBlur": "_noon_effects",
     "Shadow": "_noon_effects",
     "NoiseDissolve": "_noon_effects",
+    "RadialMask": "_noon_effects",
+    "RadialReveal": "_noon_effects",
     "Pixelate": "_noon_effects",
     "ShaderEffect": "_noon_shaders",
     "WgslEffectProgram": "_noon_shaders",

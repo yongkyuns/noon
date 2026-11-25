@@ -60,8 +60,8 @@ video.set_opacity(0.85)
                      "showcase_code_blocks", "showcase_group_animation", "showcase_group_opacity",
                      "showcase_mounted_callout",
                      "glow_pulse", "ordered_effects", "composed_effects", "effect_restore",
-                     "noise_dissolve",
-                     "linear_gradient", "radial_gradient", "noise_paint", "hatch_paint",
+                     "noise_dissolve", "radial_reveal", "radial_reveal_composed",
+                     "linear_gradient", "radial_gradient", "noise_paint", "fractal_noise", "hatch_paint",
                      "image_fill", "showcase_layered_effects", "showcase_painted_surfaces",
                      "ordinary_path_construction", "ordinary_path_editing", "ordinary_path_smoothing",
                      "specialized_geometry", "live_geometry_construction",
@@ -511,6 +511,101 @@ class Demo(Scene):
             self.assertEqual(source, view.capture(time=2.0, width=320, height=180))
         finally:
             view.close()
+
+    def test_native_radial_reveal_has_exact_endpoints_and_repeatable_seek(self):
+        path = ROOT / "web/python/examples/radial_reveal.py"
+        scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
+        self.assertEqual(len(scene.mobjects), 1)
+        view = prepare_view(scene)
+        try:
+            self.assertAlmostEqual(view.duration, 3.75)
+            times = (0.0, 0.5, 1.125, 1.75, 2.375, 3.0, 3.625)
+            frames = [view.capture(time=t, width=320, height=180) for t in times]
+            self.assertEqual(frames[0], frames[4])  # Both fully hidden, no residual rim.
+            self.assertEqual(frames[2], frames[6])  # Both exactly the untouched source.
+            self.assertNotEqual(frames[1], frames[5])  # Repeated In retains the authored burn treatment.
+            self.assertEqual(len(set(frames)), 5)
+            for time, pixels in reversed(tuple(zip(times, frames))):
+                self.assertEqual(view.capture(time=time, width=320, height=180), pixels)
+        finally:
+            view.close()
+
+    def test_native_radial_convenience_and_named_effect_match_with_movement(self):
+        source = """from noon import *
+class RevealAndMove(Scene):
+    def construct(self):
+        panel = Rectangle(width=4, height=2, fill=Color(0.2, 0.4, 0.9),
+                          fill_opacity=0.7, stroke=None).set_object_opacity(0.6)
+        panel.set_reveal(edge="burn", seed=7, progress=0.25)
+        self.add(panel)
+        self.wait(0.25)
+        self.play(panel.animate.shift(0.5 * RIGHT).set_reveal(progress=0.75, softness=0.03),
+                  run_time=1, rate_func=linear)
+        self.wait(0.25)
+"""
+        explicit = source.replace(
+            'panel.set_reveal(edge="burn", seed=7, progress=0.25)',
+            'panel.add_effect(RadialMask(edge="burn", seed=7, progress=0.25), name="mask")',
+        ).replace('.set_reveal(progress=0.75, softness=0.03)',
+                  '.set_effect("mask", progress=0.75, softness=0.03)')
+        times = (0.0, 0.5, 0.75, 1.0, 1.5)
+        outputs = []
+        for text in (source, explicit):
+            scene = asyncio.run(run_source(text, retain_history=True))
+            if text == explicit:
+                definition = scene.mobjects[0].get_effect("mask").authored_definition
+                self.assertEqual(definition.center, (0.5, 0.5))
+                self.assertEqual(definition.axes, (0.5, 0.5))
+                self.assertEqual(definition.seed, 7)
+                self.assertAlmostEqual(definition.progress, 0.75)
+                self.assertAlmostEqual(definition.softness, 0.03)
+                self.assertGreater(definition.rim_width, 0)
+                self.assertFalse(definition.hole)
+            view = prepare_view(scene)
+            try:
+                frames = [view.capture(time=t, width=320, height=180) for t in times]
+                self.assertNotEqual(frames[0], frames[-1])
+                self.assertEqual(frames[2], view.capture(time=times[2], width=320, height=180))
+                outputs.append(frames)
+            finally:
+                view.close()
+        self.assertEqual(outputs[0], outputs[1])
+
+    def test_native_fractal_default_matches_explicit_detail_and_rewinds(self):
+        source = """from noon import *
+class PaintedMotion(Scene):
+    def construct(self):
+        low, high = Color(0.05, 0.10, 0.25), Color(0.50, 0.80, 1.0)
+        paint = NoisePaint.fractal(low, high, seed=7)
+        left = Rectangle(width=3, height=2, stroke=None).set_fill(paint, opacity=0.7).shift(2 * LEFT)
+        right = Rectangle(width=3, height=2, stroke=None).set_fill(paint, opacity=0.7).shift(2 * RIGHT)
+        self.add(left, right)
+        self.wait(0.25)
+        self.play(left.animate.shift(0.4 * UP).set_fill(
+            NoisePaint.fractal(low, high, seed=7, phase=(1.5, 0))),
+            run_time=1, rate_func=linear)
+        self.wait(0.25)
+"""
+        explicit = source.replace("seed=7", "seed=7, octaves=4, lacunarity=2, gain=0.5, stops=[(0, low), (1, high)]")
+        times = (0.0, 0.5, 0.75, 1.0, 1.5)
+        outputs = []
+        for text in (source, explicit):
+            scene = asyncio.run(run_source(text, retain_history=True))
+            self.assertEqual(len(scene.mobjects), 2)
+            view = prepare_view(scene)
+            try:
+                frames = [view.capture(time=t, width=320, height=180) for t in times]
+                self.assertNotEqual(frames[0], frames[-1])
+                for time, pixels in reversed(tuple(zip(times, frames))):
+                    self.assertEqual(view.capture(time=time, width=320, height=180), pixels)
+                # The second object reuses the paint but has independent animation ownership.
+                right_half = lambda frame: b"".join(frame[(row * 320 + 160) * 4:(row + 1) * 320 * 4]
+                                                   for row in range(180))
+                self.assertEqual(right_half(frames[0]), right_half(frames[-1]))
+                outputs.append(frames)
+            finally:
+                view.close()
+        self.assertEqual(outputs[0], outputs[1])
 
     def test_native_diagram_glow_follows_rotation_and_rewind(self):
         path = ROOT / "web/python/examples/showcase_group_animation.py"

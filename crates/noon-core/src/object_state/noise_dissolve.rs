@@ -128,6 +128,8 @@ pub enum DissolveDirection {
 pub struct DissolveStyle {
     seed: Option<u32>,
     softness: Option<f64>,
+    radial: Option<crate::RadialUpdate>,
+    edge: Option<crate::RadialEdge>,
 }
 impl DissolveStyle {
     pub fn new(update: EffectUpdate) -> Result<Self, EffectParameterError> {
@@ -136,7 +138,83 @@ impl DissolveStyle {
         Ok(Self {
             seed: update.seed,
             softness: update.softness,
+            radial: None,
+            edge: None,
         })
+    }
+    /// The same visibility lifecycle with a radial field. A burn edge selects
+    /// checked defaults; omitted explicit fields preserve an existing radial mask.
+    pub fn radial(
+        update: EffectUpdate,
+        edge: Option<crate::RadialEdge>,
+    ) -> Result<Self, EffectParameterError> {
+        if update.progress.is_some() {
+            return Err(EffectParameterError::UnsupportedParameter(
+                EffectParameter::Progress,
+            ));
+        }
+        update.apply_to(crate::RadialMask::default())?;
+        Ok(Self {
+            seed: update.seed,
+            softness: update.softness,
+            radial: Some(update.radial),
+            edge,
+        })
+    }
+    pub fn is_radial(self) -> bool {
+        self.radial.is_some()
+    }
+    pub fn initial_definition(self, direction: DissolveDirection) -> crate::EffectDefinition {
+        let initial = if self.is_radial() {
+            crate::RadialMask::default().into()
+        } else {
+            NoiseDissolve::default().into()
+        };
+        let resolved = self
+            .resolve_definition(&initial, direction)
+            .expect("checked visibility style");
+        EffectUpdate::default()
+            .progress(match direction {
+                DissolveDirection::In => 1.0,
+                DissolveDirection::Out => 0.0,
+            })
+            .apply_to(resolved)
+            .expect("finite visibility start")
+    }
+    pub fn resolve_definition(
+        self,
+        previous: &crate::EffectDefinition,
+        direction: DissolveDirection,
+    ) -> Result<crate::EffectDefinition, EffectParameterError> {
+        if let Some(radial) = self.radial {
+            let previous = previous
+                .as_radial_mask()
+                .ok_or(EffectParameterError::IncompatibleDefinition)?;
+            let update = EffectUpdate {
+                radial,
+                ..self.parameters()
+            };
+            let mut update = match self.edge {
+                Some(edge) => edge.resolve(update),
+                None => update,
+            };
+            update.radial.hole = Some(radial.hole.unwrap_or(direction == DissolveDirection::Out));
+            let next = update.apply_to(previous)?;
+            if previous.hole() != next.hole()
+                && previous.progress() != 0.0
+                && previous.progress() != 1.0
+            {
+                return Err(EffectParameterError::DiscreteTransition(
+                    EffectParameter::Radial(crate::RadialParameter::Hole),
+                ));
+            }
+            Ok(next.into())
+        } else {
+            let previous = previous
+                .as_noise_dissolve()
+                .ok_or(EffectParameterError::IncompatibleDefinition)?;
+            Ok(self.resolve(previous).into())
+        }
     }
     pub fn parameters(self) -> EffectUpdate {
         EffectUpdate {

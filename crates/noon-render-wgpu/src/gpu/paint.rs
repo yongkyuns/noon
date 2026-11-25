@@ -108,14 +108,37 @@ impl PaintUniform {
             noon_core::SemanticPaint::Noise(noise) => {
                 let (cell, fraction) = noise.phase_parts();
                 let frequency = noise.frequency();
-                result.metadata = [2, 3, noise.seed(), cell[0] | (cell[1] << 16)];
+                // One-octave output keeps the existing program branch and
+                // uniform representation, with no fractal loop or extra work.
+                result.metadata = [0, 3, noise.seed(), cell[0] | (cell[1] << 16)];
                 result.image_u = [
                     frequency[0] as f32,
                     frequency[1] as f32,
                     fraction[0] as f32,
                     fraction[1] as f32,
                 ];
-                result.set_colors(noise.colors(), value.color_profile);
+                result.set_stops(noise.stops(), value.color_profile);
+                if noise.octaves() > 1 {
+                    result.metadata[1] = 5;
+                    result.metadata[3] = u32::from(noise.octaves());
+                    result.image_u[2] = noise.lacunarity() as f32;
+                    result.image_u[3] = noise.gain() as f32;
+                    // Stop positions require vec4 alignment but only use X.
+                    // Reuse their otherwise unused YZW lanes for bounded
+                    // octave phases. Two stops carry each octave's exact u16
+                    // cells (as representable floats) and fractional phase.
+                    // No larger uniform, texture or additional binding.
+                    for octave in 0..noise.octaves() {
+                        let (cell, fraction) = noise
+                            .octave_phase_parts(octave)
+                            .expect("checked octave count");
+                        let index = usize::from(octave) * 2;
+                        result.stops[index].position[1] = cell[0] as f32;
+                        result.stops[index].position[2] = cell[1] as f32;
+                        result.stops[index].position[3] = fraction[0] as f32;
+                        result.stops[index + 1].position[1] = fraction[1] as f32;
+                    }
+                }
             }
             noon_core::SemanticPaint::Hatch(hatch) => {
                 let rows = noon_compile::project_hatch_mapping(hatch)

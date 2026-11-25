@@ -243,3 +243,49 @@ fn image_projection_bounds_rotated_coordinates_before_narrowing() {
         "finite UV coefficients must not overflow the filtered texel coordinates"
     );
 }
+
+#[test]
+fn fractal_profile_checks_every_octave_and_the_complete_ramp_transition() {
+    let base = noon_core::NoisePaint::fractal(Color::BLACK, Color::WHITE).unwrap();
+    validate_noise(&base).unwrap();
+    assert!(validate_noise(&base.clone().with_frequency([64.0; 2]).unwrap()).is_err());
+    assert!(validate_noise(&base.clone().with_detail(8, 2.0, 0.5).unwrap()).is_err());
+    validate_noise(
+        &base
+            .clone()
+            .with_frequency([1.0; 2])
+            .unwrap()
+            .with_detail(8, 2.0, 0.5)
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(validate_noise(
+        &base
+            .clone()
+            .with_stops(
+                (0..17).map(|i| GradientStop::new(f64::from(i) / 16.0, Color::WHITE).unwrap())
+            )
+            .unwrap()
+    )
+    .is_err());
+    let make = |position| {
+        base.clone()
+            .with_stops([
+                GradientStop::new(0.0, Color::WHITE).unwrap(),
+                GradientStop::new(position, Color::BLUE).unwrap(),
+                GradientStop::new(1.0, Color::WHITE).unwrap(),
+            ])
+            .unwrap()
+    };
+    let transition = noon_core::PaintTransition::new(
+        Some(SemanticPaint::Noise(Arc::new(make(0.0)))),
+        1.0,
+        Some(SemanticPaint::Noise(Arc::new(make(0.5)))),
+        1.0,
+    )
+    .unwrap();
+    assert!(
+        validate_transition(&transition).is_err(),
+        "opening a ramp hard edge must not create unrepresentable intermediate intervals"
+    );
+}

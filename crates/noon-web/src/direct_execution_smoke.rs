@@ -808,6 +808,24 @@ pub async fn create_direct_ordered_effects_smoke_renderer(
     WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
 }
 
+/// Target-only radial reveal through the same typed Rust programme as native.
+#[wasm_bindgen(js_name = createDirectRadialRevealSmokeRenderer)]
+pub async fn create_direct_radial_reveal_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::radial_reveal::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+/// Composed/image visibility, motion and fading through the same Rust program.
+#[wasm_bindgen(js_name = createDirectRadialRevealComposedSmokeRenderer)]
+pub async fn create_direct_radial_reveal_composed_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::radial_reveal_composed::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
 /// Visibility lifecycle through native's shared live Rust program.
 #[wasm_bindgen(js_name = createDirectDissolveSmokeRenderer)]
 pub async fn create_direct_dissolve_smoke_renderer(
@@ -934,6 +952,27 @@ pub async fn create_direct_hatch_paint_profile_smoke_renderer(
     profile: u32,
 ) -> Result<WasmExecutionCanvasRenderer, JsValue> {
     let scene = noon::example_scenes::hatch_paint::profile_scene(profile).map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_scene_execution(
+        canvas,
+        scene.into_execution().map_err(js_error)?,
+    )
+    .await
+}
+
+#[wasm_bindgen(js_name = createDirectFractalNoiseSmokeRenderer)]
+pub async fn create_direct_fractal_noise_smoke_renderer(
+    canvas: OffscreenCanvas,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let program = noon::example_scenes::fractal_noise::program().map_err(js_error)?;
+    WasmExecutionCanvasRenderer::create_from_live_program(canvas, program).await
+}
+
+#[wasm_bindgen(js_name = createDirectFractalNoiseProfileSmokeRenderer)]
+pub async fn create_direct_fractal_noise_profile_smoke_renderer(
+    canvas: OffscreenCanvas,
+    profile: u32,
+) -> Result<WasmExecutionCanvasRenderer, JsValue> {
+    let scene = noon::example_scenes::fractal_noise::profile_scene(profile).map_err(js_error)?;
     WasmExecutionCanvasRenderer::create_from_scene_execution(
         canvas,
         scene.into_execution().map_err(js_error)?,

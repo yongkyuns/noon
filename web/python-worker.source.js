@@ -274,6 +274,7 @@ async function initializePyodide() {
   self.noonBackdropBlur = (update) => WasmEffectDefinition.backdropBlur(update);
   self.noonShadow = (update) => WasmEffectDefinition.shadow(update);
   self.noonNoiseDissolve = (update) => WasmEffectDefinition.noiseDissolve(update);
+  self.noonRadialMask = (update, edge) => WasmEffectDefinition.radialMask(update, edge);
   self.noonPixelate = (update) => WasmEffectDefinition.pixelate(update);
   self.noonShaderParameter = WasmShaderParameter;
   self.noonShaderSchema = (...args) => new WasmShaderSchema(...args);
@@ -281,6 +282,7 @@ async function initializePyodide() {
   self.noonLinearGradient = (...args) => new WasmLinearGradient(...args);
   self.noonRadialGradient = (...args) => new WasmRadialGradient(...args);
   self.noonNoisePaint = (...args) => new WasmNoisePaint(...args);
+  self.noonFractalNoisePaint = (...args) => WasmNoisePaint.fractal(...args);
   self.noonHatchPaint = (...args) => new WasmHatchPaint(...args);
   self.noonImageMapping = (...args) => new WasmImageMapping(...args);
   self.noonImagePaintOptions = WasmImagePaintOptions;

@@ -236,6 +236,7 @@ fn apply_effective_track_endpoint(
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSize
+            | Property::EffectRadial(_)
             | Property::EffectShader(_)
             | Property::EffectSeed,
             TrackValues::Effect {

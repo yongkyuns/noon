@@ -1066,7 +1066,7 @@ class Example(Scene):
 
     def test_procedural_paint_examples_use_resource_free_rust_values(self):
         examples = Path(__file__).with_name("examples")
-        for name in ("radial_gradient.py", "noise_paint.py", "hatch_paint.py"):
+        for name in ("radial_gradient.py", "noise_paint.py", "fractal_noise.py", "hatch_paint.py"):
             with self.subTest(name=name):
                 source = examples.joinpath(name).read_text()
                 self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
@@ -1079,6 +1079,51 @@ class Example(Scene):
         )
         self.assertFalse(external_image["admitted"])
         self.assertEqual(external_image["reason"]["code"], "unproven_image_paint_source")
+
+    def test_radial_reveals_keep_the_normal_closed_source_and_mutation_contract(self):
+        for name in ("radial_reveal.py", "radial_reveal_composed.py"):
+            with self.subTest(example=name):
+                example = Path(__file__).with_name("examples").joinpath(name)
+                self.assertEqual(source_execution_proof(example.read_text()),
+                                 {"admitted": True, "reason": None})
+        source = dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    panel = Rectangle(width=4, height=2)
+                    panel.set_reveal(progress=0.4, edge="burn")
+                    self.add(panel)
+                    self.play(panel.animate.shift(RIGHT).set_reveal(progress=0))
+                    panel.remove_reveal()
+                    self.play(RadialReveal(panel, direction="out"))
+        ''')
+        self.assertTrue(source_execution_proof(source)["admitted"])
+        self.assertFalse(source_execution_proof(source.replace(
+            'edge="burn"', 'edge=open("style.txt").read()'))["admitted"])
+        self.assertFalse(source_execution_proof(source.replace(
+            "panel = Rectangle(width=4, height=2)", "panel = external.make_panel()"))["admitted"])
+
+    def test_fractal_paint_factory_requires_the_trusted_native_constructor(self):
+        source = dedent('''
+            from noon import *
+            class Example(Scene):
+                def construct(self):
+                    paint = NoisePaint.fractal(BLACK, BLUE, seed=7)
+                    panel = Rectangle(width=4, height=2).set_fill(paint)
+                    self.add(panel)
+                    self.play(panel.animate.shift(UP).set_fill(
+                        NoisePaint.fractal(BLACK, BLUE, seed=7, phase=(1.5, 0))))
+        ''')
+        self.assertEqual(source_execution_proof(source), {"admitted": True, "reason": None})
+        for unsafe in (
+            source.replace("from noon import *", "from noon import *\nNoisePaint = context"),
+            source.replace("        paint =", "        NoisePaint = Rectangle\n        paint =", 1),
+            source.replace("NoisePaint.fractal", "Rectangle.fractal"),
+            source.replace("NoisePaint.fractal", "external.fractal"),
+            source.replace("seed=7", 'seed=open("seed.txt").read()'),
+        ):
+            with self.subTest(source=unsafe):
+                self.assertFalse(source_execution_proof(unsafe)["admitted"])
 
     def test_shader_showcases_use_closed_wgsl_schemas_and_bound_parameter_keys(self):
         examples = Path(__file__).with_name("examples")

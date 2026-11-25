@@ -85,6 +85,58 @@ fn noise_field(point: vec2<f32>) -> f32 {
     return mix(value, 0.5, fade);
 }
 
+// Fractal detail uses the same nine-value reconstruction at each scale.
+// Phase has been split in f64 on the CPU before narrowing. The spare aligned
+// stop-position lanes carry these derived values without growing PaintUniform.
+fn fractal_noise_hash(cell: vec2<u32>, octave: u32) -> f32 {
+    var h = (paint.metadata.z + octave * 0x9e3779b9u)
+        ^ (cell.x * 0x9e3779b9u) ^ (cell.y * 0x85ebca6bu);
+    h = (h ^ (h >> 16u)) * 0x7feb352du;
+    h = (h ^ (h >> 15u)) * 0x846ca68bu;
+    h = h ^ (h >> 16u);
+    return f32(h >> 16u) / 65535.0;
+}
+fn fractal_octave(point: vec2<f32>, width: vec2<f32>, scale: f32, octave: u32) -> f32 {
+    let coarse = max(width.x, width.y);
+    if coarse >= 2.0 { return 0.5; }
+    let packed = paint.stops[octave * 2u].position;
+    let phase = vec2<u32>(packed.yz);
+    let fraction = vec2(packed.w, paint.stops[octave * 2u + 1u].position.y);
+    let q = clamp(point, vec2(0.0), vec2(1.0)) * (paint.image_u.xy * scale) + fraction;
+    let x = noise_axis(q.x, min(width.x, 1.0));
+    let y = noise_axis(q.y, min(width.y, 1.0));
+    let base = bitcast<vec2<u32>>(vec2(x.cell, y.cell)) + phase;
+    var value = 0.0;
+    for (var i = 0u; i < 3u; i += 1u) {
+        for (var j = 0u; j < 3u; j += 1u) {
+            let cell = (base + vec2(i,j)) & vec2(65535u);
+            value += fractal_noise_hash(cell, octave) * x.weights[i] * y.weights[j];
+        }
+    }
+    let u = clamp(coarse - 1.0, 0.0, 1.0);
+    return mix(value, 0.5, u*u*(3.0-2.0*u));
+}
+fn fractal_noise_field(point: vec2<f32>) -> f32 {
+    let pixel = vec2(2.0) / (camera.viewport_size * camera.clip_scale);
+    let c = paint.rotation.x;
+    let s = paint.rotation.y;
+    let dx = vec2(c,-s) * pixel.x / paint.transform.zw / paint.bounds.zw * paint.image_u.xy;
+    let dy = vec2(s,c) * pixel.y / paint.transform.zw / paint.bounds.zw * paint.image_u.xy;
+    let width = abs(dx) + abs(dy);
+    var value = 0.0;
+    var total = 0.0;
+    var weight = 1.0;
+    var scale = 1.0;
+    for (var octave = 0u; octave < paint.metadata.w; octave += 1u) {
+        if weight == 0.0 { break; }
+        value += weight * fractal_octave(point, width * scale, scale, octave);
+        total += weight;
+        scale *= paint.image_u.z;
+        weight *= paint.image_u.w;
+    }
+    return clamp(value / total, 0.0, 1.0);
+}
+
 // Exact periodic-band overlap for an interval shorter than one cell. Working
 // in units of that interval keeps a tiny footprint meaningful at a band edge.
 fn hatch_partial_band(center: f32, width: f32, duty: f32) -> f32 {
@@ -155,6 +207,8 @@ fn base_paint_fill(local: vec2<f32>, carrier: vec4<f32>) -> vec4<f32> {
         t = hatch_field(local);
     } else if paint.metadata.y == 3u {
         t = noise_field(point);
+    } else if paint.metadata.y == 5u {
+        t = fractal_noise_field(point);
     } else if paint.metadata.y == 2u {
         let delta = abs(point - paint.endpoints.xy);
         let radii = paint.endpoints.zw;

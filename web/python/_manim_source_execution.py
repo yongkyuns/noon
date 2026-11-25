@@ -48,7 +48,7 @@ ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedSta
 LaggedStartMap SpinInFromNothing ShrinkToCenter
 TransformMatchingShapes TransformMatchingTex Rotate MoveAlongPath Restore GrowArrow
 ShowIncreasingSubsets ShowSubmobjectsOneByOne
-ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur Bloom GlowPulse Dissolve SVGMobject
+ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur Bloom GlowPulse Dissolve RadialMask RadialReveal SVGMobject
 """.split())
 _SOURCE_MAPPED_ANIMATION_FACTORIES = frozenset("FadeIn FadeOut".split())
 _SOURCE_FUNCTIONS = frozenset("""
@@ -77,7 +77,7 @@ add remove clear play wait audio video on_click set_drag_targets set_viewer_drag
 add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace replace_content
 value_tracker bind_position bind_opacity bind_sampled
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
-set_fill set_stroke set_color set_opacity set_emission set_object_opacity set_z_index set_glow remove_glow set_effect
+set_fill set_stroke set_color set_opacity set_emission set_object_opacity set_z_index set_glow remove_glow set_effect set_reveal remove_reveal
 add_effect remove_effect get_center get_x get_y get_width get_height get_value get_left get_right
 set_fill_image_mapping set_value increment_value copy become add_updater remove_updater clear_updaters
 plot plot_samples
@@ -3644,6 +3644,16 @@ class _SceneOnlySource(ast.NodeVisitor):
         )
 
     def visit_Attribute(self, node):
+        if node.attr == "fractal":
+            # Admit the immutable native paint factory only on its trusted
+            # constructor binding, not an arbitrary receiver or rebound name.
+            if (not isinstance(node.ctx, ast.Load)
+                    or not isinstance(node.value, ast.Name)
+                    or node.value.id != "NoisePaint"
+                    or not self._trusted_noon_binding("NoisePaint")):
+                raise _OpaqueSource(node, "unproven_noise_paint_factory")
+            self.visit(node.value)
+            return
         if self.admitted_regex_attributes and id(node) in self.admitted_regex_attributes[-1]:
             self.visit(node.value)
             return

@@ -5399,6 +5399,86 @@ mod wasm {
             Ok(())
         }
 
+        #[wasm_bindgen(js_name = appendRadialRevealMobject)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_radial_reveal_mobject(
+            &mut self,
+            object_id: &str,
+            target: &crate::WasmAuthoringMobjectHandle,
+            direction: &str,
+            update: &crate::WasmEffectUpdate,
+            edge: Option<String>,
+            introducer: Option<bool>,
+            remover: Option<bool>,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            reverse_rate_function: bool,
+        ) -> Result<(), JsValue> {
+            let direction = match parse_fade_direction(direction)? {
+                noon_core::SemanticFadeDirection::In => noon_core::DissolveDirection::In,
+                noon_core::SemanticFadeDirection::Out => noon_core::DissolveDirection::Out,
+            };
+            let edge = noon::integration::radial_edge(edge.as_deref()).map_err(js_error)?;
+            let style = noon_core::DissolveStyle::radial(update.value.clone(), edge)
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)?;
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .reverse_rate_function(reverse_rate_function);
+            options.introducer = introducer;
+            options.remover = remover;
+            self.children.push(OrdinaryCompositionChild::Dissolve {
+                entering_id: if object_id.is_empty() {
+                    None
+                } else {
+                    Some(parse_object_id("dissolve object ID", object_id)?)
+                },
+                target: target.semantic_mobject().clone(),
+                direction,
+                style,
+                options,
+            });
+            Ok(())
+        }
+
+        #[wasm_bindgen(js_name = appendRadialRevealFamily)]
+        #[allow(clippy::too_many_arguments)]
+        pub fn append_radial_reveal_family(
+            &mut self,
+            target: &crate::WasmAuthoringFamilyHandle,
+            direction: &str,
+            update: &crate::WasmEffectUpdate,
+            edge: Option<String>,
+            introducer: Option<bool>,
+            remover: Option<bool>,
+            child_run_time: Option<f64>,
+            rate_function: Option<String>,
+            lag_ratio: Option<f64>,
+            reverse_rate_function: bool,
+        ) -> Result<(), JsValue> {
+            let direction = match parse_fade_direction(direction)? {
+                noon_core::SemanticFadeDirection::In => noon_core::DissolveDirection::In,
+                noon_core::SemanticFadeDirection::Out => noon_core::DissolveDirection::Out,
+            };
+            let edge = noon::integration::radial_edge(edge.as_deref()).map_err(js_error)?;
+            let style = noon_core::DissolveStyle::radial(update.value.clone(), edge)
+                .map_err(noon::AuthoringError::from)
+                .map_err(js_error)?;
+            let mut options = Self::family_options(child_run_time, rate_function, lag_ratio)?
+                .reverse_rate_function(reverse_rate_function);
+            options.introducer = introducer;
+            options.remover = remover;
+            self.children
+                .push(OrdinaryCompositionChild::FamilyDissolve {
+                    target: target.semantic_family()?,
+                    entering: Vec::new(),
+                    direction,
+                    style,
+                    options,
+                });
+            Ok(())
+        }
+
         #[wasm_bindgen(js_name = appendDissolveFamilyEntering)]
         pub fn append_dissolve_family_entering(
             &mut self,

@@ -4,7 +4,7 @@ use noon_compile::{
     PreparedSemanticAnimationScheduleProjection, PreparedSemanticScheduledAnimationPayload,
 };
 use noon_core::{
-    AnimationOptions, DissolveDirection, NoiseDissolve, PreparedSemanticMutationTransaction,
+    AnimationOptions, DissolveDirection, EffectDefinition, PreparedSemanticMutationTransaction,
     SemanticNodeId, SemanticStore, SemanticTransactionNodeRef,
 };
 use std::collections::HashSet;
@@ -158,7 +158,7 @@ impl ExecutionSession {
             ));
         }
         let present = self.reachability.is_reachable(target);
-        if !present {
+        if !present && !admitted.seen.contains(&target.into()) {
             if !options
                 .introducer
                 .unwrap_or(direction == DissolveDirection::In)
@@ -186,7 +186,7 @@ impl ExecutionSession {
         &self,
         prepared: &PreparedSemanticMutationTransaction<'_>,
         schedule: &PreparedSemanticAnimationScheduleProjection,
-    ) -> Result<Vec<(SemanticTransactionNodeRef, NoiseDissolve)>, ExecutionSessionAnimationError>
+    ) -> Result<Vec<(SemanticTransactionNodeRef, EffectDefinition)>, ExecutionSessionAnimationError>
     {
         let mut missing = Vec::new();
         let mut seen = HashSet::new();
@@ -204,16 +204,7 @@ impl ExecutionSession {
             if !snapshot.iter().any(|effect| effect.name.is_visibility())
                 && seen.insert(leaf.target)
             {
-                missing.push((
-                    leaf.target,
-                    style
-                        .resolve(NoiseDissolve::default())
-                        .with_progress(match direction {
-                            DissolveDirection::In => 1.0,
-                            DissolveDirection::Out => 0.0,
-                        })
-                        .expect("finite dissolve start"),
-                ));
+                missing.push((leaf.target, style.initial_definition(direction)));
             }
         }
         Ok(missing)

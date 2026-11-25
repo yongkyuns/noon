@@ -24,9 +24,9 @@ use composed::PublishedComposedSource;
 /// Object content and family-plan semantic bindings are explicit so geometry and
 /// text share the source identity/order stream across a genuine worker boundary.
 pub const RETAINED_EXECUTION_TRANSPORT_CHANNEL: &str = "noon.execution.retained";
-// V31 carries checked WGSL programs and authored HDR/Bloom view metadata.
+// V32 adds checked radial visibility fields.
 // Older envelopes reject; native and direct Rust/WASM remain typed in process.
-pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 31;
+pub const RETAINED_EXECUTION_TRANSPORT_VERSION: u32 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,6 +95,19 @@ pub enum TransportEffectDefinition {
         radius: EffectRadius,
         offset: noon_core::EffectOffset,
     },
+    RadialMask {
+        progress: f64,
+        softness: f64,
+        seed: u32,
+        center: [f64; 2],
+        axes: [f64; 2],
+        roughness: f64,
+        frequency: f64,
+        rim_width: f64,
+        inner_color: Color,
+        outer_color: Color,
+        hole: bool,
+    },
     NoiseDissolve {
         seed: u32,
         softness: f64,
@@ -135,6 +148,19 @@ impl TryFrom<&noon_compile::CompiledEffect> for TransportEffectState {
                     radius: blur.radius(),
                 }
             }
+            noon_core::EffectDefinition::RadialMask(v) => TransportEffectDefinition::RadialMask {
+                progress: v.progress(),
+                softness: v.softness(),
+                seed: v.seed(),
+                center: v.center(),
+                axes: v.axes(),
+                roughness: v.roughness(),
+                frequency: v.frequency(),
+                rim_width: v.rim_width(),
+                inner_color: v.inner_color(),
+                outer_color: v.outer_color(),
+                hole: v.hole(),
+            },
             noon_core::EffectDefinition::NoiseDissolve(value) => {
                 TransportEffectDefinition::NoiseDissolve {
                     seed: value.seed(),
@@ -220,6 +246,34 @@ impl TransportEffectState {
                     .ok()?
                     .into()
             }
+            TransportEffectDefinition::RadialMask {
+                progress,
+                softness,
+                seed,
+                center,
+                axes,
+                roughness,
+                frequency,
+                rim_width,
+                inner_color,
+                outer_color,
+                hole,
+            } => noon_core::RadialMask::new(
+                EffectUpdate::default()
+                    .progress(progress)
+                    .softness(softness)
+                    .seed(seed)
+                    .reveal_center(center)
+                    .reveal_axes(axes)
+                    .reveal_roughness(roughness)
+                    .reveal_frequency(frequency)
+                    .reveal_rim_width(rim_width)
+                    .reveal_inner_color(inner_color)
+                    .reveal_outer_color(outer_color)
+                    .reveal_hole(hole),
+            )
+            .ok()?
+            .into(),
             TransportEffectDefinition::NoiseDissolve {
                 seed,
                 softness,
@@ -3183,6 +3237,40 @@ mod tests {
         corrected.snapshot = false;
         corrected.sequence = 1;
         mirror.apply(corrected).unwrap();
+    }
+
+    #[test]
+    fn tagged_radial_mask_roundtrip_keeps_fields_and_rejects_invalid_axes() {
+        let definition = noon_core::RadialMask::burn()
+            .with_update(
+                EffectUpdate::default()
+                    .progress(0.6250000000000123)
+                    .seed(u32::MAX)
+                    .reveal_center([0.2, 0.8])
+                    .reveal_axes([0.7, 0.4])
+                    .reveal_hole(true),
+                None,
+            )
+            .unwrap();
+        let effect = noon_compile::CompiledEffect {
+            attachment: SemanticNodeId::new(77, u32::MAX),
+            definition: definition.into(),
+        };
+        let wire = TransportEffectState::try_from(&effect).unwrap();
+        let json = serde_json::to_value(&wire).unwrap();
+        assert_eq!(json["kind"], "radial_mask");
+        assert_eq!(json["seed"], u32::MAX);
+        let decoded: TransportEffectState = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(decoded.to_compiled(), Some(effect));
+        let mut invalid = json.clone();
+        invalid["axes"] = serde_json::json!([0.0, 0.5]);
+        assert!(serde_json::from_value::<TransportEffectState>(invalid)
+            .unwrap()
+            .to_compiled()
+            .is_none());
+        let mut invalid = json;
+        invalid["radius"] = serde_json::json!(0.5);
+        assert!(serde_json::from_value::<TransportEffectState>(invalid).is_err());
     }
 
     #[test]

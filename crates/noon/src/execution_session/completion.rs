@@ -293,7 +293,7 @@ impl ExecutionSession {
                 .effects
                 .as_ref()
                 .and_then(|stack| stack.get(attachment))
-                .and_then(|effect| effect.definition.as_noise_dissolve())
+                .map(|effect| effect.definition.clone())
                 .expect("pending visibility keeps its exact mask generation");
             if remover {
                 let parents = store
@@ -308,15 +308,12 @@ impl ExecutionSession {
                     .or_default()
                     .insert(owner);
             }
-            if remover || endpoint.is_neutral() {
+            if remover || (endpoint.is_neutral() && endpoint.as_radial_mask().is_none()) {
                 removed_visibility.insert(attachment);
             } else {
                 semantic.update_effect(
                     attachment,
-                    noon_core::EffectUpdate::default()
-                        .progress(endpoint.progress())
-                        .softness(endpoint.softness())
-                        .seed(endpoint.seed()),
+                    endpoint.visibility_update().expect("visibility endpoint"),
                 );
             }
         }

@@ -103,3 +103,50 @@ pub fn mask_parameters(
     update.validate().map_err(crate::AuthoringError::from)?;
     Ok(update)
 }
+
+/// Project language-boundary arrays without owning defaults or mask semantics.
+#[allow(clippy::too_many_arguments)]
+pub fn radial_parameters(
+    mut update: EffectUpdate,
+    center: &[f64],
+    axes: &[f64],
+    roughness: Option<f64>,
+    frequency: Option<f64>,
+    rim_width: Option<f64>,
+    inner_color: &[f64],
+    outer_color: &[f64],
+    hole: Option<bool>,
+) -> Result<EffectUpdate, AuthoringFailure> {
+    let pair = |values: &[f64], parameter| match values {
+        [] => Ok(None),
+        [x, y] => Ok(Some([*x, *y])),
+        _ => Err(crate::AuthoringError::from(
+            EffectParameterError::InvalidRadialParameter(parameter),
+        )),
+    };
+    update.radial = noon_core::RadialUpdate {
+        center: pair(center, noon_core::RadialParameter::Center)?,
+        axes: pair(axes, noon_core::RadialParameter::Axes)?,
+        roughness,
+        frequency,
+        rim_width,
+        inner_color: effect_color(inner_color)?,
+        outer_color: effect_color(outer_color)?,
+        hole,
+    };
+    update.validate().map_err(crate::AuthoringError::from)?;
+    Ok(update)
+}
+
+pub fn radial_edge(edge: Option<&str>) -> Result<Option<noon_core::RadialEdge>, AuthoringFailure> {
+    match edge {
+        None => Ok(None),
+        Some("clean") => Ok(Some(noon_core::RadialEdge::Clean)),
+        Some("burn") => Ok(Some(noon_core::RadialEdge::Burn)),
+        Some(_) => Err(AuthoringFailure::new(
+            "invalid_input",
+            "effect.invalid_radial_edge",
+            "radial edge must be clean or burn",
+        )),
+    }
+}

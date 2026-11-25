@@ -79,6 +79,33 @@ class PaintFacadeTests(unittest.TestCase):
             with self.assertRaises(TypeError):
                 noon.NoisePaint(noon.Color(1, 0, 0), noon.Color(0, 0, 1), seed=True)
 
+    def test_fractal_factory_keeps_the_same_fill_route_and_only_coerces_values(self):
+        definition = object()
+        js = types.ModuleType("js")
+        js.noonFractalNoisePaint = Mock(return_value=definition)
+        ffi = types.ModuleType("pyodide.ffi")
+        ffi.to_js = tuple
+        handle = Mock()
+        value = object.__new__(noon.Mobject)
+        with patch.dict(sys.modules, {"js": js, "pyodide.ffi": ffi}), \
+             patch.object(handles, "_handle_for", return_value=handle), \
+             patch.object(handles, "_is_shared_family", return_value=False), \
+             patch.object(handles, "_path_authoring_context", return_value=None):
+            paint = noon.NoisePaint.fractal(noon.Color(0, 0, 0), noon.Color(1, 1, 1), seed=7)
+            js.noonFractalNoisePaint.assert_called_once_with(
+                7.0, (8.0, 8.0), (0.0, 0.0), (0, 0, 0, 1, 1, 1, 1, 1),
+                (4.0, 2.0, 0.5), (), False,
+            )
+            self.assertIs(copy.copy(paint), paint)
+            self.assertIs(copy.deepcopy(paint), paint)
+            value.set_fill(paint)
+            handle.setFillNoise.assert_called_once_with(definition, None)
+            noon.NoisePaint.fractal(noon.WHITE, noon.BLACK, stops=[])
+            self.assertEqual(js.noonFractalNoisePaint.call_args.args[-2:], ((), True))
+            for options in ({"octaves": True}, {"gain": False}, {"lacunarity": True}):
+                with self.subTest(options=options), self.assertRaises(TypeError):
+                    noon.NoisePaint.fractal(noon.WHITE, noon.BLACK, **options)
+
     def test_radial_value_uses_the_shared_detached_and_scene_owned_fill_operation(self):
         definition = object()
         js = types.ModuleType("js")

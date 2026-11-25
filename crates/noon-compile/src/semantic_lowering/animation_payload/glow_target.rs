@@ -88,7 +88,8 @@ pub(super) fn channels(
     let omitted: HashSet<_> = source
         .iter()
         .filter(|effect| {
-            effect.name.is_visibility()
+            (effect.name.is_visibility()
+                && !snapshot.is_some_and(|snapshot| snapshot.source.contains(&effect.attachment)))
                 || (temporary_attachments.contains(&effect.attachment)
                     && effect
                         .definition
@@ -108,7 +109,10 @@ pub(super) fn channels(
         .collect();
     let target: Vec<_> = target
         .iter()
-        .filter(|effect| !effect.name.is_visibility())
+        .filter(|effect| {
+            !effect.name.is_visibility()
+                || snapshot.is_some_and(|snapshot| snapshot.target.contains(&effect.attachment))
+        })
         .cloned()
         .collect();
     let target = target.as_slice();
@@ -237,18 +241,34 @@ fn attachment_channels(
         }
     }
     if let (Some(a), Some(b)) = (
-        baseline.as_noise_dissolve(),
-        destination.as_noise_dissolve(),
+        baseline.visibility_progress(),
+        destination.visibility_progress(),
     ) {
-        if a.progress() != b.progress()
+        if a != b
             || copy_intent.is_some_and(|c| c.writes_parameter(noon_core::EffectParameter::Progress))
         {
-            update.progress = Some(b.progress());
+            update.progress = Some(b);
         }
-        if a.softness() != b.softness()
+    }
+    if let (Some(a), Some(b)) = (
+        baseline.visibility_softness(),
+        destination.visibility_softness(),
+    ) {
+        if a != b
             || copy_intent.is_some_and(|c| c.writes_parameter(noon_core::EffectParameter::Softness))
         {
-            update.softness = Some(b.softness());
+            update.softness = Some(b);
+        }
+    }
+    if let (Some(a), Some(b)) = (baseline.as_radial_mask(), destination.as_radial_mask()) {
+        for value in b.parameters().values() {
+            if a.parameters().get(value.parameter()) != Some(value)
+                || copy_intent.is_some_and(|copy| {
+                    copy.writes_parameter(noon_core::EffectParameter::Radial(value.parameter()))
+                })
+            {
+                update.radial.set(value);
+            }
         }
     }
     if let (Some(a), Some(b)) = (baseline.as_shader(), destination.as_shader()) {

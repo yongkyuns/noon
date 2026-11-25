@@ -39,6 +39,7 @@ fn local_property(property: Property) -> bool {
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSeed
+            | Property::EffectRadial(_)
             | Property::EffectShader(_)
     )
 }
@@ -46,7 +47,9 @@ fn local_property(property: Property) -> bool {
 /// Ordered Blur/Glow or BackdropBlur with optional owned visibility, or one
 /// standalone immutable shader with no authored-time or seed dependency.
 pub(super) fn local_effect_stack(stack: &CompiledEffectStack) -> bool {
-    use noon_core::EffectDefinition::{BackdropBlur, Blur, Glow, NoiseDissolve, Shader};
+    use noon_core::EffectDefinition::{
+        BackdropBlur, Blur, Glow, NoiseDissolve, RadialMask, Shader,
+    };
 
     match (stack.definitions(), stack.visibility()) {
         ([], None) => true,
@@ -58,11 +61,11 @@ pub(super) fn local_effect_stack(stack: &CompiledEffectStack) -> bool {
         ([Blur(_)], None) => true,
         ([Glow(_)], None) => true,
         ([Blur(_), Glow(_)], None) => true,
-        ([NoiseDissolve(_)], Some(visibility))
-        | ([Blur(_), NoiseDissolve(_)], Some(visibility))
-        | ([Glow(_), NoiseDissolve(_)], Some(visibility))
-        | ([Blur(_), Glow(_), NoiseDissolve(_)], Some(visibility))
-        | ([BackdropBlur(_), NoiseDissolve(_)], Some(visibility)) => {
+        ([NoiseDissolve(_) | RadialMask(_)], Some(visibility))
+        | ([Blur(_), NoiseDissolve(_) | RadialMask(_)], Some(visibility))
+        | ([Glow(_), NoiseDissolve(_) | RadialMask(_)], Some(visibility))
+        | ([Blur(_), Glow(_), NoiseDissolve(_) | RadialMask(_)], Some(visibility))
+        | ([BackdropBlur(_), NoiseDissolve(_) | RadialMask(_)], Some(visibility)) => {
             stack.attachments().last() == Some(&visibility.attachment)
         }
         _ => false,
@@ -202,6 +205,7 @@ fn local_effect_track(track: &CompiledTrack, object: Option<&CompiledObject>) ->
             | Property::EffectProgress
             | Property::EffectSoftness
             | Property::EffectSeed
+            | Property::EffectRadial(_)
             | Property::EffectShader(_)
     ) {
         return true;
@@ -261,13 +265,26 @@ fn local_effect_track(track: &CompiledTrack, object: Option<&CompiledObject>) ->
             stack
                 .visibility()
                 .is_some_and(|visibility| visibility.attachment == *attachment)
-                && effect.definition.as_noise_dissolve().is_some()
+                && effect.definition.is_visibility_mask()
         }
         (Property::EffectSeed, EffectTrackValue::Seed(_), EffectTrackValue::Seed(_)) => {
             stack
                 .visibility()
                 .is_some_and(|visibility| visibility.attachment == *attachment)
-                && effect.definition.as_noise_dissolve().is_some()
+                && effect.definition.is_visibility_mask()
+        }
+        (
+            Property::EffectRadial(parameter),
+            EffectTrackValue::Radial(from),
+            EffectTrackValue::Radial(to),
+        ) => {
+            effect.definition.as_radial_mask().is_some()
+                && from.parameter() == parameter
+                && to.parameter() == parameter
+                && from.interpolate(*to, 0.5).is_some()
+                && stack
+                    .visibility()
+                    .is_some_and(|visibility| visibility.attachment == *attachment)
         }
         (
             Property::EffectShader(index),

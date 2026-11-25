@@ -51,7 +51,7 @@ pub struct PathMotionActivationProperties {
 pub enum SemanticAnimationCompletion {
     Visibility {
         attachment: SemanticNodeId,
-        endpoint: noon_core::NoiseDissolve,
+        endpoint: noon_core::EffectDefinition,
         remover: bool,
     },
     /// Persist only the driven parameter at the actual terminal sample.
@@ -3343,6 +3343,7 @@ pub(super) fn driver_key(object: ObjectId, property: Property) -> DriverKey {
         Property::EffectThreshold => 23,
         Property::Emission => 24,
         Property::EffectShader(index) => 25 + u16::from(index),
+        Property::EffectRadial(parameter) => 41 + parameter as u16,
     };
     (object.get(), slot, None)
 }

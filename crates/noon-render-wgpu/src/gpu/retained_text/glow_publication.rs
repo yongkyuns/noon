@@ -876,7 +876,7 @@ impl GpuRenderer {
                             .effects
                             .as_ref()
                             .and_then(|stack| stack.visibility())
-                            .and_then(|effect| effect.definition.as_noise_dissolve()),
+                            .map(|effect| effect.definition),
                     )?
                 } else {
                     self.prepare_draw_source_effect(
@@ -899,7 +899,7 @@ impl GpuRenderer {
                             .effects
                             .as_ref()
                             .and_then(|stack| stack.visibility())
-                            .and_then(|effect| effect.definition.as_noise_dissolve()),
+                            .map(|effect| effect.definition),
                     )?
                 };
                 stats.accumulate(value);

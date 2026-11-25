@@ -163,6 +163,16 @@ impl ScriptScene {
         self.with_scene(|scene| Ok(scene.set_fill_opacity(object, opacity)?))
     }
 
+    /// Publish the shared immutable noise paint, preserving opacity when omitted.
+    pub fn set_fill_noise(
+        &self,
+        object: &Mobject,
+        paint: impl Into<std::sync::Arc<crate::NoisePaint>>,
+        opacity: Option<f64>,
+    ) -> Result<(), ScriptError> {
+        self.with_scene(|scene| Ok(scene.set_fill_noise(object, paint, opacity)?))
+    }
+
     pub fn set_stroke_width(&self, object: &Mobject, width: f64) -> Result<(), ScriptError> {
         self.with_scene(|scene| Ok(scene.set_stroke_width(object, width)?))
     }

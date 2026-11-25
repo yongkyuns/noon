@@ -31,8 +31,31 @@ def _number(value, name):
         raise ValueError(f"{name} is outside the host numeric range") from error
 
 
+def _pair(value, name):
+    if value is None:
+        return ()
+    pair = tuple(_number(item, name) for item in value)
+    if len(pair) != 2:
+        raise ValueError(f"{name} requires two coordinates")
+    return pair
+
+
+def _rgba(value, name):
+    if value is None:
+        return ()
+    from _manim_compat import _as_color
+    parsed = _as_color(name, value)
+    return (parsed.red, parsed.green, parsed.blue, parsed.alpha)
+
+
+def _edge(value):
+    if value is not None and not isinstance(value, str):
+        raise TypeError("reveal edge must be a string")
+    return value
+
+
 @contextmanager
-def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None):
+def _update(*, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None, center=None, axes=None, roughness=None, frequency=None, rim_width=None, inner_color=None, outer_color=None, hole=None):
     # Only language shape/coercion here. Defaults, bounds and nonfinite checks
     # are shared with Rust, including validation before f64-to-f32 narrowing.
     components = []
@@ -58,8 +81,25 @@ def _update(*, color=None, radius=None, intensity=None, source=None, offset=None
     packed_offset = [] if raw_offset is None else [_number(v, "offset coordinate") for v in raw_offset]
     if raw_offset is not None and len(packed_offset) != 2:
         raise ValueError("effect offset requires two coordinates")
+    radial = any(value is not None for value in (
+        center, axes, roughness, frequency, rim_width, inner_color, outer_color, hole,
+    ))
+    if radial:
+        radial_center = _pair(center, "reveal center")
+        radial_axes = _pair(axes, "reveal axes")
+        radial_inner = _rgba(inner_color, "inner rim color")
+        radial_outer = _rgba(outer_color, "outer rim color")
+        roughness = None if roughness is None else _number(roughness, "reveal roughness")
+        frequency = None if frequency is None else _number(frequency, "reveal frequency")
+        rim_width = None if rim_width is None else _number(rim_width, "reveal rim width")
+        if hole is not None and not isinstance(hole, bool):
+            raise TypeError("reveal hole must be a boolean")
     request = engine_call(noonEffectUpdate, to_js(components), radius, pixels, intensity, source, to_js(packed_offset), offset_pixels, progress, softness, seed)
     try:
+        if radial:
+            engine_call(request.setRadial, to_js(radial_center), to_js(radial_axes),
+                        roughness, frequency, rim_width, to_js(radial_inner),
+                        to_js(radial_outer), hole)
         if size is not None:
             size_pixels = isinstance(size, Pixels)
             engine_call(request.setSize, _number(size.value if size_pixels else size, "size"), size_pixels)
@@ -349,6 +389,99 @@ class Dissolve:
         self.anim_args = dict(kwargs)
 
 
+class RadialMask(NoiseDissolve):
+    """Immutable radial visibility treatment with optional seeded burn rim.
+
+    Progress is removal progress: zero preserves the source, one hides it.
+    Center and ellipse axes use the captured source's normalized bounds. The
+    shared Rust definition owns defaults, units, limits and interpolation.
+    ``hole`` selects an expanding opening instead of an inward-clipped image.
+    Use ``RadialReveal`` for a timed reveal/hide with automatic lifecycle.
+    """
+    __slots__ = ()
+
+    def __init__(self, *, progress=None, center=None, axes=None, roughness=None,
+                 frequency=None, softness=None, rim_width=None, inner_color=None,
+                 outer_color=None, seed=None, hole=None, edge=None):
+        edge = _edge(edge)
+        with _update(progress=progress, center=center, axes=axes,
+                     roughness=roughness, frequency=frequency, softness=softness,
+                     rim_width=rim_width, inner_color=inner_color,
+                     outer_color=outer_color, seed=seed, hole=hole) as update:
+            from _noon_host import noonRadialMask
+            self._definition = engine_call(noonRadialMask, update, edge)
+
+    @property
+    def center(self):
+        return tuple(float(value) for value in self._definition.revealCenter)
+
+    @property
+    def axes(self):
+        return tuple(float(value) for value in self._definition.revealAxes)
+
+    @property
+    def roughness(self):
+        return float(self._definition.revealRoughness)
+
+    @property
+    def frequency(self):
+        return float(self._definition.revealFrequency)
+
+    @property
+    def rim_width(self):
+        return float(self._definition.revealRimWidth)
+
+    @property
+    def inner_color(self):
+        return _base.Color(*(float(value) for value in self._definition.revealInnerColor))
+
+    @property
+    def outer_color(self):
+        return _base.Color(*(float(value) for value in self._definition.revealOuterColor))
+
+    @property
+    def hole(self):
+        return bool(self._definition.revealHole)
+
+
+class RadialReveal:
+    """Reveal or hide a source through one Rust-owned radial visibility mask.
+
+    Construction is inert. ``direction='in'`` reveals from the center;
+    ``direction='out'`` opens a hole. ``edge='burn'`` selects a seeded rough rim.
+    Ordinary Scene.play options own timing. Set ``remover=False`` to retain a
+    hidden out endpoint for a later reveal without manual attachment cleanup.
+    """
+    __slots__ = ("mobject", "direction", "edge", "seed", "softness", "center",
+                 "axes", "roughness", "frequency", "rim_width", "inner_color",
+                 "outer_color", "introducer", "remover", "anim_args")
+
+    def __init__(self, mobject, *, direction="in", edge=None, seed=None,
+                 center=None, axes=None, roughness=None, frequency=None,
+                 softness=None, rim_width=None, inner_color=None, outer_color=None,
+                 introducer=None, remover=None, **kwargs):
+        from _manim_semantic_handles import _is_shared_family
+        if not isinstance(mobject, _base.Mobject) and not _is_shared_family(mobject):
+            raise TypeError("RadialReveal target must be a Mobject or Group")
+        if direction not in ("in", "out"):
+            raise ValueError('RadialReveal direction must be "in" or "out"')
+        for name, value in (("introducer", introducer), ("remover", remover)):
+            if value is not None and not isinstance(value, bool):
+                raise TypeError(f"{name} must be a boolean")
+        self.mobject, self.direction, self.edge = mobject, direction, _edge(edge)
+        self.seed = None if seed is None else _number(seed, "seed")
+        self.softness = None if softness is None else _number(softness, "softness")
+        self.center = None if center is None else _pair(center, "reveal center")
+        self.axes = None if axes is None else _pair(axes, "reveal axes")
+        self.roughness = None if roughness is None else _number(roughness, "reveal roughness")
+        self.frequency = None if frequency is None else _number(frequency, "reveal frequency")
+        self.rim_width = None if rim_width is None else _number(rim_width, "reveal rim width")
+        self.inner_color = None if inner_color is None else _base.Color(*_rgba(inner_color, "inner rim color"))
+        self.outer_color = None if outer_color is None else _base.Color(*_rgba(outer_color, "outer rim color"))
+        self.introducer, self.remover = introducer, remover
+        self.anim_args = dict(kwargs)
+
+
 class GlowPulse:
     """Temporarily animate one leaf's canonical glow intensity in shared Rust.
 
@@ -401,7 +534,7 @@ class EffectHandle:
         """A checked authored snapshot, explicitly not a runtime-effective query."""
         definition = engine_call(self._handle.authoredDefinition)
         from _noon_shaders import ShaderEffect
-        return {"shader": ShaderEffect, "bloom": Bloom, "glow": Glow, "blur": Blur, "backdrop_blur": BackdropBlur, "shadow": Shadow, "noise_dissolve": NoiseDissolve, "pixelate": Pixelate}[str(definition.kind)]._from_definition(definition)
+        return {"shader": ShaderEffect, "bloom": Bloom, "glow": Glow, "blur": Blur, "backdrop_blur": BackdropBlur, "shadow": Shadow, "noise_dissolve": NoiseDissolve, "radial_mask": RadialMask, "pixelate": Pixelate}[str(definition.kind)]._from_definition(definition)
 
 
 def _target(value, scope=None):
@@ -428,6 +561,8 @@ _FAMILY_SCENE_METHODS = {
     "removeEffect": "removeFamilyEffect",
     "removeEffectHandle": "removeFamilyEffectHandle",
     "removeGlow": "removeFamilyGlow",
+    "setReveal": "setFamilyReveal",
+    "removeReveal": "removeFamilyReveal",
 }
 
 
@@ -450,6 +585,23 @@ def _selector(selector):
 def set_glow(value, *, color=None, radius=None, intensity=None, source=None, scope=None):
     with _update(color=color, radius=radius, intensity=intensity, source=source) as update:
         _call(value, "setGlow", update, scope=scope)
+    return value
+
+
+def set_reveal(value, *, progress=None, center=None, axes=None, roughness=None,
+               frequency=None, softness=None, rim_width=None, inner_color=None,
+               outer_color=None, seed=None, hole=None, edge=None, scope=None):
+    edge = _edge(edge)
+    with _update(progress=progress, center=center, axes=axes, roughness=roughness,
+                 frequency=frequency, softness=softness, rim_width=rim_width,
+                 inner_color=inner_color, outer_color=outer_color, seed=seed,
+                 hole=hole) as update:
+        _call(value, "setReveal", update, edge, scope=scope)
+    return value
+
+
+def remove_reveal(value):
+    _call(value, "removeReveal")
     return value
 
 
@@ -501,9 +653,9 @@ def get_effect(value, name):
     return EffectHandle._from_handle(engine_call(handle.getEffect, name))
 
 
-def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None):
+def set_effect(value, selector, *, color=None, radius=None, intensity=None, source=None, offset=None, progress=None, softness=None, seed=None, size=None, parameters=None, threshold=None, center=None, axes=None, roughness=None, frequency=None, rim_width=None, inner_color=None, outer_color=None, hole=None):
     suffix, selector = _selector(selector)
-    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size, parameters=parameters, threshold=threshold) as update:
+    with _update(color=color, radius=radius, intensity=intensity, source=source, offset=offset, progress=progress, softness=softness, seed=seed, size=size, parameters=parameters, threshold=threshold, center=center, axes=axes, roughness=roughness, frequency=frequency, rim_width=rim_width, inner_color=inner_color, outer_color=outer_color, hole=hole) as update:
         _call(value, "setEffect" + suffix, selector, update)
     return value
 

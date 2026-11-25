@@ -91,6 +91,7 @@ fn neutral(effect: &EffectDefinition, height: u32, world: f64) -> bool {
         }
         EffectDefinition::Shadow(v) => v.color().alpha == 0.0,
         EffectDefinition::NoiseDissolve(v) => v.is_neutral(),
+        EffectDefinition::RadialMask(v) => v.is_neutral(),
         EffectDefinition::Pixelate(v) => scalar(v.size(), height, world) <= 1.0,
         EffectDefinition::Shader(_) => false,
     }
@@ -160,7 +161,7 @@ pub(super) fn evaluate(
             .flat_map(|(at, pixel)| {
                 let source: [f64; 4] = std::array::from_fn(|c| f64::from(pixel[c]) / 255.0);
                 let value: [f64; 4] = match effect {
-                    EffectDefinition::Shader(_) => {
+                    EffectDefinition::RadialMask(_) | EffectDefinition::Shader(_) => {
                         panic!("custom programs require a separate independent reference")
                     }
                     EffectDefinition::Bloom(_) => {

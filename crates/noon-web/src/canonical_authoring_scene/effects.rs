@@ -117,6 +117,26 @@ impl CanonicalAuthoringSceneContext {
             .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = setReveal)]
+    pub fn set_reveal(
+        &mut self,
+        object: &WasmAuthoringMobjectHandle,
+        update: &WasmEffectUpdate,
+        edge: Option<String>,
+    ) -> Result<(), JsValue> {
+        let edge = noon::integration::radial_edge(edge.as_deref()).map_err(js_error)?;
+        self.inner
+            .edit_scene(|scene| {
+                scene.set_reveal_with_edge(object.semantic_mobject(), update.value.clone(), edge)
+            })
+            .map_err(js_error)
+    }
+    #[wasm_bindgen(js_name = removeReveal)]
+    pub fn remove_reveal(&mut self, object: &WasmAuthoringMobjectHandle) -> Result<(), JsValue> {
+        self.inner
+            .edit_scene(|scene| scene.remove_reveal(object.semantic_mobject()))
+            .map_err(js_error)
+    }
     #[wasm_bindgen(js_name = setGlow)]
     pub fn set_glow(
         &mut self,

@@ -60,6 +60,34 @@ impl EffectUpdate {
     ) -> Result<(), PyErr> {
         self.shader_write(key, ShaderValue::Unsigned(crate::shaders::unsigned(value)?))
     }
+    #[pyo3(name="setRadial", signature=(center,axes,roughness,frequency,rim_width,inner_color,outer_color,hole))]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_radial(
+        &mut self,
+        center: Vec<f64>,
+        axes: Vec<f64>,
+        roughness: Option<f64>,
+        frequency: Option<f64>,
+        rim_width: Option<f64>,
+        inner_color: Vec<f64>,
+        outer_color: Vec<f64>,
+        hole: Option<bool>,
+    ) -> Result<(), PyErr> {
+        let value = noon::integration::radial_parameters(
+            self.value.clone(),
+            &center,
+            &axes,
+            roughness,
+            frequency,
+            rim_width,
+            &inner_color,
+            &outer_color,
+            hole,
+        )
+        .map_err(engine_error)?;
+        self.value = value;
+        Ok(())
+    }
     #[pyo3(name = "setThreshold")]
     pub fn set_threshold(&mut self, threshold: f64) -> Result<(), PyErr> {
         let update = self.value.clone().threshold(threshold);
@@ -130,10 +158,22 @@ impl EffectDefinition {
             ))
         })
     }
-    fn mask_value(&self) -> Result<noon_core::NoiseDissolve, PyErr> {
-        self.value.as_noise_dissolve().ok_or_else(|| {
+    fn mask_value(&self) -> Result<&noon_core::EffectDefinition, PyErr> {
+        self.value
+            .is_visibility_mask()
+            .then_some(&self.value)
+            .ok_or_else(|| {
+                engine_error(noon::AuthoringError::from(
+                    EffectParameterError::UnsupportedParameter(
+                        noon_core::EffectParameter::Progress,
+                    ),
+                ))
+            })
+    }
+    fn radial_value(&self) -> Result<noon_core::RadialMask, PyErr> {
+        self.value.as_radial_mask().ok_or_else(|| {
             engine_error(noon::AuthoringError::from(
-                EffectParameterError::UnsupportedParameter(noon_core::EffectParameter::Progress),
+                EffectParameterError::IncompatibleDefinition,
             ))
         })
     }
@@ -305,6 +345,21 @@ impl EffectDefinition {
             .map_err(engine_error)
     }
     #[staticmethod]
+    #[pyo3(name="radialMask", signature=(update,edge=None))]
+    pub fn radial_mask(
+        update: &EffectUpdate,
+        edge: Option<String>,
+    ) -> Result<EffectDefinition, PyErr> {
+        let edge = noon::integration::radial_edge(edge.as_deref()).map_err(engine_error)?;
+        noon_core::RadialMask::default()
+            .with_update(update.value.clone(), edge)
+            .map(|value| Self {
+                value: value.into(),
+            })
+            .map_err(noon::AuthoringError::from)
+            .map_err(engine_error)
+    }
+    #[staticmethod]
     #[pyo3(name = "noiseDissolve")]
     pub fn noise_dissolve(update: &EffectUpdate) -> Result<EffectDefinition, PyErr> {
         update
@@ -318,19 +373,67 @@ impl EffectDefinition {
     }
     #[getter]
     pub fn progress(&self) -> Result<f64, PyErr> {
-        Ok(self.mask_value()?.progress())
+        Ok(self
+            .mask_value()?
+            .visibility_progress()
+            .expect("checked mask"))
     }
     #[getter]
     pub fn softness(&self) -> Result<f64, PyErr> {
-        Ok(self.mask_value()?.softness())
+        Ok(self
+            .mask_value()?
+            .visibility_softness()
+            .expect("checked mask"))
     }
     #[getter]
     pub fn seed(&self) -> Result<u32, PyErr> {
-        self.value
-            .as_shader()
-            .map_or_else(|| self.mask_value().map(|v| v.seed()), |v| Ok(v.seed()))
+        self.value.as_shader().map_or_else(
+            || {
+                self.mask_value()
+                    .map(|v| v.visibility_seed().expect("checked mask"))
+            },
+            |v| Ok(v.seed()),
+        )
     }
 
+    #[getter(revealCenter)]
+    pub fn reveal_center(&self) -> Result<Vec<f64>, PyErr> {
+        Ok(self.radial_value()?.center().to_vec())
+    }
+    #[getter(revealAxes)]
+    pub fn reveal_axes(&self) -> Result<Vec<f64>, PyErr> {
+        Ok(self.radial_value()?.axes().to_vec())
+    }
+    #[getter(revealRoughness)]
+    pub fn reveal_roughness(&self) -> Result<f64, PyErr> {
+        Ok(self.radial_value()?.roughness())
+    }
+    #[getter(revealFrequency)]
+    pub fn reveal_frequency(&self) -> Result<f64, PyErr> {
+        Ok(self.radial_value()?.frequency())
+    }
+    #[getter(revealRimWidth)]
+    pub fn reveal_rim_width(&self) -> Result<f64, PyErr> {
+        Ok(self.radial_value()?.rim_width())
+    }
+    #[getter(revealHole)]
+    pub fn reveal_hole(&self) -> Result<bool, PyErr> {
+        Ok(self.radial_value()?.hole())
+    }
+    #[getter(revealInnerColor)]
+    pub fn reveal_inner_color(&self) -> Result<Vec<f64>, PyErr> {
+        Ok({
+            let c = self.radial_value()?.inner_color();
+            vec![c.red.into(), c.green.into(), c.blue.into(), c.alpha.into()]
+        })
+    }
+    #[getter(revealOuterColor)]
+    pub fn reveal_outer_color(&self) -> Result<Vec<f64>, PyErr> {
+        Ok({
+            let c = self.radial_value()?.outer_color();
+            vec![c.red.into(), c.green.into(), c.blue.into(), c.alpha.into()]
+        })
+    }
     #[getter(offsetX)]
     pub fn offset_x(&self) -> Result<f64, PyErr> {
         Ok(self.shadow_value()?.offset().value()[0])
@@ -357,6 +460,7 @@ impl EffectDefinition {
             noon::effects::EffectDefinition::BackdropBlur(_) => "backdrop_blur",
             noon::effects::EffectDefinition::Shadow(_) => "shadow",
             noon::effects::EffectDefinition::NoiseDissolve(_) => "noise_dissolve",
+            noon::effects::EffectDefinition::RadialMask(_) => "radial_mask",
         }
         .into()
     }

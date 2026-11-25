@@ -822,3 +822,51 @@ fn cell_grid_has_literal_subpixel_vectors_and_bounded_integer_coordinates() {
 
 #[cfg(feature = "wgsl-effects")]
 mod shader;
+
+#[test]
+fn radial_parameter_animation_reuses_one_sample_pipeline_and_retained_resources() {
+    let (device, queue) = wgpu::Device::noop(&Default::default());
+    let source = source(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let mut filter = SampleFilter::default();
+    let mut scope = SampleScope::default();
+    let mut p = parameters(0.5);
+    p.definition = noon_core::RadialMask::burn()
+        .with_update(noon_core::EffectUpdate::default().progress(0.5), None)
+        .unwrap()
+        .into();
+    let first = prepare(&mut filter, &mut scope, &device, &queue, &source, p.clone()).unwrap();
+    assert_eq!(
+        (
+            first.pipeline_compiles,
+            first.texture_allocations,
+            first.buffer_allocations,
+            first.composite_passes
+        ),
+        (1, 1, 1, 1)
+    );
+    let output = scope.output().unwrap().clone();
+    for progress in [0.25, 0.75, 1.0, 0.0] {
+        p.definition = noon_core::EffectUpdate::default()
+            .progress(progress)
+            .apply_to(p.definition.clone())
+            .unwrap();
+        let changed =
+            prepare(&mut filter, &mut scope, &device, &queue, &source, p.clone()).unwrap();
+        assert_eq!(
+            (
+                changed.pipeline_compiles,
+                changed.texture_allocations,
+                changed.buffer_allocations,
+                changed.composite_passes
+            ),
+            (0, 0, 0, 1)
+        );
+        assert_eq!(changed.bytes_uploaded, std::mem::size_of::<Uniform>());
+        assert_eq!(scope.output(), Some(&output));
+        let clean = prepare(&mut filter, &mut scope, &device, &queue, &source, p.clone()).unwrap();
+        assert_eq!((clean.bytes_uploaded, clean.composite_passes), (0, 0));
+    }
+    assert_eq!(scope.scratch_bytes(), u64::from(SIZE[0] * SIZE[1] * 4));
+    scope.clear();
+    assert_eq!(scope.scratch_bytes(), 0);
+}

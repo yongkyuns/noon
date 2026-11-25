@@ -1078,6 +1078,22 @@ impl FamilyHandle {
         self.family.make_jagged().map_err(engine_error)
     }
 
+    #[pyo3(name="setReveal", signature=(update,edge=None))]
+    pub fn set_reveal(
+        &self,
+        update: &crate::effects::EffectUpdate,
+        edge: Option<String>,
+    ) -> Result<(), PyErr> {
+        let edge = noon::integration::radial_edge(edge.as_deref()).map_err(engine_error)?;
+        self.family
+            .clone()
+            .set_reveal_with_edge(update.value.clone(), edge)
+            .map_err(engine_error)
+    }
+    #[pyo3(name = "removeReveal")]
+    pub fn remove_reveal(&self) -> Result<(), PyErr> {
+        self.family.clone().remove_reveal().map_err(engine_error)
+    }
     #[pyo3(name = "setGlow")]
     fn set_glow(&self, update: &crate::effects::EffectUpdate) -> PyResult<()> {
         self.family

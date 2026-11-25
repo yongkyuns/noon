@@ -526,6 +526,45 @@ impl Composition {
         Ok(())
     }
     #[allow(clippy::too_many_arguments)]
+    fn radial_reveal(
+        &mut self,
+        target: DissolveTarget,
+        direction: &str,
+        update: &crate::effects::EffectUpdate,
+        edge: Option<&str>,
+        introducer: Option<bool>,
+        remover: Option<bool>,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        reverse: bool,
+    ) -> PyResult<()> {
+        let direction = match direction {
+            "in" => noon_core::DissolveDirection::In,
+            "out" => noon_core::DissolveDirection::Out,
+            _ => return Err(engine_error("invalid dissolve direction")),
+        };
+        let edge = noon::integration::radial_edge(edge).map_err(engine_error)?;
+        let style = noon_core::DissolveStyle::radial(update.value.clone(), edge)
+            .map_err(noon::AuthoringError::from)
+            .map_err(engine_error)?;
+        self.children.push(Child::Dissolve(
+            target,
+            direction,
+            style,
+            AnimationOptions {
+                run_time: duration,
+                rate_func: easing.map(rate).transpose()?,
+                lag_ratio: lag,
+                introducer,
+                remover,
+                reverse_rate_function: Some(reverse),
+                ..AnimationOptions::new()
+            },
+        ));
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
     fn transform(
         &mut self,
         source: &MobjectHandle,
@@ -702,6 +741,65 @@ impl Composition {
             direction,
             seed,
             softness,
+            introducer,
+            remover,
+            duration,
+            easing,
+            lag,
+            reverse,
+        )
+    }
+    #[pyo3(name="appendRadialRevealMobject", signature=(_id,target,direction,update,edge,introducer,remover,duration,easing,lag,reverse))]
+    fn radial_reveal_object(
+        &mut self,
+        _id: &str,
+        target: &MobjectHandle,
+        direction: &str,
+        update: &crate::effects::EffectUpdate,
+        edge: Option<&str>,
+        introducer: Option<bool>,
+        remover: Option<bool>,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        reverse: bool,
+    ) -> PyResult<()> {
+        self.radial_reveal(
+            DissolveTarget::Object(target.handle.clone()),
+            direction,
+            update,
+            edge,
+            introducer,
+            remover,
+            duration,
+            easing,
+            lag,
+            reverse,
+        )?;
+        if !_id.is_empty() {
+            self.bindings.push(target.handle.clone());
+        }
+        Ok(())
+    }
+    #[pyo3(name="appendRadialRevealFamily", signature=(target,direction,update,edge,introducer,remover,duration,easing,lag,reverse))]
+    fn radial_reveal_family(
+        &mut self,
+        target: &FamilyHandle,
+        direction: &str,
+        update: &crate::effects::EffectUpdate,
+        edge: Option<&str>,
+        introducer: Option<bool>,
+        remover: Option<bool>,
+        duration: Option<f64>,
+        easing: Option<&str>,
+        lag: Option<f64>,
+        reverse: bool,
+    ) -> PyResult<()> {
+        self.radial_reveal(
+            DissolveTarget::Family(target.family.clone()),
+            direction,
+            update,
+            edge,
             introducer,
             remover,
             duration,

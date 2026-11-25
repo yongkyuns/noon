@@ -616,6 +616,7 @@ const fn property_slot(property: Property) -> u16 {
         Property::EffectThreshold => 23,
         Property::Emission => 24,
         Property::EffectShader(index) => 25 + index as u16,
+        Property::EffectRadial(parameter) => 41 + parameter as u16,
     }
 }
 

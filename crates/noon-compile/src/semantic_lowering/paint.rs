@@ -72,10 +72,16 @@ pub(crate) fn validate_definition(
 pub(crate) fn validate_noise(
     noise: &noon_core::NoisePaint,
 ) -> Result<(), SemanticExecutionValueError> {
-    if noise
-        .frequency()
-        .into_iter()
-        .any(|v| v > 256.0 || (v as f32) < f32::MIN_POSITIVE)
+    if noise.stops().len() > 16
+        || noise.stops().windows(2).any(|pair| {
+            pair[0].position() != pair[1].position()
+                && pair[0].position() as f32 == pair[1].position() as f32
+        })
+        || noise.highest_frequency().into_iter().any(|v| v > 256.0)
+        || noise
+            .frequency()
+            .into_iter()
+            .any(|v| (v as f32) < f32::MIN_POSITIVE)
     {
         return Err(SemanticExecutionValueError::UnsupportedPaintProfile {
             field: SemanticExecutionField::FillPaint,
@@ -204,7 +210,7 @@ pub(crate) fn validate_transition(
     if let Some([from, to]) = transition.noises() {
         validate_noise(from)?;
         validate_noise(to)?;
-        return Ok(());
+        return validate_stop_sweep(from.stops(), to.stops());
     }
     if let Some([from, to]) = transition.hatches() {
         project_hatch_mapping(from)?;

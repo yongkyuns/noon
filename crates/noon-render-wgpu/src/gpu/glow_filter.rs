@@ -525,6 +525,7 @@ impl EffectCaptureParameters {
                 return Err(EffectPrepareError::UnsupportedCapture)
             }
             noon_core::EffectDefinition::NoiseDissolve(_)
+            | noon_core::EffectDefinition::RadialMask(_)
             | noon_core::EffectDefinition::Pixelate(_)
             | noon_core::EffectDefinition::Shader(_) => 4,
             noon_core::EffectDefinition::Glow(_) => 12,
