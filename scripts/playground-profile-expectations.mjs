@@ -62,8 +62,8 @@ const rows = [
   ['showcase-drip-fill-gauge','showcase_drip_fill_gauge.py','6e1582c8432dc9fd88de0df2e54e4f1bf07131f20dae93def3393938abbb76e8','incremental','ordinary',[], 'finite-complete', true],
   ['showcase-character-rigs','showcase_character_rigs.py','8f4450139597368def1bd3c17cc17cb8fee09d7ccfd3fcb641d85b2ce1146f8b','observed','observed-replay',[], 'observed-complete'],
   ['showcase-shape-characters','showcase_shape_characters.py','aff850534219adffeb89f6e3d5222931b75df8f16b7073ba4ae61159ad6b04df','observed','observed-replay',[], 'observed-complete'],
-  ['showcase-retarget-hand','showcase_retarget_hand.py','95dbc32f30a214c6000147f97dc38d12f2a46f567bc67b859c4dc51b2af259d9','observed','observed-replay',[], 'observed-complete'],
-  ['showcase-retarget-blink','showcase_retarget_blink.py','1349fda9bbaf2161b26530a5b9e3d26862f1be61eb4eeca768a3ee423def9f60','observed','observed-replay',[], 'observed-complete'],
+  ['showcase-retarget-hand','showcase_retarget_hand.py','babc7dcb4ae16f69b1131ffcb4e0def5f9f55622a29d1d6e778e949f66d9ab3c','observed','observed-replay',[], 'observed-complete'],
+  ['showcase-retarget-blink','showcase_retarget_blink.py','8eee8e589bc7a0126df0f98b94af976d33c51e43dd6b5a818cb498045dd62660','observed','observed-replay',[], 'observed-complete'],
 ];
 
 export const SHOWCASE_PROFILE_EXPECTATIONS = Object.freeze(rows.map(
