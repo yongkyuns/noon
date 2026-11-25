@@ -115,7 +115,7 @@ The [hand-drawn diagram](web/python/examples/hand_drawn.py) uses
 Run the paired Rust demo with `cargo run -p noon-native --example hand_drawn`.
 The [sketch path demo](web/python/examples/hand_drawn_paths.py) uses the same
 style on an open `Path` and a `VMobject` with a filled contour and a hole.
-The [sketch text demo](web/python/examples/sketch_text.py) uses the same stroke
+The [sketch text demo](web/python/examples/showcase_sketch_text.py) uses the same stroke
 on `Text` and `MathTex` glyph outlines with `Create` and `Write`.
 Use `obj.set_stroke(SketchStroke(TEAL), width=3)` to style an existing shape,
 text object, or group. `SVGMobject`, `Axes`, and `VGroup` also accept the
