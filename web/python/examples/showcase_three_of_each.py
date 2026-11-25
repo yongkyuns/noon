@@ -1,6 +1,6 @@
 """A printmaker points to each term while three copies of it appear."""
 
-from math import hypot
+from math import atan2, cos, hypot, sin, sqrt
 
 from noon import *
 
@@ -58,22 +58,23 @@ def underline(tip, color):
                 stroke_color=color, stroke_width=3.0, stroke_cap="round")
 
 
-def pointing_pose(shoulder, tip):
-    """Place one drawing between its shoulder and index fingertip."""
+def pointing_pose(shoulder, tip, side):
+    """Place the same sleeve and glove on either side of the coat."""
     sx, sy, _ = shoulder
     tx, ty, _ = tip
     dx, dy = tx - sx, ty - sy
     length = hypot(dx, dy)
 
     def at(u, across):
+        across *= side
         return sx + u * dx - across * dy / length, sy + u * dy + across * dx / length
 
     sleeve = curve([at(u, v) for u, v in [
-        (-0.06, 0.15), (0.14, 0.15), (0.35, 0.035), (0.49, 0.025),
+        (-0.045, 0.10), (0.14, 0.15), (0.35, 0.035), (0.49, 0.025),
         (0.59, 0.02), (0.66, 0.115), (0.755, 0.115),
         (0.77, 0.06), (0.77, -0.06), (0.75, -0.11),
         (0.62, -0.105), (0.60, -0.22), (0.47, -0.225),
-        (0.29, -0.235), (0.09, -0.16), (-0.06, -0.16),
+        (0.29, -0.235), (0.09, -0.16), (-0.045, -0.10),
     ]], "#85B2A0")
     glove = curve([at(u, v) for u, v in [
         (0.73, -0.098), (0.78, -0.106), (0.805, -0.13), (0.84, -0.12),
@@ -92,32 +93,57 @@ def pointing_pose(shoulder, tip):
     return VGroup(sleeve, fold, glove, cuff)
 
 
-def printmaker():
-    boots = [box(x, -1.26, 0.39, 0.29, 0.10, INK) for x in (-1.01, -0.55)]
-    other_sleeve = curve([
-        (-1.21, -0.07), (-1.48, -0.10), (-1.61, -0.48), (-1.63, -0.73),
-        (-1.62, -0.83), (-1.43, -0.85), (-1.39, -0.72),
-        (-1.31, -0.48), (-1.25, -0.26), (-1.10, -0.25),
-    ], "#85B2A0")
-    other_glove = box(-1.54, -0.80, 0.24, 0.30, 0.10, GOLD, INK)
+def resting_tip(shoulder, target, side):
+    sx, sy, _ = shoulder
+    tx, ty, _ = target
+    length = hypot(tx - sx, ty - sy)
+    rest_x = side * 0.32 * length
+    return sx + rest_x, sy - sqrt(length * length - rest_x * rest_x), 0
+
+
+def swing_targets(shoulder, start, end, side):
+    sx, sy, _ = shoulder
+    ax, ay = start[0] - sx, start[1] - sy
+    bx, by = end[0] - sx, end[1] - sy
+    sweep = atan2(ax * by - ay * bx, ax * bx + ay * by)
+    # Sample the swing around the shoulder so the intermediate drawings
+    # keep the hand clear of the coat.
+    poses = []
+    for fraction in (1 / 3, 2 / 3):
+        c, s = cos(sweep * fraction), sin(sweep * fraction)
+        poses.append((sx + c * ax - s * ay, sy + s * ax + c * ay, 0))
+    poses.append(end)
+    return [pointing_pose(shoulder, tip, side) for tip in poses]
+
+
+def coat_and_boots():
+    boots = [box(x, -1.57, 0.39, 0.29, 0.10, INK) for x in (-0.26, 0.26)]
     coat = curve([
-        (-1.13, 0.015), (-0.85, 0.15), (-0.27, 0.13), (-0.04, 0.035),
-        (0.04, -0.17), (0.01, -0.63), (0.01, -0.89),
-        (-0.014, -1.14), (-0.37, -1.13), (-0.60, -1.14),
-        (-0.92, -1.14), (-1.32, -1.13), (-1.31, -0.90),
-        (-1.33, -0.62), (-1.32, -0.14), (-1.13, 0.015),
+        (-0.46, 0.10), (-0.23, 0.21), (0.27, 0.21), (0.46, 0.10),
+        (0.68, -0.02), (0.65, -0.49), (0.65, -1.09),
+        (0.65, -1.40), (0.50, -1.45), (0.0, -1.45),
+        (-0.49, -1.45), (-0.65, -1.40), (-0.65, -1.09),
+        (-0.65, -0.49), (-0.68, -0.02), (-0.46, 0.10),
     ], COAT)
-    apron = box(-0.66, -0.65, 0.86, 0.68, 0.13, "#BBD2C1", CUFF)
-    pocket = box(-0.66, -0.76, 0.44, 0.25, 0.065, "#8FB7A4")
-    buttons = [dot(x, -0.37, 0.045, GOLD) for x in (-0.93, -0.37)]
-    helmet = box(-0.77, 0.43, 1.30, 0.91, 0.30, "#7BAD9F", INK)
-    visor = box(-0.72, 0.42, 0.97, 0.55, 0.19, INK)
-    eyes = [box(x, 0.45, 0.095, 0.14, 0.04, "#FFF3D7") for x in (-0.87, -0.51)]
-    smile = curve([(-0.77, 0.34), (-0.73, 0.30), (-0.67, 0.30), (-0.63, 0.34)],
+    apron = box(0, -0.78, 0.88, 0.86, 0.16, "#BBD2C1", CUFF)
+    pocket = box(0, -0.92, 0.46, 0.26, 0.065, "#8FB7A4")
+    buttons = [dot(x, -0.42, 0.045, GOLD) for x in (-0.28, 0.28)]
+    return VGroup(*boots, coat, apron, pocket, *buttons)
+
+
+def face(direction):
+    turn = direction * 0.073
+    helmet = box(0, 0.50, 1.17, 0.82, 0.28, "#7BAD9F", INK)
+    visor = box(turn, 0.50, 0.88, 0.52, 0.18, INK)
+    eyes = [dot(x + turn, 0.54, 0.083, "#FFF3D7") for x in (-0.174, 0.174)]
+    pupils = [dot(x + turn + 0.034 * direction, 0.55 + 0.026 * abs(direction), 0.038, INK)
+              for x in (-0.174, 0.174)]
+    smile = curve([(turn - 0.066, 0.408), (turn - 0.032, 0.369),
+                   (turn + 0.032, 0.369), (turn + 0.066, 0.408)],
                   edge="#A7C9BA", width=1.45)
-    stem = curve([(-0.94, 0.84), (-1.00, 0.93), (-0.99, 1.03), (-0.94, 1.08)])
-    return VGroup(*boots, other_glove, other_sleeve, coat, apron, pocket, *buttons,
-                  stem, dot(-0.94, 1.08, 0.069, GOLD), helmet, visor, *eyes, smile)
+    stem = curve([(-0.20, 0.865), (-0.23, 0.94), (-0.23, 1.006), (-0.18, 1.057)])
+    head = VGroup(stem, dot(-0.18, 1.057, 0.060, GOLD), helmet, visor, *eyes, *pupils, smile)
+    return head.rotate(-0.10 * direction, about_point=(0, 0.24, 0))
 
 
 def copy_panel(x, accent, tint, variable):
@@ -157,30 +183,48 @@ class ThreeOfEach(Scene):
         x_tip, two_tip = point_below(x_term), point_below(two_term)
         x_mark = underline(x_tip, TEAL)
         two_mark = underline(two_tip, RUST)
-        shoulder = (-0.06, -0.93, 0)
-        idle_tip = (0.39, -1.97, 0)
-        arm = pointing_pose(shoulder, idle_tip)
-        robot = printmaker().shift((0.10, -0.88, 0))
-        shadow = Ellipse(width=1.95, height=0.23, fill="#EBDFC9", fill_opacity=1,
-                         stroke=None).move_to((-0.65, -2.29, 0))
+        center = (x_tip[0] + two_tip[0]) / 2
+        left_shoulder, right_shoulder = (center - 0.49, 0.02, 0), (center + 0.49, 0.02, 0)
+        left_rest = resting_tip(left_shoulder, x_tip, -1)
+        right_rest = resting_tip(right_shoulder, two_tip, 1)
+        left_arm = pointing_pose(left_shoulder, left_rest, -1)
+        right_arm = pointing_pose(right_shoulder, right_rest, 1)
+        reach_left = swing_targets(left_shoulder, left_rest, x_tip, -1)
+        reach_right = swing_targets(right_shoulder, right_rest, two_tip, 1)
+        lower_left = (reach_left[1], reach_left[0], pointing_pose(left_shoulder, left_rest, -1))
+        lower_right = (reach_right[1], reach_right[0], pointing_pose(right_shoulder, right_rest, 1))
+        robot = coat_and_boots().shift((center, 0, 0))
+        head = face(0).shift((center, 0, 0))
+        shadow = Ellipse(width=1.82, height=0.21, fill="#EBDFC9", fill_opacity=1,
+                         stroke=None).move_to((center, -1.72, 0))
         x_panel, x_tiles, product_x = copy_panel(-4.42, TEAL, "#DFEEE5", True)
         two_panel, two_tiles, product_two = copy_panel(4.42, RUST, "#F8E5DB", False)
         answer = VGroup(
             box(0, -2.86, 7.80, 0.91, 0.19, INK),
             formula("3 (x + 2) = 3 x + 6", 0, -2.85, 56, SHEET),
         )
-        self.add(paper, sheet, title, subtitle, original, x_panel, two_panel, shadow, arm, robot)
+        self.add(paper, sheet, title, subtitle, original, x_panel, two_panel,
+                 shadow, left_arm, right_arm, robot, head)
         self.wait(0.45)
-        self.play(Transform(arm, pointing_pose(shoulder, x_tip)),
-                  Create(x_mark), run_time=0.85)
+        self.play(Transform(left_arm, reach_left[0]),
+                  Transform(head, face(-1).shift((center, 0, 0))), run_time=0.30, rate_func=linear)
+        self.play(Transform(left_arm, reach_left[1]), run_time=0.25, rate_func=linear)
+        self.play(Transform(left_arm, reach_left[2]), Create(x_mark), run_time=0.30, rate_func=linear)
         self.play(LaggedStart(FadeIn(x_tiles[0]), FadeIn(x_tiles[1]), FadeIn(x_tiles[2]),
                               FadeIn(product_x), lag_ratio=0.38), run_time=0.95)
         self.wait(0.60)
-        self.play(Transform(arm, pointing_pose(shoulder, two_tip)),
-                  FadeOut(x_mark), Create(two_mark), run_time=0.78)
+        self.play(Transform(left_arm, lower_left[0]), Transform(right_arm, reach_right[0]),
+                  Transform(head, face(1).shift((center, 0, 0))),
+                  FadeOut(x_mark), run_time=0.27, rate_func=linear)
+        self.play(Transform(left_arm, lower_left[1]), Transform(right_arm, reach_right[1]),
+                  run_time=0.24, rate_func=linear)
+        self.play(Transform(left_arm, lower_left[2]), Transform(right_arm, reach_right[2]),
+                  Create(two_mark), run_time=0.27, rate_func=linear)
         self.play(LaggedStart(FadeIn(two_tiles[0]), FadeIn(two_tiles[1]), FadeIn(two_tiles[2]),
                               FadeIn(product_two), lag_ratio=0.38), run_time=0.95)
         self.wait(0.64)
-        self.play(Transform(arm, pointing_pose(shoulder, idle_tip)), FadeOut(two_mark),
-                  FadeIn(answer), run_time=0.90)
+        self.play(Transform(right_arm, lower_right[0]), FadeOut(two_mark),
+                  Transform(head, face(0).shift((center, 0, 0))), run_time=0.32, rate_func=linear)
+        self.play(Transform(right_arm, lower_right[1]), run_time=0.27, rate_func=linear)
+        self.play(Transform(right_arm, lower_right[2]), FadeIn(answer), run_time=0.31, rate_func=linear)
         self.wait(1.40)

@@ -284,7 +284,7 @@
       "beats": [
         { "time": 1.3, "label": "Point to x in the parentheses" },
         { "time": 2.55, "label": "Count three x tiles" },
-        { "time": 3.63, "label": "Use the same pointing pose for 2" },
+        { "time": 3.63, "label": "Turn toward 2 and point with the other hand" },
         { "time": 5.05, "label": "Count six dots in three pairs" },
         { "time": 6.75, "label": "Read the full equation" }
       ],
