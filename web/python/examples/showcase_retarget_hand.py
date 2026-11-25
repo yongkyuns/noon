@@ -103,7 +103,6 @@ def arm_drawing(rig, hand, key, sleeve_color, hand_width):
                         stroke_join="round", stroke_cap="round").set_points_as_corners(joints)
 
     place = placement(pose.joint("wrist"), hand_width)
-    glove = path(hand.points_at(phase), HAND, width=1.8)
     # The interior marks tell palm from knuckles. Their opacity collapses
     # through the thin edge view while the same glove outline keeps moving.
     crease = path([place(0.16, -0.13), place(0.20, -0.06),
@@ -112,7 +111,7 @@ def arm_drawing(rig, hand, key, sleeve_color, hand_width):
     crease.set_stroke(opacity=1 if view == "palm" else 0)
     knuckles = [ink_line(place(0.44, y), place(0.53, y*0.85), PALM, 1.35)
                 .set_stroke(opacity=1 if view == "back" else 0) for y in (-0.069, 0.069)]
-    return VGroup(sleeve(INK, 33), sleeve(sleeve_color, 29), glove, crease, *knuckles)
+    return VGroup(sleeve(INK, 33), sleeve(sleeve_color, 29), hand.target_at(phase), crease, *knuckles)
 
 
 class RetargetHand(Scene):
@@ -142,7 +141,7 @@ class RetargetHand(Scene):
             rig = self._arm_rig(x, upper, forearm)
             # The second actor has a shorter local drawing and a shorter forearm.
             hand_width = 1.0 if front else 0.84
-            poses = {name: [(hand_width * a, b) for a, b in points]
+            poses = {name: path([(hand_width * a, b) for a, b in points], HAND, width=1.8)
                      for name, points in HAND_POSES.items()}
             hand = rig.artwork_track("wrist", poses=poses, cues=HAND_CUES)
             arm = arm_drawing(rig, hand, 0, sleeve, hand_width)

@@ -5,18 +5,19 @@ from noon import *
 
 BLINK = [(0, "open"), (2, "closed"), (4, "open")]
 TILT = [(0, -0.13), (1, 0.04), (2, 0.27), (3, 0.19), (4, 0.04), (5, -0.13)]
-EYE_COLORS = ("#FFFCF4", "#32465A", "#FFFFFF") * 2
+EYE_COLORS = ("#FFFCF4", "#32465A", "#FFFFFF")
 
 
 def eye_poses(oval, spacing, width, height):
     def place(layers):
         # Every layer uses the same ellipse points, so the poses correspond.
-        return [
-            (eye_x + dx + sx * x, dy + sy * y + bow * (x * x - 1))
+        return VGroup(*(
+            VMobject(fill_color=color, fill_opacity=1, stroke_width=0).set_points([
+                (eye_x + dx + sx * x, dy + sy * y + bow * (x * x - 1), 0) for x, y in oval
+            ])
             for eye_x in (-spacing, spacing)
-            for dx, dy, sx, sy, bow in layers
-            for x, y in oval
-        ]
+            for (dx, dy, sx, sy, bow), color in zip(layers, EYE_COLORS)
+        ))
 
     return {
         "open": place([(0, 0, width, height, 0), (0.035, 0, 0.48 * width, 0.73 * height, 0),
@@ -34,14 +35,10 @@ def face_art(shell, blush):
     return VGroup(shell, smile, *cheeks)
 
 
-def face_at(art, rig, eye, phase, contour_size):
+def face_at(art, rig, eye, phase):
     x, y, angle = rig.pose(phase).joint("head")
     head = art.copy().rotate(angle, about_point=ORIGIN).shift((x, y, 0))
-    points = eye.points_at(phase)
-    eyes = [VMobject(fill_color=color, fill_opacity=1, stroke_width=0)
-            .set_points([(x, y, 0) for x, y in points[i:i + contour_size]])
-            for i, color in zip(range(0, len(points), contour_size), EYE_COLORS)]
-    return VGroup(head, *eyes)
+    return VGroup(head, eye.target_at(phase))
 
 
 class RetargetBlink(Scene):
@@ -69,12 +66,12 @@ class RetargetBlink(Scene):
             )
             eye = rig.artwork_track("eye", poses=eye_poses(oval, spacing, width, height), cues=BLINK)
             art = face_art(shell, cheek_color)
-            face = face_at(art, rig, eye, 0, len(oval))
+            face = face_at(art, rig, eye, 0)
             self.add(face)
             actors.append((face, art, rig, eye))
 
         def turn_to(phase):
-            return [Transform(face, face_at(art, rig, eye, phase, len(oval)))
+            return [Transform(face, face_at(art, rig, eye, phase))
                     for face, art, rig, eye in actors]
 
         self.wait(0.5)
