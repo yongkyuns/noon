@@ -18,7 +18,7 @@ struct VertexInput {
     @location(6) fill: vec4<f32>,
     @location(7) stroke: vec4<f32>,
     @location(8) opacity: f32,
-    @location(9) fixed_orientation: u32,
+    @location(9) reveal_and_orientation: u32,
     @location(10) fixed_anchor: vec3<f32>,
     @location(11) tangent: vec2<f32>,
     @location(12) extrusion: vec2<f32>,
@@ -47,13 +47,16 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) opacity: f32,
+    @location(2) path_progress: f32,
+    @location(3) @interpolate(flat) reveal: f32,
 };
 
 fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
     let world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
+    let fixed_orientation = input.reveal_and_orientation >> 31u;
     let local_point = vec4<f32>(input.local, 0.0, 1.0);
     var clip = camera.view_projection * world * local_point;
-    if input.fixed_orientation != 0u {
+    if fixed_orientation != 0u {
         // Project the object's effective center, then preserve its world-point
         // offsets in the 2D camera's clip scale. This is intentionally not a
         // camera-facing quaternion billboard.
@@ -72,8 +75,8 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
     }
     if input.stroke_metadata.x > 0.0 {
         let kind = input.stroke_metadata.x;
-        let previous = stable_unit(projected_tangent(world, input.tangent, clip, input.fixed_orientation));
-        let next = stable_unit(projected_tangent(world, input.extrusion, clip, input.fixed_orientation));
+        let previous = stable_unit(projected_tangent(world, input.tangent, clip, fixed_orientation));
+        let next = stable_unit(projected_tangent(world, input.extrusion, clip, fixed_orientation));
         let turn = previous.x * next.y - previous.y * next.x;
         if kind == 2.0 {
             // Fan/miter origins stay at the path centerline.
@@ -123,7 +126,7 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
         // authoring frame. The homogeneous derivative is the exact projected
         // straight-line direction, including perspective and world rotation.
         var direction = input.tangent;
-        if input.fixed_orientation == 0u {
+        if fixed_orientation == 0u {
             let derivative = camera.view_projection * world * vec4<f32>(input.tangent, 0.0, 0.0);
             direction = (derivative.xy * clip.w - clip.xy * derivative.w) / fixed_camera.clip_scale;
         } else {
@@ -148,6 +151,8 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
         output.color = input.background_stroke;
     }
     output.opacity = input.opacity;
+    output.path_progress = f32((input.surface >> 1u) & 0x00ffffffu) / 16777215.0;
+    output.reveal = bitcast<f32>(input.reveal_and_orientation & 0x7fffffffu);
     return output;
 }
 
@@ -157,5 +162,15 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    // Discard before writing depth so unrevealed geometry cannot occlude other objects.
+    if input.reveal <= 0.0 || (input.reveal < 1.0 && input.path_progress > input.reveal) {
+        discard;
+    }
     return cairo_source_color(input.color, input.opacity);
+}
+
+@fragment
+fn fs_fading_fill(input: VertexOutput) -> @location(0) vec4<f32> {
+    let coverage = smoothstep(0.0, 1.0, input.reveal);
+    return cairo_source_color(input.color, input.opacity * coverage);
 }

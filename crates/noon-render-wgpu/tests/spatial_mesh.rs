@@ -945,6 +945,109 @@ fn cairo_path_world_up_shading_and_sheen_reuse_geometry_across_light_camera_and_
 }
 
 #[test]
+fn world_path_create_fades_fill_smoothly_over_depth_and_repeats_on_seek() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping world path Create raster test: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
+        let target = Target::new(&device);
+        let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+        renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+        let mut preparer = FramePreparer::new();
+
+        let mut store = SemanticStore::new();
+        let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+        camera.set_role(SemanticObjectRole::Camera3D);
+        camera
+            .set_camera_projection(Some(projection(true)))
+            .unwrap();
+        camera.transform.translation.z = 5.0;
+        attach(&mut store, camera);
+
+        let rectangle = StoredGeometry::Rectangle {
+            size: Vec2::new(2.0, 2.0),
+        };
+        let mut rear = SemanticObjectState::new(rectangle);
+        rear.style = opaque_style(Color::from_hex(0xFF0000));
+        rear.transform = SemanticWorldTransform3D {
+            translation: SemanticVec3::new(0.0, 0.0, -1.0),
+            ..SemanticWorldTransform3D::IDENTITY
+        }
+        .into();
+        attach(&mut store, rear);
+
+        let mut panel = SemanticObjectState::new(rectangle);
+        panel.style = opaque_style(Color::from_hex(0x0000FF));
+        panel.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+        panel.style.stroke_width = 0.04;
+        panel.style.sketch_stroke = noon_core::SketchStroke::new(1.2, 7);
+        panel.transform = SemanticWorldTransform3D {
+            rotation: noon_core::SemanticRotation3D::from_axis_angle(
+                SemanticVec3::new(1.0, 0.0, 0.0),
+                0.3,
+            )
+            .unwrap(),
+            ..SemanticWorldTransform3D::IDENTITY
+        }
+        .into();
+        let panel = attach(&mut store, panel);
+        let mut index = SemanticExecutionIndex::new();
+        let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
+            .unwrap()
+            .into_parts();
+        compiled
+            .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                id: TrackId::new(0),
+                object: index.execution_object_id(panel).unwrap(),
+                property: Property::Reveal,
+                values: TrackValues::Scalar { from: 0.0, to: 1.0 },
+                timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                time_map: CompositionTimeMap::identity(),
+            }))
+            .unwrap();
+        let mut scene = SceneInstance::new(compiled);
+        let mut draw = |scene: &mut SceneInstance| {
+            render(
+                &device,
+                &queue,
+                &mut renderer,
+                &mut preparer,
+                scene,
+                &target,
+            )
+            .unwrap()
+        };
+        let mut midpoint = Vec::new();
+        for (time, blue) in [(0.0, 0u8), (0.25, 40), (0.5, 128), (0.75, 215), (1.0, 255)] {
+            scene.advance_to(time).unwrap();
+            let (stats, pixels) = draw(&mut scene);
+            let actual = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
+            let expected = [255 - blue, 0, blue, 255];
+            assert!(
+                actual
+                    .into_iter()
+                    .zip(expected)
+                    .all(|(a, b)| a.abs_diff(b) <= 1),
+                "t={time}: expected {expected:?}, got {actual:?}"
+            );
+            if time > 0.0 {
+                assert_eq!(stats.geometry_bytes, 0);
+            }
+            if time == 0.5 {
+                midpoint = pixels;
+            }
+        }
+        scene.seek(0.5).unwrap();
+        let (stats, replayed) = draw(&mut scene);
+        assert_eq!(stats.geometry_bytes, 0);
+        assert!(replayed == midpoint, "the midpoint changed after rewind");
+    });
+}
+
+#[test]
 fn fixed_orientation_miter_preserves_frame_geometry_with_anisotropic_clip_scale() {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();

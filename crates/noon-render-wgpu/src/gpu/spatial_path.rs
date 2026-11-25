@@ -22,6 +22,7 @@ use noon_runtime::{FrameChanges, FrameState};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -74,6 +75,13 @@ pub(super) struct PathKey {
 pub(super) struct TessellatedSpatialPath {
     pub vertices: Vec<SpatialPathVertex>,
     pub indices: Vec<u32>,
+    fill: Option<PathFill>,
+}
+
+#[derive(Debug)]
+struct PathFill {
+    indices: Range<u32>,
+    local_center: SemanticVec3,
 }
 
 #[repr(C)]
@@ -83,7 +91,8 @@ struct PathInstance {
     fill: [f32; 4],
     stroke: [f32; 4],
     opacity: f32,
-    fixed_orientation: u32,
+    // A normalized nonnegative f32 leaves its sign bit available for the domain flag.
+    reveal_and_orientation: u32,
     fixed_anchor: [f32; 3],
     screen_stroke_width: f32,
     background_stroke: [f32; 4],
@@ -102,6 +111,7 @@ struct ResidentPath {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    fill: Option<PathFill>,
     users: usize,
 }
 
@@ -122,6 +132,7 @@ pub(super) struct SpatialPathGpuState {
     gpu: Option<PathGpuState>,
     outlines: GlyphOutlineCache,
     cairo: Option<Box<cairo::State>>,
+    fading_fills: BTreeMap<DrawId, SemanticVec3>,
 }
 
 #[derive(Debug)]
@@ -136,6 +147,9 @@ struct PathGpuState {
     world_pipeline_msaa: wgpu::RenderPipeline,
     fixed_pipeline: wgpu::RenderPipeline,
     fixed_pipeline_msaa: wgpu::RenderPipeline,
+    layout: wgpu::PipelineLayout,
+    shader: wgpu::ShaderModule,
+    fill_pipelines: Option<[wgpu::RenderPipeline; 2]>,
     instances: wgpu::Buffer,
     capacity: usize,
 }
@@ -212,50 +226,13 @@ impl PathGpuState {
             label: Some("Noon retained spatial path shader"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
         });
-        let world_pipeline = spatial_path_pipeline(
-            device,
-            &pipeline_layout,
-            &shader,
-            format,
-            1,
-            true,
-            &PATH_VERTEX_ATTRIBUTES,
-            &PATH_INSTANCE_ATTRIBUTES,
-            false,
-        );
-        let world_pipeline_msaa = spatial_path_pipeline(
-            device,
-            &pipeline_layout,
-            &shader,
-            format,
-            sample_count,
-            true,
-            &PATH_VERTEX_ATTRIBUTES,
-            &PATH_INSTANCE_ATTRIBUTES,
-            false,
-        );
-        let fixed_pipeline = spatial_path_pipeline(
-            device,
-            &pipeline_layout,
-            &shader,
-            format,
-            1,
-            false,
-            &PATH_VERTEX_ATTRIBUTES,
-            &PATH_INSTANCE_ATTRIBUTES,
-            false,
-        );
-        let fixed_pipeline_msaa = spatial_path_pipeline(
-            device,
-            &pipeline_layout,
-            &shader,
-            format,
-            sample_count,
-            false,
-            &PATH_VERTEX_ATTRIBUTES,
-            &PATH_INSTANCE_ATTRIBUTES,
-            false,
-        );
+        let pipeline = |samples, mode| {
+            spatial_path_pipeline(device, &pipeline_layout, &shader, format, samples, mode)
+        };
+        let world_pipeline = pipeline(1, PathPass::World);
+        let world_pipeline_msaa = pipeline(sample_count, PathPass::World);
+        let fixed_pipeline = pipeline(1, PathPass::Fixed);
+        let fixed_pipeline_msaa = pipeline(sample_count, PathPass::Fixed);
         let instances = create_buffer_with_data(
             device,
             queue,
@@ -274,29 +251,38 @@ impl PathGpuState {
             world_pipeline_msaa,
             fixed_pipeline,
             fixed_pipeline_msaa,
+            layout: pipeline_layout,
+            shader,
+            fill_pipelines: None,
             instances,
             capacity: 0,
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PathPass {
+    World,
+    Fixed,
+    Cairo,
+    FadingFill,
+}
+
 fn spatial_path_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     format: wgpu::TextureFormat,
     samples: u32,
-    depth: bool,
-    vertex_attributes: &'static [wgpu::VertexAttribute],
-    instance_attributes: &'static [wgpu::VertexAttribute],
-    cairo: bool,
+    mode: PathPass,
 ) -> wgpu::RenderPipeline {
+    let cairo = mode == PathPass::Cairo;
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(if depth {
-            "Noon world spatial path pipeline"
-        } else {
-            "Noon fixed-orientation spatial path pipeline"
+        label: Some(match mode {
+            PathPass::World => "Noon world spatial path pipeline",
+            PathPass::Fixed => "Noon fixed-orientation spatial path pipeline",
+            PathPass::Cairo => "Noon Cairo spatial path pipeline",
+            PathPass::FadingFill => "Noon fading spatial path fill pipeline",
         }),
         layout: Some(layout),
         vertex: wgpu::VertexState {
@@ -307,18 +293,22 @@ fn spatial_path_pipeline(
                 Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<SpatialPathVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: vertex_attributes,
+                    attributes: &PATH_VERTEX_ATTRIBUTES,
                 }),
                 Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<PathInstance>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: instance_attributes,
+                    attributes: &PATH_INSTANCE_ATTRIBUTES,
                 }),
             ],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some(if cairo { "fs_cairo" } else { "fs_main" }),
+            entry_point: Some(match mode {
+                PathPass::Cairo => "fs_cairo",
+                PathPass::FadingFill => "fs_fading_fill",
+                _ => "fs_main",
+            }),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
@@ -335,11 +325,12 @@ fn spatial_path_pipeline(
         // ignores that depth without declaring an incompatible pipeline.
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth24Plus,
-            depth_write_enabled: Some(depth && !cairo),
-            depth_compare: Some(if depth {
-                wgpu::CompareFunction::LessEqual
-            } else {
-                wgpu::CompareFunction::Always
+            depth_write_enabled: Some(mode == PathPass::World),
+            depth_compare: Some(match mode {
+                PathPass::Fixed => wgpu::CompareFunction::Always,
+                // Preserve an opaque stroke where it shares the fill's depth.
+                PathPass::FadingFill => wgpu::CompareFunction::Less,
+                _ => wgpu::CompareFunction::LessEqual,
             }),
             stencil: Default::default(),
             bias: Default::default(),
@@ -379,6 +370,7 @@ struct StagedPath {
     domain: Domain,
     painter_rank: u32,
     cairo: Option<Box<(cairo::Uniform, SemanticVec3)>>,
+    fading_fill: Option<SemanticVec3>,
 }
 
 #[derive(Debug)]
@@ -514,7 +506,9 @@ impl SpatialPathGpuState {
         });
         let effective_ranks = painter_ranks.as_ref().unwrap_or(&self.painter_ranks);
         for &index in indices {
+            let row_start = staged.len();
             staged.extend(self.row_draw_ids(index).map(|draw_id| (draw_id, None)));
+            let row_end = staged.len();
             let Some(object) = frame
                 .objects
                 .get(index)
@@ -536,7 +530,12 @@ impl SpatialPathGpuState {
             ) {
                 return Err(SpatialPathError::UnsupportedMaterial);
             }
-            if frame.reveal(index) != 1.0 || frame.morph(index) != 0.0 {
+            let reveal = frame.reveal(index);
+            if frame.morph(index) != 0.0
+                || !(0.0..=1.0).contains(&reveal)
+                || (reveal != 1.0
+                    && (!spatial.supports_path_reveal() || object.content.geometry().is_none()))
+            {
                 return Err(SpatialPathError::UnsupportedAnimation);
             }
             let world = lower_world(spatial.world).ok_or(SpatialPathError::InvalidStyle)?;
@@ -675,6 +674,22 @@ impl SpatialPathGpuState {
                     }
                     new_paths.insert(keyed, path);
                 }
+                let fading_fill = if reveal > 0.0 && reveal < 1.0 && style.fill.is_some() {
+                    let fill = self
+                        .paths
+                        .get(&keyed)
+                        .and_then(|path| path.fill.as_ref())
+                        .or_else(|| new_paths.get(&keyed).and_then(|path| path.fill.as_ref()));
+                    fill.map(|fill| {
+                        spatial
+                            .world
+                            .transform_point(fill.local_center)
+                            .ok_or(SpatialPathError::InvalidStyle)
+                    })
+                    .transpose()?
+                } else {
+                    None
+                };
                 let color = |value: Option<Color>| {
                     value.map_or([0.0; 4], |c| [c.red, c.green, c.blue, c.alpha])
                 };
@@ -684,7 +699,8 @@ impl SpatialPathGpuState {
                     stroke: color(style.stroke),
                     background_stroke: color(style.background_stroke),
                     opacity: object_alpha,
-                    fixed_orientation: u32::from(fixed),
+                    reveal_and_orientation: (reveal.to_bits() & 0x7fff_ffff)
+                        | (u32::from(fixed) << 31),
                     fixed_anchor: [anchor.x as f32, anchor.y as f32, anchor.z as f32],
                     screen_stroke_width: if screen_stroke(style) {
                         style.stroke_width
@@ -703,16 +719,23 @@ impl SpatialPathGpuState {
                 {
                     return Err(SpatialPathError::InvalidStyle);
                 }
-                staged.push((
-                    draw_id,
-                    Some(StagedPath {
-                        key: keyed,
-                        instance,
-                        domain: spatial.composition_domain,
-                        painter_rank,
-                        cairo,
-                    }),
-                ));
+                let draw = Some(StagedPath {
+                    key: keyed,
+                    instance,
+                    domain: spatial.composition_domain,
+                    painter_rank,
+                    cairo,
+                    fading_fill,
+                });
+                // Replace this row's pending removal in place. A reveal-only
+                // publication keeps the existing instance and depth-order entry.
+                if let Ok(slot) =
+                    staged[row_start..row_end].binary_search_by_key(&draw_id, |row| row.0)
+                {
+                    staged[row_start + slot].1 = draw;
+                } else {
+                    staged.push((draw_id, draw));
+                }
             }
         }
         for path in new_paths.values() {
@@ -733,19 +756,13 @@ impl SpatialPathGpuState {
                 return Err(SpatialPathError::BufferLimit);
             }
         }
-        let mut staged_presence = HashMap::<DrawId, bool>::new();
-        let mut staged_live = self.draws.len();
         let mut staged_free = self.free_instances.len();
         let mut needed = self.instances.len();
         for (draw_id, draw) in &staged {
-            let previous = staged_presence
-                .get(draw_id)
-                .copied()
-                .unwrap_or_else(|| self.draws.contains_key(draw_id));
+            let previous = self.draws.contains_key(draw_id);
             let next = draw.is_some();
             match (previous, next) {
                 (false, true) => {
-                    staged_live += 1;
                     if staged_free == 0 {
                         needed += 1;
                     } else {
@@ -753,14 +770,11 @@ impl SpatialPathGpuState {
                     }
                 }
                 (true, false) => {
-                    staged_live -= 1;
                     staged_free += 1;
                 }
                 _ => {}
             }
-            staged_presence.insert(*draw_id, next);
         }
-        debug_assert_eq!(staged_live + staged_free, needed);
         let capacity = needed
             .max(1)
             .checked_next_power_of_two()
@@ -784,23 +798,16 @@ impl SpatialPathGpuState {
     }
 
     pub(super) fn remaining_after(&self, plan: &PathPlan) -> usize {
-        // Track only touched ids. Plans can contain repeated updates for one
-        // row/item, so compare each staged value with the prior staged value
-        // before adjusting the retained count.
-        let mut staged_presence = HashMap::<DrawId, bool>::new();
+        // Each touched draw has one final staged value.
         let mut remaining = self.draws.len();
         for (draw_id, draw) in &plan.staged {
-            let previous = staged_presence
-                .get(draw_id)
-                .copied()
-                .unwrap_or_else(|| self.draws.contains_key(draw_id));
+            let previous = self.draws.contains_key(draw_id);
             let next = draw.is_some();
             match (previous, next) {
                 (false, true) => remaining += 1,
                 (true, false) => remaining -= 1,
                 _ => {}
             }
-            staged_presence.insert(*draw_id, next);
         }
         remaining
     }
@@ -839,6 +846,7 @@ impl SpatialPathGpuState {
                         wgpu::BufferUsages::INDEX,
                     ),
                     index_count: path.indices.len() as u32,
+                    fill: path.fill,
                     users: 0,
                 },
             );
@@ -853,6 +861,30 @@ impl SpatialPathGpuState {
                 format,
                 super::PATH_SAMPLE_COUNT,
             ));
+        }
+        let gpu = self.gpu.as_mut().expect("spatial path GPU state");
+        if gpu.fill_pipelines.is_none()
+            && plan
+                .staged
+                .iter()
+                .filter_map(|(_, draw)| draw.as_ref())
+                .any(|draw| {
+                    draw.domain == Domain::World
+                        && draw.instance.reveal_and_orientation < 1.0_f32.to_bits()
+                        && self.paths[&draw.key].fill.is_some()
+                })
+        {
+            // Prepare the pipeline at the zero-reveal snapshot, ahead of the fade.
+            gpu.fill_pipelines = Some([1, super::PATH_SAMPLE_COUNT].map(|samples| {
+                spatial_path_pipeline(
+                    device,
+                    &gpu.layout,
+                    &gpu.shader,
+                    format,
+                    samples,
+                    PathPass::FadingFill,
+                )
+            }));
         }
         if !plan.new_cairo_geometry.is_empty()
             || plan
@@ -874,6 +906,12 @@ impl SpatialPathGpuState {
         let mut dirty = BTreeSet::new();
         let mut released = HashSet::new();
         for (draw_id, staged) in plan.staged {
+            if let Some(center) = staged.as_ref().and_then(|draw| draw.fading_fill) {
+                stats.depth_order_changed |=
+                    self.fading_fills.insert(draw_id, center) != Some(center);
+            } else {
+                stats.depth_order_changed |= self.fading_fills.remove(&draw_id).is_some();
+            }
             if let Some(state) = self.cairo.as_deref_mut() {
                 let old_center = state
                     .draws
@@ -1017,21 +1055,30 @@ impl SpatialPathGpuState {
         });
         match domain {
             Domain::World => {
-                for (_, draw) in self.draws.iter().filter(|(id, draw)| {
+                for (id, draw) in self.draws.iter().filter(|(id, draw)| {
                     draw.domain == Domain::World
                         && !self
                             .cairo
                             .as_deref()
                             .is_some_and(|state| state.draws.contains_key(id))
                 }) {
-                    draw_calls += encode_path_draw(pass, &self.paths, draw);
+                    let path = &self.paths[&draw.key];
+                    if self.fading_fills.contains_key(id) {
+                        let fill = path.fill.as_ref().expect("retained fading fill");
+                        for range in [0..fill.indices.start, fill.indices.end..path.index_count] {
+                            draw_calls += encode_path_draw(pass, path, draw, range);
+                        }
+                    } else {
+                        draw_calls += encode_path_draw(pass, path, draw, 0..path.index_count);
+                    }
                 }
             }
             Domain::FixedOrientation => {
                 for &(_, item, row) in &self.fixed_orientation_order {
                     let id = DrawId { row, item };
                     if let Some(draw) = self.draws.get(&id) {
-                        draw_calls += encode_path_draw(pass, &self.paths, draw);
+                        let path = &self.paths[&draw.key];
+                        draw_calls += encode_path_draw(pass, path, draw, 0..path.index_count);
                     }
                 }
             }
@@ -1046,31 +1093,60 @@ impl SpatialPathGpuState {
             .flat_map(|state| state.draws.keys())
             .copied()
             .filter(|id| self.draws[id].domain == Domain::World)
+            .chain(self.fading_fills.keys().copied())
     }
 
     pub(super) fn depth_center(&self, id: DrawId) -> SemanticVec3 {
-        self.cairo.as_ref().expect("Cairo state").draws[&id].center
-    }
-
-    pub(super) fn bind_depth_pipeline<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, samples: u32) {
-        let gpu = self.gpu.as_ref().expect("spatial path GPU state");
-        let cairo = self.cairo.as_ref().expect("Cairo state");
-        pass.set_pipeline(
-            &cairo.pipelines.as_ref().expect("Cairo pipelines").world[usize::from(samples != 1)],
-        );
-        pass.set_bind_group(0, &gpu.camera_group, &[]);
-        pass.set_bind_group(1, &gpu.fixed_camera_group, &[]);
-        pass.set_vertex_buffer(1, gpu.instances.slice(..));
+        self.fading_fills
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| self.cairo.as_ref().expect("Cairo state").draws[&id].center)
     }
 
     pub(super) fn encode_depth_draw<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         id: DrawId,
+        samples: u32,
+        bound: &mut Option<PathPass>,
     ) -> usize {
-        let cairo = self.cairo.as_ref().expect("Cairo state");
-        pass.set_bind_group(2, &cairo.draws[&id].binding, &[]);
-        encode_path_draw(pass, &self.paths, &self.draws[&id])
+        let gpu = self.gpu.as_ref().expect("spatial path GPU state");
+        let draw = &self.draws[&id];
+        let path = &self.paths[&draw.key];
+        let sample = usize::from(samples != 1);
+        let (mode, pipeline, range) = if self.fading_fills.contains_key(&id) {
+            (
+                PathPass::FadingFill,
+                &gpu.fill_pipelines.as_ref().expect("fill pipelines")[sample],
+                path.fill
+                    .as_ref()
+                    .expect("retained fading fill")
+                    .indices
+                    .clone(),
+            )
+        } else {
+            let cairo = self.cairo.as_ref().expect("Cairo state");
+            (
+                PathPass::Cairo,
+                &cairo.pipelines.as_ref().expect("Cairo pipelines").world[sample],
+                0..path.index_count,
+            )
+        };
+        if *bound != Some(mode) {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &gpu.camera_group, &[]);
+            pass.set_bind_group(1, &gpu.fixed_camera_group, &[]);
+            pass.set_vertex_buffer(1, gpu.instances.slice(..));
+            *bound = Some(mode);
+        }
+        if mode == PathPass::Cairo {
+            pass.set_bind_group(
+                2,
+                &self.cairo.as_ref().expect("Cairo state").draws[&id].binding,
+                &[],
+            );
+        }
+        encode_path_draw(pass, path, draw, range)
     }
 }
 
@@ -1097,17 +1173,16 @@ fn local_path<'a>(
 
 fn encode_path_draw<'a>(
     pass: &mut wgpu::RenderPass<'a>,
-    paths: &'a HashMap<PathKey, ResidentPath>,
-    draw: &'a PathDraw,
+    path: &'a ResidentPath,
+    draw: &PathDraw,
+    range: Range<u32>,
 ) -> usize {
-    let path = &paths[&draw.key];
+    if range.is_empty() {
+        return 0;
+    }
     pass.set_vertex_buffer(0, path.vertices.slice(..));
     pass.set_index_buffer(path.indices.slice(..), wgpu::IndexFormat::Uint32);
-    pass.draw_indexed(
-        0..path.index_count,
-        0,
-        draw.instance as u32..draw.instance as u32 + 1,
-    );
+    pass.draw_indexed(range, 0, draw.instance as u32..draw.instance as u32 + 1);
     1
 }
 
@@ -1560,7 +1635,7 @@ pub(super) fn tessellate(
         .map(|vertex| {
             let mut output = SpatialPathVertex {
                 position: [vertex.position.x, vertex.position.y],
-                surface: crate::pack_path_surface(vertex.surface, 1.0),
+                surface: crate::pack_path_surface(vertex.surface, vertex.path_progress),
                 tangent: [0.0; 2],
                 extrusion: [0.0; 2],
                 stroke_metadata: [0.0; 3],
@@ -1588,7 +1663,10 @@ pub(super) fn tessellate(
         let offset = u32::try_from(vertices.len()).map_err(|_| SpatialPathError::BufferLimit)?;
         vertices.extend(frames.vertices.into_iter().map(|vertex| SpatialPathVertex {
             position: [vertex.position.x, vertex.position.y],
-            surface: crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0),
+            surface: crate::pack_path_surface(
+                noon_geometry::PathSurface::Stroke,
+                vertex.path_progress,
+            ),
             tangent: [vertex.tangent.x, vertex.tangent.y],
             extrusion: [vertex.extrusion.x, vertex.extrusion.y],
             stroke_metadata: vertex.metadata,
@@ -1616,7 +1694,33 @@ pub(super) fn tessellate(
     }) {
         return Err(SpatialPathError::UnrepresentableVertex);
     }
-    Ok(TessellatedSpatialPath { vertices, indices })
+    let fill = if domain == Domain::World && style.fill.is_some() {
+        let is_fill = |&index: &u32| vertices[index as usize].surface & 1 == 0;
+        indices
+            .iter()
+            .position(is_fill)
+            .map(|start| {
+                let end = indices.iter().rposition(is_fill).expect("fill indices") + 1;
+                debug_assert!(indices[start..end].iter().all(is_fill));
+                let local_center = path
+                    .conservative_bounds()
+                    .ok_or(SpatialPathError::UnsupportedGeometry)?
+                    .center();
+                Ok(PathFill {
+                    indices: u32::try_from(start).map_err(|_| SpatialPathError::BufferLimit)?
+                        ..u32::try_from(end).map_err(|_| SpatialPathError::BufferLimit)?,
+                    local_center: SemanticVec3::from_vec2(local_center),
+                })
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(TessellatedSpatialPath {
+        vertices,
+        indices,
+        fill,
+    })
 }
 
 #[cfg(test)]
@@ -1677,10 +1781,10 @@ mod tests {
         let screen_mesh =
             tessellate(&geometry, &resources, screen_stroke, 1.0, Domain::World).unwrap();
         assert!(screen_mesh.indices.len() > mesh.indices.len());
-        assert!(screen_mesh.vertices.iter().any(|vertex| {
-            vertex.surface == crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0)
-                && vertex.tangent != [0.0; 2]
-        }));
+        assert!(screen_mesh
+            .vertices
+            .iter()
+            .any(|vertex| { vertex.surface & 1 != 0 && vertex.tangent != [0.0; 2] }));
         // A filled Dot has no stroke to expand. Its unused constructor width
         // mode must not reject an otherwise supported World path.
         let filled = Style {
@@ -1733,6 +1837,10 @@ mod tests {
             let key = path_key(&geometry, &resources, sketched, 1).unwrap();
             let sketched_mesh = mesh(sketched);
             let solid_mesh = mesh(solid);
+            assert!(sketched_mesh.vertices.iter().any(|vertex| {
+                vertex.surface & 1 != 0
+                    && (0.1..0.9).contains(&crate::unpack_path_progress(vertex.surface))
+            }));
             assert_eq!(
                 positions(&sketched_mesh, true),
                 positions(&solid_mesh, true)
@@ -1839,19 +1947,14 @@ mod tests {
         let mesh = tessellate(&geometry, &resources, style, 1.0, Domain::World).unwrap();
         assert!(!mesh.indices.is_empty());
         let fill_surface = crate::pack_path_surface(noon_geometry::PathSurface::Fill, 1.0);
-        let stroke_surface = crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0);
         assert!(mesh
             .vertices
             .iter()
             .any(|vertex| vertex.surface == fill_surface));
-        assert!(mesh
-            .vertices
-            .iter()
-            .any(|vertex| vertex.surface == stroke_surface));
         let stroke_vertices: Vec<_> = mesh
             .vertices
             .iter()
-            .filter(|vertex| vertex.surface == stroke_surface)
+            .filter(|vertex| vertex.surface & 1 != 0)
             .collect();
         assert!(
             stroke_vertices.len() >= 4,
@@ -1915,11 +2018,10 @@ mod tests {
         let inline = GeometryRef::path(curved_open);
         for geometry in [&inline, &external] {
             let mesh = tessellate(geometry, &resources, style, 1.0, Domain::World).unwrap();
-            let stroke = crate::pack_path_surface(noon_geometry::PathSurface::Stroke, 1.0);
             let vertices: Vec<_> = mesh
                 .vertices
                 .iter()
-                .filter(|vertex| vertex.surface == stroke)
+                .filter(|vertex| vertex.surface & 1 != 0)
                 .collect();
             assert!(!vertices.is_empty());
             assert!(vertices.iter().all(|vertex| {
@@ -2054,16 +2156,15 @@ mod tests {
                     domain: Domain::World,
                     painter_rank: 0,
                     cairo: None,
+                    fading_fill: None,
                 }),
             )
         };
         let plan = PathPlan {
             staged: vec![
-                staged(DrawId { row: 2, item: 0 }, None),
                 staged(DrawId { row: 2, item: 0 }, Some(())),
                 staged(DrawId { row: 2, item: 3 }, None),
                 staged(DrawId { row: 12, item: 0 }, Some(())),
-                staged(DrawId { row: 12, item: 0 }, None),
             ],
             new_paths: HashMap::new(),
             new_cairo_geometry: HashMap::new(),
@@ -2072,9 +2173,8 @@ mod tests {
             camera_clip_scale: [1.0, 1.0],
             painter_ranks: None,
         };
-        // Row 9 remains, row 2/item 0 remains after its replacement, and the
-        // transient row 12 draw is absent: two final draws total.
-        assert_eq!(state.remaining_after(&plan), 2);
+        // Row 9 and row 2/item 0 remain, with one new draw for row 12.
+        assert_eq!(state.remaining_after(&plan), 3);
     }
 
     #[test]

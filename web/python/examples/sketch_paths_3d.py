@@ -1,4 +1,4 @@
-"""Orbit two sketch strokes as an opaque panel passes in front of them."""
+"""Draw two sketch strokes during a camera orbit with an opaque foreground panel."""
 from noon import *
 
 
@@ -23,8 +23,11 @@ class SpatialSketchPaths(ThreeDScene):
         self.set_world_transform(panel, translation=(-0.9, 0.5, 0),
                                  rotation=(0.9659258263, 0.2588190451, 0, 0))
         self.set_world_transform(occluder, translation=(0.4, -0.18, 1.15))
-        self.add_world_mobjects(occluder, panel, curve)
+        self.set_world_transform(curve)
+        self.add_world_mobjects(occluder)
 
-        self.wait(0.4)
-        self.move_camera(phi=0.85, theta=-0.6, run_time=2.2, rate_func=linear)
+        self.move_camera(
+            phi=0.85, theta=-0.6, added_anims=(Create(panel), Create(curve)),
+            run_time=2.6, rate_func=linear,
+        )
         self.wait(0.4)

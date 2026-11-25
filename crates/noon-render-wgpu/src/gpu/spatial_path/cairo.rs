@@ -90,10 +90,7 @@ impl Pipelines {
                 &shader,
                 format,
                 samples,
-                true,
-                &super::PATH_VERTEX_ATTRIBUTES,
-                &super::PATH_INSTANCE_ATTRIBUTES,
-                true,
+                super::PathPass::Cairo,
             )
         });
         Self { layout, world }

@@ -96,6 +96,7 @@ enum ObjectOverlay {
         click_indicate_target: bool,
         index: u32,
         is_text: bool,
+        is_geometry: bool,
         continuous_fill: bool,
         spatial: Option<Box<crate::CompiledSpatialState>>,
     },
@@ -204,6 +205,7 @@ impl PreflightOverlay {
                     ),
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
+                    is_geometry: scene.objects[index as usize].content.geometry().is_some(),
                     continuous_fill: crate::continuous_fill_content_supported(
                         &scene.objects[index as usize].content,
                     ),
@@ -257,6 +259,7 @@ impl PreflightOverlay {
                     ),
                     index,
                     is_text: scene.objects[index as usize].text().is_some(),
+                    is_geometry: scene.objects[index as usize].content.geometry().is_some(),
                     continuous_fill: crate::continuous_fill_content_supported(
                         &scene.objects[index as usize].content,
                     ),
@@ -324,9 +327,21 @@ impl PreflightOverlay {
                     click_indicate_target: crate::is_click_indicate_target(&row.content),
                     index,
                     is_text: row.text().is_some(),
+                    is_geometry: row.content.geometry().is_some(),
                     spatial: row.spatial.clone(),
                 },
             );
+        }
+    }
+
+    fn is_geometry(&self, scene: &CompiledScene, id: ObjectId) -> bool {
+        match self.objects.get(&id) {
+            Some(ObjectOverlay::Present { is_geometry, .. }) => *is_geometry,
+            Some(ObjectOverlay::Removed { .. }) => false,
+            None => scene
+                .object_indices
+                .get(&id)
+                .is_some_and(|&index| scene.objects[index as usize].content.geometry().is_some()),
         }
     }
 
@@ -530,6 +545,7 @@ pub(super) fn preflight_transaction_with_resources(
                         click_indicate_target: crate::is_click_indicate_target(&object.content),
                         index,
                         is_text: object.text().is_some(),
+                        is_geometry: object.content.geometry().is_some(),
                         continuous_fill: crate::continuous_fill_content_supported(&object.content),
                         spatial: object.spatial.clone(),
                     },
@@ -579,7 +595,15 @@ pub(super) fn preflight_transaction_with_resources(
                     content,
                     *text_bounds,
                 )?;
-                for property in [Property::Transform, Property::Morph] {
+                let spatial = overlay.spatial(scene, *object);
+                let spatial_reveal = spatial
+                    .as_ref()
+                    .is_some_and(crate::CompiledSpatialState::supports_path_reveal)
+                    && content.geometry().is_none();
+                for property in [Property::Transform, Property::Morph]
+                    .into_iter()
+                    .chain(spatial_reveal.then_some(Property::Reveal))
+                {
                     if let Some(track) = overlay
                         .channel(scene, CompiledChannelKey::new(index, property))
                         .iter()
@@ -592,7 +616,6 @@ pub(super) fn preflight_transaction_with_resources(
                         });
                     }
                 }
-                let spatial = overlay.spatial(scene, *object);
                 let effects = overlay.effects(scene, *object);
                 overlay.require_paint_source(
                     scene,
@@ -607,6 +630,7 @@ pub(super) fn preflight_transaction_with_resources(
                         click_indicate_target: crate::is_click_indicate_target(content),
                         index,
                         is_text: matches!(content, ObjectContentRef::Text(_)),
+                        is_geometry: content.geometry().is_some(),
                         continuous_fill: crate::continuous_fill_content_supported(content),
                         spatial: spatial.map(Box::new),
                     },
@@ -695,6 +719,7 @@ pub(super) fn preflight_transaction_with_resources(
                                 track.property,
                                 &track.values,
                                 spatial.as_ref(),
+                                overlay.is_geometry(scene, *object),
                             )
                         })
                 }) {
@@ -925,7 +950,11 @@ pub(super) fn preflight_transaction_with_resources(
                     crate::validate_paint_track_profile(track, supported, spatial.is_some())
                         .map_err(CompilePatchError::InvalidTrack)?;
                 }
-                if !crate::valid_track_for_spatial(track, spatial.as_ref()) {
+                if !crate::valid_track_for_spatial(
+                    track,
+                    spatial.as_ref(),
+                    overlay.is_geometry(scene, track.object),
+                ) {
                     return Err(CompilePatchError::InvalidTrack(
                         noon_core::TimelineError::InvalidWorldTransformValues,
                     ));
@@ -987,7 +1016,11 @@ pub(super) fn preflight_transaction_with_resources(
                     crate::validate_paint_track_profile(track, supported, spatial.is_some())
                         .map_err(CompilePatchError::InvalidTrack)?;
                 }
-                if !crate::valid_track_for_spatial(track, spatial.as_ref()) {
+                if !crate::valid_track_for_spatial(
+                    track,
+                    spatial.as_ref(),
+                    overlay.is_geometry(scene, track.object),
+                ) {
                     return Err(CompilePatchError::InvalidTrack(
                         noon_core::TimelineError::InvalidWorldTransformValues,
                     ));

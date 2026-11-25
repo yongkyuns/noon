@@ -119,9 +119,10 @@ The [sketch path demo](web/python/examples/hand_drawn_paths.py) uses the same
 style on an open `Path` and a `VMobject` with a filled contour and a hole.
 The [sketch text demo](web/python/examples/showcase_sketch_text.py) uses the same stroke
 on `Text` and `MathTex` glyph outlines with `Create` and `Write`.
-The [3D sketch path demo](web/python/examples/sketch_paths_3d.py) shows the
-same stroke on world-space paths during a camera orbit. Run the paired Rust demo
-with `cargo run -p noon-native --example spatial_sketch_paths`.
+The [3D sketch path demo](web/python/examples/sketch_paths_3d.py) uses `Create`
+on world-space paths during a camera orbit. The stroke draws progressively
+while the fill eases in. Run the paired Rust demo with
+`cargo run -p noon-native --example spatial_sketch_paths`.
 The [cube sketch demo](web/python/examples/cube_sketch_wireframe.py) uses
 `Cube(stroke=SketchStroke(TEAL))` on all 12 edges with opaque, unlit faces.
 Use `fill_opacity=0` for a bare wireframe.
