@@ -704,11 +704,16 @@ mod tests {
         let prepare = |roughness, seed| {
             let mut options = options.clone();
             options
-                .set_sketch_stroke(crate::YELLOW, roughness, seed)
+                .set_sketch_stroke(
+                    Color { alpha: 0.5, ..crate::YELLOW },
+                    roughness,
+                    seed,
+                )
                 .unwrap();
             let arrow = options
                 .prepare(&mut scene.integration_store().borrow_mut())
                 .unwrap();
+            assert_eq!(arrow.shaft.style.stroke_opacity, 0.5);
             [arrow.end_tip, arrow.start_tip.unwrap()]
         };
         let plain = prepare(0.0, 7);

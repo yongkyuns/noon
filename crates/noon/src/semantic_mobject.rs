@@ -427,6 +427,7 @@ impl ManimGeometryOptions {
             color.blue.into(),
             color.alpha.into(),
         )?;
+        self.set_stroke_opacity(color.alpha.into())?;
         self.style.sketch_stroke = (stroke.roughness() > 0.0).then_some(stroke);
         Ok(())
     }

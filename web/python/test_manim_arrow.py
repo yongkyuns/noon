@@ -111,7 +111,8 @@ class ManimArrowFacadeTests(unittest.TestCase):
                 def setFillOpacity(self, value): self._record("fill_opacity", float(value))
                 def setStrokeColor(self, r, g, b, a): self._record("stroke_color", float(r), float(g), float(b), float(a))
                 def disableStroke(self): self._record("disable_stroke")
-                def setStrokeOpacity(self, value): self._record("stroke_opacity", float(value))
+                def setSketchStroke(self, roughness, seed, r, g, b, a):
+                    self._record("sketch_stroke", roughness, seed, r, g, b, a)
                 def setColor(self, r, g, b, a): self._record("color", float(r), float(g), float(b), float(a))
 
             def boundary_options(kind, mode, *values):
@@ -203,6 +204,11 @@ class ManimArrowFacadeTests(unittest.TestCase):
             assert ("publish", "vector") in calls
             assert ("double_arrow", -1.0, 0.0, 1.0, 0.0) in calls
             assert ("publish", "double") in calls
+
+            sketch = noon.SketchStroke(noon.YELLOW, roughness=1.4, seed=17)
+            arrows.Arrow(stroke=sketch)
+            yellow = noon.YELLOW
+            assert ("sketch_stroke", 1.4, 17, yellow.red, yellow.green, yellow.blue, yellow.alpha) in calls
 
             # Static construction keeps the original host; continuation-time
             # construction publishes through the active canonical session and
