@@ -235,6 +235,27 @@ impl NativeRetargetedRig2d {
             .map(NativeRigArtwork2d)
             .map_err(engine_error)
     }
+
+    #[pyo3(name = "artworkObjectTrack")]
+    fn artwork_object_track(
+        &self,
+        joint: &str,
+        names: Vec<String>,
+        poses: &MembershipBatch,
+        cues: Vec<(f32, String)>,
+    ) -> PyResult<NativeRigArtworkTarget2d> {
+        let targets = poses.add_targets()?;
+        if names.len() != targets.len() {
+            return Err(engine_error(
+                "2D artwork drawings require corresponding pose names",
+            ));
+        }
+        let poses: Vec<_> = names.into_iter().zip(targets).collect();
+        self.0
+            .artwork_track_for(joint, &poses, &cues)
+            .map(NativeRigArtworkTarget2d)
+            .map_err(engine_error)
+    }
 }
 
 #[pyclass(skip_from_py_object, module = "_noon_native")]
@@ -250,6 +271,9 @@ impl NativeRigArtwork2d {
             .map_err(engine_error)
     }
 }
+
+#[pyclass(unsendable, skip_from_py_object, module = "_noon_native")]
+pub struct NativeRigArtworkTarget2d(noon::RigArtworkTarget2d);
 
 #[pyclass(skip_from_py_object, module = "_noon_native")]
 pub struct NativeRigPose2d(noon::RigPose2d);
@@ -1451,6 +1475,22 @@ impl Context {
             .map(|copied| crate::family::FamilyCopy {
                 copied: copied.into_entry_copy(),
             })
+            .map_err(AuthoringFailure::from_scene_capture)
+            .map_err(engine_error)
+    }
+
+    #[pyo3(name = "rigArtworkTarget")]
+    fn rig_artwork_target(
+        &mut self,
+        artwork: &NativeRigArtworkTarget2d,
+        phase: f32,
+        references: &MembershipBatch,
+    ) -> PyResult<crate::family::FamilyCopy> {
+        self.require_active()?;
+        artwork
+            .0
+            .target_at_with_references(&mut self.scene, phase, &references.add_targets()?)
+            .map(|copied| crate::family::FamilyCopy { copied })
             .map_err(AuthoringFailure::from_scene_capture)
             .map_err(engine_error)
     }

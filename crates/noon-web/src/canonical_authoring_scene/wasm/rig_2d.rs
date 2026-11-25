@@ -2,7 +2,7 @@ use js_sys::Array;
 use noon::integration::AuthoringFailure;
 use noon::{
     Joint2d, JointAttachment2d, JointMapping2d, JointTrack2d, RetargetedRig2d, RigArtwork2d,
-    RigPose2d,
+    RigArtworkTarget2d, RigPose2d,
 };
 use wasm_bindgen::prelude::*;
 
@@ -120,6 +120,26 @@ impl CanonicalAuthoringSceneContext {
             .map_err(typed_js_error)
     }
 
+    #[wasm_bindgen(js_name = rigArtworkTarget)]
+    pub fn rig_artwork_target(
+        &mut self,
+        artwork: &WasmRigArtworkTarget2d,
+        phase: f32,
+        references: WasmSceneMembershipBatch,
+    ) -> Result<WasmFamilyCopy, JsValue> {
+        let scene = self.inner.local_authoring_scene().map_err(typed_js_error)?;
+        artwork
+            .0
+            .target_at_with_references(
+                scene,
+                phase,
+                &references.copy_references().map_err(typed_js_error)?,
+            )
+            .map(WasmFamilyCopy::from_entry_copy)
+            .map_err(AuthoringFailure::from_scene_capture)
+            .map_err(typed_js_error)
+    }
+
     #[wasm_bindgen(js_name = bindRig2d)]
     pub fn bind_rig_2d(
         &mut self,
@@ -176,21 +196,40 @@ impl WasmRetargetedRig2d {
                 Ok((name, points))
             })
             .collect::<Result<_, JsValue>>()?;
-        let cues: Vec<_> = cues
-            .iter()
-            .map(|row| {
-                let row = artwork_pair(row)?;
-                let phase = artwork_number(row.get(0))? as f32;
-                let name = row
-                    .get(1)
-                    .as_string()
-                    .ok_or_else(|| js_error("2D artwork cue requires a pose name"))?;
-                Ok((phase, name))
-            })
-            .collect::<Result<_, JsValue>>()?;
         self.0
-            .artwork_track(joint, poses, &cues)
+            .artwork_track(joint, poses, &artwork_cues(cues)?)
             .map(WasmRigArtwork2d)
+            .map_err(typed_js_error)
+    }
+
+    #[wasm_bindgen(js_name = artworkObjectTrack)]
+    pub fn artwork_object_track(
+        &self,
+        joint: &str,
+        names: Array,
+        poses: WasmSceneMembershipBatch,
+        cues: Array,
+    ) -> Result<WasmRigArtworkTarget2d, JsValue> {
+        let targets = poses.copy_references().map_err(typed_js_error)?;
+        if names.length() as usize != targets.len() {
+            return Err(js_error(
+                "2D artwork drawings require corresponding pose names",
+            ));
+        }
+        let poses = names
+            .iter()
+            .zip(targets)
+            .map(|(name, target)| {
+                Ok((
+                    name.as_string()
+                        .ok_or_else(|| js_error("2D artwork pose requires a name"))?,
+                    target,
+                ))
+            })
+            .collect::<Result<Vec<_>, JsValue>>()?;
+        self.0
+            .artwork_track_for(joint, &poses, &artwork_cues(cues)?)
+            .map(WasmRigArtworkTarget2d)
             .map_err(typed_js_error)
     }
 }
@@ -207,6 +246,23 @@ impl WasmRigArtwork2d {
             .map(|points| points.into_flattened())
             .map_err(typed_js_error)
     }
+}
+
+#[wasm_bindgen]
+pub struct WasmRigArtworkTarget2d(RigArtworkTarget2d);
+
+fn artwork_cues(cues: Array) -> Result<Vec<(f32, String)>, JsValue> {
+    cues.iter()
+        .map(|row| {
+            let row = artwork_pair(row)?;
+            let phase = artwork_number(row.get(0))? as f32;
+            let name = row
+                .get(1)
+                .as_string()
+                .ok_or_else(|| js_error("2D artwork cue requires a pose name"))?;
+            Ok((phase, name))
+        })
+        .collect()
 }
 
 fn artwork_pair(row: JsValue) -> Result<Array, JsValue> {
