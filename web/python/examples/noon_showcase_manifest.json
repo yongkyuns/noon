@@ -299,6 +299,17 @@
       "beats": [{"time": 0.8, "label": "Create the blue equation"}, {"time": 1.6, "label": "Write the yellow equation"}, {"time": 3.1, "label": "Compare completed equations"}]
     },
     {
+      "id": "showcase-sketch-text", "title": "Hand-drawn text and equations",
+      "lesson": "Draw a title and write a fraction with seeded sketch outlines. Adjust roughness to change how much the lines vary.",
+      "primary_feature": "sketch-stroke", "category": "Text and mathematics",
+      "path": "python/examples/showcase_sketch_text.py", "features": ["SketchStroke", "Text", "MathTex", "Create", "Write"],
+      "duration": 3.0, "thumbnail_time": 2.7,
+      "thumbnail": "thumbnails/showcase/showcase-sketch-text.png",
+      "thumbnail_alt": "The word Noon outlined in teal above a hand-drawn yellow fraction",
+      "still_intervals": [[2.4, 3.0]],
+      "beats": [{"time": 0.6, "label": "Draw the title"}, {"time": 1.8, "label": "Write the fraction"}, {"time": 2.7, "label": "Inspect the completed outlines"}]
+    },
+    {
       "id": "showcase-equation-card", "title": "Animate an equation card",
       "lesson": "Move a MathTex equation and its frame together, then highlight the original first term.",
       "primary_feature": "mathtex-group-animation", "category": "Text and mathematics",
