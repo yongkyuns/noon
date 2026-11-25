@@ -1083,6 +1083,51 @@ class NestedPose(Scene):
         finally:
             view.close()
 
+    def test_distributive_tutorial_points_to_both_terms_during_replay(self):
+        path = ROOT / "web/python/examples/showcase_three_of_each.py"
+        scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
+        view = prepare_view(scene)
+        width, height = 640, 360
+
+        def capture(time):
+            return view.capture(time=time, width=width, height=height)
+
+        def assert_pointing(frame, term_x, ink):
+            center = int(width / 2 + term_x * height / 8)
+            colored, gold = [], []
+            for y in range(87, 155):
+                for x in range(center - 20, center + 21):
+                    offset = (y * width + x) * 4
+                    r, g, b = frame[offset:offset + 3]
+                    if (r, g, b) == ink:
+                        colored.append((x, y))
+                    if r > 240 and 180 <= g <= 225 and b < 143:
+                        gold.append((x, y))
+            self.assertTrue(colored and gold)
+            underline_y = max(y for _, y in colored)
+            underline = [x for x, y in colored if y == underline_y]
+            glyph = [x for x, y in colored if y < underline_y - 5]
+            tip_y = min(y for _, y in gold)
+            fingertip = [x for x, y in gold if y == tip_y]
+            self.assertGreater(len(underline), 15)
+            self.assertTrue(glyph)
+            underline_center = (min(underline) + max(underline)) / 2
+            glyph_center = (min(glyph) + max(glyph)) / 2
+            self.assertLessEqual(abs(underline_center - glyph_center), 2)
+            self.assertLessEqual(abs(underline_center - sum(fingertip) / len(fingertip)), 3)
+            self.assertLessEqual(abs(tip_y - underline_y), 4)
+
+        try:
+            self.assertAlmostEqual(view.duration, 7.52)
+            x_frame, two_frame = capture(2.55), capture(5.05)
+            assert_pointing(x_frame, -0.68, (35, 98, 89))
+            assert_pointing(two_frame, 1.00, (157, 69, 47))
+            self.assertNotEqual(capture(7.52), two_frame)
+            self.assertEqual(capture(5.05), two_frame)
+            self.assertEqual(capture(2.55), x_frame)
+        finally:
+            view.close()
+
     def test_background_music_lesson_prepares_its_full_authored_timeline(self):
         path = ROOT / "web/python/examples/background_music_lesson.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
