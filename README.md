@@ -112,6 +112,8 @@ For a local browser build, follow the [web guide](web/README.md).
 The [hand-drawn diagram](web/python/examples/hand_drawn.py) uses
 `stroke=SketchStroke(TEAL, roughness=1.25, seed=8)` on a `Rectangle` with
 `Create` and `HatchPaint`. The same stroke works on lines, arrows, and circles.
+Noon adapts the [RoughJS](https://github.com/rough-stuff/rough) line and Bézier
+stroke algorithms to retained contours.
 Run the paired Rust demo with `cargo run -p noon-native --example hand_drawn`.
 The [sketch path demo](web/python/examples/hand_drawn_paths.py) uses the same
 style on an open `Path` and a `VMobject` with a filled contour and a hole.
