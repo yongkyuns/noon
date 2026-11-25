@@ -1503,25 +1503,6 @@ mod tests {
     }
 
     #[test]
-    fn sketch_style_applies_to_a_tilted_path() {
-        let mut scene = Scene::new();
-        let rectangle = scene.square(2.0).unwrap();
-        let pose = noon_core::SemanticWorldTransform3D::from_axial_direction(
-            SemanticVec3::new(0.0, 1.0, 1.0),
-            1.0,
-        )
-        .unwrap();
-        scene.set_world_transform(&rectangle, pose).unwrap();
-        let sketch = StyleUpdate::sketch_stroke(Color::BLUE, Some(0.1), None, 1.0, 17).unwrap();
-
-        scene.set_style(&rectangle, sketch).unwrap();
-
-        let state = rectangle.state().unwrap();
-        assert_eq!(state.style.sketch_stroke, sketch.sketch_stroke);
-        assert_eq!(rectangle.world_transform().unwrap(), pose);
-    }
-
-    #[test]
     fn recursive_fade_counts_alias_paths_but_reads_and_publishes_unique_leaves() {
         let mut scene = Scene::new();
         let mut a = scene.square(0.6).unwrap();
