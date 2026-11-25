@@ -705,7 +705,10 @@ mod tests {
             let mut options = options.clone();
             options
                 .set_sketch_stroke(
-                    Color { alpha: 0.5, ..crate::YELLOW },
+                    Color {
+                        alpha: 0.5,
+                        ..crate::YELLOW
+                    },
                     roughness,
                     seed,
                 )

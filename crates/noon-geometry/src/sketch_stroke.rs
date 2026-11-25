@@ -95,7 +95,7 @@ fn draw_pass(
     overlay: bool,
     random: &mut SketchRandom,
 ) -> VectorPath {
-    // Keep each pass connected at the authored vertices for fills and reveals.
+    // Keep each pass connected at the authored vertices for joins and reveals.
     let curve_jitter = offset * roughness * if overlay { 1.15 } else { 1.0 };
     path = path.move_to(start);
     let mut point = start;
@@ -181,7 +181,9 @@ impl SketchRandom {
     fn new(seed: u32) -> Self {
         // RoughJS uses entropy at seed zero. Noon needs repeatable geometry for
         // seek and export, including when authors use the default seed.
-        Self((seed & 0x7fff_ffff).max(1))
+        const SEED_MIX: u32 = 0x61c8_8647;
+        let folded = (seed & 0x7fff_ffff) ^ ((seed >> 31) * SEED_MIX);
+        Self(if folded == 0 { 0x2c92_77b5 } else { folded })
     }
 
     fn signed(&mut self) -> f32 {
@@ -197,7 +199,7 @@ impl SketchRandom {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PathSurface, tessellate_styled_with_fill, tessellate_with_stroke_outline};
+    use crate::{tessellate_styled_with_fill, tessellate_with_stroke_outline, PathSurface};
     use noon_core::{StrokeCap, StrokeJoin};
 
     #[test]
@@ -209,6 +211,15 @@ mod tests {
             Vec2::new(0.3, 1.2),
             Vec2::new(1.4, 0.2),
             end,
+        );
+        let default = sketch_outline(&line, SketchStroke::new(1.3, 0).unwrap());
+        assert_ne!(
+            default,
+            sketch_outline(&line, SketchStroke::new(1.3, 1).unwrap())
+        );
+        assert_ne!(
+            default,
+            sketch_outline(&line, SketchStroke::new(1.3, 1 << 31).unwrap())
         );
         let stroke = SketchStroke::new(1.3, 17).unwrap();
         // RoughJS line() and path(), with preserveVertices and coordinates
@@ -246,14 +257,11 @@ mod tests {
             for (pass, [first, second]) in
                 outline.commands().as_chunks::<2>().0.iter().zip(expected)
             {
-                let [
-                    PathCommand::MoveTo { to: from },
-                    PathCommand::CubicTo {
-                        control1,
-                        control2,
-                        to,
-                    },
-                ] = *pass
+                let [PathCommand::MoveTo { to: from }, PathCommand::CubicTo {
+                    control1,
+                    control2,
+                    to,
+                }] = *pass
                 else {
                     panic!("expected two anchored cubic strokes");
                 };
