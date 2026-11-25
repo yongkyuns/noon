@@ -72,13 +72,15 @@ impl Outline {
     }
 }
 
+type PoseStep = (f64, Option<Vec<Mobject>>);
+
 pub struct RetargetedPoses {
     source: Vec<Mobject>,
     steps: std::vec::IntoIter<PoseStep>,
 }
 
 impl RetargetedPoses {
-    pub(super) fn new(source: Vec<Mobject>, steps: Vec<PoseStep>) -> Self {
+    fn new(source: Vec<Mobject>, steps: Vec<PoseStep>) -> Self {
         Self {
             source,
             steps: steps.into_iter(),
