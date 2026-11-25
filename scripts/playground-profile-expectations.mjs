@@ -62,7 +62,6 @@ const rows = [
   ['showcase-drip-fill-gauge','showcase_drip_fill_gauge.py','6e1582c8432dc9fd88de0df2e54e4f1bf07131f20dae93def3393938abbb76e8','incremental','ordinary',[], 'finite-complete', true],
   ['showcase-character-rigs','showcase_character_rigs.py','8f4450139597368def1bd3c17cc17cb8fee09d7ccfd3fcb641d85b2ce1146f8b','observed','observed-replay',[], 'observed-complete'],
   ['showcase-shape-characters','showcase_shape_characters.py','aff850534219adffeb89f6e3d5222931b75df8f16b7073ba4ae61159ad6b04df','observed','observed-replay',[], 'observed-complete'],
-  ['showcase-retarget-hand','showcase_retarget_hand.py','babc7dcb4ae16f69b1131ffcb4e0def5f9f55622a29d1d6e778e949f66d9ab3c','observed','observed-replay',[], 'observed-complete'],
   ['showcase-drawn-sleeve-fold','showcase_drawn_sleeve_fold.py','5282e636f2d8cfe58b472c8222146f346a95bcf2100e98e3f5f211bdd7c72cbf','incremental','ordinary',[], 'finite-complete', true],
   ['showcase-retarget-blink','showcase_retarget_blink.py','8eee8e589bc7a0126df0f98b94af976d33c51e43dd6b5a818cb498045dd62660','observed','observed-replay',[], 'observed-complete'],
 ];

@@ -1050,36 +1050,36 @@ class NestedPose(Scene):
         finally:
             view.close()
 
-    def test_retargeted_gloves_turn_edge_on_and_respect_torso_order(self):
-        path = ROOT / "web/python/examples/showcase_retarget_hand.py"
+    def test_drawn_sleeve_and_glove_fold_behind_coat(self):
+        path = ROOT / "web/python/examples/showcase_drawn_sleeve_fold.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
         view = prepare_view(scene)
 
-        def gold(frame):
-            counts = [0, 0]
-            for y in range(38, 105):
-                for x in range(320):
-                    offset = (y * 320 + x) * 4
-                    r, g, b = frame[offset:offset + 3]
-                    if r >= 233 and 145 <= g <= 222 and 68 <= b <= 142:
-                        counts[x >= 160] += 1
-            return counts
+        def capture(time):
+            return view.capture(time=time, width=320, height=180)
+
+        def coverage(frame, color):
+            # Sample the moving arm to the right of the coat, below the visor.
+            return sum(
+                tuple(frame[(y * 320 + x) * 4:(y * 320 + x) * 4 + 3]) == color
+                for y in range(56, 140) for x in range(176, 262)
+            )
 
         try:
-            self.assertEqual(view.duration, 6.75)
-            rest, edge, folded = [
-                view.capture(time=time, width=320, height=180) for time in (0.5, 2.25, 3.5)
-            ]
-            for full, thin in zip(gold(rest), gold(edge)):
-                self.assertGreater(full, 50)
-                self.assertLess(thin, full / 2)
-                self.assertGreater(thin, 8)
-            front, behind = gold(folded)
-            self.assertGreater(front, 50)
-            self.assertLess(behind, front / 3)
-            self.assertEqual(rest, view.capture(time=6.5, width=320, height=180))
-            self.assertEqual(edge, view.capture(time=2.25, width=320, height=180))
-            self.assertEqual(folded, view.capture(time=3.5, width=320, height=180))
+            self.assertEqual(view.duration, 6)
+            reach, turn, tuck = [capture(time) for time in (0.25, 1.32, 2.55)]
+            glove, cuff, sleeve = (255, 208, 117), (54, 100, 95), (120, 170, 147)
+            self.assertGreater(coverage(reach, glove), coverage(turn, glove))
+            self.assertGreater(coverage(turn, glove), 8)
+            self.assertGreater(coverage(turn, cuff), 8)
+            self.assertEqual(coverage(tuck, glove), 0)
+            self.assertEqual(coverage(tuck, cuff), 0)
+            self.assertGreater(coverage(tuck, sleeve), 30)
+            self.assertLess(coverage(tuck, sleeve), coverage(turn, sleeve))
+            self.assertEqual(capture(5.75), reach)
+            self.assertEqual(capture(2.55), tuck)
+            self.assertEqual(capture(1.32), turn)
+            self.assertEqual(capture(0.25), reach)
         finally:
             view.close()
 

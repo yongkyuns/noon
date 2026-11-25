@@ -1124,29 +1124,6 @@
       "playback_capability": "deterministic-retained-replay"
     },
     {
-      "id": "showcase-retarget-hand",
-      "title": "One fold, two reaches",
-      "lesson": "Two characters with different arm lengths and glove shapes reuse an inward fold and the same hand-pose cues. The gloves turn edge-on and pass in front of one torso and behind the other.",
-      "primary_feature": "retargeted-hand-turn",
-      "category": "Motion",
-      "path": "python/examples/showcase_retarget_hand.py",
-      "features": ["joint retargeting", "named artwork cues", "painter order"],
-      "duration": 6.75,
-      "thumbnail_time": 3.45,
-      "thumbnail": "thumbnails/showcase/showcase-retarget-hand.png",
-      "thumbnail_alt": "A teal robot holds a gold glove in front of its coat while a coral robot's glove passes behind its coat.",
-      "beats": [
-        { "time": 0.5, "label": "Compare the two arm lengths" },
-        { "time": 1.5, "label": "Follow the palms as the elbows fold" },
-        { "time": 2.25, "label": "See both gloves edge-on" },
-        { "time": 3.5, "label": "See the back of one glove while the other passes behind its coat" },
-        { "time": 5.1, "label": "Watch the palms come back into view" },
-        { "time": 6.5, "label": "Both arms return to rest" }
-      ],
-      "still_intervals": [[0, 0.75], [2.25, 2.5], [3.25, 4], [6.25, 6.75]],
-      "playback_capability": "deterministic-retained-replay"
-    },
-    {
       "id": "showcase-drawn-sleeve-fold",
       "title": "Fold behind the coat",
       "lesson": "Use Transform to morph one illustrated arm through a reach, a turn, and a tuck. The cuff and glove stay attached as the coat covers the folding sleeve.",

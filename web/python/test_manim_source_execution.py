@@ -556,12 +556,12 @@ value: MissingName = 2
         self.assertEqual(original.co_qualname, "RasterImage.construct")
         self.assertTrue(portable.co_flags & inspect.CO_COROUTINE)
 
-    def test_retargeting_showcases_use_portable_continuations(self):
+    def test_character_showcases_use_portable_continuations(self):
         examples = Path(__file__).with_name("examples")
         for filename, scene_name, methods in (
             ("showcase_character_rigs.py", "CharacterRigs", ("construct", "_add_bird")),
             ("showcase_shape_characters.py", "ShapeCharacters", ("construct", "_bind_outline")),
-            ("showcase_retarget_hand.py", "RetargetHand", ("construct", "_arm_rig")),
+            ("showcase_drawn_sleeve_fold.py", "DrawnSleeveFold", ("construct",)),
             ("showcase_retarget_blink.py", "RetargetBlink", ("construct",)),
         ):
             with self.subTest(filename=filename):

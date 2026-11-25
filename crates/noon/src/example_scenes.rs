@@ -90,7 +90,6 @@ pub mod raster_image;
 pub mod renderer_fixtures;
 pub mod renderer_recovery;
 pub mod retained_locality;
-pub mod retarget_hand;
 pub mod retarget_outlines;
 pub mod sample_space;
 pub mod scope_opacity;
