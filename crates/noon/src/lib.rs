@@ -477,7 +477,7 @@ pub use path_queries::{
 pub use plot_authoring::PlotAuthoringError;
 pub use rig_2d::{
     Joint2d, JointAttachment2d, JointMapping2d, JointTrack2d, RetargetedRig2d, RigArtwork2d,
-    RigPose2d,
+    RigArtworkTarget2d, RigPose2d,
 };
 pub use rotation_authoring::ManimRotationPivot;
 pub use rounded_rectangle_authoring::RoundedRectangleAuthoringError;

@@ -3611,15 +3611,29 @@ class _RetargetedRig2d:
         return _RigPose2d(handle, self._scene)
 
     def artwork_track(self, joint, *, poses, cues):
-        """Prepare named joint-local drawings with matching ordered (x, y) points.
+        """Prepare named joint-local drawings with corresponding contours.
 
-        Cues are (phase, pose name) in increasing order. A drawing can recur.
-        Points interpolate between cues in the same phase units as the rig.
+        VMobject and VGroup drawings use the first pose's styles and member order.
+        The result's target_at(phase) gives a detached Transform target.
+        Point-array drawings can be sampled with points_at(phase).
+        Cues are (phase, pose name) in increasing order, in the rig's phase units.
         """
         from _noon_host import array_value
 
-        draws = [(name, [tuple(map(float, xy)) for xy in points]) for name, points in poses.items()]
         keys = [(float(phase), name) for phase, name in cues]
+        vector_poses = [isinstance(value, _compat.VMobject) for value in poses.values()]
+        if any(vector_poses):
+            if not all(vector_poses):
+                raise TypeError("2D artwork poses must all be vector drawings or all be point arrays")
+            names = list(poses)
+            drawings = tuple(poses.values())
+            context = _context(self._scene)
+            batch = _semantic_handles._family_membership_batch(context, "add", drawings)
+            track = engine_call(self._handle.artworkObjectTrack, joint, array_value(names), batch,
+                                array_value(keys), operation="RetargetedRig2d.artwork_track")
+            return _RigArtworkTarget2d(track, context, drawings[0])
+
+        draws = [(name, [tuple(map(float, xy)) for xy in points]) for name, points in poses.items()]
         handle = engine_call(self._handle.artworkTrack, joint, array_value(draws), array_value(keys),
                              operation="RetargetedRig2d.artwork_track")
         return _RigArtwork2d(handle)
@@ -3633,6 +3647,38 @@ class _RigArtwork2d:
         """Sample the drawing in scene coordinates at an arbitrary clip phase."""
         points = iter(engine_call(self._handle.pointsAt, float(phase), operation="RigArtwork2d.points_at"))
         return list(zip(points, points))
+
+
+class _RigArtworkTarget2d:
+    def __init__(self, handle, context, source):
+        self._handle = handle
+        self._context = context
+        self._source = source
+
+    def target_at(self, phase):
+        """Sample a styled, detached Transform target in scene coordinates."""
+        operation = "RigArtworkTarget2d.target_at"
+        source = self._source
+        context = self._context
+
+        def sample(controller, references):
+            return engine_call(controller.rigArtworkTarget, self._handle, float(phase),
+                               references, operation=operation)
+
+        if (_semantic_handles._is_shared_family(source)
+                or getattr(source, "_semantic_member_wrappers", None)):
+            return _semantic_handles._group_copy_operation(
+                source, cyclic_replace=False, context_override=context,
+                prepare_copy=lambda controller, _, references: sample(controller, references),
+            )
+
+        def prepare_copy(controller, handle):
+            references = _semantic_handles._family_membership_batch(controller, "add", ())
+            return engine_call(sample(controller, references).mobjectFor, handle, operation=operation)
+
+        return _semantic_handles._clone_mobject(
+            source, context_override=context, prepare_copy=prepare_copy,
+        )
 
 
 class _RigPose2d:

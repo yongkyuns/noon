@@ -1,10 +1,12 @@
 //! Direct Rust counterpart of the gallery's inward fold and hand turn.
 use crate::{
-    AnimationOptions, AuthoringError, Color, ContinuationScene, ContinuationStep, Joint2d,
-    JointTrack2d, LiveContinuation, LiveProgram, Mobject, RateFunction, RetargetedRig2d,
-    RigArtwork2d, Scene, SemanticAnimationCompositionKind, SemanticPaint, SemanticStyle,
-    TransformToRequest, Vec2, VectorPath,
+    AnimationOptions, AuthoringError, Color, CompositeEntryHandle, ContinuationScene,
+    ContinuationStep, Joint2d, JointTrack2d, LiveContinuation, LiveProgram, Mobject, RateFunction,
+    RetargetedRig2d, RigArtworkTarget2d, Scene, SemanticAnimationCompositionKind, SemanticPaint,
+    SemanticStyle, TransformToRequest, Vec2, VectorPath,
 };
+
+use noon_core::{SemanticPathSegment, SemanticVec3};
 
 const FOLD: [[f32; 3]; 5] = [
     [0.0, 0.0, 0.0],
@@ -56,8 +58,8 @@ fn vector([x, y]: [f64; 2]) -> Vec2 {
     Vec2::new(x as f32, y as f32)
 }
 
-fn hand_outline(top: f64, bottom: f64, width: f64) -> Vec<[f64; 2]> {
-    [
+fn hand_outline(top: f64, bottom: f64, width: f64) -> VectorPath {
+    let controls = [
         [-0.05, 0.0],
         [-0.05, 0.83 * top],
         [0.08, top],
@@ -78,13 +80,17 @@ fn hand_outline(top: f64, bottom: f64, width: f64) -> Vec<[f64; 2]> {
         [-0.05, 0.83 * bottom],
         [-0.05, 0.0],
     ]
-    .into_iter()
-    .map(|[x, y]| [width * x, y])
-    .collect()
+    .map(|[x, y]| SemanticVec3::new(width * x, y, 0.0));
+    let curves = controls
+        .windows(4)
+        .step_by(3)
+        .map(|curve| SemanticPathSegment::Cubic(curve.try_into().expect("four cubic controls")))
+        .collect();
+    VectorPath::from_semantic_contours([(curves, true)])
 }
 
 struct Arm {
-    hand: RigArtwork2d,
+    hand: RigArtworkTarget2d,
     rig: RetargetedRig2d,
     sleeve_color: Color,
     layer: f64,
@@ -92,6 +98,7 @@ struct Arm {
 
 impl Arm {
     fn new(
+        scene: &mut Scene,
         x: f64,
         upper: f64,
         forearm: f64,
@@ -105,12 +112,15 @@ impl Arm {
             .zip(VIEWS)
             .map(|(row, name)| (row[0], name.into()))
             .collect::<Vec<_>>();
-        let hand = rig.artwork_track(
+        let palm = scene.path(hand_outline(0.15, -0.26, hand_width), filled(GLOVE))?;
+        let edge = scene.path(hand_outline(0.055, -0.055, hand_width), filled(GLOVE))?;
+        let back = scene.path(hand_outline(0.26, -0.15, hand_width), filled(GLOVE))?;
+        let hand = rig.artwork_track_for(
             "wrist",
-            vec![
-                ("palm".into(), hand_outline(0.15, -0.26, hand_width)),
-                ("edge".into(), hand_outline(0.055, -0.055, hand_width)),
-                ("back".into(), hand_outline(0.26, -0.15, hand_width)),
+            &[
+                ("palm".into(), (&palm).into()),
+                ("edge".into(), (&edge).into()),
+                ("back".into(), (&back).into()),
             ],
             &cues,
         )?;
@@ -131,21 +141,20 @@ impl Arm {
             .move_to(vector([sx, sy]))
             .line_to(vector([ex, ey]))
             .line_to(vector([wrist[0], wrist[1]]));
-        let glove = self.hand.points_at(FOLD[key][0])?;
+        let target = self.hand.target_at(scene, FOLD[key][0])?;
+        let CompositeEntryHandle::Mobject(glove) = target.root() else {
+            unreachable!("the glove is a single vector object");
+        };
         let stroke = |color, width| SemanticStyle {
             fill: None,
             stroke: Some(SemanticPaint::Solid(color)),
             stroke_width: width,
             ..Default::default()
         };
-        let mut hand = VectorPath::new().move_to(vector(glove[0]));
-        for &[a, b, c] in glove[1..].as_chunks::<3>().0 {
-            hand = hand.cubic_to(vector(a), vector(b), vector(c));
-        }
         let drawings = [
             scene.path(sleeve.clone(), stroke(INK, 0.33))?,
             scene.path(sleeve, stroke(self.sleeve_color, 0.29))?,
-            scene.path(hand.close(), filled(GLOVE))?,
+            glove.clone(),
         ];
         for object in &drawings {
             object.set_z_index(self.layer)?;
@@ -208,8 +217,24 @@ impl LiveContinuation for RetargetedPoses {
 pub fn program() -> Result<LiveProgram<RetargetedPoses>, Box<dyn std::error::Error>> {
     let mut scene = Scene::new();
     let arms = [
-        Arm::new(-3.76, 0.76, 1.27, 1.0, Color::from_hex(0x78AA93), 1.0)?,
-        Arm::new(2.20, 0.57, 0.99, 0.84, Color::from_hex(0xDB8875), -1.0)?,
+        Arm::new(
+            &mut scene,
+            -3.76,
+            0.76,
+            1.27,
+            1.0,
+            Color::from_hex(0x78AA93),
+            1.0,
+        )?,
+        Arm::new(
+            &mut scene,
+            2.20,
+            0.57,
+            0.99,
+            0.84,
+            Color::from_hex(0xDB8875),
+            -1.0,
+        )?,
     ];
     let mut paper = scene.rectangle(14.4, 8.3)?;
     let background = Color::from_hex(0xF7ECD7);

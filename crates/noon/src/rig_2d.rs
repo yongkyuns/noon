@@ -1,3 +1,7 @@
+mod artwork;
+
+pub use artwork::{RigArtwork2d, RigArtworkTarget2d};
+
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -168,14 +172,6 @@ pub struct RetargetedRig2d {
     samples: Vec<Option<SignalSamples>>,
 }
 
-/// Named drawings with matching point correspondence, attached to one target joint.
-pub struct RigArtwork2d {
-    rig: RetargetedRig2d,
-    joint: usize,
-    poses: Vec<Vec<[f64; 2]>>,
-    cues: Vec<(f32, usize)>,
-}
-
 struct RigSkeleton {
     joints: Vec<Joint2d>,
     parents: Vec<Option<usize>>,
@@ -246,90 +242,6 @@ impl RetargetedRig2d {
             posed,
         })
     }
-
-    /// Prepare a sequence of named drawings in joint-local coordinates. Each
-    /// drawing supplies the same ordered set of anchors and control points.
-    /// The cue phases use the same units as the joint tracks.
-    pub fn artwork_track(
-        &self,
-        joint: &str,
-        poses: Vec<(String, Vec<[f64; 2]>)>,
-        cues: &[(f32, String)],
-    ) -> Result<RigArtwork2d, AuthoringError> {
-        let joint = *self
-            .skeleton
-            .names
-            .get(joint)
-            .ok_or_else(|| invalid(format!("unknown artwork joint `{joint}`")))?;
-        let point_count = poses.first().map_or(0, |(_, points)| points.len());
-        let mut names = HashMap::new();
-        for (index, (name, points)) in poses.iter().enumerate() {
-            if name.is_empty() || names.insert(name.as_str(), index).is_some() {
-                return Err(invalid("2D artwork pose names must be nonempty and unique"));
-            }
-            if point_count == 0 || points.len() != point_count {
-                return Err(invalid(
-                    "2D artwork poses require matching nonempty point arrays",
-                ));
-            }
-            if !points
-                .iter()
-                .flatten()
-                .all(|&value| (value as f32).is_finite())
-            {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
-        }
-        if cues.is_empty()
-            || cues.iter().any(|(phase, _)| !phase.is_finite())
-            || cues.windows(2).any(|pair| pair[0].0 >= pair[1].0)
-        {
-            return Err(invalid(
-                "2D artwork cues require finite, strictly increasing phases",
-            ));
-        }
-        let cues = cues
-            .iter()
-            .map(|(phase, name)| {
-                let index = names
-                    .get(name.as_str())
-                    .ok_or_else(|| invalid(format!("unknown artwork pose `{name}`")))?;
-                Ok((*phase, *index))
-            })
-            .collect::<Result<_, AuthoringError>>()?;
-        Ok(RigArtwork2d {
-            rig: self.clone(),
-            joint,
-            cues,
-            poses: poses.into_iter().map(|(_, points)| points).collect(),
-        })
-    }
-}
-
-impl RigArtwork2d {
-    /// Interpolate the named drawings locally, then place the points in scene
-    /// space using the exact sampled joint pose. Cue endpoints clamp.
-    pub fn points_at(&self, phase: f32) -> Result<Vec<[f64; 2]>, AuthoringError> {
-        let joint = self.rig.pose(phase)?.posed[self.joint];
-        let upper = self.cues.partition_point(|(key, _)| *key <= phase);
-        let (start, from) = self.cues[upper.saturating_sub(1)];
-        let (end, to) = self.cues[upper.min(self.cues.len() - 1)];
-        let progress = if from == to {
-            0.0
-        } else {
-            (f64::from(phase) - f64::from(start)) / (f64::from(end) - f64::from(start))
-        };
-        let points = self.poses[from].iter().zip(&self.poses[to]).map(|(a, b)| {
-            let local = std::array::from_fn(|axis| a[axis] + (b[axis] - a[axis]) * progress);
-            let [x, y] = rotate(local, joint.heading);
-            let point = [joint.position[0] + x, joint.position[1] + y];
-            if !point.iter().all(|&value| (value as f32).is_finite()) {
-                return Err(AuthoringError::NonFiniteGeometry);
-            }
-            Ok(point)
-        });
-        points.collect()
-    }
 }
 
 impl RigPose2d {
@@ -392,7 +304,6 @@ impl RigPose2d {
         chain: Option<&[&str]>,
         from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
     ) -> Result<SemanticCopy<R>, AuthoringError> {
-        source.require_store(scene.integration_store())?;
         let joints = match chain {
             Some(names) => self.resolve_chain(names)?,
             None if self.skeleton.parents[1..]
@@ -410,37 +321,13 @@ impl RigPose2d {
         };
         let deform_point = self.point_deformer(&joints)?;
         let members: HashSet<_> = source.family_nodes()?.into_iter().collect();
-        let mut paths = Vec::new();
-        let mut changed = Vec::new();
-        let (mut transaction, copy) =
-            scene.prepare_target_copy(source, references, |object, state| {
-                let id = object.node_id();
-                if members.contains(&id) {
-                    let store = object.integration_store().borrow();
-                    if let Some(path) = deform_path(&store, state, &deform_point)? {
-                        paths.push(path);
-                        changed.push(id);
-                    }
-                }
-                Ok(())
-            })?;
-        let result = if paths.is_empty() {
-            scene.apply_semantic_transaction(transaction)?
-        } else {
-            scene.require_resource_admission()?;
-            scene.with_semantic_publication(|store, publish| {
-                store.with_geometry_paths(paths, |store, handles| {
-                    for (id, &handle) in changed.into_iter().zip(handles) {
-                        transaction.replace_content(
-                            copy.copied_token(id),
-                            noon_core::StoredGeometry::Resource(handle),
-                        );
-                    }
-                    publish(store, transaction)
-                })
-            })?
-        };
-        copy.resolve(&result, from_node)
+        copy_with_paths(scene, source, references, from_node, |object, state| {
+            if !members.contains(&object.node_id()) {
+                return Ok(None);
+            }
+            let store = object.integration_store().borrow();
+            deform_path(&store, state, &deform_point)
+        })
     }
 
     /// Warp bind-space points with a parent-to-child chain. A single joint
@@ -535,6 +422,45 @@ impl RigPose2d {
     }
 }
 
+fn copy_with_paths<R>(
+    scene: &mut Scene,
+    source: MobjectTarget<'_>,
+    references: &[MobjectTarget<'_>],
+    from_node: fn(Rc<RefCell<SemanticStore>>, SemanticNodeId) -> Result<R, AuthoringError>,
+    mut path_for: impl FnMut(
+        &Mobject,
+        &noon_core::SemanticObjectState,
+    ) -> Result<Option<noon_core::VectorPath>, AuthoringError>,
+) -> Result<SemanticCopy<R>, AuthoringError> {
+    let mut paths = Vec::new();
+    let mut changed = Vec::new();
+    let (mut transaction, copy) =
+        scene.prepare_target_copy(source, references, |object, state| {
+            if let Some(path) = path_for(object, state)? {
+                paths.push(path);
+                changed.push(object.node_id());
+            }
+            Ok(())
+        })?;
+    let result = if paths.is_empty() {
+        scene.apply_semantic_transaction(transaction)?
+    } else {
+        scene.require_resource_admission()?;
+        scene.with_semantic_publication(|store, publish| {
+            store.with_geometry_paths(paths, |store, handles| {
+                for (id, &handle) in changed.into_iter().zip(handles) {
+                    transaction.replace_content(
+                        copy.copied_token(id),
+                        noon_core::StoredGeometry::Resource(handle),
+                    );
+                }
+                publish(store, transaction)
+            })
+        })?
+    };
+    copy.resolve(&result, from_node)
+}
+
 fn deform_path(
     store: &SemanticStore,
     state: &noon_core::SemanticObjectState,
@@ -553,19 +479,23 @@ fn deform_path(
             return (x, y);
         }
         // Keep object-relative paint and stroke scaling in the original local frame.
-        let [x, y] = rotate(
-            [
-                new_x - transform.translation.x,
-                new_y - transform.translation.y,
-            ],
-            -transform.rotation_z,
-        );
-        (x / transform.scale.x, y / transform.scale.y)
+        into_local_coordinates(transform, [new_x, new_y])
     });
     if !warped.is_finite() {
         return Err(AuthoringError::NonFiniteGeometry);
     }
     Ok((warped != *path).then_some(warped))
+}
+
+fn into_local_coordinates(
+    transform: noon_core::SemanticTransform2_5D,
+    [x, y]: [f64; 2],
+) -> (f64, f64) {
+    let [x, y] = rotate(
+        [x - transform.translation.x, y - transform.translation.y],
+        -transform.rotation_z,
+    );
+    (x / transform.scale.x, y / transform.scale.y)
 }
 
 fn joint_names(joints: &[Joint2d]) -> Result<HashMap<&str, usize>, AuthoringError> {
@@ -805,6 +735,90 @@ mod tests {
             mismatched[1].1.pop();
             assert!(rig.artwork_track("eye", mismatched, &cues).is_err());
         }
+    }
+
+    #[test]
+    fn styled_artwork_preserves_nested_members_and_samples_corresponding_contours() {
+        use noon_core::{Color, PathCommand, SemanticPaint, SemanticStyle, VectorPath};
+
+        let mut scene = Scene::new();
+        let ink = SemanticStyle {
+            stroke: Some(SemanticPaint::Solid(Color::WHITE)),
+            stroke_width: 0.15,
+            ..Default::default()
+        };
+        let drawing = |extent, close| {
+            let path = VectorPath::new()
+                .move_to(Vec2::ZERO)
+                .line_to(Vec2::new(extent, 0.0));
+            (if close { path.close() } else { path })
+                .move_to(Vec2::new(0.0, 1.0))
+                .line_to(Vec2::new(extent, 1.0))
+        };
+        let a = scene.path(drawing(2.0, true), ink.clone()).unwrap();
+        let b = scene
+            .path(drawing(4.0, true), SemanticStyle::default())
+            .unwrap();
+        let bad = scene.path(drawing(4.0, false), ink.clone()).unwrap();
+        let inner_a = scene.family(&[(&a).into()]).unwrap();
+        let inner_b = scene.family(&[(&b).into()]).unwrap();
+        let first = scene.family(&[(&a).into(), (&inner_a).into()]).unwrap();
+        let second = scene.family(&[(&b).into(), (&inner_b).into()]).unwrap();
+        let rig =
+            RetargetedRig2d::new(vec![joint("root", None, [10.0, -2.0], 0.0)], &[], &[]).unwrap();
+        let cues = [(0.0, "a".into()), (1.0, "b".into())];
+        let poses = [
+            ("a".into(), (&first).into()),
+            ("b".into(), (&second).into()),
+        ];
+        let track = rig.artwork_track_for("root", &poses, &cues).unwrap();
+        let sample = track.target_at(&mut scene, 0.5).unwrap();
+        let copy = sample.mobject(&a).unwrap();
+        let nested = sample.family(&inner_a).unwrap();
+        let root = sample.family(&first).unwrap();
+        let store = scene.integration_store().borrow();
+        assert_eq!(
+            store
+                .semantic_family_members_checked(root.node_id())
+                .unwrap(),
+            [copy.node_id(), nested.node_id()]
+        );
+        assert_eq!(
+            store
+                .semantic_family_members_checked(nested.node_id())
+                .unwrap(),
+            [copy.node_id()]
+        );
+        let state = store.semantic_object_state_checked(copy.node_id()).unwrap();
+        assert_eq!(state.style.stroke, ink.stroke);
+        assert_eq!(state.style.stroke_width, ink.stroke_width);
+        let path = crate::path_queries::content_path(&store, state.content).unwrap();
+        assert_eq!(
+            path.commands(),
+            &[
+                PathCommand::MoveTo {
+                    to: Vec2::new(10.0, -2.0)
+                },
+                PathCommand::LineTo {
+                    to: Vec2::new(13.0, -2.0)
+                },
+                PathCommand::Close,
+                PathCommand::MoveTo {
+                    to: Vec2::new(10.0, -1.0)
+                },
+                PathCommand::LineTo {
+                    to: Vec2::new(13.0, -1.0)
+                },
+            ]
+        );
+        drop(store);
+        let incompatible = [("a".into(), (&a).into()), ("b".into(), (&bad).into())];
+        let Err(error) = rig.artwork_track_for("root", &incompatible, &cues) else {
+            panic!("an open contour cannot replace a closed one");
+        };
+        assert!(error
+            .to_string()
+            .contains("pose `b` must match the path contours"));
     }
 
     #[test]
