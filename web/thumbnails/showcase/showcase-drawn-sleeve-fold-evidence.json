@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "e28e1f45b94bb3f538aa0dfc031f21d0d666f25b",
+  "backend": "webgpu",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "e28e1f45b94bb3f538aa0dfc031f21d0d666f25b",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "596cb1c76f99840eacd9b9e66c81551f4a19da6912367c18b0abd53c66c070dc"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "0449fa1101ded87a82f5240ca3d4c12bcd24de02a23a80d1a15a0febd7ca1ae2"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "632036b1ea867fa1d001568efac6e92b0b11c1a25c865325b6fbdf1052822ea4"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
+      }
+    },
+    "buildId": "fc9b0a5ebe25e88cd018112795265151910a42730bb623363f5eddcfd2958325"
+  },
+  "posters": [
+    {
+      "id": "showcase-drawn-sleeve-fold",
+      "captureBuildId": "fc9b0a5ebe25e88cd018112795265151910a42730bb623363f5eddcfd2958325",
+      "sourceSha256": "5282e636f2d8cfe58b472c8222146f346a95bcf2100e98e3f5f211bdd7c72cbf",
+      "thumbnailTime": 0.25,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 91508,
+        "pngSha256": "9c37c1359cb46cf5874b83751e637303d9dc4d5fa9feb6d86ee378781fcfeae8",
+        "pixelSha256": "9d89e41bf25c4a3dd0f0fd7d9de1b250ac29a6d37e6a040259ab6b687b81a334"
+      },
+      "sample": {
+        "requestedTime": 0.25,
+        "publishedTime": 0.25,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}

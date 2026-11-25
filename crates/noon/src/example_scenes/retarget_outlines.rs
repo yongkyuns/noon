@@ -1,13 +1,11 @@
 //! Direct Rust version of the outline bend, using the paper birds' clip.
 use crate::{
-    AuthoringError, Color, Joint2d, JointMapping2d, JointTrack2d, LiveProgram,
-    ManimGeometryOptions, Mobject, RetargetedRig2d, Scene,
+    AnimationOptions, AuthoringError, Color, ContinuationScene, ContinuationStep, Joint2d,
+    JointMapping2d, JointTrack2d, LiveContinuation, LiveProgram, ManimGeometryOptions, Mobject,
+    RateFunction, RetargetedRig2d, Scene, SemanticAnimationCompositionKind, TransformToRequest,
 };
 
-use super::{
-    character_rigs::{SHOULDER, WRIST},
-    retarget_hand::RetargetedPoses,
-};
+use super::character_rigs::{SHOULDER, WRIST};
 
 const FLOOR: f64 = -2.30;
 const POSE_TIMES: [f64; 9] = [1.27, 1.91, 2.70, 3.15, 3.54, 3.96, 4.32, 5.25, 5.65];
@@ -71,6 +69,57 @@ impl Outline {
         let mut object = pose.target_for(scene, &self.artwork, None)?;
         object.shift(self.offset[0], self.offset[1])?;
         Ok(object)
+    }
+}
+
+type PoseStep = (f64, Option<Vec<Mobject>>);
+
+pub struct RetargetedPoses {
+    source: Vec<Mobject>,
+    steps: std::vec::IntoIter<PoseStep>,
+}
+
+impl RetargetedPoses {
+    fn new(source: Vec<Mobject>, steps: Vec<PoseStep>) -> Self {
+        Self {
+            source,
+            steps: steps.into_iter(),
+        }
+    }
+}
+
+impl LiveContinuation for RetargetedPoses {
+    type Error = String;
+    const EFFECTS: crate::ContinuationEffects = crate::ContinuationEffects::SceneOnly;
+
+    fn resume(&mut self, scene: &mut ContinuationScene) -> Result<ContinuationStep, String> {
+        let Some((duration, target)) = self.steps.next() else {
+            return Ok(ContinuationStep::Finished);
+        };
+        let live = &mut scene.live();
+        let segment = if let Some(target) = target {
+            let options = AnimationOptions::new()
+                .run_time(duration)
+                .rate_func(RateFunction::Smooth);
+            let children: Vec<_> = self
+                .source
+                .iter()
+                .zip(&target)
+                .map(|(source, target)| {
+                    TransformToRequest::point_correspondence(source, target, options)
+                })
+                .collect();
+            live.declare_and_activate_transform_composition(
+                SemanticAnimationCompositionKind::Parallel,
+                &children,
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+                AnimationOptions::new().rate_func(RateFunction::Linear),
+            )
+        } else {
+            live.wait_segment(duration)
+        }
+        .map_err(|error| error.to_string())?;
+        Ok(ContinuationStep::Await(segment))
     }
 }
 

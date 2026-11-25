@@ -74,9 +74,9 @@ function diagnosticsFor(expected) {
 }
 
 test('inventory binds all showcase IDs, paths and exact source bytes', () => {
-  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'ordinary').length, 50);
+  assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'ordinary').length, 51);
   assert.deepEqual(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'observed-replay').map(row => row.id),
-    ['showcase-character-rigs', 'showcase-shape-characters', 'showcase-retarget-hand', 'showcase-retarget-blink']);
+    ['showcase-character-rigs', 'showcase-shape-characters', 'showcase-retarget-blink']);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.attachedProfile === 'immutable').length, 1);
   assert.equal(SHOWCASE_PROFILE_EXPECTATIONS.filter(row => row.dispositionKind === 'callback' ||
     row.dispositionKind === 'input-handoff').length, 0);
