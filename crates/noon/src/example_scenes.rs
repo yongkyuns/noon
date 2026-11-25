@@ -101,6 +101,7 @@ pub mod shadow;
 pub mod spatial_camera_labels;
 pub mod spatial_mesh;
 pub mod spatial_primitives;
+pub mod spatial_sketch_paths;
 pub mod spatial_surface;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod spatial_three_d_axes;

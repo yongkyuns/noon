@@ -37,7 +37,8 @@ pub struct StyleUpdate {
 }
 
 impl StyleUpdate {
-    /// Apply a seeded foreground stroke to planar paths and retained text.
+    /// Apply a seeded foreground stroke to planar paths, including those tilted in 3D,
+    /// and to retained 2D text.
     /// An explicit width is in scene units. Omission keeps the authored pen width
     /// when it is nonzero.
     pub fn sketch_stroke(
@@ -114,8 +115,7 @@ impl StyleUpdate {
 }
 
 fn supports_sketch_stroke(state: &SemanticObjectState, geometry: &GeometryResourceArena) -> bool {
-    if !matches!(state.transform.orientation, SemanticOrientation::Planar(_))
-        || state.spatial_composition_domain() != SemanticSpatialCompositionDomain::World
+    if state.spatial_composition_domain() != SemanticSpatialCompositionDomain::World
         || state.spatial_material() == SemanticSpatialMaterial::CairoPath
         || matches!(
             state.role(),
@@ -129,7 +129,10 @@ fn supports_sketch_stroke(state: &SemanticObjectState, geometry: &GeometryResour
         SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) => {
             matches!(geometry.get(handle), Some(GeometryResource::VectorPath(_)))
         }
-        SemanticObjectContent::Geometry(_) | SemanticObjectContent::Text(_) => true,
+        SemanticObjectContent::Geometry(_) => true,
+        SemanticObjectContent::Text(_) => {
+            matches!(state.transform.orientation, SemanticOrientation::Planar(_))
+        }
     }
 }
 
