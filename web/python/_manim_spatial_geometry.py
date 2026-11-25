@@ -84,31 +84,39 @@ def _take_mesh(self, mesh):
         self._canonical_live_target_context = context
 
 
-def _initialize_translucent_prism_family(
-    self, dimensions, fill_color, fill_opacity, stroke_width, shade_in_3d
+def _initialize_prism_family(
+    self, dimensions, fill_color, fill_opacity, stroke_width, shade_in_3d, *, sketch=None
 ):
-    from _noon_spatial import _create_mesh_family, _prism_face_family_options
+    from _noon_spatial import _bulk, _create_mesh_family, _mesh_options, _prism_face_family_options
 
     if not isinstance(shade_in_3d, bool):
         raise TypeError("shade_in_3d requires a boolean")
-    if float(stroke_width) != 0.0:
-        raise NotImplementedError("mesh edge strokes are not supported")
     fill_opacity = _opacity("fill_opacity", fill_opacity)
     fill = _as_color("fill_color", fill_color)
     context = _path_authoring_context()
-    candidate = _prism_face_family_options(dimensions, shade_in_3d)
-    try:
-        engine_call(
-            candidate.setFill,
-            fill.red,
-            fill.green,
-            fill.blue,
-            fill.alpha,
-            fill_opacity,
+    if sketch is None:
+        if float(stroke_width) != 0.0:
+            raise NotImplementedError("mesh edge strokes are not supported")
+        candidate = _prism_face_family_options(dimensions, shade_in_3d)
+        try:
+            engine_call(
+                candidate.setFill, fill.red, fill.green, fill.blue, fill.alpha, fill_opacity,
+            )
+        except BaseException:
+            candidate.free()
+            raise
+    else:
+        if shade_in_3d:
+            raise NotImplementedError("sketch cube edges require shade_in_3d=False")
+        if _mesh_options is None:
+            raise RuntimeError("sketch cube construction requires the shared Rust authoring host")
+        pen = sketch._color
+        candidate = engine_call(
+            _mesh_options.sketchCube, dimensions[0],
+            _bulk((fill.red, fill.green, fill.blue, fill.alpha)), fill_opacity,
+            _bulk((pen.red, pen.green, pen.blue, pen.alpha)), _manim_stroke_width(stroke_width),
+            sketch._roughness, sketch._seed,
         )
-    except BaseException:
-        candidate.free()
-        raise
     handle = (
         engine_call(_create_mesh_family, candidate)
         if context is None
@@ -121,19 +129,31 @@ def _initialize_translucent_prism_family(
 
 
 class Cube(_WorldMobject, _compat.Group):
-    """Six retained face meshes with Manim's Cairo shading defaults."""
+    """Six retained faces, with optional explicit SketchStroke edges.
+
+    The sketch profile defaults to opaque, unlit faces. Set fill_opacity=0
+    for a bare wireframe.
+    """
     set_opacity = _compat.VGroup.set_opacity
     set_fill = _compat.VGroup.set_fill
     set_stroke = _compat.VGroup.set_stroke
 
+    def __init__(self, side_length=2, fill_opacity=None, fill_color=_base.BLUE,
+                 stroke_width=None, shade_in_3d=None, *, stroke=None, **kwargs):
+        from _manim_semantic_handles import _as_sketch_stroke
 
-    def __init__(self, side_length=2, fill_opacity=0.75, fill_color=_base.BLUE,
-                 stroke_width=0, shade_in_3d=True, **kwargs):
         _reject(kwargs, ())
+        stroke = _as_sketch_stroke(stroke)
         side_length = float(side_length)
-        _initialize_translucent_prism_family(
+        if fill_opacity is None:
+            fill_opacity = 0.75 if stroke is None else 1
+        if stroke_width is None:
+            stroke_width = 0 if stroke is None else _compat.MANIM_DEFAULT_STROKE_WIDTH
+        if shade_in_3d is None:
+            shade_in_3d = stroke is None
+        _initialize_prism_family(
             self, (side_length, side_length, side_length), fill_color,
-            fill_opacity, stroke_width, shade_in_3d,
+            fill_opacity, stroke_width, shade_in_3d, sketch=stroke,
         )
 
 
@@ -148,7 +168,7 @@ class Prism(_WorldMobject, _compat.Group):
                  stroke_width=0, shade_in_3d=True, **kwargs):
         _reject(kwargs, ())
         dimensions = tuple(float(value) for value in dimensions)
-        _initialize_translucent_prism_family(
+        _initialize_prism_family(
             self, dimensions, fill_color, fill_opacity, stroke_width, shade_in_3d,
         )
 

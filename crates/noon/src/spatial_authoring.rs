@@ -76,6 +76,100 @@ impl SpatialPathOptions {
     }
 }
 
+pub(crate) fn cube_sketch_options(
+    side_length: f64,
+    fill_color: Color,
+    fill_opacity: f64,
+    stroke_color: Color,
+    stroke_width: f64,
+    sketch: noon_core::SketchStroke,
+) -> Result<(Vec<MeshOptions>, Vec<SpatialPathOptions>), AuthoringError> {
+    use noon_core::{SemanticRotation3D, Vec2, VectorPath};
+    use std::f64::consts::FRAC_PI_2;
+
+    if fill_color.alpha != 1.0 || !matches!(fill_opacity, 0.0 | 1.0) {
+        return Err(AuthoringError::InvalidSketchStroke(
+            "a sketch cube requires an opaque face color and fill_opacity of 0 or 1",
+        ));
+    }
+    if stroke_color.alpha != 1.0
+        || !stroke_width.is_finite()
+        || stroke_width < 0.0
+        || !sketch.is_valid()
+    {
+        return Err(AuthoringError::InvalidSketchStroke(
+            "a sketch cube requires an opaque stroke, finite width, and roughness between 0 and 2",
+        ));
+    }
+    let faces =
+        noon_geometry::prism_faces(SemanticVec3::new(side_length, side_length, side_length))
+            .map_err(|_| AuthoringError::NonFiniteGeometry)?;
+    let meshes = faces
+        .into_iter()
+        .map(|face| {
+            let mut options = MeshOptions::new(face);
+            options.style.fill = Some(SemanticPaint::Solid(fill_color));
+            options.style.fill_opacity = fill_opacity;
+            options
+        })
+        .collect();
+    let half = side_length * 0.5;
+    let radius = half as f32;
+    if !radius.is_finite() || radius <= 0.0 {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    let path = VectorPath::new()
+        .move_to(Vec2::new(-radius, 0.0))
+        .line_to(Vec2::new(radius, 0.0));
+    let x = SemanticVec3::new(1.0, 0.0, 0.0);
+    let around = |axis, angle| {
+        SemanticRotation3D::from_axis_angle(axis, angle).expect("finite cube edge rotation")
+    };
+    let bases = [
+        SemanticRotation3D::IDENTITY,
+        around(SemanticVec3::new(0.0, 0.0, 1.0), FRAC_PI_2),
+        around(SemanticVec3::new(0.0, 1.0, 0.0), -FRAC_PI_2),
+    ];
+    let mut paths = Vec::with_capacity(12);
+    for basis in bases {
+        for y in [-1.0_f64, 1.0] {
+            for z in [-1.0_f64, 1.0] {
+                // Wiggle along the supporting plane of the two incident faces.
+                // Either direction off the edge escapes the solid instead of
+                // burying the sketch inside an adjacent face.
+                let rotation = basis
+                    .compose(around(x, (-z).atan2(y)))
+                    .expect("finite cube edge basis");
+                let translation = basis
+                    .rotate_vector(SemanticVec3::new(0.0, y * half, z * half))
+                    .ok_or(AuthoringError::NonFiniteGeometry)?;
+                paths.push(SpatialPathOptions {
+                    path: path.clone(),
+                    transform: SemanticWorldTransform3D {
+                        translation,
+                        rotation,
+                        ..SemanticWorldTransform3D::IDENTITY
+                    },
+                    style: SemanticStyle {
+                        fill: None,
+                        stroke: Some(SemanticPaint::Solid(stroke_color)),
+                        stroke_width,
+                        stroke_width_mode: StrokeWidthMode::ScreenSpace,
+                        sketch_stroke: noon_core::SketchStroke::new(
+                            f64::from(sketch.roughness()),
+                            sketch.seed().wrapping_add(paths.len() as u32),
+                        ),
+                        ..SemanticStyle::default()
+                    },
+                    material: SemanticSpatialMaterial::Unlit,
+                    cairo_appearance: None,
+                });
+            }
+        }
+    }
+    Ok((meshes, paths))
+}
+
 enum SpatialFamilyMember {
     Mesh(MeshOptions),
     Path(SpatialPathOptions),
@@ -688,6 +782,28 @@ impl Scene {
             fill_opacity,
             shade_in_3d,
         )
+    }
+
+    /// Admit six unlit cube faces and the twelve explicit sketch edges in one family.
+    /// Face opacity zero gives a bare wireframe, and one gives depth occlusion.
+    pub fn cube_sketch_wireframe(
+        &mut self,
+        side_length: f64,
+        fill_color: Color,
+        fill_opacity: f64,
+        stroke_color: Color,
+        stroke_width: f64,
+        sketch: noon_core::SketchStroke,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        let (meshes, paths) = cube_sketch_options(
+            side_length,
+            fill_color,
+            fill_opacity,
+            stroke_color,
+            stroke_width,
+            sketch,
+        )?;
+        self.mesh_family_with_paths(meshes, paths)
     }
 
     /// Publish an already sampled UV grid as ordinary semantic mesh leaves,

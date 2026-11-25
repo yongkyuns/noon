@@ -82,6 +82,30 @@ impl MeshInput {
             .map_err(engine_error)
     }
     #[staticmethod]
+    #[pyo3(name = "sketchCube")]
+    fn sketch_cube(
+        side_length: f64,
+        fill: Vec<f64>,
+        fill_opacity: f64,
+        stroke: Vec<f64>,
+        stroke_width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<MeshFamilyInput, PyErr> {
+        input::SpatialMeshInput::sketch_cube(
+            side_length,
+            &fill,
+            fill_opacity,
+            &stroke,
+            stroke_width,
+            roughness,
+            seed,
+        )
+        .map(Into::into)
+        .map_err(engine_error)
+    }
+
+    #[staticmethod]
     fn cylinder(
         radius: f64,
         height: f64,

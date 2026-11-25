@@ -242,9 +242,50 @@ impl SpatialMeshInput {
             options,
             cells: Vec::new(),
             circle_caps: Vec::new(),
+            paths: Vec::new(),
             axial_pose: None,
         })
     }
+    pub fn sketch_cube(
+        side_length: f64,
+        fill: &[f64],
+        fill_opacity: f64,
+        stroke: &[f64],
+        stroke_width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<SpatialMeshFamilyInput, AuthoringFailure> {
+        let rgba = |channels: &[f64]| match channels {
+            [red, green, blue, alpha] => color(*red, *green, *blue, *alpha),
+            _ => Err(invalid(
+                "spatial.invalid_color",
+                "expected RGBA color channels",
+            )),
+        };
+        let sketch = noon_core::SketchStroke::new(roughness, seed).ok_or_else(|| {
+            invalid(
+                "spatial.invalid_sketch_stroke",
+                "sketch roughness must be between 0 and 2",
+            )
+        })?;
+        let (options, paths) = crate::spatial_authoring::cube_sketch_options(
+            side_length,
+            rgba(fill)?,
+            fill_opacity,
+            rgba(stroke)?,
+            stroke_width,
+            sketch,
+        )
+        .map_err(AuthoringFailure::from)?;
+        Ok(SpatialMeshFamilyInput {
+            options,
+            paths,
+            cells: Vec::new(),
+            circle_caps: Vec::new(),
+            axial_pose: None,
+        })
+    }
+
     pub fn cylinder(
         radius: f64,
         height: f64,
@@ -337,6 +378,7 @@ pub struct SpatialMeshFamilyInput {
     pub(crate) options: Vec<MeshOptions>,
     pub(crate) cells: Vec<[usize; 2]>,
     circle_caps: Vec<CircleCapRequest>,
+    paths: Vec<SpatialPathOptions>,
     axial_pose: Option<(SemanticVec3, f64)>,
 }
 
@@ -412,7 +454,8 @@ impl SpatialMeshFamilyInput {
         let (direction, offset) = self
             .axial_pose
             .unwrap_or((SemanticVec3::new(0.0, 0.0, 1.0), 0.0));
-        let mut paths = Vec::with_capacity(self.circle_caps.len());
+        let mut paths = self.paths;
+        paths.reserve(self.circle_caps.len());
         for cap in self.circle_caps {
             let transform =
                 SemanticWorldTransform3D::from_axial_direction(direction, offset + cap.local_z)
@@ -651,6 +694,7 @@ impl SurfaceSamplingInput {
             options,
             cells,
             circle_caps: Vec::new(),
+            paths: Vec::new(),
             axial_pose: None,
         })
     }
@@ -691,6 +735,7 @@ impl SurfaceSamplingInput {
             options,
             cells,
             circle_caps: Vec::new(),
+            paths: Vec::new(),
             axial_pose: None,
         })
     }
