@@ -37,7 +37,8 @@ pub struct StyleUpdate {
 }
 
 impl StyleUpdate {
-    /// Apply a seeded foreground stroke to planar paths and retained text.
+    /// Apply a seeded foreground stroke to planar paths, including those tilted in 3D,
+    /// and to retained 2D text.
     /// An explicit width is in scene units. Omission keeps the authored pen width
     /// when it is nonzero.
     pub fn sketch_stroke(
@@ -114,8 +115,7 @@ impl StyleUpdate {
 }
 
 fn supports_sketch_stroke(state: &SemanticObjectState, geometry: &GeometryResourceArena) -> bool {
-    if !matches!(state.transform.orientation, SemanticOrientation::Planar(_))
-        || state.spatial_composition_domain() != SemanticSpatialCompositionDomain::World
+    if state.spatial_composition_domain() != SemanticSpatialCompositionDomain::World
         || state.spatial_material() == SemanticSpatialMaterial::CairoPath
         || matches!(
             state.role(),
@@ -129,7 +129,10 @@ fn supports_sketch_stroke(state: &SemanticObjectState, geometry: &GeometryResour
         SemanticObjectContent::Geometry(StoredGeometry::Resource(handle)) => {
             matches!(geometry.get(handle), Some(GeometryResource::VectorPath(_)))
         }
-        SemanticObjectContent::Geometry(_) | SemanticObjectContent::Text(_) => true,
+        SemanticObjectContent::Geometry(_) => true,
+        SemanticObjectContent::Text(_) => {
+            matches!(state.transform.orientation, SemanticOrientation::Planar(_))
+        }
     }
 }
 
@@ -1497,6 +1500,25 @@ mod tests {
         assert_eq!(after.style.sketch_stroke, sketch.sketch_stroke);
         assert_eq!(image.state().unwrap(), image_before);
         assert!(scene.set_style(&image, sketch).is_err());
+    }
+
+    #[test]
+    fn sketch_style_applies_to_a_tilted_path() {
+        let mut scene = Scene::new();
+        let rectangle = scene.square(2.0).unwrap();
+        let pose = noon_core::SemanticWorldTransform3D::from_axial_direction(
+            SemanticVec3::new(0.0, 1.0, 1.0),
+            1.0,
+        )
+        .unwrap();
+        scene.set_world_transform(&rectangle, pose).unwrap();
+        let sketch = StyleUpdate::sketch_stroke(Color::BLUE, Some(0.1), None, 1.0, 17).unwrap();
+
+        scene.set_style(&rectangle, sketch).unwrap();
+
+        let state = rectangle.state().unwrap();
+        assert_eq!(state.style.sketch_stroke, sketch.sketch_stroke);
+        assert_eq!(rectangle.world_transform().unwrap(), pose);
     }
 
     #[test]

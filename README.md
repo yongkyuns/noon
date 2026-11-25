@@ -119,6 +119,8 @@ The [sketch path demo](web/python/examples/hand_drawn_paths.py) uses the same
 style on an open `Path` and a `VMobject` with a filled contour and a hole.
 The [sketch text demo](web/python/examples/showcase_sketch_text.py) uses the same stroke
 on `Text` and `MathTex` glyph outlines with `Create` and `Write`.
+The [3D sketch path demo](web/python/examples/sketch_paths_3d.py) shows the
+same stroke on world-space paths during a camera orbit.
 Use `obj.set_stroke(SketchStroke(TEAL), width=3)` to style an existing shape,
 text object, or group. `SVGMobject`, `Axes`, and `VGroup` also accept the
 `stroke=` option at construction.

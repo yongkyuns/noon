@@ -57,6 +57,7 @@ pub(super) struct Specialization {
     pub stroke_width: u32,
     pub background_stroke_width: u32,
     pub screen_stroke: bool,
+    pub sketch_stroke: Option<[u32; 2]>,
     pub stroke_join: noon_core::StrokeJoin,
     pub stroke_cap: noon_core::StrokeCap,
     pub fill: bool,
@@ -604,7 +605,12 @@ impl SpatialPathGpuState {
                     style,
                 } = candidate;
                 validate_style(style, object_alpha, spatial.composition_domain)?;
-                let style = visible_path_style(style);
+                let mut style = visible_path_style(style);
+                if spatial.material != SemanticSpatialMaterial::Unlit
+                    || spatial.composition_domain != Domain::World
+                {
+                    style.sketch_stroke = None;
+                }
                 let keyed = match text_key {
                     Some(source) => PathKey {
                         source,
@@ -1172,6 +1178,7 @@ fn path_key(
 fn specialization(style: Style) -> Specialization {
     Specialization {
         screen_stroke: screen_stroke(style),
+        sketch_stroke: crate::sketch_stroke_key(style),
         stroke_width: if style.stroke.is_some() {
             if screen_stroke(style) {
                 1.0_f32.to_bits()
@@ -1340,7 +1347,8 @@ fn collect_text_paths<'a>(
                 let item_base = item_index
                     .checked_mul(2)
                     .ok_or(SpatialPathError::BufferLimit)?;
-                let style = resolved_text_vector_style(object_style, vector);
+                let mut style = resolved_text_vector_style(object_style, vector);
+                style.sketch_stroke = None;
                 let source = SourceKey::TextVector(handle, vector_index, vector.geometry);
                 let path = if path_is_resident(&source, style) {
                     noon_core::VectorPath::new()
@@ -1466,6 +1474,9 @@ fn visible_path_style(mut style: Style) -> Style {
     style.fill = style.fill.filter(|color| color.alpha != 0.0);
     style.stroke = style.stroke.filter(|color| color.alpha != 0.0);
     style.background_stroke = style.background_stroke.filter(|color| color.alpha != 0.0);
+    style.sketch_stroke = style.sketch_stroke.filter(|stroke| {
+        style.stroke.is_some() && style.stroke_width > 0.0 && stroke.roughness() > 0.0
+    });
     style
 }
 
@@ -1481,7 +1492,8 @@ pub(super) fn tessellate(
 ) -> Result<TessellatedSpatialPath, SpatialPathError> {
     validate_style(style, object_alpha * style.opacity, domain)?;
     let style = visible_path_style(style);
-    if screen_stroke(style)
+    let screen = screen_stroke(style);
+    if screen
         && matches!(geometry, GeometryRef::Circle { radius } if !radius.is_finite() || *radius <= 0.0)
     {
         return Err(SpatialPathError::UnrepresentableVertex);
@@ -1490,18 +1502,20 @@ pub(super) fn tessellate(
     if path.morph_target().is_some() {
         return Err(SpatialPathError::UnsupportedMorph);
     }
-    let fill = style.fill.is_some();
-    let stroke = style.stroke.is_some() && style.stroke_width > 0.0;
-    let mesh = noon_geometry::tessellate_styled_with_background_stroke(
+    let sketch = style
+        .sketch_stroke
+        .map(|stroke| noon_geometry::sketch_outline(&path, stroke));
+    let outline = sketch.as_ref().unwrap_or(&path);
+    let screen_line = screen && sketch.is_none() && matches!(geometry, GeometryRef::Line { .. });
+    let mesh = noon_geometry::tessellate_with_stroke_outline(
         &path,
-        if screen_stroke(style) && matches!(geometry, GeometryRef::Line { .. }) {
+        outline,
+        if screen_line {
             1.0
-        } else if screen_stroke(style) {
+        } else if screen || style.stroke.is_none() {
             0.0
-        } else if stroke {
-            style.stroke_width
         } else {
-            0.0
+            style.stroke_width
         },
         if style.background_stroke.is_some() {
             style.background_stroke_width
@@ -1510,29 +1524,24 @@ pub(super) fn tessellate(
         },
         style.stroke_join,
         style.stroke_cap,
-        fill,
+        style.fill.is_some(),
     )
     .map_err(|_| SpatialPathError::Tessellation)?;
-    let path_stroke_frames = if screen_stroke(style) {
-        match geometry {
-            GeometryRef::Line { .. } => None,
-            GeometryRef::Circle { .. } => Some(
-                noon_geometry::tessellate_screen_stroke(&path, style.stroke_join, style.stroke_cap)
-                    .map_err(|_| SpatialPathError::Tessellation)?,
-            ),
-            _ => Some(
-                noon_geometry::tessellate_projected_screen_stroke(
-                    &path,
-                    style.stroke_join,
-                    style.stroke_cap,
-                )
+    let path_stroke_frames = if screen && !screen_line {
+        let tessellate_stroke =
+            if sketch.is_none() && matches!(geometry, GeometryRef::Circle { .. }) {
+                noon_geometry::tessellate_screen_stroke
+            } else {
+                noon_geometry::tessellate_projected_screen_stroke
+            };
+        Some(
+            tessellate_stroke(outline, style.stroke_join, style.stroke_cap)
                 .map_err(|_| SpatialPathError::Tessellation)?,
-            ),
-        }
+        )
     } else {
         None
     };
-    let line = if screen_stroke(style) && matches!(geometry, GeometryRef::Line { .. }) {
+    let line = if screen_line {
         let GeometryRef::Line { start, end } = geometry else {
             unreachable!("screen stroke was checked above")
         };
@@ -1690,6 +1699,60 @@ mod tests {
             tessellate(&geometry, &resources, style, 0.5, Domain::World).unwrap_err(),
             SpatialPathError::NonOpaqueStyle
         );
+    }
+
+    #[test]
+    fn spatial_sketch_stroke_keys_the_outline_and_preserves_fill() {
+        let resources = GeometryResourceArena::default();
+        let geometry = GeometryRef::rectangle(2.0, 1.0);
+        let fill_surface = crate::pack_path_surface(noon_geometry::PathSurface::Fill, 1.0);
+        for stroke_width_mode in [
+            StrokeWidthMode::ScaleWithObject,
+            StrokeWidthMode::ScreenSpace,
+        ] {
+            let solid = Style {
+                stroke: Some(Color::WHITE),
+                stroke_width: 0.15,
+                stroke_width_mode,
+                ..Style::default()
+            };
+            let sketch_style = |roughness, seed| Style {
+                sketch_stroke: noon_core::SketchStroke::new(roughness, seed),
+                ..solid
+            };
+            let mesh =
+                |style| tessellate(&geometry, &resources, style, 1.0, Domain::World).unwrap();
+            let positions = |mesh: &TessellatedSpatialPath, fill| {
+                mesh.vertices
+                    .iter()
+                    .filter(|vertex| (vertex.surface == fill_surface) == fill)
+                    .map(|vertex| vertex.position)
+                    .collect::<Vec<_>>()
+            };
+            let sketched = sketch_style(1.5, 17);
+            let key = path_key(&geometry, &resources, sketched, 1).unwrap();
+            let sketched_mesh = mesh(sketched);
+            let solid_mesh = mesh(solid);
+            assert_eq!(
+                positions(&sketched_mesh, true),
+                positions(&solid_mesh, true)
+            );
+            assert_ne!(
+                positions(&sketched_mesh, false),
+                positions(&solid_mesh, false)
+            );
+            for changed in [sketch_style(1.5, 23), sketch_style(0.5, 17)] {
+                assert_ne!(key, path_key(&geometry, &resources, changed, 1).unwrap());
+                assert_ne!(
+                    positions(&sketched_mesh, false),
+                    positions(&mesh(changed), false)
+                );
+            }
+            assert_eq!(
+                path_key(&geometry, &resources, sketch_style(0.0, 17), 1).unwrap(),
+                path_key(&geometry, &resources, solid, 1).unwrap()
+            );
+        }
     }
 
     #[test]
@@ -2111,6 +2174,7 @@ mod tests {
                     stroke_width: 0,
                     background_stroke_width: 0,
                     screen_stroke: false,
+                    sketch_stroke: None,
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,
                     fill: true,
@@ -2144,6 +2208,7 @@ mod tests {
                     stroke_width: 0,
                     background_stroke_width: 0,
                     screen_stroke: false,
+                    sketch_stroke: None,
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,
                     fill: true,
