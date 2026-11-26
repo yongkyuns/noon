@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from runpy import run_path
 import subprocess
 import sys
 import tempfile
@@ -1085,33 +1086,37 @@ class NestedPose(Scene):
 
     def test_distributive_tutorial_points_to_both_terms_during_replay(self):
         path = ROOT / "web/python/examples/showcase_three_of_each.py"
-        scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
+        tutorial = run_path(str(path))
+        scene = asyncio.run(run_scene(tutorial["ThreeOfEach"], retain_history=True))
         view = prepare_view(scene)
         width, height = 640, 360
 
         def capture(time):
             return view.capture(time=time, width=width, height=height)
 
-        def is_gold(r, g, b):
-            return r > 240 and 180 <= g <= 225 and b < 143
+        def rgb(swatch):
+            color = tutorial[swatch]
+            return bytes(round(255 * channel) for channel in (color.red, color.green, color.blue))
+
+        glove_color = rgb("GLOVE_COLOR")
 
         def assert_pointing(frame, term_x, ink):
             center = int(width / 2 + term_x * height / 8)
-            colored, gold = [], []
+            colored, glove = [], []
             for y in range(87, 155):
                 for x in range(center - 20, center + 21):
                     offset = (y * width + x) * 4
-                    r, g, b = frame[offset:offset + 3]
-                    if (r, g, b) == ink:
+                    pixel = frame[offset:offset + 3]
+                    if pixel == ink:
                         colored.append((x, y))
-                    if is_gold(r, g, b):
-                        gold.append((x, y))
-            self.assertTrue(colored and gold)
+                    if pixel == glove_color:
+                        glove.append((x, y))
+            self.assertTrue(colored and glove)
             underline_y = max(y for _, y in colored)
             underline = [x for x, y in colored if y == underline_y]
             glyph = [x for x, y in colored if y < underline_y - 5]
-            tip_y = min(y for _, y in gold)
-            fingertip = [x for x, y in gold if y == tip_y]
+            tip_y = min(y for _, y in glove)
+            fingertip = [x for x, y in glove if y == tip_y]
             self.assertGreater(len(underline), 15)
             self.assertTrue(glyph)
             underline_center = (min(underline) + max(underline)) / 2
@@ -1127,7 +1132,7 @@ class NestedPose(Scene):
             for y in range(120, 240):
                 for x in range(103, int(sx) - 2):
                     offset = (y * width + x) * 4
-                    if is_gold(*frame[offset:offset + 3]):
+                    if frame[offset:offset + 3] == glove_color:
                         radii.append(((x + 0.5 - sx) ** 2 + (y + 0.5 - sy) ** 2) ** 0.5)
             return max(radii)
 
@@ -1137,8 +1142,8 @@ class NestedPose(Scene):
             radii = [reach_radius(frame) for frame in swing]
             self.assertLessEqual(max(radii) - min(radii), 2.5)
             x_frame, two_frame = capture(3.56), capture(5.98)
-            assert_pointing(x_frame, -3.96, (35, 98, 89))
-            assert_pointing(two_frame, -2.28, (157, 69, 47))
+            assert_pointing(x_frame, -3.96, rgb("VARIABLE_COLOR"))
+            assert_pointing(two_frame, -2.28, rgb("CONSTANT_COLOR"))
             self.assertNotEqual(capture(8.51), two_frame)
             self.assertEqual(capture(5.98), two_frame)
             self.assertEqual(capture(3.56), x_frame)

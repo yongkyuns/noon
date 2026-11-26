@@ -27,7 +27,7 @@ const rows = [
   ['showcase-shape-matching','showcase_shape_matching.py','3f407fa427902125efd71645fc6d93bce1c70755f91be08e4fc77e043dc298e3','incremental','ordinary',[], 'looped'],
   ['showcase-ordered-reveal','showcase_ordered_reveal.py','36a2186b6bcfb4eb2be4e6a8cc0bc84728e7e7fa5fe1ef99f39d863fd66b8d7c','incremental','ordinary',[], 'looped'],
   ['showcase-text-math','showcase_text_math.py','f2734b513f9f5d590a6e7b6b62f9939a0aa83dab51f9237041cb1f8c7af2b408','incremental','ordinary',[], 'looped'],
-  ['showcase-three-of-each','showcase_three_of_each.py','787b024d8c1fdfded455f7e0b055e0c8648157d034d91e0588d3577827080bbc','incremental','ordinary',[], 'finite-complete', true],
+  ['showcase-three-of-each','showcase_three_of_each.py','c0b73155e4b5d0644fe1a0c7ad38fd3ada5ae5376b9ff163278616bc3caa8877','incremental','ordinary',[], 'finite-complete', true],
   ['showcase-code-blocks','showcase_code_blocks.py','8a4530c141a38d0b4a6357ed75075fe8e08023e1c93fd1120f618dc21f140427','incremental','ordinary',[], 'looped'],
   ['showcase-latex-create','showcase_latex_create.py','bb59b97174b6332f33ac3c43384319d434f7435a5a1bbdb529e69fff9c010a40','incremental','ordinary',[], 'looped'],
   ['showcase-sketch-text','showcase_sketch_text.py','d51a781ee279d12c4bbf92ae517b685a9f979d3526c4504377de4af803f6bc59','incremental','ordinary',[], 'looped'],
