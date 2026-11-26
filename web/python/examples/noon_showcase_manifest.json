@@ -1171,6 +1171,28 @@
       "playback_capability": "deterministic-retained-replay"
     },
     {
+      "id": "showcase-target-pointing",
+      "title": "Follow the label",
+      "lesson": "Move a label and see two differently proportioned characters point to its edges. Their elbows bend while both arm segments keep their original lengths.",
+      "primary_feature": "target-based-pointing",
+      "category": "Motion",
+      "path": "python/examples/showcase_target_pointing.py",
+      "features": ["Joint2D", "tracks_for_pointing", "bind_rig_2d"],
+      "duration": 6.35,
+      "loop": false,
+      "thumbnail_time": 3.7,
+      "thumbnail": "thumbnails/showcase/showcase-target-pointing.png",
+      "thumbnail_alt": "A tall teal robot and a short plum robot point to opposite edges of a raised label.",
+      "beats": [
+        { "time": 0.55, "label": "Both hands point to the original label" },
+        { "time": 2.1, "label": "The arms bend as the label moves" },
+        { "time": 3.7, "label": "Both hands reach the new location" },
+        { "time": 4.5, "label": "The hands follow the label back" }
+      ],
+      "still_intervals": [[0, 1.1], [3.1, 3.9], [5.1, 6.35]],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
       "id": "showcase-retarget-blink",
       "title": "One blink, two faces",
       "lesson": "Two characters share one blink cue sequence. Each eyelid has its own outline and follows a different anchor as the head tilts.",

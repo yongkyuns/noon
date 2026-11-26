@@ -5,6 +5,7 @@ pub use artwork::{RigArtwork2d, RigArtworkTarget2d};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    f64::consts::{PI, TAU},
     rc::Rc,
     sync::Arc,
 };
@@ -241,6 +242,125 @@ impl RetargetedRig2d {
             skeleton: Arc::clone(&self.skeleton),
             posed,
         })
+    }
+
+    /// Prepare rotation tracks for a shoulder, elbow, and wrist from scene-space targets.
+    ///
+    /// Targets are (phase, point) pairs in increasing order. The named wrist
+    /// must have an elbow parent and a shoulder grandparent. The fingertip is
+    /// measured along the wrist's local +X axis and follows the forearm heading.
+    /// `bend_left` puts the elbow left of the shoulder-to-target ray. Any
+    /// ancestors of the shoulder use the existing clip at each target phase.
+    ///
+    /// The tip meets each key. Angles interpolate between keys and keep both
+    /// arm lengths fixed. Sample a moving target more densely when it needs to
+    /// stay close between keys.
+    pub fn tracks_for_pointing(
+        &self,
+        wrist: &str,
+        targets: &[(f32, [f64; 2])],
+        fingertip: f64,
+        bend_left: bool,
+    ) -> Result<[JointTrack2d; 3], AuthoringError> {
+        let skeleton = &self.skeleton;
+        let wrist_index = *skeleton
+            .names
+            .get(wrist)
+            .ok_or_else(|| invalid(format!("unknown 2D pointing wrist `{wrist}`")))?;
+        let parents = &skeleton.parents;
+        let (elbow, shoulder) = parents[wrist_index]
+            .and_then(|elbow| parents[elbow].map(|shoulder| (elbow, shoulder)))
+            .ok_or_else(|| {
+                invalid(format!(
+                    "2D pointing wrist `{wrist}` needs a parent and grandparent"
+                ))
+            })?;
+        let [shoulder_joint, elbow_joint, wrist_joint] =
+            [shoulder, elbow, wrist_index].map(|index| &skeleton.joints[index]);
+        let [ux, uy] = elbow_joint.offset;
+        let [fx, fy] = wrist_joint.offset;
+        let (upper, forearm) = (ux.hypot(uy), fx.hypot(fy));
+        if (upper as f32) == 0.0 || (forearm as f32) == 0.0 {
+            return Err(invalid(format!(
+                "2D pointing wrist `{wrist}` needs two nonzero arm segments"
+            )));
+        }
+        if !(fingertip as f32).is_finite() || fingertip < 0.0 {
+            return Err(invalid(
+                "2D pointing fingertip must be finite and nonnegative",
+            ));
+        }
+        if targets.is_empty() || targets.len() > SignalSamples::MAX_KEYS {
+            return Err(invalid(
+                "2D pointing requires a supported number of target keys",
+            ));
+        }
+
+        let mut tracks = [shoulder_joint, elbow_joint, wrist_joint].map(|joint| JointTrack2d {
+            joint: joint.name.clone(),
+            keys: Vec::with_capacity(targets.len()),
+        });
+        // The hand extends the second side of the triangle along the forearm.
+        // Wrist placement in playback still uses the original joint offset.
+        let lower = forearm + fingertip;
+        let reach = upper + lower;
+        let inner = (upper - lower).abs();
+        let tolerance = reach * (8.0 * f64::EPSILON);
+        let side = if bend_left { 1.0 } else { -1.0 };
+        let upper_rest_axis = uy.atan2(ux);
+        let lower_rest_axis = fy.atan2(fx);
+        let mut previous_phase = f32::NEG_INFINITY;
+        let mut previous_angles = [0.0; 3];
+        for &(phase, target) in targets {
+            if !phase.is_finite()
+                || phase <= previous_phase
+                || !target
+                    .iter()
+                    .all(|&coordinate| (coordinate as f32).is_finite())
+            {
+                return Err(invalid(
+                    "2D pointing keys require increasing finite phases and finite targets",
+                ));
+            }
+            previous_phase = phase;
+            let (origin, parent_heading) = match parents[shoulder] {
+                Some(parent) => {
+                    let base = self.pose(phase)?;
+                    (base.posed[shoulder].position, base.posed[parent].heading)
+                }
+                None => (shoulder_joint.offset, 0.0),
+            };
+            let [dx, dy] = subtract(target, origin);
+            let distance = dx.hypot(dy);
+            if (distance as f32) == 0.0
+                || distance < inner - tolerance
+                || distance > reach + tolerance
+            {
+                return Err(invalid(format!(
+                    "2D pointing target at phase {phase} for wrist `{wrist}` is out of reach or has no direction"
+                )));
+            }
+            let cosine = (distance * distance + (upper - lower) * (upper + lower))
+                / (2.0 * upper * distance);
+            let upper_axis = dy.atan2(dx) + side * cosine.clamp(-1.0, 1.0).acos();
+            let [ex, ey] = rotate([upper, 0.0], upper_axis);
+            let lower_axis = (dy - ey).atan2(dx - ex);
+            let shoulder_heading = upper_axis - upper_rest_axis;
+            let elbow_heading = lower_axis - lower_rest_axis;
+            let angles = [
+                shoulder_heading - parent_heading - shoulder_joint.rest_angle,
+                elbow_heading - shoulder_heading - elbow_joint.rest_angle,
+                lower_rest_axis - wrist_joint.rest_angle,
+            ];
+            for ((track, previous), angle) in
+                tracks.iter_mut().zip(&mut previous_angles).zip(angles)
+            {
+                // Unwrap adjacent keys across the atan2 seam.
+                *previous += (angle - *previous + PI).rem_euclid(TAU) - PI;
+                track.keys.push([phase, *previous as f32]);
+            }
+        }
+        Ok(tracks)
     }
 }
 
@@ -965,6 +1085,136 @@ mod tests {
                 assert!((pair[1].transform.rotation - forearm_angle).abs() < 1e-5);
             }
         }
+    }
+
+    #[test]
+    fn tracks_for_pointing_reach_with_fixed_lengths_during_play_and_seek() {
+        let mut scene = Scene::new();
+        let clock = scene.value_tracker(0.0).unwrap();
+        let targets: Vec<_> = (0..=16_u8)
+            .map(|i| {
+                let t = f32::from(i) / 16.0;
+                (t, [0.5 * f64::from(t), 0.9 * f64::from(t)])
+            })
+            .collect();
+        let proportions = [(-2.4, 1.42, 1.55, false), (2.6, 1.81, 1.03, true)];
+        let fingertip = 0.23;
+        for (x, upper, lower, bend_left) in proportions {
+            let joints = [
+                joint("shoulder", None, [x, 0.0], 0.31),
+                joint("elbow", Some("shoulder"), [0.0, upper], -0.46),
+                joint("wrist", Some("elbow"), [-lower, 0.0], 0.72),
+            ];
+            let rig = RetargetedRig2d::new(joints.to_vec(), &[], &[]).unwrap();
+            let tracks = rig
+                .tracks_for_pointing("wrist", &targets, fingertip, bend_left)
+                .unwrap();
+            let elbow = scene.circle(0.1).unwrap();
+            let wrist = scene.circle(0.1).unwrap();
+            let tip = scene.circle(0.1).unwrap();
+            scene
+                .add_many(&[(&elbow).into(), (&wrist).into(), (&tip).into()])
+                .unwrap();
+            scene
+                .bind_rig_2d(
+                    &clock,
+                    &joints,
+                    &tracks,
+                    &[
+                        attachment("elbow", &elbow),
+                        attachment("wrist", &wrist),
+                        JointAttachment2d {
+                            offset: [fingertip, 0.0],
+                            ..attachment("wrist", &tip)
+                        },
+                    ],
+                )
+                .unwrap();
+        }
+        scene
+            .play_value(&clock, 1.0)
+            .rate_func(RateFunction::Linear)
+            .run_time(1.0)
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let mut forward = Vec::new();
+        for i in 0..=32_u8 {
+            let t = f32::from(i) / 32.0;
+            session.seek(f64::from(t)).unwrap();
+            let positions: Vec<_> = session
+                .frame()
+                .objects
+                .iter()
+                .map(|object| object.transform.translation)
+                .collect();
+            let (arms, remainder) = positions.as_chunks::<3>();
+            assert!(remainder.is_empty());
+            assert_eq!(arms.len(), proportions.len());
+            for (&[elbow, wrist, tip], (x, upper, lower, bend_left)) in arms.iter().zip(proportions)
+            {
+                let shoulder = Vec2::new(x as f32, 0.0);
+                let target = Vec2::new(0.5 * t, 0.9 * t);
+                assert!(((elbow - shoulder).length() - upper as f32).abs() < 1e-5);
+                assert!(((wrist - elbow).length() - lower as f32).abs() < 1e-5);
+                assert!(((tip - wrist).length() - fingertip as f32).abs() < 1e-5);
+                assert!((tip - target).length() < if i % 2 == 0 { 1e-5 } else { 0.002 });
+                let ray = target - shoulder;
+                let offset = elbow - shoulder;
+                assert_eq!(ray.x * offset.y - ray.y * offset.x > 0.0, bend_left);
+            }
+            forward.push(positions);
+        }
+        for (i, expected) in forward.into_iter().enumerate().rev() {
+            session.seek(i as f64 / 32.0).unwrap();
+            assert!(session
+                .frame()
+                .objects
+                .iter()
+                .map(|object| object.transform.translation)
+                .eq(expected));
+        }
+    }
+
+    #[test]
+    fn pointing_rejects_unreachable_targets_and_unwraps_adjacent_angles() {
+        let rig = RetargetedRig2d::new(
+            vec![
+                joint("shoulder", None, [0.0, 0.0], 0.0),
+                joint("elbow", Some("shoulder"), [2.0, 0.0], 0.0),
+                joint("wrist", Some("elbow"), [1.0, 0.0], 0.0),
+            ],
+            &[],
+            &[],
+        )
+        .unwrap();
+        for target in [[4.0, 0.0], [0.1, 0.0], [0.0, 0.0]] {
+            let message = rig
+                .tracks_for_pointing("wrist", &[(3.0, target)], 0.0, true)
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(message.contains("phase 3 for wrist `wrist` is out of reach"));
+        }
+        assert!(rig
+            .tracks_for_pointing("elbow", &[(0.0, [2.0, 0.0])], 0.0, true)
+            .is_err());
+        assert!(rig
+            .tracks_for_pointing("wrist", &[(0.0, [2.0, 0.0]); 2], 0.0, true)
+            .is_err());
+        // With equal effective lengths, the reach interval includes zero.
+        // A direction that vanishes at runtime precision cannot define a pose.
+        assert!(rig
+            .tracks_for_pointing("wrist", &[(0.0, [f64::MIN_POSITIVE, 0.0])], 1.0, true)
+            .is_err());
+        let [shoulder, _, _] = rig
+            .tracks_for_pointing(
+                "wrist",
+                &[(0.0, [-3.0, 0.0]), (1.0, [-2.99, -0.01])],
+                0.0,
+                true,
+            )
+            .unwrap();
+        assert!((shoulder.keys[1][1] - shoulder.keys[0][1]).abs() < 0.2);
     }
 
     #[test]
