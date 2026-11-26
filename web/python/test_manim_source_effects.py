@@ -12,7 +12,8 @@ class SourceEffectsTests(unittest.TestCase):
     def test_hand_drawn_demo_uses_prepared_playback(self):
         for name in (
             "hand_drawn.py", "hand_drawn_paths.py", "showcase_sketch_text.py", "sketch_paths_3d.py",
-            "cube_sketch_wireframe.py", "mesh_sketch_creases.py", "mesh_sketch_silhouette.py",
+            "cube_sketch_wireframe.py", "prism_sketch_wireframe.py",
+            "mesh_sketch_creases.py", "mesh_sketch_silhouette.py",
         ):
             with self.subTest(demo=name):
                 source = Path(__file__).with_name("examples").joinpath(name).read_text()

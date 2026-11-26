@@ -79,8 +79,8 @@ impl SpatialPathOptions {
     }
 }
 
-pub(crate) fn cube_sketch_options(
-    side_length: f64,
+pub(crate) fn prism_sketch_options(
+    size: SemanticVec3,
     fill_color: Color,
     fill_opacity: f64,
     stroke_color: Color,
@@ -92,13 +92,11 @@ pub(crate) fn cube_sketch_options(
 
     if fill_color.alpha != 1.0 || !matches!(fill_opacity, 0.0 | 1.0) {
         return Err(AuthoringError::InvalidSketchStroke(
-            "a sketch cube requires an opaque face color and fill_opacity of 0 or 1",
+            "a sketch prism requires an opaque face color and fill_opacity of 0 or 1",
         ));
     }
     validate_sketch_edge(stroke_color, stroke_width, sketch)?;
-    let faces =
-        noon_geometry::prism_faces(SemanticVec3::new(side_length, side_length, side_length))
-            .map_err(|_| AuthoringError::NonFiniteGeometry)?;
+    let faces = noon_geometry::prism_faces(size).map_err(|_| AuthoringError::NonFiniteGeometry)?;
     let meshes = faces
         .into_iter()
         .map(|face| {
@@ -108,25 +106,32 @@ pub(crate) fn cube_sketch_options(
             options
         })
         .collect();
-    let half = side_length * 0.5;
-    let radius = half as f32;
-    if !radius.is_finite() || radius <= 0.0 {
-        return Err(AuthoringError::NonFiniteGeometry);
-    }
-    let path = VectorPath::new()
-        .move_to(Vec2::new(-radius, 0.0))
-        .line_to(Vec2::new(radius, 0.0));
     let x = SemanticVec3::new(1.0, 0.0, 0.0);
     let around = |axis, angle| {
-        SemanticRotation3D::from_axis_angle(axis, angle).expect("finite cube edge rotation")
+        SemanticRotation3D::from_axis_angle(axis, angle).expect("finite prism edge rotation")
     };
+    // Each basis maps local X to the edge axis. The other extents follow
+    // the corresponding local Y and Z axes.
     let bases = [
-        SemanticRotation3D::IDENTITY,
-        around(SemanticVec3::new(0.0, 0.0, 1.0), FRAC_PI_2),
-        around(SemanticVec3::new(0.0, 1.0, 0.0), -FRAC_PI_2),
+        (SemanticRotation3D::IDENTITY, [size.x, size.y, size.z]),
+        (
+            around(SemanticVec3::new(0.0, 0.0, 1.0), FRAC_PI_2),
+            [size.y, size.x, size.z],
+        ),
+        (
+            around(SemanticVec3::new(0.0, 1.0, 0.0), -FRAC_PI_2),
+            [size.z, size.y, size.x],
+        ),
     ];
     let mut paths = Vec::with_capacity(12);
-    for basis in bases {
+    for (basis, [length, width, height]) in bases {
+        let radius = (length * 0.5) as f32;
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(AuthoringError::NonFiniteGeometry);
+        }
+        let path = VectorPath::new()
+            .move_to(Vec2::new(-radius, 0.0))
+            .line_to(Vec2::new(radius, 0.0));
         for y in [-1.0_f64, 1.0] {
             for z in [-1.0_f64, 1.0] {
                 // Wiggle along the supporting plane of the two incident faces.
@@ -134,9 +139,9 @@ pub(crate) fn cube_sketch_options(
                 // burying the sketch inside an adjacent face.
                 let rotation = basis
                     .compose(around(x, (-z).atan2(y)))
-                    .expect("finite cube edge basis");
+                    .expect("finite prism edge basis");
                 let translation = basis
-                    .rotate_vector(SemanticVec3::new(0.0, y * half, z * half))
+                    .rotate_vector(SemanticVec3::new(0.0, y * width * 0.5, z * height * 0.5))
                     .ok_or(AuthoringError::NonFiniteGeometry)?;
                 paths.push(sketch_edge(
                     path.clone(),
@@ -821,8 +826,29 @@ impl Scene {
         stroke_width: f64,
         sketch: noon_core::SketchStroke,
     ) -> Result<MobjectFamily, AuthoringError> {
-        let (meshes, paths) = cube_sketch_options(
-            side_length,
+        self.prism_sketch_wireframe(
+            SemanticVec3::new(side_length, side_length, side_length),
+            fill_color,
+            fill_opacity,
+            stroke_color,
+            stroke_width,
+            sketch,
+        )
+    }
+
+    /// Admit six unlit rectangular prism faces and twelve explicit sketch edges.
+    /// Face opacity zero gives a bare wireframe, and one gives depth occlusion.
+    pub fn prism_sketch_wireframe(
+        &mut self,
+        size: SemanticVec3,
+        fill_color: Color,
+        fill_opacity: f64,
+        stroke_color: Color,
+        stroke_width: f64,
+        sketch: SketchStroke,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        let (meshes, paths) = prism_sketch_options(
+            size,
             fill_color,
             fill_opacity,
             stroke_color,

@@ -21,9 +21,12 @@ fn cube() -> MeshOptions {
 }
 
 #[test]
-fn cube_sketch_options_place_one_edge_in_each_supporting_plane() {
-    let (faces, paths) = cube_sketch_options(
-        2.0,
+fn prism_sketch_options_place_one_edge_in_each_supporting_plane() {
+    use noon_core::PathCommand::{LineTo, MoveTo};
+
+    let half_extents = [1.75, 0.875, 0.625];
+    let (faces, paths) = prism_sketch_options(
+        SemanticVec3::new(3.5, 1.75, 1.25),
         Color::BLUE,
         1.0,
         Color::WHITE,
@@ -34,21 +37,29 @@ fn cube_sketch_options_place_one_edge_in_each_supporting_plane() {
     assert_eq!(faces.len(), 6);
     let mut unique = std::collections::BTreeSet::new();
     for edge in paths {
-        let corner = |x| {
+        let [MoveTo { to: start }, LineTo { to: end }] = edge.path.commands() else {
+            panic!("expected one straight centerline per edge");
+        };
+        let corner = |point: &noon_core::Vec2| {
             let p = edge
                 .transform
-                .transform_point(SemanticVec3::new(x, 0.0, 0.0))
+                .transform_point(SemanticVec3::new(point.x.into(), point.y.into(), 0.0))
                 .unwrap();
             assert!([p.x, p.y, p.z]
                 .iter()
-                .all(|v| (v.abs() - 1.0).abs() < 1e-12));
+                .zip(half_extents)
+                .all(|(v, half)| (v.abs() - half).abs() < 1e-12));
             [
                 p.x.is_sign_positive(),
                 p.y.is_sign_positive(),
                 p.z.is_sign_positive(),
             ]
         };
-        let mut ends = [corner(-1.0), corner(1.0)];
+        let mut ends = [corner(start), corner(end)];
+        assert_eq!(
+            ends[0].iter().zip(&ends[1]).filter(|(a, b)| a != b).count(),
+            1
+        );
         ends.sort();
         assert!(unique.insert(ends));
         for offset in [-0.06, 0.06] {
@@ -56,7 +67,10 @@ fn cube_sketch_options_place_one_edge_in_each_supporting_plane() {
                 .transform
                 .transform_point(SemanticVec3::new(0.0, offset, 0.0))
                 .unwrap();
-            assert!(p.x.abs().max(p.y.abs()).max(p.z.abs()) > 1.0);
+            assert!([p.x, p.y, p.z]
+                .iter()
+                .zip(half_extents)
+                .any(|(v, half)| v.abs() > half));
         }
     }
     assert_eq!(unique.len(), 12);

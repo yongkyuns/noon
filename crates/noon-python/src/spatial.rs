@@ -101,9 +101,9 @@ impl MeshInput {
             .map_err(engine_error)
     }
     #[staticmethod]
-    #[pyo3(name = "sketchCube")]
-    fn sketch_cube(
-        side_length: f64,
+    #[pyo3(name = "sketchPrism")]
+    fn sketch_prism(
+        dimensions: Vec<f64>,
         fill: Vec<f64>,
         fill_opacity: f64,
         stroke: Vec<f64>,
@@ -111,8 +111,8 @@ impl MeshInput {
         roughness: f64,
         seed: u32,
     ) -> Result<MeshFamilyInput, PyErr> {
-        input::SpatialMeshInput::sketch_cube(
-            side_length,
+        input::SpatialMeshInput::sketch_prism(
+            &dimensions,
             &fill,
             fill_opacity,
             &stroke,

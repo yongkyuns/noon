@@ -110,9 +110,9 @@ impl WasmMeshOptions {
             .map_err(js_error)
     }
 
-    #[wasm_bindgen(js_name = sketchCube)]
-    pub fn sketch_cube(
-        side_length: f64,
+    #[wasm_bindgen(js_name = sketchPrism)]
+    pub fn sketch_prism(
+        dimensions: &[f64],
         fill: &[f64],
         fill_opacity: f64,
         stroke: &[f64],
@@ -120,8 +120,8 @@ impl WasmMeshOptions {
         roughness: f64,
         seed: u32,
     ) -> Result<WasmMeshFamilyOptions, JsValue> {
-        input::SpatialMeshInput::sketch_cube(
-            side_length,
+        input::SpatialMeshInput::sketch_prism(
+            dimensions,
             fill,
             fill_opacity,
             stroke,

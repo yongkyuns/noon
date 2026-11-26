@@ -304,8 +304,8 @@ impl SpatialMeshInput {
             axial_pose: None,
         })
     }
-    pub fn sketch_cube(
-        side_length: f64,
+    pub fn sketch_prism(
+        dimensions: &[f64],
         fill: &[f64],
         fill_opacity: f64,
         stroke: &[f64],
@@ -314,8 +314,8 @@ impl SpatialMeshInput {
         seed: u32,
     ) -> Result<SpatialMeshFamilyInput, AuthoringFailure> {
         let sketch = sketch_stroke(roughness, seed)?;
-        let (options, paths) = crate::spatial_authoring::cube_sketch_options(
-            side_length,
+        let (options, paths) = crate::spatial_authoring::prism_sketch_options(
+            vec3(dimensions, "prism dimensions")?,
             rgba(fill)?,
             fill_opacity,
             rgba(stroke)?,

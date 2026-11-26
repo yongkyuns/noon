@@ -126,6 +126,9 @@ while the fill eases in. Run the paired Rust demo with
 The [cube sketch demo](web/python/examples/cube_sketch_wireframe.py) uses
 `Cube(stroke=SketchStroke(TEAL))` on all 12 edges with opaque, unlit faces.
 Use `fill_opacity=0` for a bare wireframe.
+The [prism sketch demo](web/python/examples/prism_sketch_wireframe.py) uses the
+same edge style on `Prism(dimensions=(3.5, 1.75, 1.25), stroke=SketchStroke(TEAL))`.
+Run the paired Rust demo with `cargo run -p noon-native --example prism_sketch_wireframe`.
 The [mesh crease demo](web/python/examples/mesh_sketch_creases.py) uses
 `Mesh3D.polyhedron(vertices, triangles, stroke=SketchStroke(TEAL))` on a closed,
 consistently wound mesh with opaque, unlit faces. Shared coplanar edges are
