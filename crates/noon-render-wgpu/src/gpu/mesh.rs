@@ -1148,11 +1148,13 @@ impl SpatialGpuState {
             }
         }
         // Opaque world paths populate depth before translucent faces blend.
-        draw_calls += self.paths.encode(
+        let (world_path_draws, hidden_silhouettes) = self.paths.encode(
             &mut pass,
             sample_count,
             noon_core::SemanticSpatialCompositionDomain::World,
+            self.cameras.values().next(),
         );
+        draw_calls += world_path_draws;
         let mut path_pass = None;
         for entry in &self.depth_order {
             let index = match entry.draw {
@@ -1195,14 +1197,18 @@ impl SpatialGpuState {
             }
             draw_calls += self.encode_boundary(&mut pass, gpu, draw, sample_count);
         }
-        draw_calls += self.paths.encode(
-            &mut pass,
-            sample_count,
-            noon_core::SemanticSpatialCompositionDomain::FixedOrientation,
-        );
+        draw_calls += self
+            .paths
+            .encode(
+                &mut pass,
+                sample_count,
+                noon_core::SemanticSpatialCompositionDomain::FixedOrientation,
+                None,
+            )
+            .0;
         DrawStats {
             draw_calls,
-            instances_drawn: self.draws.len() + self.paths.draw_count(),
+            instances_drawn: self.draws.len() + self.paths.draw_count() - hidden_silhouettes,
         }
     }
 }

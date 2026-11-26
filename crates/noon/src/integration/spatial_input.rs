@@ -239,6 +239,7 @@ impl SpatialMeshInput {
         width: f64,
         roughness: f64,
         seed: u32,
+        silhouette: bool,
     ) -> Result<SpatialMeshFamilyInput, AuthoringFailure> {
         let (vertices, faces) = polyhedron_input(vertices, faces)?;
         let sketch = sketch_stroke(roughness, seed)?;
@@ -249,6 +250,7 @@ impl SpatialMeshInput {
             rgba(stroke)?,
             width,
             sketch,
+            silhouette,
         )
         .map_err(AuthoringFailure::from)?;
         Ok(SpatialMeshFamilyInput {

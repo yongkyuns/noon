@@ -72,9 +72,10 @@ impl MeshInput {
         width: f64,
         roughness: f64,
         seed: u32,
+        silhouette: bool,
     ) -> Result<MeshFamilyInput, PyErr> {
         input::SpatialMeshInput::sketch_polyhedron(
-            &vertices, &faces, &fill, &stroke, width, roughness, seed,
+            &vertices, &faces, &fill, &stroke, width, roughness, seed, silhouette,
         )
         .map(Into::into)
         .map_err(engine_error)

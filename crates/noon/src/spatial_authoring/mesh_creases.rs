@@ -3,8 +3,8 @@
 use super::{sketch_edge, validate_sketch_edge, MeshOptions, SpatialPathOptions};
 use crate::AuthoringError;
 use noon_core::{
-    Color, SemanticPaint, SemanticRotation3D, SemanticVec3, SemanticWorldTransform3D, SketchStroke,
-    Vec2, VectorPath,
+    Color, SemanticPaint, SemanticRotation3D, SemanticSpatialMaterial, SemanticVec3,
+    SemanticWorldTransform3D, SilhouetteEdge, SketchStroke, Vec2, VectorPath,
 };
 use std::collections::{btree_map::Entry, BTreeMap};
 
@@ -25,6 +25,7 @@ pub(crate) fn polyhedron_sketch_options(
     stroke: Color,
     width: f64,
     sketch: SketchStroke,
+    silhouette: bool,
 ) -> Result<(MeshOptions, Vec<SpatialPathOptions>), AuthoringError> {
     validate_sketch_edge(stroke, width, sketch)?;
     if fill.alpha != 1.0 {
@@ -69,14 +70,14 @@ pub(crate) fn polyhedron_sketch_options(
         let (path, transform) =
             crease_path(vertices[a as usize], vertices[b as usize], first, second)
                 .ok_or(AuthoringError::NonFiniteGeometry)?;
-        paths.push(sketch_edge(
-            path,
-            transform,
-            stroke,
-            width,
-            sketch,
-            paths.len() as u32,
-        ));
+        let mut edge = sketch_edge(path, transform, stroke, width, sketch, paths.len() as u32);
+        if silhouette {
+            edge.material = SemanticSpatialMaterial::SketchSilhouette(
+                SilhouetteEdge::from_face_normal_dot(cosine)
+                    .ok_or(AuthoringError::NonFiniteGeometry)?,
+            );
+        }
+        paths.push(edge);
     }
     let mut mesh = MeshOptions::new(geometry);
     mesh.style.fill = Some(SemanticPaint::Solid(fill));
@@ -138,6 +139,7 @@ fn mesh_sketch_creases_require_closed_consistent_triangle_adjacency() {
             Color::WHITE,
             0.04,
             SketchStroke::new(1.0, 7).unwrap(),
+            false,
         )
     };
     assert_eq!(options(&faces).unwrap().1.len(), 6);

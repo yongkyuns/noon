@@ -226,14 +226,19 @@ class Mesh3D(_WorldMobject):
                                     float(thickness), _count(segments)), options)
 
     @classmethod
-    def polyhedron(cls, vertices, triangular_faces, *, stroke=None, stroke_width=None, **options):
-        """Build an indexed mesh. SketchStroke draws the creases of a closed mesh."""
+    def polyhedron(cls, vertices, triangular_faces, *, stroke=None, stroke_width=None,
+                   silhouette=False, **options):
+        """Sketch the creases of a closed mesh, or its contour with silhouette=True."""
         from _manim_compat import MANIM_DEFAULT_STROKE_WIDTH, _as_color, _manim_stroke_width
         from _manim_semantic_handles import _as_sketch_stroke, _attach_shared_family, _initialize_shared_wrapper
         from _noon_host import array_value as to_js
 
         _mesh_arguments(options)
+        if not isinstance(silhouette, bool):
+            raise TypeError("silhouette requires a boolean")
         sketch = _as_sketch_stroke(stroke)
+        if sketch is None and (stroke_width is not None or silhouette):
+            raise TypeError("polyhedron stroke_width and silhouette require a SketchStroke")
         points = array("d", (v for point in vertices for v in _vector(point)))
         faces = array("I")
         for face in triangular_faces:
@@ -243,8 +248,6 @@ class Mesh3D(_WorldMobject):
             faces.extend(_count(index) for index in face)
         values = (_bulk(points), to_js(memoryview(faces)))
         if sketch is None:
-            if stroke_width is not None:
-                raise TypeError("polyhedron stroke_width requires a SketchStroke")
             return cls._solid("polyhedron", values, options)
         if options.get("point_lit", False):
             raise NotImplementedError("sketch polyhedron creases require point_lit=False")
@@ -258,7 +261,7 @@ class Mesh3D(_WorldMobject):
             _mesh_options.sketchPolyhedron, *values,
             _bulk((fill.red, fill.green, fill.blue, fill.alpha)),
             _bulk((pen.red, pen.green, pen.blue, pen.alpha)), _manim_stroke_width(width),
-            sketch._roughness, sketch._seed,
+            sketch._roughness, sketch._seed, silhouette,
         )
         handle = (engine_call(_create_mesh_family, candidate) if context is None
                   else engine_call(context.createMeshFamily, candidate))

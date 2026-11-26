@@ -844,7 +844,23 @@ impl Scene {
         sketch: SketchStroke,
     ) -> Result<MobjectFamily, AuthoringError> {
         let (mesh, paths) =
-            polyhedron_sketch_options(vertices, triangles, fill, stroke, width, sketch)?;
+            polyhedron_sketch_options(vertices, triangles, fill, stroke, width, sketch, false)?;
+        self.mesh_family_with_paths(vec![mesh], paths)
+    }
+
+    /// Admit one opaque polyhedron whose exterior sketch follows the active camera.
+    /// The indexed triangles must form a closed surface with consistent winding.
+    pub fn polyhedron_sketch_silhouette(
+        &mut self,
+        vertices: &[SemanticVec3],
+        triangles: &[[u32; 3]],
+        fill: Color,
+        stroke: Color,
+        width: f64,
+        sketch: SketchStroke,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        let (mesh, paths) =
+            polyhedron_sketch_options(vertices, triangles, fill, stroke, width, sketch, true)?;
         self.mesh_family_with_paths(vec![mesh], paths)
     }
 

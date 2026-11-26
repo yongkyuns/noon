@@ -921,7 +921,9 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
              patch.object(native, "_create_mesh_family", return_value=family) as admit, \
              patch.object(native, "_path_authoring_context", return_value=None), \
              patch("_noon_host.array_value", side_effect=tuple):
-            mesh = Mesh3D.polyhedron(points, faces, stroke=noon.SketchStroke(noon.TEAL))
+            mesh = Mesh3D.polyhedron(points, faces, stroke=noon.SketchStroke(noon.TEAL),
+                                     silhouette=True)
+        self.assertIs(options.sketchPolyhedron.call_args.args[-1], True)
         admit.assert_called_once_with(candidate)
         self.assertIsInstance(mesh, Mesh3D)
         self.assertEqual(semantic._family_member_handle(mesh), ("family", family))

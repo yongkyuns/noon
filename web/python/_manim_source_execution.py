@@ -3519,8 +3519,10 @@ class _SceneOnlySource(ast.NodeVisitor):
             return False
         if "stroke" not in values:
             return set(values) <= {"color", "point_lit"}
-        return (set(values) <= {"color", "point_lit", "stroke", "stroke_width"}
+        return (set(values) <= {"color", "point_lit", "stroke", "stroke_width", "silhouette"}
                 and self._trusted_sketch_call(values["stroke"])
+                and ("silhouette" not in values or isinstance(values["silhouette"], ast.Constant)
+                     and type(values["silhouette"].value) is bool)
                 and ("stroke_width" not in values or self._finite_number(values["stroke_width"]))
                 and ("point_lit" not in values or isinstance(values["point_lit"], ast.Constant)
                      and values["point_lit"].value is False))

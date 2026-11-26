@@ -78,9 +78,10 @@ impl WasmMeshOptions {
         width: f64,
         roughness: f64,
         seed: u32,
+        silhouette: bool,
     ) -> Result<WasmMeshFamilyOptions, JsValue> {
         input::SpatialMeshInput::sketch_polyhedron(
-            vertices, faces, fill, stroke, width, roughness, seed,
+            vertices, faces, fill, stroke, width, roughness, seed, silhouette,
         )
         .map(Into::into)
         .map_err(js_error)
