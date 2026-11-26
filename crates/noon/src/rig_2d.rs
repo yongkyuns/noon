@@ -332,7 +332,10 @@ impl RetargetedRig2d {
             };
             let [dx, dy] = subtract(target, origin);
             let distance = dx.hypot(dy);
-            if distance == 0.0 || distance < inner - tolerance || distance > reach + tolerance {
+            if (distance as f32) == 0.0
+                || distance < inner - tolerance
+                || distance > reach + tolerance
+            {
                 return Err(invalid(format!(
                     "2D pointing target at phase {phase} for wrist `{wrist}` is out of reach or has no direction"
                 )));
@@ -1194,6 +1197,11 @@ mod tests {
             .is_err());
         assert!(rig
             .pointing_tracks("wrist", &[(0.0, [2.0, 0.0]); 2], 0.0, true)
+            .is_err());
+        // With equal effective lengths, the reach interval includes zero.
+        // A direction that vanishes at runtime precision cannot define a pose.
+        assert!(rig
+            .pointing_tracks("wrist", &[(0.0, [f64::MIN_POSITIVE, 0.0])], 1.0, true)
             .is_err());
         let [shoulder, _, _] = rig
             .pointing_tracks(
