@@ -87,6 +87,7 @@ pub mod pixelate;
 pub mod point_promotion;
 pub mod pointer_input_trace;
 pub mod polar_plane;
+pub mod prism_sketch_wireframe;
 pub mod radial_gradient;
 pub mod raster_image;
 pub mod renderer_fixtures;

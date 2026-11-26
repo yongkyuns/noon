@@ -100,7 +100,7 @@ _canonical_authoring_context
 _register_top_level _edit_membership _bind_camera_frame
 """.split())
 _SOURCE_LINEAR_MEMBERS = frozenset("background_plane add_coordinates add_vector apply_matrix".split())
-_SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Cube Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
+_SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Cube Prism Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
 _SOURCE_COLOR_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
 GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
@@ -3446,13 +3446,22 @@ class _SceneOnlySource(ast.NodeVisitor):
             values = {keyword.arg: keyword.value for keyword in node.keywords}
             if len(values) != len(node.keywords):
                 return False
-            if node.func.id == "Cube":
-                return (not node.args and self._trusted_noon_binding("Cube")
-                        and set(values) <= {"side_length", "fill_color", "fill_opacity",
+            if node.func.id in {"Cube", "Prism"}:
+                cube = node.func.id == "Cube"
+                size_key = "side_length" if cube else "dimensions"
+                size = values.get(size_key)
+                if node.args:
+                    if cube or len(node.args) != 1 or size is not None:
+                        return False
+                    size = node.args[0]
+                valid_size = (size is None or
+                              (self._finite_number(size) if cube else self._finite_tuple(size, 3)))
+                return (self._trusted_noon_binding(node.func.id)
+                        and set(values) <= {size_key, "fill_color", "fill_opacity",
                                             "stroke", "stroke_width", "shade_in_3d"}
+                        and valid_size
                         and self._trusted_sketch_call(values.get("stroke"))
-                        and all(self._finite_number(values[name])
-                                for name in ("side_length", "stroke_width") if name in values)
+                        and ("stroke_width" not in values or self._finite_number(values["stroke_width"]))
                         and ("fill_color" not in values or self._spatial_color(values["fill_color"]))
                         and ("fill_opacity" not in values or isinstance(values["fill_opacity"], ast.Constant)
                              and type(values["fill_opacity"].value) in (int, float)
