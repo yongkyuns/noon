@@ -269,6 +269,30 @@
       "beats": [{"time": 0.8, "label": "Write the equation"}, {"time": 2.0, "label": "Write the heading"}, {"time": 5.0, "label": "Complete composition"}]
     },
     {
+      "id": "showcase-three-of-each",
+      "title": "Three of each",
+      "lesson": "Make three copies of x + 2. Then gather the three x tiles and the six dots to see why 3(x + 2) equals 3x + 6.",
+      "primary_feature": "distributive-property-with-vector-poses",
+      "category": "Text and mathematics",
+      "path": "python/examples/showcase_three_of_each.py",
+      "features": ["Transform", "MathTypst", "distributive property"],
+      "duration": 8.51,
+      "loop": false,
+      "thumbnail_time": 7.75,
+      "thumbnail": "thumbnails/showcase/showcase-three-of-each.png",
+      "thumbnail_alt": "Three cards each contain an x tile and two dots. The matching tiles are grouped below as 3x and 6.",
+      "beats": [
+        { "time": 1.4, "label": "Make three complete copies of x + 2" },
+        { "time": 2.12, "label": "Point to x in the parentheses" },
+        { "time": 3.56, "label": "Collect the three x tiles" },
+        { "time": 4.6, "label": "Turn and point to 2" },
+        { "time": 5.98, "label": "Collect six dots in three pairs" },
+        { "time": 7.75, "label": "Read the full equation" }
+      ],
+      "still_intervals": [[0, 0.45], [3.24, 3.88], [5.72, 6.34], [7.06, 8.51]],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
       "id": "showcase-code-blocks",
       "title": "Code with native syntax highlighting",
       "lesson": "Display Python and CUDA source with native Rust-owned syntax coloring, preserved indentation and line numbers; reveal and move the retained code blocks as normal scene objects.",
