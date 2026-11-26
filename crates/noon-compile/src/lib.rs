@@ -280,6 +280,16 @@ pub struct CompiledSpatialState {
     pub cairo_path_appearance: Option<Box<CompiledCairoPathAppearance>>,
 }
 
+impl CompiledSpatialState {
+    pub fn supports_path_reveal(&self) -> bool {
+        self.draw_kind == CompiledSpatialDrawKind::Planar
+            && self.composition_domain == noon_core::SemanticSpatialCompositionDomain::World
+            && self.material == noon_core::SemanticSpatialMaterial::Unlit
+            && self.camera_projection.is_none()
+            && !self.point_light
+    }
+}
+
 /// Source geometry class used to route spatial objects without inferring role
 /// from authored metadata. Mesh identity comes from the captured resource type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1698,7 +1708,12 @@ impl CompiledScene {
                 .map_err(CompileError::InvalidTrack)?;
             validate_paint_track(track, &objects[object_index as usize])
                 .map_err(CompileError::InvalidTrack)?;
-            if !valid_track_for_spatial(track, objects[object_index as usize].spatial.as_deref()) {
+            let object = &objects[object_index as usize];
+            if !valid_track_for_spatial(
+                track,
+                object.spatial.as_deref(),
+                object.content.geometry().is_some(),
+            ) {
                 return Err(CompileError::InvalidTrack(
                     noon_core::TimelineError::InvalidWorldTransformValues,
                 ));
@@ -2643,7 +2658,15 @@ impl CompiledScene {
                     index,
                     continuous_fill_content_supported(content),
                 )?;
-                for property in [Property::Transform, Property::Morph] {
+                let spatial_reveal = self.objects[index as usize]
+                    .spatial
+                    .as_deref()
+                    .is_some_and(CompiledSpatialState::supports_path_reveal)
+                    && content.geometry().is_none();
+                for property in [Property::Transform, Property::Morph]
+                    .into_iter()
+                    .chain(spatial_reveal.then_some(Property::Reveal))
+                {
                     let channel = CompiledChannelKey::new(index, property);
                     if let Some(track) = self
                         .channel_tracks(channel)
@@ -2760,6 +2783,7 @@ impl CompiledScene {
                                 track.property,
                                 &track.values,
                                 spatial.as_ref(),
+                                self.objects[index as usize].content.geometry().is_some(),
                             )
                         })
                 }) {
@@ -3076,9 +3100,11 @@ impl CompiledScene {
             .map_err(CompilePatchError::InvalidTrack)?;
         validate_paint_track(track, &self.objects[object_index as usize])
             .map_err(CompilePatchError::InvalidTrack)?;
+        let object = &self.objects[object_index as usize];
         if !valid_track_for_spatial(
             track,
-            self.objects[object_index as usize].spatial.as_deref(),
+            object.spatial.as_deref(),
+            object.content.geometry().is_some(),
         ) {
             return Err(CompilePatchError::InvalidTrack(
                 noon_core::TimelineError::InvalidWorldTransformValues,
@@ -3666,22 +3692,16 @@ fn camera_motion_track_overlap(tracks: &[CompiledTrack], objects: &[CompiledObje
 fn valid_track_for_spatial(
     track: &TrackDefinition,
     spatial: Option<&CompiledSpatialState>,
+    is_geometry: bool,
 ) -> bool {
-    valid_track_values_for_spatial(track.property, &track.values, spatial)
+    valid_compiled_track_for_spatial(track.property, &track.values, spatial, is_geometry)
 }
 
 pub(crate) fn valid_compiled_track_for_spatial(
     property: Property,
     values: &TrackValues,
     spatial: Option<&CompiledSpatialState>,
-) -> bool {
-    valid_track_values_for_spatial(property, values, spatial)
-}
-
-fn valid_track_values_for_spatial(
-    property: Property,
-    values: &TrackValues,
-    spatial: Option<&CompiledSpatialState>,
+    is_geometry: bool,
 ) -> bool {
     let Some(spatial) = spatial else {
         return !matches!(property, Property::WorldTransform | Property::CameraProfile);
@@ -3707,8 +3727,11 @@ fn valid_track_values_for_spatial(
     if spatial.point_light {
         return matches!(property, Property::Fill | Property::Opacity);
     }
-    // Meshes require opaque color endpoints. Planar stroke, reveal, appearance,
-    // and opacity effects must fail before activation rather than during drawing.
+    if property == Property::Reveal {
+        return is_geometry && spatial.supports_path_reveal();
+    }
+    // Meshes require opaque color endpoints. Other planar style channels must
+    // fail before activation rather than during drawing.
     matches!(
         (&property, values),
         (
@@ -5532,7 +5555,7 @@ mod tests {
     }
 
     #[test]
-    fn spatial_track_capabilities_preserve_opaque_mesh_color_and_point_light_channels() {
+    fn spatial_track_capabilities_distinguish_path_reveal_mesh_color_and_light_opacity() {
         let mesh = CompiledSpatialState {
             world: noon_core::SemanticWorldTransform3D::IDENTITY,
             camera_projection: None,
@@ -5565,7 +5588,7 @@ mod tests {
                 to: Some(noon_core::Color::BLUE),
             },
         );
-        assert!(valid_track_for_spatial(&opaque_fill, Some(&mesh)));
+        assert!(valid_track_for_spatial(&opaque_fill, Some(&mesh), true));
         let translucent_fill = track(
             Property::Fill,
             TrackValues::Color {
@@ -5573,12 +5596,29 @@ mod tests {
                 to: Some(noon_core::Color::rgba(0.0, 0.0, 1.0, 0.99)),
             },
         );
-        assert!(!valid_track_for_spatial(&translucent_fill, Some(&mesh)));
+        assert!(!valid_track_for_spatial(
+            &translucent_fill,
+            Some(&mesh),
+            true
+        ));
         let opacity = track(
             Property::Opacity,
             TrackValues::Scalar { from: 1.0, to: 0.0 },
         );
-        assert!(!valid_track_for_spatial(&opacity, Some(&mesh)));
-        assert!(valid_track_for_spatial(&opacity, Some(&light)));
+        assert!(!valid_track_for_spatial(&opacity, Some(&mesh), true));
+        assert!(valid_track_for_spatial(&opacity, Some(&light), true));
+        let path = CompiledSpatialState {
+            draw_kind: CompiledSpatialDrawKind::Planar,
+            ..mesh.clone()
+        };
+        let reveal = track(Property::Reveal, TrackValues::Scalar { from: 0.0, to: 1.0 });
+        assert!(valid_track_for_spatial(&reveal, Some(&path), true));
+        assert!(!valid_track_for_spatial(&reveal, Some(&path), false));
+        assert!(!valid_track_for_spatial(&reveal, Some(&mesh), true));
+        let cairo = CompiledSpatialState {
+            material: noon_core::SemanticSpatialMaterial::CairoPath,
+            ..path
+        };
+        assert!(!valid_track_for_spatial(&reveal, Some(&cairo), true));
     }
 }

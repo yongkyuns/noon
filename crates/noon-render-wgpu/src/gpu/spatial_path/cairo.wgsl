@@ -64,7 +64,7 @@ struct CairoPathOutput {
     // Only retained straight, screen-space butt strokes use this filter.
     // Curves, joins, other caps and clipped endpoints retain their old path.
     if cairo_path.metadata.w == 1.0 && (input.surface & 1u) != 0u
-        && input.fixed_orientation == 0u {
+        && (input.reveal_and_orientation >> 31u) == 0u {
         let transform = camera.view_projection * world;
         let first = transform * vec4<f32>(cairo_path.p0.xyz, 1.0);
         let last = transform * vec4<f32>(

@@ -63,6 +63,8 @@ pub struct ScreenStrokeVertex {
     /// `(kind, side, progress)` for projection-time join and cap reconstruction.
     /// When nonzero, `tangent` and `extrusion` carry the incoming/outgoing frames.
     pub metadata: [f32; 3],
+    /// Normalized authored curve progress at the projected centerline.
+    pub path_progress: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -318,7 +320,7 @@ pub fn tessellate_screen_stroke(
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
 ) -> Result<TessellatedScreenStroke, GeometryError> {
-    let lyon_path = build_lyon_path(path)?;
+    let lyon_path = build_lyon_path_with_manim_progress(path)?;
     let options = StrokeOptions::default()
         .with_tolerance(PATH_TESSELLATION_TOLERANCE)
         .with_line_width(1.0)
@@ -331,7 +333,7 @@ pub fn tessellate_screen_stroke(
         screen_stroke_smooth_anchors(&lyon_path)
     };
     let mut buffers = VertexBuffers::<ScreenStrokeVertex, u32>::new();
-    let mut output = BuffersBuilder::new(&mut buffers, |vertex: StrokeVertex<'_, '_>| {
+    let mut output = BuffersBuilder::new(&mut buffers, |mut vertex: StrokeVertex<'_, '_>| {
         let smooth_endpoint = match vertex.source() {
             VertexSource::Endpoint { id } => smooth_anchors.contains(&id),
             VertexSource::Edge { .. } => true,
@@ -369,6 +371,7 @@ pub fn tessellate_screen_stroke(
             tangent,
             extrusion,
             metadata: [0.0; 3],
+            path_progress: vertex.interpolated_attributes()[0],
         }
     });
     if stroke_join == StrokeJoin::Miter {
@@ -377,7 +380,13 @@ pub fn tessellate_screen_stroke(
         // Keep the Path endpoint identities used by the smooth-join prepass.
         // The attribute-free tessellate_path shortcut generates different IDs.
         StrokeTessellator::new()
-            .tessellate_with_ids(lyon_path.id_iter(), &lyon_path, None, &options, &mut output)
+            .tessellate_with_ids(
+                lyon_path.id_iter(),
+                &lyon_path,
+                Some(&lyon_path),
+                &options,
+                &mut output,
+            )
             .map_err(|error| GeometryError::Tessellation(error.to_string()))?;
     }
     if buffers.vertices.is_empty() || buffers.indices.is_empty() {
@@ -525,12 +534,13 @@ pub fn tessellate_projected_screen_stroke(
     stroke_cap: StrokeCap,
 ) -> Result<TessellatedScreenStroke, GeometryError> {
     const FAN_SEGMENTS: usize = 8;
-    let contours = crate::flatten::flatten_path(path, PATH_TESSELLATION_TOLERANCE)?;
+    let (contours, curve_count) =
+        crate::flatten::flatten_path_with_reveal(path, PATH_TESSELLATION_TOLERANCE)?;
     let mut output = TessellatedScreenStroke::default();
 
     fn push_vertex(
         output: &mut TessellatedScreenStroke,
-        position: Vec2,
+        (position, path_progress): (Vec2, f32),
         tangent: Vec2,
         other: Vec2,
         extrusion: Vec2,
@@ -544,6 +554,7 @@ pub fn tessellate_projected_screen_stroke(
             tangent,
             extrusion: if metadata[0] == 0.0 { extrusion } else { other },
             metadata,
+            path_progress,
         });
         Ok(index)
     }
@@ -554,6 +565,15 @@ pub fn tessellate_projected_screen_stroke(
 
     for contour in contours {
         let points = contour.points;
+        let vertex_at = |point_index: usize| {
+            let index = point_index % points.len();
+            let progress = if point_index == points.len() {
+                contour.end_reveal
+            } else {
+                contour.reveal[index]
+            };
+            (points[index], progress / curve_count.max(1) as f32)
+        };
         if points.len() < 2 {
             continue;
         }
@@ -570,10 +590,9 @@ pub fn tessellate_projected_screen_stroke(
             })?);
         }
 
-        for segment in 0..segment_count {
-            let start = points[segment];
-            let end = points[(segment + 1) % points.len()];
-            let tangent = tangents[segment];
+        for (segment, &tangent) in tangents.iter().enumerate() {
+            let start = vertex_at(segment);
+            let end = vertex_at(segment + 1);
             let start_extension =
                 if !contour.closed && segment == 0 && stroke_cap == StrokeCap::Square {
                     -0.5
@@ -643,14 +662,13 @@ pub fn tessellate_projected_screen_stroke(
                     "screen stroke contains an unrepresentable reversal join".to_owned(),
                 ));
             }
-            let center = push_vertex(
-                &mut output,
-                points[point_index],
-                previous,
-                next,
-                Vec2::ZERO,
-                [2.0, 0.0, 0.0],
-            )?;
+            // The closing join belongs to the end of a closed contour.
+            let at = vertex_at(if point_index == 0 {
+                points.len()
+            } else {
+                point_index
+            });
+            let center = push_vertex(&mut output, at, previous, next, Vec2::ZERO, [2.0, 0.0, 0.0])?;
             while contour
                 .feature_indices
                 .get(feature_cursor)
@@ -665,43 +683,19 @@ pub fn tessellate_projected_screen_stroke(
             } else {
                 StrokeJoin::Bevel
             };
-            let previous_edge = push_vertex(
-                &mut output,
-                points[point_index],
-                previous,
-                next,
-                Vec2::ZERO,
-                [1.0, 0.0, 0.0],
-            )?;
+            let previous_edge =
+                push_vertex(&mut output, at, previous, next, Vec2::ZERO, [1.0, 0.0, 0.0])?;
             match join {
                 StrokeJoin::Bevel => {
-                    let next_edge = push_vertex(
-                        &mut output,
-                        points[point_index],
-                        previous,
-                        next,
-                        Vec2::ZERO,
-                        [1.0, 0.0, 1.0],
-                    )?;
+                    let next_edge =
+                        push_vertex(&mut output, at, previous, next, Vec2::ZERO, [1.0, 0.0, 1.0])?;
                     add_triangle(&mut output, center, previous_edge, next_edge);
                 }
                 StrokeJoin::Miter => {
-                    let miter = push_vertex(
-                        &mut output,
-                        points[point_index],
-                        previous,
-                        next,
-                        Vec2::ZERO,
-                        [3.0, 0.0, 0.0],
-                    )?;
-                    let next_edge = push_vertex(
-                        &mut output,
-                        points[point_index],
-                        previous,
-                        next,
-                        Vec2::ZERO,
-                        [1.0, 0.0, 1.0],
-                    )?;
+                    let miter =
+                        push_vertex(&mut output, at, previous, next, Vec2::ZERO, [3.0, 0.0, 0.0])?;
+                    let next_edge =
+                        push_vertex(&mut output, at, previous, next, Vec2::ZERO, [1.0, 0.0, 1.0])?;
                     add_triangle(&mut output, center, previous_edge, miter);
                     add_triangle(&mut output, center, miter, next_edge);
                 }
@@ -710,7 +704,7 @@ pub fn tessellate_projected_screen_stroke(
                     for step in 1..=FAN_SEGMENTS {
                         let next_arc = push_vertex(
                             &mut output,
-                            points[point_index],
+                            at,
                             previous,
                             next,
                             Vec2::ZERO,
@@ -730,7 +724,7 @@ pub fn tessellate_projected_screen_stroke(
             ] {
                 let center = push_vertex(
                     &mut output,
-                    points[point_index],
+                    vertex_at(point_index),
                     tangent,
                     tangent,
                     Vec2::ZERO,
@@ -738,7 +732,7 @@ pub fn tessellate_projected_screen_stroke(
                 )?;
                 let mut previous_arc = push_vertex(
                     &mut output,
-                    points[point_index],
+                    vertex_at(point_index),
                     tangent,
                     tangent,
                     Vec2::ZERO,
@@ -747,7 +741,7 @@ pub fn tessellate_projected_screen_stroke(
                 for step in 1..=FAN_SEGMENTS {
                     let next_arc = push_vertex(
                         &mut output,
-                        points[point_index],
+                        vertex_at(point_index),
                         tangent,
                         tangent,
                         Vec2::ZERO,
@@ -2413,6 +2407,9 @@ mod tests {
             .iter()
             .find(|vertex| vertex.metadata[0] == 3.0)
             .expect("miter join vertex");
+        assert_eq!(miter_vertex.path_progress, 0.5);
+        assert_eq!(miter.vertices[0].path_progress, 0.0);
+        assert_eq!(miter.vertices[7].path_progress, 1.0);
         assert_eq!(miter_vertex.tangent, Vec2::new(1.0, 0.0));
         assert_eq!(miter_vertex.extrusion, Vec2::new(0.0, 1.0));
         assert!(round

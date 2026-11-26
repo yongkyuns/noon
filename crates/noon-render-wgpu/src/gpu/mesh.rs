@@ -1153,20 +1153,18 @@ impl SpatialGpuState {
             sample_count,
             noon_core::SemanticSpatialCompositionDomain::World,
         );
-        let mut using_path_pipeline = false;
+        let mut path_pass = None;
         for entry in &self.depth_order {
             let index = match entry.draw {
                 DepthDraw::Mesh(index) => index,
                 DepthDraw::Path(id) => {
-                    if !using_path_pipeline {
-                        self.paths.bind_depth_pipeline(&mut pass, sample_count);
-                        using_path_pipeline = true;
-                    }
-                    draw_calls += self.paths.encode_depth_draw(&mut pass, id);
+                    draw_calls +=
+                        self.paths
+                            .encode_depth_draw(&mut pass, id, sample_count, &mut path_pass);
                     continue;
                 }
             };
-            using_path_pipeline = false;
+            path_pass = None;
             let draw = &self.draws[&index];
             let mesh = &self.meshes[&draw.handle];
             if self.instances[draw.instance].color[3] > 0.0 {
@@ -2024,5 +2022,29 @@ mod tests {
             (state.depth_order.as_ptr(), state.depth_order.capacity()),
             storage
         );
+
+        // A spatial Create fill joins the same ordered pass during its fade.
+        let row = farther_row;
+        let object = &mut frame.objects[row];
+        object.content =
+            noon_core::ObjectContentRef::Geometry(noon_core::GeometryRef::rectangle(2.0, 1.0));
+        object.spatial.as_mut().unwrap().draw_kind = noon_compile::CompiledSpatialDrawKind::Planar;
+        object.style = noon_core::Style {
+            stroke: Some(Color::WHITE),
+            ..noon_core::Style::default()
+        };
+        let changes = FrameChanges::objects(vec![row]);
+        let path = DepthDraw::Path(super::DrawId { row, item: 0 });
+        for (step, reveal) in [0.0, 0.25, 0.75, 1.0, 0.5, 0.0].into_iter().enumerate() {
+            frame.reveals[row] = reveal;
+            let stats = prepare(&mut state, &frame, &changes, &order).unwrap();
+            assert_eq!(
+                observed_order(&state).contains(&path),
+                reveal > 0.0 && reveal < 1.0
+            );
+            if step > 0 {
+                assert_eq!(stats.geometry_bytes, 0);
+            }
+        }
     }
 }

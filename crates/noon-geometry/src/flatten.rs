@@ -8,49 +8,85 @@ pub(crate) struct FlattenedContour {
     pub(crate) points: Vec<Vec2>,
     pub(crate) feature_indices: Vec<usize>,
     pub(crate) closed: bool,
+    pub(crate) reveal: Vec<f32>,
+    pub(crate) end_reveal: f32,
 }
 
 pub(crate) fn flatten_path(
     path: &VectorPath,
     tolerance: f32,
 ) -> Result<Vec<FlattenedContour>, GeometryError> {
+    flatten_path_impl::<false>(path, tolerance).map(|(contours, _)| contours)
+}
+
+/// Retain the authored curve index plus Bézier parameter for each flattened point.
+pub(crate) fn flatten_path_with_reveal(
+    path: &VectorPath,
+    tolerance: f32,
+) -> Result<(Vec<FlattenedContour>, usize), GeometryError> {
+    flatten_path_impl::<true>(path, tolerance)
+}
+
+fn flatten_path_impl<const REVEAL: bool>(
+    path: &VectorPath,
+    tolerance: f32,
+) -> Result<(Vec<FlattenedContour>, usize), GeometryError> {
     let mut contours = Vec::new();
-    let mut points = Vec::new();
-    let mut feature_indices = Vec::new();
+    let mut contour = FlattenedContour {
+        points: Vec::new(),
+        feature_indices: Vec::new(),
+        closed: false,
+        reveal: Vec::new(),
+        end_reveal: 0.0,
+    };
     let mut current = Vec2::ZERO;
     let mut start = Vec2::ZERO;
     let mut active = false;
+    let mut curve_index = 0;
+    let finish = |contour: &mut FlattenedContour, closed, curve_index| FlattenedContour {
+        points: std::mem::take(&mut contour.points),
+        feature_indices: std::mem::take(&mut contour.feature_indices),
+        closed,
+        reveal: std::mem::take(&mut contour.reveal),
+        end_reveal: curve_index as f32,
+    };
 
     for command in path.commands() {
+        let mut push = |point, parameter| {
+            if contour.points.last().copied() != Some(point) {
+                contour.points.push(point);
+                if REVEAL {
+                    contour.reveal.push(curve_index as f32 + parameter);
+                }
+            }
+        };
         match *command {
             PathCommand::MoveTo { to } => {
                 finite(to)?;
                 if active {
-                    contours.push(FlattenedContour {
-                        points: std::mem::take(&mut points),
-                        feature_indices: std::mem::take(&mut feature_indices),
-                        closed: false,
-                    });
+                    contours.push(finish(&mut contour, false, curve_index));
                 }
-                points.push(to);
-                feature_indices.push(0);
+                contour.points.push(to);
+                contour.feature_indices.push(0);
+                if REVEAL {
+                    contour.reveal.push(curve_index as f32);
+                }
                 current = to;
                 start = to;
                 active = true;
+                continue;
             }
             PathCommand::LineTo { to } => {
                 require_active(active)?;
                 finite(to)?;
-                push_distinct(&mut points, to);
-                mark_feature(&mut feature_indices, points.len() - 1);
+                push(to, 1.0);
                 current = to;
             }
             PathCommand::QuadraticTo { control, to } => {
                 require_active(active)?;
                 finite(control)?;
                 finite(to)?;
-                flatten_quadratic(current, control, to, tolerance, 0, &mut points);
-                mark_feature(&mut feature_indices, points.len() - 1);
+                flatten_quadratic(current, control, to, tolerance, 0, [0.0, 1.0], &mut push);
                 current = to;
             }
             PathCommand::CubicTo {
@@ -62,37 +98,46 @@ pub(crate) fn flatten_path(
                 finite(control1)?;
                 finite(control2)?;
                 finite(to)?;
-                flatten_cubic(current, control1, control2, to, tolerance, 0, &mut points);
-                mark_feature(&mut feature_indices, points.len() - 1);
+                flatten_cubic(
+                    current,
+                    control1,
+                    control2,
+                    to,
+                    tolerance,
+                    0,
+                    [0.0, 1.0],
+                    &mut push,
+                );
                 current = to;
             }
             PathCommand::Close => {
                 if !active {
                     return Err(GeometryError::CloseBeforeMove);
                 }
-                if points.last().copied() == Some(start) {
-                    let removed = points.len() - 1;
-                    points.pop();
-                    feature_indices.retain(|index| *index != removed);
+                if REVEAL && (current.x - start.x).hypot(current.y - start.y) > f32::EPSILON {
+                    curve_index += 1;
                 }
-                contours.push(FlattenedContour {
-                    points: std::mem::take(&mut points),
-                    feature_indices: std::mem::take(&mut feature_indices),
-                    closed: true,
-                });
+                if contour.points.last().copied() == Some(start) {
+                    let removed = contour.points.len() - 1;
+                    contour.points.pop();
+                    contour.reveal.pop();
+                    contour.feature_indices.retain(|index| *index != removed);
+                }
+                contours.push(finish(&mut contour, true, curve_index));
                 current = start;
                 active = false;
+                continue;
             }
         }
+        if REVEAL {
+            curve_index += 1;
+        }
+        mark_feature(&mut contour.feature_indices, contour.points.len() - 1);
     }
     if active {
-        contours.push(FlattenedContour {
-            points,
-            feature_indices,
-            closed: false,
-        });
+        contours.push(finish(&mut contour, false, curve_index));
     }
-    Ok(contours)
+    Ok((contours, curve_index))
 }
 
 fn flatten_quadratic(
@@ -101,17 +146,35 @@ fn flatten_quadratic(
     to: Vec2,
     tolerance: f32,
     depth: u32,
-    points: &mut Vec<Vec2>,
+    [start, end]: [f32; 2],
+    push: &mut impl FnMut(Vec2, f32),
 ) {
     if depth >= MAX_FLATTEN_DEPTH || point_line_distance(control, from, to) <= tolerance {
-        push_distinct(points, to);
+        push(to, end);
         return;
     }
     let from_control = midpoint(from, control);
     let control_to = midpoint(control, to);
     let middle = midpoint(from_control, control_to);
-    flatten_quadratic(from, from_control, middle, tolerance, depth + 1, points);
-    flatten_quadratic(middle, control_to, to, tolerance, depth + 1, points);
+    let half = (start + end) * 0.5;
+    flatten_quadratic(
+        from,
+        from_control,
+        middle,
+        tolerance,
+        depth + 1,
+        [start, half],
+        push,
+    );
+    flatten_quadratic(
+        middle,
+        control_to,
+        to,
+        tolerance,
+        depth + 1,
+        [half, end],
+        push,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -122,12 +185,13 @@ fn flatten_cubic(
     to: Vec2,
     tolerance: f32,
     depth: u32,
-    points: &mut Vec<Vec2>,
+    [start, end]: [f32; 2],
+    push: &mut impl FnMut(Vec2, f32),
 ) {
     let flatness =
         point_line_distance(control1, from, to).max(point_line_distance(control2, from, to));
     if depth >= MAX_FLATTEN_DEPTH || flatness <= tolerance {
-        push_distinct(points, to);
+        push(to, end);
         return;
     }
     let a = midpoint(from, control1);
@@ -136,19 +200,23 @@ fn flatten_cubic(
     let d = midpoint(a, b);
     let e = midpoint(b, c);
     let middle = midpoint(d, e);
-    flatten_cubic(from, a, d, middle, tolerance, depth + 1, points);
-    flatten_cubic(middle, e, c, to, tolerance, depth + 1, points);
+    let half = (start + end) * 0.5;
+    flatten_cubic(
+        from,
+        a,
+        d,
+        middle,
+        tolerance,
+        depth + 1,
+        [start, half],
+        push,
+    );
+    flatten_cubic(middle, e, c, to, tolerance, depth + 1, [half, end], push);
 }
 
 fn mark_feature(features: &mut Vec<usize>, index: usize) {
     if features.last().copied() != Some(index) {
         features.push(index);
-    }
-}
-
-fn push_distinct(points: &mut Vec<Vec2>, point: Vec2) {
-    if points.last().copied() != Some(point) {
-        points.push(point);
     }
 }
 

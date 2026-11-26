@@ -135,6 +135,15 @@ fn same_world_spatial_owner(before: &CompiledObject, after: &CompiledObject) -> 
             })
 }
 
+fn world_path_reveal_owner(object: &CompiledObject) -> bool {
+    world_spatial_owner(object)
+        && object.content.geometry().is_some()
+        && object
+            .spatial
+            .as_deref()
+            .is_some_and(crate::CompiledSpatialState::supports_path_reveal)
+}
+
 fn local_channel_for_objects(
     property: Property,
     before: &CompiledObject,
@@ -142,6 +151,10 @@ fn local_channel_for_objects(
 ) -> bool {
     match property {
         Property::EffectThreshold => authored_bloom_owner(before) && authored_bloom_owner(after),
+        Property::Reveal => {
+            same_planar_owner(before, after)
+                || (world_path_reveal_owner(before) && world_path_reveal_owner(after))
+        }
         property if local_property(property) => same_planar_owner(before, after),
         Property::WorldTransform => {
             (camera_owner(before) && camera_owner(after)) || same_world_spatial_owner(before, after)
@@ -155,19 +168,22 @@ fn local_track_for_object(track: Option<&CompiledTrack>, object: Option<&Compile
     track.is_none_or(|track| {
         let typed_spatial_track = matches!(
             track.property,
-            Property::WorldTransform | Property::CameraProfile
+            Property::WorldTransform | Property::CameraProfile | Property::Reveal
         ) && object.is_some_and(|object| match track.property {
             Property::WorldTransform => spatial_history_owner(object),
             Property::CameraProfile => camera_owner(object),
+            Property::Reveal => world_path_reveal_owner(object),
             _ => false,
         }) && object.is_some_and(|object| {
             crate::valid_compiled_track_for_spatial(
                 track.property,
                 &track.values,
                 object.spatial.as_deref(),
+                object.content.geometry().is_some(),
             )
         }) && match (&track.property, &track.values) {
-            (Property::WorldTransform, TrackValues::WorldTransform { .. }) => true,
+            (Property::WorldTransform, TrackValues::WorldTransform { .. })
+            | (Property::Reveal, TrackValues::Scalar { .. }) => true,
             (
                 Property::CameraProfile,
                 TrackValues::CameraProfile {

@@ -1,13 +1,16 @@
 //! Native Rust counterpart of the 3D sketch path demo.
 use crate::{
-    AnimationOptions, Color, ContinuationEffects, ContinuationScene, ContinuationStep,
-    DeclaredAnimation, LiveContinuation, LiveProgram, RateFunction, Scene, ScriptError,
-    SemanticStyle, SemanticVec3, SemanticWorldTransform3D, StyleUpdate, Vec2, VectorPath,
+    AnimationCompositionRequest as Animation, AnimationOptions, Color, ContinuationEffects,
+    ContinuationScene, ContinuationStep, LiveContinuation, LiveProgram, Mobject, RateFunction,
+    Scene, ScriptError, SemanticAnimationCompositionKind, SemanticStyle, SemanticVec3,
+    SemanticWorldTransform3D, StyleUpdate, Vec2, VectorPath,
 };
 use noon_core::{ManimCamera3DProfile, SemanticRotation3D};
 
 pub struct SketchPathOrbit {
-    movement: DeclaredAnimation,
+    camera: Mobject,
+    endpoint: ManimCamera3DProfile,
+    paths: [Mobject; 2],
     step: u8,
 }
 
@@ -17,8 +20,32 @@ impl LiveContinuation for SketchPathOrbit {
 
     fn resume(&mut self, scene: &mut ContinuationScene) -> Result<ContinuationStep, ScriptError> {
         let segment = match self.step {
-            0 | 2 => scene.live().wait_segment(0.4)?,
-            1 => scene.live().play_animation(&self.movement)?,
+            0 => {
+                let options = AnimationOptions::new();
+                scene.live().declare_and_activate_composition(
+                    &Animation::Composition {
+                        kind: SemanticAnimationCompositionKind::Parallel,
+                        children: vec![
+                            Animation::CameraProfile {
+                                target: &self.camera,
+                                profile: self.endpoint,
+                                options,
+                            },
+                            Animation::Create {
+                                target: &self.paths[0],
+                                options,
+                            },
+                            Animation::Create {
+                                target: &self.paths[1],
+                                options,
+                            },
+                        ],
+                        options,
+                    },
+                    options.run_time(2.6).rate_func(RateFunction::Linear),
+                )?
+            }
+            1 => scene.live().wait_segment(0.4)?,
             _ => return Ok(ContinuationStep::Finished),
         };
         self.step += 1;
@@ -93,21 +120,17 @@ pub fn program() -> Result<LiveProgram<SketchPathOrbit>, ScriptError> {
             ..SemanticWorldTransform3D::IDENTITY
         },
     )?;
-    for object in [&occluder, &panel, &curve] {
-        scene.add(object)?;
-    }
-    let movement = scene.declare_camera_profile_move(
-        &camera,
-        ManimCamera3DProfile {
+    scene.add(&occluder)?;
+    Ok(scene.into_live_program(SketchPathOrbit {
+        camera,
+        endpoint: ManimCamera3DProfile {
             phi: 0.85,
             theta: -0.6,
             ..start
         },
-        AnimationOptions::new()
-            .run_time(2.2)
-            .rate_func(RateFunction::Linear),
-    )?;
-    Ok(scene.into_live_program(SketchPathOrbit { movement, step: 0 })?)
+        paths: [panel, curve],
+        step: 0,
+    })?)
 }
 
 #[cfg(all(test, feature = "prepared-prefix"))]
@@ -130,20 +153,24 @@ fn spatial_sketch_paths_preserve_camera_and_strokes_when_scrubbed() {
     player.advance_to(&mut callbacks, 1.3).unwrap();
     let mid = frame(&player);
     assert_ne!(camera(&start), camera(&mid));
-    assert_eq!(
-        mid.objects
+    let strokes = |frame: &noon_runtime::FrameState| {
+        frame
+            .objects
             .iter()
-            .filter_map(|object| {
+            .enumerate()
+            .filter_map(|(index, object)| {
                 let stroke = object.style.sketch_stroke?;
                 assert!(object.world_transform().is_some());
-                Some(stroke.seed())
+                Some((stroke.seed(), frame.reveal(index)))
             })
-            .collect::<Vec<_>>(),
-        [7, 17]
-    );
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(strokes(&start), [(7, 0.0), (17, 0.0)]);
+    assert_eq!(strokes(&mid), [(7, 0.5), (17, 0.5)]);
     player.advance_to(&mut callbacks, 2.75).unwrap();
     let end = frame(&player);
     assert_ne!(camera(&mid), camera(&end));
+    assert_eq!(strokes(&end), [(7, 1.0), (17, 1.0)]);
 
     player.seek(0.0).unwrap();
     assert_eq!(frame(&player), start);
