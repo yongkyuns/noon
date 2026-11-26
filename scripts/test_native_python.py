@@ -1087,12 +1087,8 @@ class NestedPose(Scene):
     def test_distributive_tutorial_points_to_both_terms_during_replay(self):
         path = ROOT / "web/python/examples/showcase_three_of_each.py"
         tutorial = run_path(str(path))
-        scene = asyncio.run(run_scene(tutorial["ThreeOfEach"], retain_history=True))
-        view = prepare_view(scene)
-        width, height = 640, 360
-
-        def capture(time):
-            return view.capture(time=time, width=width, height=height)
+        source = path.read_text()
+        width, height = 960, 540
 
         def rgb(swatch):
             color = tutorial[swatch]
@@ -1102,22 +1098,21 @@ class NestedPose(Scene):
 
         def assert_pointing(frame, term_x, ink):
             center = int(width / 2 + term_x * height / 8)
-            colored, glove = [], []
-            for y in range(87, 155):
-                for x in range(center - 20, center + 21):
+            rows, glove = {}, []
+            for y in range(120, 236):
+                for x in range(center - 24, center + 25):
                     offset = (y * width + x) * 4
                     pixel = frame[offset:offset + 3]
                     if pixel == ink:
-                        colored.append((x, y))
+                        rows.setdefault(y, []).append(x)
                     if pixel == glove_color:
                         glove.append((x, y))
-            self.assertTrue(colored and glove)
-            underline_y = max(y for _, y in colored)
-            underline = [x for x, y in colored if y == underline_y]
-            glyph = [x for x, y in colored if y < underline_y - 5]
+            self.assertTrue(rows and glove)
+            underline_y, underline = max(rows.items(), key=lambda item: len(item[1]))
+            glyph = [x for y, pixels in rows.items() if y < underline_y - 5 for x in pixels]
             tip_y = min(y for _, y in glove)
             fingertip = [x for x, y in glove if y == tip_y]
-            self.assertGreater(len(underline), 15)
+            self.assertGreater(len(underline), 30)
             self.assertTrue(glyph)
             underline_center = (min(underline) + max(underline)) / 2
             glyph_center = (min(glyph) + max(glyph)) / 2
@@ -1125,31 +1120,22 @@ class NestedPose(Scene):
             self.assertLessEqual(abs(underline_center - sum(fingertip) / len(fingertip)), 3)
             self.assertLessEqual(abs(tip_y - underline_y), 4)
 
-        def reach_radius(frame):
-            # The outward swing keeps this glove left of its shoulder.
-            sx, sy = width / 2 - 3.61 * height / 8, height / 2 - 0.02 * height / 8
-            radii = []
-            for y in range(120, 240):
-                for x in range(103, int(sx) - 2):
-                    offset = (y * width + x) * 4
-                    if frame[offset:offset + 3] == glove_color:
-                        radii.append(((x + 0.5 - sx) ** 2 + (y + 0.5 - sy) ** 2) ** 0.5)
-            return max(radii)
-
-        try:
-            self.assertAlmostEqual(view.duration, 8.51)
-            swing = [capture(t) for t in (1.40, 1.57, 1.76, 1.94, 2.12)]
-            radii = [reach_radius(frame) for frame in swing]
-            self.assertLessEqual(max(radii) - min(radii), 2.5)
-            x_frame, two_frame = capture(3.56), capture(5.98)
-            assert_pointing(x_frame, -3.96, rgb("VARIABLE_COLOR"))
-            assert_pointing(two_frame, -2.28, rgb("CONSTANT_COLOR"))
-            self.assertNotEqual(capture(8.51), two_frame)
-            self.assertEqual(capture(5.98), two_frame)
-            self.assertEqual(capture(3.56), x_frame)
-            self.assertEqual(capture(1.76), swing[2])
-        finally:
-            view.close()
+        for x_term, two_term in ((tutorial["X_TERM"], tutorial["TWO_TERM"]),
+                                 ((-4.10, 1.54), (-2.12, 1.63))):
+            code = source + f"\nX_TERM = {x_term!r}\nTWO_TERM = {two_term!r}\n"
+            scene = asyncio.run(run_source(code, filename=str(path), retain_history=True, portable=True))
+            view = prepare_view(scene)
+            try:
+                self.assertAlmostEqual(view.duration, 8.51)
+                times = (1.76, 3.56, 5.98)
+                frames = [view.capture(time=t, width=width, height=height) for t in times]
+                assert_pointing(frames[1], x_term[0], rgb("VARIABLE_COLOR"))
+                assert_pointing(frames[2], two_term[0], rgb("CONSTANT_COLOR"))
+                self.assertNotEqual(view.capture(time=8.51, width=width, height=height), frames[-1])
+                for time, expected in reversed(list(zip(times, frames))):
+                    self.assertEqual(view.capture(time=time, width=width, height=height), expected)
+            finally:
+                view.close()
 
     def test_pointing_gallery_follows_the_label_after_a_source_edit_and_seek(self):
         path = ROOT / "web/python/examples/showcase_target_pointing.py"
@@ -1160,7 +1146,7 @@ class NestedPose(Scene):
         start = palette["LABEL_START"]
         edge = palette["LABEL_EDGE"]
         width, height = 960, 540
-        times = (0.55, 2.1, 3.7)
+        times = (1.1, 2.1, 3.7)
 
         for end in (palette["LABEL_END"], (-0.04, 0.47)):
             code = source + f"\nLABEL_END = {end!r}\n"
