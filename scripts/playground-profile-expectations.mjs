@@ -27,7 +27,7 @@ const rows = [
   ['showcase-shape-matching','showcase_shape_matching.py','3f407fa427902125efd71645fc6d93bce1c70755f91be08e4fc77e043dc298e3','incremental','ordinary',[], 'looped'],
   ['showcase-ordered-reveal','showcase_ordered_reveal.py','36a2186b6bcfb4eb2be4e6a8cc0bc84728e7e7fa5fe1ef99f39d863fd66b8d7c','incremental','ordinary',[], 'looped'],
   ['showcase-text-math','showcase_text_math.py','f2734b513f9f5d590a6e7b6b62f9939a0aa83dab51f9237041cb1f8c7af2b408','incremental','ordinary',[], 'looped'],
-  ['showcase-three-of-each','showcase_three_of_each.py','c0b73155e4b5d0644fe1a0c7ad38fd3ada5ae5376b9ff163278616bc3caa8877','incremental','ordinary',[], 'finite-complete', true],
+  ['showcase-three-of-each','showcase_three_of_each.py','86191331e5c928793fee0a81120e4c38e50105aeef7203bf6544481a00fc39af','incremental','ordinary',[], 'finite-complete', true],
   ['showcase-code-blocks','showcase_code_blocks.py','8a4530c141a38d0b4a6357ed75075fe8e08023e1c93fd1120f618dc21f140427','incremental','ordinary',[], 'looped'],
   ['showcase-latex-create','showcase_latex_create.py','bb59b97174b6332f33ac3c43384319d434f7435a5a1bbdb529e69fff9c010a40','incremental','ordinary',[], 'looped'],
   ['showcase-sketch-text','showcase_sketch_text.py','d51a781ee279d12c4bbf92ae517b685a9f979d3526c4504377de4af803f6bc59','incremental','ordinary',[], 'looped'],
@@ -64,7 +64,7 @@ const rows = [
   ['showcase-character-rigs','showcase_character_rigs.py','8f4450139597368def1bd3c17cc17cb8fee09d7ccfd3fcb641d85b2ce1146f8b','observed','observed-replay',[], 'observed-complete'],
   ['showcase-shape-characters','showcase_shape_characters.py','aff850534219adffeb89f6e3d5222931b75df8f16b7073ba4ae61159ad6b04df','observed','observed-replay',[], 'observed-complete'],
   ['showcase-drawn-sleeve-fold','showcase_drawn_sleeve_fold.py','5282e636f2d8cfe58b472c8222146f346a95bcf2100e98e3f5f211bdd7c72cbf','incremental','ordinary',[], 'finite-complete', true],
-  ['showcase-target-pointing','showcase_target_pointing.py','2e72dfc754d22de1d854ebe6c637902dd43852c3119b4915a660cdf5f5de8d6d','observed','observed-replay',[], 'observed-complete'],
+  ['showcase-target-pointing','showcase_target_pointing.py','93556071296257da41f09399d05cd0726bb80e0957b6dd5d63a3171389dd015e','incremental','ordinary',[], 'finite-complete', true],
   ['showcase-retarget-blink','showcase_retarget_blink.py','8eee8e589bc7a0126df0f98b94af976d33c51e43dd6b5a818cb498045dd62660','observed','observed-replay',[], 'observed-complete'],
 ];
 
