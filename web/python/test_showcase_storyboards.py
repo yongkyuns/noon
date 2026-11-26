@@ -14,6 +14,7 @@ LESSONS = {
     "showcase-always-redraw",
     "showcase-camera-follows-path",
     "showcase-gpu-glow",
+    "showcase-three-of-each",
 }
 
 

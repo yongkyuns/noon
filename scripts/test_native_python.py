@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from runpy import run_path
 import subprocess
 import sys
 import tempfile
@@ -1080,6 +1081,73 @@ class NestedPose(Scene):
             self.assertEqual(capture(2.55), tuck)
             self.assertEqual(capture(1.32), turn)
             self.assertEqual(capture(0.25), reach)
+        finally:
+            view.close()
+
+    def test_distributive_tutorial_points_to_both_terms_during_replay(self):
+        path = ROOT / "web/python/examples/showcase_three_of_each.py"
+        tutorial = run_path(str(path))
+        scene = asyncio.run(run_scene(tutorial["ThreeOfEach"], retain_history=True))
+        view = prepare_view(scene)
+        width, height = 640, 360
+
+        def capture(time):
+            return view.capture(time=time, width=width, height=height)
+
+        def rgb(swatch):
+            color = tutorial[swatch]
+            return bytes(round(255 * channel) for channel in (color.red, color.green, color.blue))
+
+        glove_color = rgb("GLOVE_COLOR")
+
+        def assert_pointing(frame, term_x, ink):
+            center = int(width / 2 + term_x * height / 8)
+            colored, glove = [], []
+            for y in range(87, 155):
+                for x in range(center - 20, center + 21):
+                    offset = (y * width + x) * 4
+                    pixel = frame[offset:offset + 3]
+                    if pixel == ink:
+                        colored.append((x, y))
+                    if pixel == glove_color:
+                        glove.append((x, y))
+            self.assertTrue(colored and glove)
+            underline_y = max(y for _, y in colored)
+            underline = [x for x, y in colored if y == underline_y]
+            glyph = [x for x, y in colored if y < underline_y - 5]
+            tip_y = min(y for _, y in glove)
+            fingertip = [x for x, y in glove if y == tip_y]
+            self.assertGreater(len(underline), 15)
+            self.assertTrue(glyph)
+            underline_center = (min(underline) + max(underline)) / 2
+            glyph_center = (min(glyph) + max(glyph)) / 2
+            self.assertLessEqual(abs(underline_center - glyph_center), 2)
+            self.assertLessEqual(abs(underline_center - sum(fingertip) / len(fingertip)), 3)
+            self.assertLessEqual(abs(tip_y - underline_y), 4)
+
+        def reach_radius(frame):
+            # The outward swing keeps this glove left of its shoulder.
+            sx, sy = width / 2 - 3.61 * height / 8, height / 2 - 0.02 * height / 8
+            radii = []
+            for y in range(120, 240):
+                for x in range(103, int(sx) - 2):
+                    offset = (y * width + x) * 4
+                    if frame[offset:offset + 3] == glove_color:
+                        radii.append(((x + 0.5 - sx) ** 2 + (y + 0.5 - sy) ** 2) ** 0.5)
+            return max(radii)
+
+        try:
+            self.assertAlmostEqual(view.duration, 8.51)
+            swing = [capture(t) for t in (1.40, 1.57, 1.76, 1.94, 2.12)]
+            radii = [reach_radius(frame) for frame in swing]
+            self.assertLessEqual(max(radii) - min(radii), 2.5)
+            x_frame, two_frame = capture(3.56), capture(5.98)
+            assert_pointing(x_frame, -3.96, rgb("VARIABLE_COLOR"))
+            assert_pointing(two_frame, -2.28, rgb("CONSTANT_COLOR"))
+            self.assertNotEqual(capture(8.51), two_frame)
+            self.assertEqual(capture(5.98), two_frame)
+            self.assertEqual(capture(3.56), x_frame)
+            self.assertEqual(capture(1.76), swing[2])
         finally:
             view.close()
 
