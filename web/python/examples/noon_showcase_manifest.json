@@ -271,24 +271,25 @@
     {
       "id": "showcase-three-of-each",
       "title": "Three of each",
-      "lesson": "A printmaker points to each term in 3(x + 2) while three x tiles and three pairs of dots show why the result is 3x + 6.",
+      "lesson": "Make three copies of x + 2. Then gather the three x tiles and the six dots to see why 3(x + 2) equals 3x + 6.",
       "primary_feature": "distributive-property-with-vector-poses",
       "category": "Text and mathematics",
       "path": "python/examples/showcase_three_of_each.py",
       "features": ["Transform", "MathTypst", "distributive property"],
-      "duration": 7.52,
+      "duration": 8.51,
       "loop": false,
-      "thumbnail_time": 5.05,
+      "thumbnail_time": 7.75,
       "thumbnail": "thumbnails/showcase/showcase-three-of-each.png",
-      "thumbnail_alt": "A teal printmaker points to 2 in 3(x + 2). Three x tiles are on the left, and three pairs of dots are on the right.",
+      "thumbnail_alt": "Three cards each contain an x tile and two dots. The matching tiles are grouped below as 3x and 6.",
       "beats": [
-        { "time": 1.3, "label": "Point to x in the parentheses" },
-        { "time": 2.55, "label": "Count three x tiles" },
-        { "time": 3.63, "label": "Turn toward 2 and point with the other hand" },
-        { "time": 5.05, "label": "Count six dots in three pairs" },
-        { "time": 6.75, "label": "Read the full equation" }
+        { "time": 1.4, "label": "Make three complete copies of x + 2" },
+        { "time": 2.12, "label": "Point to x in the parentheses" },
+        { "time": 3.56, "label": "Collect the three x tiles" },
+        { "time": 4.6, "label": "Turn and point to 2" },
+        { "time": 5.98, "label": "Collect six dots in three pairs" },
+        { "time": 7.75, "label": "Read the full equation" }
       ],
-      "still_intervals": [[0, 0.45], [2.25, 2.85], [4.58, 5.22], [6.12, 7.52]],
+      "still_intervals": [[0, 0.45], [3.24, 3.88], [5.72, 6.34], [7.06, 8.51]],
       "playback_capability": "deterministic-retained-replay"
     },
     {

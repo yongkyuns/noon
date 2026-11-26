@@ -1092,6 +1092,9 @@ class NestedPose(Scene):
         def capture(time):
             return view.capture(time=time, width=width, height=height)
 
+        def is_gold(r, g, b):
+            return r > 240 and 180 <= g <= 225 and b < 143
+
         def assert_pointing(frame, term_x, ink):
             center = int(width / 2 + term_x * height / 8)
             colored, gold = [], []
@@ -1101,7 +1104,7 @@ class NestedPose(Scene):
                     r, g, b = frame[offset:offset + 3]
                     if (r, g, b) == ink:
                         colored.append((x, y))
-                    if r > 240 and 180 <= g <= 225 and b < 143:
+                    if is_gold(r, g, b):
                         gold.append((x, y))
             self.assertTrue(colored and gold)
             underline_y = max(y for _, y in colored)
@@ -1117,14 +1120,29 @@ class NestedPose(Scene):
             self.assertLessEqual(abs(underline_center - sum(fingertip) / len(fingertip)), 3)
             self.assertLessEqual(abs(tip_y - underline_y), 4)
 
+        def reach_radius(frame):
+            # The outward swing keeps this glove left of its shoulder.
+            sx, sy = width / 2 - 3.61 * height / 8, height / 2 - 0.02 * height / 8
+            radii = []
+            for y in range(120, 240):
+                for x in range(103, int(sx) - 2):
+                    offset = (y * width + x) * 4
+                    if is_gold(*frame[offset:offset + 3]):
+                        radii.append(((x + 0.5 - sx) ** 2 + (y + 0.5 - sy) ** 2) ** 0.5)
+            return max(radii)
+
         try:
-            self.assertAlmostEqual(view.duration, 7.52)
-            x_frame, two_frame = capture(2.55), capture(5.05)
-            assert_pointing(x_frame, -0.68, (35, 98, 89))
-            assert_pointing(two_frame, 1.00, (157, 69, 47))
-            self.assertNotEqual(capture(7.52), two_frame)
-            self.assertEqual(capture(5.05), two_frame)
-            self.assertEqual(capture(2.55), x_frame)
+            self.assertAlmostEqual(view.duration, 8.51)
+            swing = [capture(t) for t in (1.40, 1.57, 1.76, 1.94, 2.12)]
+            radii = [reach_radius(frame) for frame in swing]
+            self.assertLessEqual(max(radii) - min(radii), 2.5)
+            x_frame, two_frame = capture(3.56), capture(5.98)
+            assert_pointing(x_frame, -3.96, (35, 98, 89))
+            assert_pointing(two_frame, -2.28, (157, 69, 47))
+            self.assertNotEqual(capture(8.51), two_frame)
+            self.assertEqual(capture(5.98), two_frame)
+            self.assertEqual(capture(3.56), x_frame)
+            self.assertEqual(capture(1.76), swing[2])
         finally:
             view.close()
 
