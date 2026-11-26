@@ -167,6 +167,45 @@ impl WasmRetargetedRig2d {
             .map_err(typed_js_error)
     }
 
+    #[wasm_bindgen(js_name = pointingTracks)]
+    pub fn pointing_tracks(
+        &self,
+        wrist: &str,
+        targets: Array,
+        fingertip: f64,
+        bend_left: bool,
+    ) -> Result<Array, JsValue> {
+        let targets = targets
+            .iter()
+            .map(|row| {
+                let row = row
+                    .dyn_into::<Array>()
+                    .ok()
+                    .filter(|row| row.length() == 3)
+                    .ok_or_else(|| js_error("2D pointing requires (phase, x, y) rows"))?;
+                let number = |index| {
+                    row.get(index).as_f64().ok_or_else(|| {
+                        js_error("2D pointing phases and coordinates require numbers")
+                    })
+                };
+                Ok((number(0)? as f32, [number(1)?, number(2)?]))
+            })
+            .collect::<Result<Vec<_>, JsValue>>()?;
+        let tracks = self
+            .0
+            .pointing_tracks(wrist, &targets, fingertip, bend_left)
+            .map_err(typed_js_error)?;
+        let rows = Array::new();
+        for track in tracks {
+            let keys = Array::new();
+            for [phase, angle] in track.keys {
+                keys.push(&Array::of2(&phase.into(), &angle.into()));
+            }
+            rows.push(&Array::of2(&track.joint.into(), &keys));
+        }
+        Ok(rows)
+    }
+
     #[wasm_bindgen(js_name = artworkTrack)]
     pub fn artwork_track(
         &self,

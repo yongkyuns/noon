@@ -223,6 +223,29 @@ impl NativeRetargetedRig2d {
             .map_err(engine_error)
     }
 
+    #[pyo3(name = "pointingTracks")]
+    fn pointing_tracks(
+        &self,
+        wrist: &str,
+        targets: Vec<(f32, f64, f64)>,
+        fingertip: f64,
+        bend_left: bool,
+    ) -> PyResult<Vec<(String, Vec<[f32; 2]>)>> {
+        let targets: Vec<_> = targets
+            .into_iter()
+            .map(|(phase, x, y)| (phase, [x, y]))
+            .collect();
+        self.0
+            .pointing_tracks(wrist, &targets, fingertip, bend_left)
+            .map(|tracks| {
+                tracks
+                    .into_iter()
+                    .map(|track| (track.joint, track.keys))
+                    .collect()
+            })
+            .map_err(engine_error)
+    }
+
     #[pyo3(name = "artworkTrack")]
     fn artwork_track(
         &self,
