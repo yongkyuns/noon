@@ -70,7 +70,7 @@ fn pointing_scene() -> Result<Scene> {
         0.68,
         Color::from_hex(0x293643),
     )?;
-    let label = scene.text(Text::new("LOOK HERE").with_font_size(25.0))?;
+    let label = scene.text(Text::new("LOOK HERE").with_font_size(20.0))?;
     scene.set_fill(&label, Color::WHITE, 1.0)?;
     scene.add(&label)?;
     for object in [&card, &label] {

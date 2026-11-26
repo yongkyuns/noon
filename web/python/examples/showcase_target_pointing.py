@@ -42,7 +42,7 @@ def arm(scene, phase, shoulder, lengths, color, side, path):
     glove = Polygon((-0.11, -0.085, 0), (0.12, -0.13, 0), (0.20, -0.06, 0),
                     (FINGERTIP, -0.025, 0), (FINGERTIP, 0.025, 0), (0.19, 0.07, 0),
                     (0.10, 0.13, 0), (-0.11, 0.085, 0),
-                    fill=GLOVE_COLOR, fill_opacity=1, stroke=INK, stroke_width=1.7)
+                    fill_color=GLOVE_COLOR, fill_opacity=1, stroke_color=INK, stroke_width=1.7)
     shoulder_pin = disc(0.16, SHEET, stroke=INK)
     elbow_pin = disc(0.115, SHEET, stroke=INK)
     scene.add(sleeve, cuff, glove, shoulder_pin, elbow_pin)
@@ -85,7 +85,7 @@ class TargetPointing(Scene):
         arm(self, phase, (3.52, -1.50), (2.02, 1.14), PLUM, 1, path)
         label = [
             (box(1.96, 0.68, 0.15, INK), 0),
-            (Text("LOOK HERE", font="Arimo", font_size=25, color=SHEET), 0),
+            (Text("LOOK HERE", font="Arimo", font_size=20, color=SHEET), 0),
             (disc(0.068, SHEET, stroke=INK), -LABEL_EDGE),
             (disc(0.068, SHEET, stroke=INK), LABEL_EDGE),
         ]
