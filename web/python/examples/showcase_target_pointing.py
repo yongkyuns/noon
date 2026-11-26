@@ -41,8 +41,8 @@ def arm(scene, phase, shoulder, lengths, color, side, path):
     cuff = box(forearm + 0.12, 0.23, 0.10, color, stroke=INK)
     glove = Polygon((-0.11, -0.085, 0), (0.12, -0.13, 0), (0.20, -0.06, 0),
                     (FINGERTIP, -0.025, 0), (FINGERTIP, 0.025, 0), (0.19, 0.07, 0),
-                    (0.10, 0.13, 0), (-0.11, 0.085, 0),
-                    fill_color=GLOVE_COLOR, fill_opacity=1, stroke_color=INK, stroke_width=1.7)
+                    (0.10, 0.13, 0), (-0.11, 0.085, 0), color=GLOVE_COLOR)
+    glove.set_fill(GLOVE_COLOR, opacity=1).set_stroke(INK, width=1.7)
     shoulder_pin = disc(0.16, SHEET, stroke=INK)
     elbow_pin = disc(0.115, SHEET, stroke=INK)
     scene.add(sleeve, cuff, glove, shoulder_pin, elbow_pin)
