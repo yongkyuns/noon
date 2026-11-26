@@ -1151,6 +1151,41 @@ class NestedPose(Scene):
         finally:
             view.close()
 
+    def test_pointing_gallery_follows_the_label_after_a_source_edit_and_seek(self):
+        path = ROOT / "web/python/examples/showcase_target_pointing.py"
+        source = path.read_text()
+        palette = run_path(str(path))
+        glove = palette["GLOVE_COLOR"]
+        gold = bytes(round(channel * 255) for channel in (glove.red, glove.green, glove.blue))
+        start = palette["LABEL_START"]
+        edge = palette["LABEL_EDGE"]
+        width, height = 960, 540
+        times = (0.55, 2.1, 3.7)
+
+        for end in (palette["LABEL_END"], (-0.04, 0.47)):
+            code = source + f"\nLABEL_END = {end!r}\n"
+            scene = asyncio.run(run_source(code, filename=str(path), retain_history=True, portable=True))
+            view = prepare_view(scene)
+            try:
+                frames = [view.capture(time=t, width=width, height=height) for t in times]
+                for phase, frame in zip((0, 0.5, 1), frames):
+                    x, y = [a + (b - a) * phase for a, b in zip(start, end)]
+                    for side in (-1, 1):
+                        col = round(width / 2 + (x + side * edge) * height / 8)
+                        row = round(height / 2 - y * height / 8)
+                        hits = []
+                        for py in range(row - 8, row + 9):
+                            for px in range(col - 8, col + 9):
+                                offset = (py * width + px) * 4
+                                if frame[offset:offset + 3] == gold:
+                                    hits.append((px - col) ** 2 + (py - row) ** 2)
+                        self.assertTrue(hits, (end, phase, side))
+                        self.assertLessEqual(min(hits), 7 ** 2, (end, phase, side))
+                for time, expected in reversed(list(zip(times, frames))):
+                    self.assertEqual(view.capture(time=time, width=width, height=height), expected)
+            finally:
+                view.close()
+
     def test_background_music_lesson_prepares_its_full_authored_timeline(self):
         path = ROOT / "web/python/examples/background_music_lesson.py"
         scene = asyncio.run(run_source(path.read_text(), filename=str(path), retain_history=True))
