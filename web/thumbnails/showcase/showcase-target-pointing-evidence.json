@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "f1bd06aaab698fb1f4316b8f3a1aa8f76d5de1bf",
+  "captureRevision": "9b62525074c62cb40e38bdb079469420429df9d1",
   "backend": "webgpu",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "f1bd06aaab698fb1f4316b8f3a1aa8f76d5de1bf",
+    "sourceRevision": "9b62525074c62cb40e38bdb079469420429df9d1",
     "files": {
       "worker": {
         "path": "./python-worker.js",
@@ -24,13 +24,13 @@
         "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
       }
     },
-    "buildId": "44ccffe4074503fd0772fecb4aa63546fc17445935fb3968f1d2d1ffad52d27e"
+    "buildId": "278b07d8bd3fa566bd7edd04192881d513f1afd651dd4547eaeaf3d8d7395277"
   },
   "posters": [
     {
       "id": "showcase-target-pointing",
-      "captureBuildId": "44ccffe4074503fd0772fecb4aa63546fc17445935fb3968f1d2d1ffad52d27e",
-      "sourceSha256": "d0db68e8fd922593de11f047264ccebffe16a52b6fcae96c1de9cc3c652768aa",
+      "captureBuildId": "278b07d8bd3fa566bd7edd04192881d513f1afd651dd4547eaeaf3d8d7395277",
+      "sourceSha256": "fb3bbaafc451e27b1acc084eccd421dfe6c4538563a4ea472ecdfd04538f00b8",
       "thumbnailTime": 3.7,
       "image": {
         "width": 960,
