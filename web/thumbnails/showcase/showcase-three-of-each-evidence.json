@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "295d246c22ded1185d0868bb0ebb817560e06788",
+  "captureRevision": "1be53fad47cae37a30179ca84ded4cdcbb36ebb1",
   "backend": "webgpu",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "295d246c22ded1185d0868bb0ebb817560e06788",
+    "sourceRevision": "1be53fad47cae37a30179ca84ded4cdcbb36ebb1",
     "files": {
       "worker": {
         "path": "./python-worker.js",
@@ -24,20 +24,20 @@
         "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
       }
     },
-    "buildId": "870cd59dee12bafcddfd6baab2405323e1bdee9aed3859f56ac3a73f111a5789"
+    "buildId": "a6e753e5030d2b172b147a4368e46b7a4fbe4015baaca6e723c294ec996d5e23"
   },
   "posters": [
     {
       "id": "showcase-three-of-each",
-      "captureBuildId": "870cd59dee12bafcddfd6baab2405323e1bdee9aed3859f56ac3a73f111a5789",
-      "sourceSha256": "787b024d8c1fdfded455f7e0b055e0c8648157d034d91e0588d3577827080bbc",
+      "captureBuildId": "a6e753e5030d2b172b147a4368e46b7a4fbe4015baaca6e723c294ec996d5e23",
+      "sourceSha256": "c0b73155e4b5d0644fe1a0c7ad38fd3ada5ae5376b9ff163278616bc3caa8877",
       "thumbnailTime": 7.75,
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 391899,
-        "pngSha256": "19a2eb07659655de27e1cfcec545939f99df068d48a4defee4196b15aa902521",
-        "pixelSha256": "29b8253c0d1cdb9d51f4cc3fdf73caecc8427164d2a54d814a4ea01bf82d42d8"
+        "foregroundPixels": 377137,
+        "pngSha256": "59190f585ff83e28bc146c940ff2cf4ca5aeb1a506b2756e9c1ad0eb81f8fa23",
+        "pixelSha256": "8c545e9d7334f62a5f747644b83056afe8c164002d1412b7e8716eba70b94ac6"
       },
       "sample": {
         "requestedTime": 7.75,
