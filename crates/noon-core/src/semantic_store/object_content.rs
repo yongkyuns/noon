@@ -743,11 +743,13 @@ impl SemanticObjectState {
                 self.role,
                 SemanticObjectRole::Camera3D | SemanticObjectRole::PointLight3D
             )
-            || (self.spatial_material() != SemanticSpatialMaterial::CairoPath
-                && !matches!(
-                    self.transform.orientation,
-                    crate::SemanticOrientation::Spatial(_)
-                ))
+            || (!matches!(
+                self.spatial_material(),
+                SemanticSpatialMaterial::CairoPath | SemanticSpatialMaterial::SketchSilhouette(_)
+            ) && !matches!(
+                self.transform.orientation,
+                crate::SemanticOrientation::Spatial(_)
+            ))
         {
             return true;
         }
@@ -1029,6 +1031,14 @@ impl SemanticObjectState {
     /// Validate all optional spatial declarations attached to this ordinary
     /// semantic object, including the effective pose constraints for a point light.
     pub fn spatial_declaration_is_valid(&self) -> bool {
+        if let SemanticSpatialMaterial::SketchSilhouette(edge) = self.spatial_material() {
+            if !edge.is_valid()
+                || self.role != SemanticObjectRole::Ordinary
+                || self.spatial_composition_domain() != SemanticSpatialCompositionDomain::World
+            {
+                return false;
+            }
+        }
         self.camera_declaration_is_valid()
             && (self.camera_motions().is_empty()
                 || (self.role == SemanticObjectRole::Camera3D

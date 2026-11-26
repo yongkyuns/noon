@@ -14,9 +14,10 @@ use super::retained_text::{
 use bytemuck::{Pod, Zeroable};
 use noon_core::{
     Color, FontResourceHandle, FontResourceLookup, GeometryRef, GeometryResource,
-    GeometryResourceHandle, GeometryResourceLookup, SemanticSpatialCompositionDomain as Domain,
-    SemanticSpatialMaterial, SemanticVec3, SemanticWorldTransform3D, StrokeWidthMode, Style,
-    TextRenderItem, TextResource, TextResourceHandle, TextResourceLookup, Vec2,
+    GeometryResourceHandle, GeometryResourceLookup, SemanticCamera3D, SemanticProjection3D,
+    SemanticSpatialCompositionDomain as Domain, SemanticSpatialMaterial, SemanticVec3,
+    SemanticWorldTransform3D, SilhouetteEdge, StrokeWidthMode, Style, TextRenderItem, TextResource,
+    TextResourceHandle, TextResourceLookup, Vec2,
 };
 use noon_runtime::{FrameChanges, FrameState};
 use std::borrow::Cow;
@@ -104,6 +105,49 @@ struct PathDraw {
     instance: usize,
     domain: Domain,
     painter_rank: u32,
+    silhouette: Option<SilhouetteEdge>,
+}
+
+#[derive(Clone, Copy)]
+enum SilhouetteView {
+    Eye(SemanticVec3),
+    Direction(SemanticVec3),
+}
+
+impl SilhouetteView {
+    fn from_camera(camera: &SemanticCamera3D) -> Option<Self> {
+        match camera.projection {
+            SemanticProjection3D::Perspective { .. } => Some(Self::Eye(camera.position)),
+            SemanticProjection3D::Orthographic { .. } => camera
+                .orientation
+                .rotate_vector(SemanticVec3::new(0.0, 0.0, 1.0))
+                .map(Self::Direction),
+        }
+    }
+
+    fn includes(self, edge: SilhouetteEdge, world: &[f32; 16]) -> bool {
+        let view = match self {
+            Self::Eye(eye) => [
+                eye.x - f64::from(world[12]),
+                eye.y - f64::from(world[13]),
+                eye.z - f64::from(world[14]),
+            ],
+            Self::Direction(dir) => [dir.x, dir.y, dir.z],
+        };
+        let axis = |index| {
+            let [x, y, z] = [world[index], world[index + 1], world[index + 2]].map(f64::from);
+            (
+                view[0] * x + view[1] * y + view[2] * z,
+                x * x + y * y + z * z,
+            )
+        };
+        let (y, yy) = axis(4);
+        let (z, zz) = axis(8);
+        // In local space the face tests have the form z ± y*tan(half_angle).
+        // Multiply by both squared axis lengths to evaluate the inverse scale without divides.
+        let side = y.abs() * edge.half_angle_tangent() * zz;
+        side > 0.0 && side >= z.abs() * yy
+    }
 }
 
 #[derive(Debug)]
@@ -369,6 +413,7 @@ struct StagedPath {
     instance: PathInstance,
     domain: Domain,
     painter_rank: u32,
+    silhouette: Option<SilhouetteEdge>,
     cairo: Option<Box<(cairo::Uniform, SemanticVec3)>>,
     fading_fill: Option<SemanticVec3>,
 }
@@ -524,12 +569,17 @@ impl SpatialPathGpuState {
             }) else {
                 continue;
             };
-            if !matches!(
-                spatial.material,
-                SemanticSpatialMaterial::Unlit | SemanticSpatialMaterial::CairoPath
-            ) {
-                return Err(SpatialPathError::UnsupportedMaterial);
-            }
+            let silhouette = match spatial.material {
+                SemanticSpatialMaterial::Unlit | SemanticSpatialMaterial::CairoPath => None,
+                SemanticSpatialMaterial::SketchSilhouette(edge)
+                    if edge.is_valid()
+                        && spatial.composition_domain == Domain::World
+                        && object.content.geometry().is_some() =>
+                {
+                    Some(edge)
+                }
+                _ => return Err(SpatialPathError::UnsupportedMaterial),
+            };
             let reveal = frame.reveal(index);
             if frame.morph(index) != 0.0
                 || !(0.0..=1.0).contains(&reveal)
@@ -605,7 +655,7 @@ impl SpatialPathGpuState {
                 } = candidate;
                 validate_style(style, object_alpha, spatial.composition_domain)?;
                 let mut style = visible_path_style(style);
-                if spatial.material != SemanticSpatialMaterial::Unlit
+                if spatial.material == SemanticSpatialMaterial::CairoPath
                     || spatial.composition_domain != Domain::World
                 {
                     style.sketch_stroke = None;
@@ -724,6 +774,7 @@ impl SpatialPathGpuState {
                     instance,
                     domain: spatial.composition_domain,
                     painter_rank,
+                    silhouette,
                     cairo,
                     fading_fill,
                 });
@@ -980,6 +1031,7 @@ impl SpatialPathGpuState {
                         instance: slot,
                         domain: staged.domain,
                         painter_rank: staged.painter_rank,
+                        silhouette: staged.silhouette,
                     },
                 );
             } else if let Some(old) = previous {
@@ -1036,17 +1088,19 @@ impl SpatialPathGpuState {
         pass: &mut wgpu::RenderPass<'a>,
         sample_count: u32,
         domain: Domain,
-    ) -> usize {
+        camera: Option<&SemanticCamera3D>,
+    ) -> (usize, usize) {
         let Some(gpu) = self.gpu.as_ref() else {
-            return 0;
+            return (0, 0);
         };
         if self.draws.is_empty() {
-            return 0;
+            return (0, 0);
         }
         pass.set_bind_group(0, &gpu.camera_group, &[]);
         pass.set_bind_group(1, &gpu.fixed_camera_group, &[]);
         pass.set_vertex_buffer(1, gpu.instances.slice(..));
         let mut draw_calls = 0;
+        let mut hidden_silhouettes = 0;
         pass.set_pipeline(match (domain, sample_count) {
             (Domain::World, 1) => &gpu.world_pipeline,
             (Domain::World, _) => &gpu.world_pipeline_msaa,
@@ -1055,6 +1109,7 @@ impl SpatialPathGpuState {
         });
         match domain {
             Domain::World => {
+                let view = camera.and_then(SilhouetteView::from_camera);
                 for (id, draw) in self.draws.iter().filter(|(id, draw)| {
                     draw.domain == Domain::World
                         && !self
@@ -1062,6 +1117,14 @@ impl SpatialPathGpuState {
                             .as_deref()
                             .is_some_and(|state| state.draws.contains_key(id))
                 }) {
+                    if draw.silhouette.is_some_and(|edge| {
+                        !view.is_some_and(|view| {
+                            view.includes(edge, &self.instances[draw.instance].world)
+                        })
+                    }) {
+                        hidden_silhouettes += 1;
+                        continue;
+                    }
                     let path = &self.paths[&draw.key];
                     if self.fading_fills.contains_key(id) {
                         let fill = path.fill.as_ref().expect("retained fading fill");
@@ -1084,7 +1147,7 @@ impl SpatialPathGpuState {
             }
             Domain::FixedFrame => {}
         }
-        draw_calls
+        (draw_calls, hidden_silhouettes)
     }
 
     pub(super) fn depth_draws(&self) -> impl Iterator<Item = DrawId> + '_ {
@@ -1726,6 +1789,37 @@ pub(super) fn tessellate(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn silhouette_follows_opposite_face_orientation_in_camera_space() {
+        let edge = SilhouetteEdge::from_face_normal_dot(0.0).unwrap();
+        let mut transform = SemanticWorldTransform3D {
+            translation: SemanticVec3::new(0.0, 8.0, 0.0),
+            ..SemanticWorldTransform3D::IDENTITY
+        };
+        let front = SilhouetteView::Eye(SemanticVec3::new(0.0, 8.0, 3.0));
+        let grazing = SilhouetteView::Eye(SemanticVec3::new(0.0, 12.0, 3.0));
+        let world = lower_world(transform).unwrap();
+        assert!(!front.includes(edge, &world));
+        assert!(grazing.includes(edge, &world));
+        transform.scale.y = 2.0;
+        let scaled = lower_world(transform).unwrap();
+        assert!(!grazing.includes(edge, &scaled));
+
+        let orthographic = SemanticCamera3D::new(
+            SemanticVec3::new(0.0, 12.0, 3.0),
+            noon_core::SemanticRotation3D::IDENTITY,
+            SemanticProjection3D::Orthographic {
+                height: 6.0,
+                near: 0.1,
+                far: 30.0,
+            },
+        )
+        .unwrap();
+        assert!(!SilhouetteView::from_camera(&orthographic)
+            .unwrap()
+            .includes(edge, &world));
+    }
+
+    #[test]
     fn background_stroke_instance_attributes_match_struct_layout() {
         assert_eq!(
             super::PATH_INSTANCE_ATTRIBUTES[6].offset,
@@ -2134,6 +2228,7 @@ mod tests {
             specialization: specialization(Style::default()),
         };
         let draw = |row| PathDraw {
+            silhouette: None,
             key,
             instance: row,
             domain: Domain::World,
@@ -2155,6 +2250,7 @@ mod tests {
                     instance: PathInstance::zeroed(),
                     domain: Domain::World,
                     painter_rank: 0,
+                    silhouette: None,
                     cairo: None,
                     fading_fill: None,
                 }),
@@ -2268,6 +2364,7 @@ mod tests {
     fn fixed_orientation_draws_use_effective_painter_rank_then_item_order() {
         let mut state = SpatialPathGpuState::default();
         let draw = |index: usize, painter_rank: u32| PathDraw {
+            silhouette: None,
             key: PathKey {
                 source: SourceKey::Inline(index as u64),
                 specialization: Specialization {
@@ -2302,6 +2399,7 @@ mod tests {
     fn fixed_orientation_order_index_tracks_rank_domain_and_removal_changes() {
         let mut state = SpatialPathGpuState::default();
         let make_draw = |row: usize, domain, painter_rank| PathDraw {
+            silhouette: None,
             key: PathKey {
                 source: SourceKey::Inline(row as u64),
                 specialization: Specialization {

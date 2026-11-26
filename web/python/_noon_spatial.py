@@ -12,6 +12,7 @@ from array import array
 from operator import index as _integer_index
 
 import noon as _base
+from _manim_compat import Group as _Group
 from _noon_errors import engine_call
 from _manim_semantic_handles import (
     _attach_shared_handle, _handle_for, _path_authoring_context,
@@ -225,9 +226,19 @@ class Mesh3D(_WorldMobject):
                                     float(thickness), _count(segments)), options)
 
     @classmethod
-    def polyhedron(cls, vertices, triangular_faces, **options):
-        _mesh_arguments(options)
+    def polyhedron(cls, vertices, triangular_faces, *, stroke=None, stroke_width=None,
+                   silhouette=False, **options):
+        """Sketch the creases of a closed mesh, or its contour with silhouette=True."""
+        from _manim_compat import MANIM_DEFAULT_STROKE_WIDTH, _as_color, _manim_stroke_width
+        from _manim_semantic_handles import _as_sketch_stroke, _attach_shared_family, _initialize_shared_wrapper
         from _noon_host import array_value as to_js
+
+        _mesh_arguments(options)
+        if not isinstance(silhouette, bool):
+            raise TypeError("silhouette requires a boolean")
+        sketch = _as_sketch_stroke(stroke)
+        if sketch is None and (stroke_width is not None or silhouette):
+            raise TypeError("polyhedron stroke_width and silhouette require a SketchStroke")
         points = array("d", (v for point in vertices for v in _vector(point)))
         faces = array("I")
         for face in triangular_faces:
@@ -235,7 +246,28 @@ class Mesh3D(_WorldMobject):
             if len(face) != 3:
                 raise ValueError("polyhedron faces require three indices")
             faces.extend(_count(index) for index in face)
-        return cls._solid("polyhedron", (_bulk(points), to_js(memoryview(faces))), options)
+        values = (_bulk(points), to_js(memoryview(faces)))
+        if sketch is None:
+            return cls._solid("polyhedron", values, options)
+        if options.get("point_lit", False):
+            raise NotImplementedError("sketch polyhedron creases require point_lit=False")
+        if _mesh_options is None:
+            raise RuntimeError("mesh construction requires the shared Rust authoring host")
+        fill = _as_color("mesh color", options.get("color", _base.BLUE))
+        pen = sketch._color
+        width = MANIM_DEFAULT_STROKE_WIDTH if stroke_width is None else stroke_width
+        context = _path_authoring_context()
+        candidate = engine_call(
+            _mesh_options.sketchPolyhedron, *values,
+            _bulk((fill.red, fill.green, fill.blue, fill.alpha)),
+            _bulk((pen.red, pen.green, pen.blue, pen.alpha)), _manim_stroke_width(width),
+            sketch._roughness, sketch._seed, silhouette,
+        )
+        handle = (engine_call(_create_mesh_family, candidate) if context is None
+                  else engine_call(context.createMeshFamily, candidate))
+        mesh = object.__new__(_SketchPolyhedron)
+        _initialize_shared_wrapper(mesh)
+        return _attach_shared_family(mesh, handle, context)
 
     @classmethod
     def prism(cls, dimensions=(2, 2, 2), **options):
@@ -287,6 +319,10 @@ class Mesh3D(_WorldMobject):
         finally:
             plan.free()
         return cls(candidate, **options)
+
+
+class _SketchPolyhedron(Mesh3D, _Group):
+    """A mesh and its retained crease paths with one shared family handle."""
 
 
 class WorldTransformTo:

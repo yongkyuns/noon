@@ -126,6 +126,13 @@ while the fill eases in. Run the paired Rust demo with
 The [cube sketch demo](web/python/examples/cube_sketch_wireframe.py) uses
 `Cube(stroke=SketchStroke(TEAL))` on all 12 edges with opaque, unlit faces.
 Use `fill_opacity=0` for a bare wireframe.
+The [mesh crease demo](web/python/examples/mesh_sketch_creases.py) uses
+`Mesh3D.polyhedron(vertices, triangles, stroke=SketchStroke(TEAL))` on a closed,
+consistently wound mesh with opaque, unlit faces. Shared coplanar edges are
+omitted. Run the paired Rust demo with `cargo run -p noon-native --example mesh_sketch_creases`.
+The [silhouette demo](web/python/examples/mesh_sketch_silhouette.py) uses
+`silhouette=True` to keep only the contour as the camera moves. Run the paired
+Rust demo with `cargo run -p noon-native --example mesh_sketch_silhouette`.
 Use `obj.set_stroke(SketchStroke(TEAL), width=3)` to style an existing shape,
 text object, or group. `SVGMobject`, `Axes`, and `VGroup` also accept the
 `stroke=` option at construction.

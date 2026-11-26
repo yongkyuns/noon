@@ -314,6 +314,7 @@ pub enum TransportSpatialMaterial {
     PointLit,
     CairoSurface,
     CairoPath,
+    SketchSilhouette(noon_core::SilhouetteEdge),
 }
 
 impl From<SemanticProjection3D> for TransportProjection3D {
@@ -355,6 +356,9 @@ impl TransportSpatialState {
                 SemanticSpatialMaterial::PointLit => TransportSpatialMaterial::PointLit,
                 SemanticSpatialMaterial::CairoSurface => TransportSpatialMaterial::CairoSurface,
                 SemanticSpatialMaterial::CairoPath => TransportSpatialMaterial::CairoPath,
+                SemanticSpatialMaterial::SketchSilhouette(edge) => {
+                    TransportSpatialMaterial::SketchSilhouette(edge)
+                }
             },
             point_light: value.point_light,
             cairo_path_appearance: value.cairo_path_appearance.clone(),
@@ -364,6 +368,14 @@ impl TransportSpatialState {
     fn is_valid(&self) -> bool {
         use noon_compile::CompiledSpatialDrawKind as Draw;
         use noon_core::SemanticSpatialCompositionDomain as Domain;
+        if let TransportSpatialMaterial::SketchSilhouette(edge) = self.material {
+            if !edge.is_valid()
+                || self.draw_kind != Draw::Planar
+                || self.composition_domain != Domain::World
+            {
+                return false;
+            }
+        }
         if (self.material == TransportSpatialMaterial::CairoPath)
             != self.cairo_path_appearance.is_some()
             || self
@@ -475,6 +487,9 @@ impl TransportSpatialState {
                 TransportSpatialMaterial::PointLit => SemanticSpatialMaterial::PointLit,
                 TransportSpatialMaterial::CairoSurface => SemanticSpatialMaterial::CairoSurface,
                 TransportSpatialMaterial::CairoPath => SemanticSpatialMaterial::CairoPath,
+                TransportSpatialMaterial::SketchSilhouette(edge) => {
+                    SemanticSpatialMaterial::SketchSilhouette(edge)
+                }
             },
             point_light: self.point_light,
             cairo_path_appearance: self.cairo_path_appearance.clone(),

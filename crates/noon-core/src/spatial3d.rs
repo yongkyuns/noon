@@ -25,6 +25,31 @@ pub enum SemanticSpatialMaterial {
     /// Cairo endpoint lighting for retained planar vector paths. This shares
     /// the world camera and light; it never projects geometry in a frontend.
     CairoPath,
+    /// Unlit world stroke where one adjacent face faces the camera and the other faces away.
+    SketchSilhouette(SilhouetteEdge),
+}
+
+/// Two adjacent face normals symmetric about the local +Z axis of an X-aligned edge.
+/// The stored tangent is their shared half-angle from +Z toward local ±Y.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct SilhouetteEdge(u32);
+
+impl SilhouetteEdge {
+    pub fn from_face_normal_dot(dot: f64) -> Option<Self> {
+        let tangent = (((1.0 - dot) / (1.0 + dot)).sqrt()) as f32;
+        let edge = Self(tangent.to_bits());
+        edge.is_valid().then_some(edge)
+    }
+
+    pub fn half_angle_tangent(self) -> f64 {
+        f64::from(f32::from_bits(self.0))
+    }
+
+    pub fn is_valid(self) -> bool {
+        let tangent = self.half_angle_tangent();
+        tangent.is_finite() && tangent > 0.0
+    }
 }
 
 /// Optional Cairo path appearance. A gradient direction binds its endpoints

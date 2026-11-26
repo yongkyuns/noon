@@ -3569,6 +3569,16 @@ pub(crate) fn valid_compiled_spatial(spatial: Option<&CompiledSpatialState>) -> 
     let Some(spatial) = spatial else {
         return true;
     };
+    if let noon_core::SemanticSpatialMaterial::SketchSilhouette(edge) = spatial.material {
+        if !edge.is_valid()
+            || spatial.draw_kind != CompiledSpatialDrawKind::Planar
+            || spatial.composition_domain != noon_core::SemanticSpatialCompositionDomain::World
+            || spatial.camera_projection.is_some()
+            || spatial.point_light
+        {
+            return false;
+        }
+    }
     let world = spatial.world;
     noon_core::SemanticWorldTransform3D::new(world.translation, world.rotation, world.scale)
         .is_some()

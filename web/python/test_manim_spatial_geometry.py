@@ -908,6 +908,27 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         family.worldFamilyCenter.assert_called_once_with()
         family.shiftWorld.assert_called_with(-9.0, 5.0, 1.0)
 
+    def test_sketch_polyhedron_uses_the_shared_family_membership(self):
+        import _noon_spatial as native
+        member = SimpleNamespace(semanticSlot=1, semanticGeneration=1)
+        family = _family_handle((member,))
+        candidate = Mock()
+        options = Mock()
+        options.sketchPolyhedron.return_value = candidate
+        points = ((0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1))
+        faces = ((0, 2, 1), (0, 1, 3), (1, 2, 3), (2, 0, 3))
+        with patch.object(native, "_mesh_options", options), \
+             patch.object(native, "_create_mesh_family", return_value=family) as admit, \
+             patch.object(native, "_path_authoring_context", return_value=None), \
+             patch("_noon_host.array_value", side_effect=tuple):
+            mesh = Mesh3D.polyhedron(points, faces, stroke=noon.SketchStroke(noon.TEAL),
+                                     silhouette=True)
+        self.assertIs(options.sketchPolyhedron.call_args.args[-1], True)
+        admit.assert_called_once_with(candidate)
+        self.assertIsInstance(mesh, Mesh3D)
+        self.assertEqual(semantic._family_member_handle(mesh), ("family", family))
+        self.assertIs(mesh.submobjects[0]._semantic_handle, member)
+
     def test_prism_family_setter_failure_frees_unconsumed_options_once(self):
         import _noon_spatial as native
 

@@ -961,7 +961,11 @@ pub(super) fn object_requires_spatial_lowering(
         || state.role() == noon_core::SemanticObjectRole::PointLight3D
         || object_has_mesh_content(state, store)
         || state.spatial_composition_domain() != noon_core::SemanticSpatialCompositionDomain::World
-        || state.spatial_material() == noon_core::SemanticSpatialMaterial::CairoPath
+        || matches!(
+            state.spatial_material(),
+            noon_core::SemanticSpatialMaterial::CairoPath
+                | noon_core::SemanticSpatialMaterial::SketchSilhouette(_)
+        )
         || matches!(
             state.transform.orientation,
             noon_core::SemanticOrientation::Spatial(_)
@@ -1110,7 +1114,13 @@ pub(super) fn lower_object_state(
     {
         return Err(SemanticLoweringError::UnsupportedSpatialMaterial { node: semantic_id });
     }
-    if state.spatial_material() == noon_core::SemanticSpatialMaterial::CairoPath && mesh_content {
+    if mesh_content
+        && matches!(
+            state.spatial_material(),
+            noon_core::SemanticSpatialMaterial::CairoPath
+                | noon_core::SemanticSpatialMaterial::SketchSilhouette(_)
+        )
+    {
         return Err(SemanticLoweringError::UnsupportedSpatialMaterial { node: semantic_id });
     }
     if is_camera_3d && state.transform.scale != noon_core::SemanticVec3::new(1.0, 1.0, 1.0) {

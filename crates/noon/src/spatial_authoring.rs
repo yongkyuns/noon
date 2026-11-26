@@ -5,10 +5,13 @@ use noon_core::{
     Color, GeometryResource, MeshResource, SemanticCairoPathAppearance, SemanticCamera3D,
     SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectRole, SemanticObjectState,
     SemanticPaint, SemanticSpatialMaterial, SemanticStyle, SemanticVec3, SemanticWorldTransform3D,
-    StoredGeometry, StrokeWidthMode,
+    SketchStroke, StoredGeometry, StrokeWidthMode, VectorPath,
 };
 use noon_geometry::{CairoSurfaceGrid, SurfaceGrid};
 use std::{rc::Rc, sync::Arc};
+
+mod mesh_creases;
+pub(crate) use mesh_creases::polyhedron_sketch_options;
 
 /// Inert mesh constructor input. Generation/sampling happens once before admission;
 /// instance motion subsequently changes the ordinary effective world transform.
@@ -84,7 +87,7 @@ pub(crate) fn cube_sketch_options(
     stroke_width: f64,
     sketch: noon_core::SketchStroke,
 ) -> Result<(Vec<MeshOptions>, Vec<SpatialPathOptions>), AuthoringError> {
-    use noon_core::{SemanticRotation3D, Vec2, VectorPath};
+    use noon_core::{SemanticRotation3D, Vec2};
     use std::f64::consts::FRAC_PI_2;
 
     if fill_color.alpha != 1.0 || !matches!(fill_opacity, 0.0 | 1.0) {
@@ -92,15 +95,7 @@ pub(crate) fn cube_sketch_options(
             "a sketch cube requires an opaque face color and fill_opacity of 0 or 1",
         ));
     }
-    if stroke_color.alpha != 1.0
-        || !stroke_width.is_finite()
-        || stroke_width < 0.0
-        || !sketch.is_valid()
-    {
-        return Err(AuthoringError::InvalidSketchStroke(
-            "a sketch cube requires an opaque stroke, finite width, and roughness between 0 and 2",
-        ));
-    }
+    validate_sketch_edge(stroke_color, stroke_width, sketch)?;
     let faces =
         noon_geometry::prism_faces(SemanticVec3::new(side_length, side_length, side_length))
             .map_err(|_| AuthoringError::NonFiniteGeometry)?;
@@ -143,31 +138,62 @@ pub(crate) fn cube_sketch_options(
                 let translation = basis
                     .rotate_vector(SemanticVec3::new(0.0, y * half, z * half))
                     .ok_or(AuthoringError::NonFiniteGeometry)?;
-                paths.push(SpatialPathOptions {
-                    path: path.clone(),
-                    transform: SemanticWorldTransform3D {
+                paths.push(sketch_edge(
+                    path.clone(),
+                    SemanticWorldTransform3D {
                         translation,
                         rotation,
                         ..SemanticWorldTransform3D::IDENTITY
                     },
-                    style: SemanticStyle {
-                        fill: None,
-                        stroke: Some(SemanticPaint::Solid(stroke_color)),
-                        stroke_width,
-                        stroke_width_mode: StrokeWidthMode::ScreenSpace,
-                        sketch_stroke: noon_core::SketchStroke::new(
-                            f64::from(sketch.roughness()),
-                            sketch.seed().wrapping_add(paths.len() as u32),
-                        ),
-                        ..SemanticStyle::default()
-                    },
-                    material: SemanticSpatialMaterial::Unlit,
-                    cairo_appearance: None,
-                });
+                    stroke_color,
+                    stroke_width,
+                    sketch,
+                    paths.len() as u32,
+                ));
             }
         }
     }
     Ok((meshes, paths))
+}
+
+fn validate_sketch_edge(
+    color: Color,
+    width: f64,
+    sketch: SketchStroke,
+) -> Result<(), AuthoringError> {
+    if color.alpha != 1.0 || !width.is_finite() || width < 0.0 || !sketch.is_valid() {
+        return Err(AuthoringError::InvalidSketchStroke(
+            "mesh edges require an opaque stroke, finite width, and roughness between 0 and 2",
+        ));
+    }
+    Ok(())
+}
+
+fn sketch_edge(
+    path: VectorPath,
+    transform: SemanticWorldTransform3D,
+    color: Color,
+    width: f64,
+    sketch: SketchStroke,
+    index: u32,
+) -> SpatialPathOptions {
+    SpatialPathOptions {
+        path,
+        transform,
+        style: SemanticStyle {
+            fill: None,
+            stroke: Some(SemanticPaint::Solid(color)),
+            stroke_width: width,
+            stroke_width_mode: StrokeWidthMode::ScreenSpace,
+            sketch_stroke: SketchStroke::new(
+                f64::from(sketch.roughness()),
+                sketch.seed().wrapping_add(index),
+            ),
+            ..SemanticStyle::default()
+        },
+        material: SemanticSpatialMaterial::Unlit,
+        cairo_appearance: None,
+    }
 }
 
 enum SpatialFamilyMember {
@@ -804,6 +830,38 @@ impl Scene {
             sketch,
         )?;
         self.mesh_family_with_paths(meshes, paths)
+    }
+
+    /// Admit one opaque polyhedron with a retained sketch path on each crease.
+    /// The indexed triangles must form a closed surface with consistent winding.
+    pub fn polyhedron_sketch_creases(
+        &mut self,
+        vertices: &[SemanticVec3],
+        triangles: &[[u32; 3]],
+        fill: Color,
+        stroke: Color,
+        width: f64,
+        sketch: SketchStroke,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        let (mesh, paths) =
+            polyhedron_sketch_options(vertices, triangles, fill, stroke, width, sketch, false)?;
+        self.mesh_family_with_paths(vec![mesh], paths)
+    }
+
+    /// Admit one opaque polyhedron whose exterior sketch follows the active camera.
+    /// The indexed triangles must form a closed surface with consistent winding.
+    pub fn polyhedron_sketch_silhouette(
+        &mut self,
+        vertices: &[SemanticVec3],
+        triangles: &[[u32; 3]],
+        fill: Color,
+        stroke: Color,
+        width: f64,
+        sketch: SketchStroke,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        let (mesh, paths) =
+            polyhedron_sketch_options(vertices, triangles, fill, stroke, width, sketch, true)?;
+        self.mesh_family_with_paths(vec![mesh], paths)
     }
 
     /// Publish an already sampled UV grid as ordinary semantic mesh leaves,

@@ -63,6 +63,25 @@ impl MeshInput {
             .map_err(engine_error)
     }
     #[staticmethod]
+    #[pyo3(name = "sketchPolyhedron")]
+    fn sketch_polyhedron(
+        vertices: Vec<f64>,
+        faces: Vec<u32>,
+        fill: Vec<f64>,
+        stroke: Vec<f64>,
+        width: f64,
+        roughness: f64,
+        seed: u32,
+        silhouette: bool,
+    ) -> Result<MeshFamilyInput, PyErr> {
+        input::SpatialMeshInput::sketch_polyhedron(
+            &vertices, &faces, &fill, &stroke, width, roughness, seed, silhouette,
+        )
+        .map(Into::into)
+        .map_err(engine_error)
+    }
+
+    #[staticmethod]
     fn cube(size: f64) -> Result<Self, PyErr> {
         input::SpatialMeshInput::cube(size)
             .map(Into::into)
