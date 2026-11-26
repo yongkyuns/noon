@@ -3610,7 +3610,7 @@ class _RetargetedRig2d:
         handle = engine_call(self._handle.pose, float(phase), operation="RetargetedRig2d.pose")
         return _RigPose2d(handle, self._scene)
 
-    def pointing_tracks(self, wrist, targets, *, fingertip=0.0, bend_left=True):
+    def tracks_for_pointing(self, wrist, targets, *, fingertip=0.0, bend_left=True):
         """Prepare rotation tracks from (phase, (x, y)) cues for a two-segment arm.
 
         The wrist's local +X axis points along the forearm. Set fingertip to the
@@ -3621,8 +3621,8 @@ class _RetargetedRig2d:
         from _noon_host import array_value
 
         cues = [(float(phase), float(x), float(y)) for phase, (x, y) in targets]
-        rows = engine_call(self._handle.pointingTracks, wrist, array_value(cues),
-                           float(fingertip), bool(bend_left), operation="RetargetedRig2d.pointing_tracks")
+        rows = engine_call(self._handle.tracksForPointing, wrist, array_value(cues),
+                           float(fingertip), bool(bend_left), operation="RetargetedRig2d.tracks_for_pointing")
         return {name: [tuple(key) for key in keys] for name, keys in rows}
 
     def artwork_track(self, joint, *, poses, cues):

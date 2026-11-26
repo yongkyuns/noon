@@ -48,7 +48,7 @@ fn pointing_scene() -> Result<Scene> {
             .map(|&(t, [x, y])| (t, [x + side * label_edge, y]))
             .collect();
         let rig = RetargetedRig2d::new(joints.to_vec(), &[], &[])?;
-        let tracks = rig.pointing_tracks("wrist", &targets, fingertip, side > 0.0)?;
+        let tracks = rig.tracks_for_pointing("wrist", &targets, fingertip, side > 0.0)?;
         let sleeve = rectangle(&mut scene, upper + 0.10, 0.30, color)?;
         let cuff = rectangle(&mut scene, forearm + 0.10, 0.22, color)?;
         let hand = rectangle(&mut scene, fingertip, 0.13, Color::from_hex(0xEBAC4C))?;

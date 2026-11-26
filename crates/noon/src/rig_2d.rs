@@ -255,7 +255,7 @@ impl RetargetedRig2d {
     /// The tip meets each key. Angles interpolate between keys and keep both
     /// arm lengths fixed. Sample a moving target more densely when it needs to
     /// stay close between keys.
-    pub fn pointing_tracks(
+    pub fn tracks_for_pointing(
         &self,
         wrist: &str,
         targets: &[(f32, [f64; 2])],
@@ -1088,7 +1088,7 @@ mod tests {
     }
 
     #[test]
-    fn pointing_tracks_reach_with_fixed_lengths_during_play_and_seek() {
+    fn tracks_for_pointing_reach_with_fixed_lengths_during_play_and_seek() {
         let mut scene = Scene::new();
         let clock = scene.value_tracker(0.0).unwrap();
         let targets: Vec<_> = (0..=16_u8)
@@ -1107,7 +1107,7 @@ mod tests {
             ];
             let rig = RetargetedRig2d::new(joints.to_vec(), &[], &[]).unwrap();
             let tracks = rig
-                .pointing_tracks("wrist", &targets, fingertip, bend_left)
+                .tracks_for_pointing("wrist", &targets, fingertip, bend_left)
                 .unwrap();
             let elbow = scene.circle(0.1).unwrap();
             let wrist = scene.circle(0.1).unwrap();
@@ -1147,9 +1147,12 @@ mod tests {
                 .iter()
                 .map(|object| object.transform.translation)
                 .collect();
-            for (arm, (x, upper, lower, bend_left)) in positions.chunks_exact(3).zip(proportions) {
+            let (arms, remainder) = positions.as_chunks::<3>();
+            assert!(remainder.is_empty());
+            assert_eq!(arms.len(), proportions.len());
+            for (&[elbow, wrist, tip], (x, upper, lower, bend_left)) in arms.iter().zip(proportions)
+            {
                 let shoulder = Vec2::new(x as f32, 0.0);
-                let [elbow, wrist, tip] = <[Vec2; 3]>::try_from(arm).unwrap();
                 let target = Vec2::new(0.5 * t, 0.9 * t);
                 assert!(((elbow - shoulder).length() - upper as f32).abs() < 1e-5);
                 assert!(((wrist - elbow).length() - lower as f32).abs() < 1e-5);
@@ -1186,25 +1189,25 @@ mod tests {
         .unwrap();
         for target in [[4.0, 0.0], [0.1, 0.0], [0.0, 0.0]] {
             let message = rig
-                .pointing_tracks("wrist", &[(3.0, target)], 0.0, true)
+                .tracks_for_pointing("wrist", &[(3.0, target)], 0.0, true)
                 .err()
                 .unwrap()
                 .to_string();
             assert!(message.contains("phase 3 for wrist `wrist` is out of reach"));
         }
         assert!(rig
-            .pointing_tracks("elbow", &[(0.0, [2.0, 0.0])], 0.0, true)
+            .tracks_for_pointing("elbow", &[(0.0, [2.0, 0.0])], 0.0, true)
             .is_err());
         assert!(rig
-            .pointing_tracks("wrist", &[(0.0, [2.0, 0.0]); 2], 0.0, true)
+            .tracks_for_pointing("wrist", &[(0.0, [2.0, 0.0]); 2], 0.0, true)
             .is_err());
         // With equal effective lengths, the reach interval includes zero.
         // A direction that vanishes at runtime precision cannot define a pose.
         assert!(rig
-            .pointing_tracks("wrist", &[(0.0, [f64::MIN_POSITIVE, 0.0])], 1.0, true)
+            .tracks_for_pointing("wrist", &[(0.0, [f64::MIN_POSITIVE, 0.0])], 1.0, true)
             .is_err());
         let [shoulder, _, _] = rig
-            .pointing_tracks(
+            .tracks_for_pointing(
                 "wrist",
                 &[(0.0, [-3.0, 0.0]), (1.0, [-2.99, -0.01])],
                 0.0,

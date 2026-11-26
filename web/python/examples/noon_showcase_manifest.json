@@ -1177,7 +1177,7 @@
       "primary_feature": "target-based-pointing",
       "category": "Motion",
       "path": "python/examples/showcase_target_pointing.py",
-      "features": ["Joint2D", "pointing_tracks", "bind_rig_2d"],
+      "features": ["Joint2D", "tracks_for_pointing", "bind_rig_2d"],
       "duration": 6.35,
       "loop": false,
       "thumbnail_time": 3.7,

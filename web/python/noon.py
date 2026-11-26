@@ -1701,7 +1701,7 @@ class Scene:
         Track names match by default. Mapping entries are source: target or source:
         (target, angle_gain). Use rig.pose(phase) to get joint placements
         or pose.target_for(mobject) to prepare a vector drawing for Transform.
-        Use rig.pointing_tracks(wrist, targets) to prepare tracks for scene-space cues.
+        Use rig.tracks_for_pointing(wrist, targets) to prepare tracks for scene-space cues.
         """
         return _scene_operations()._canonical_retarget_rig_2d(self, joints, tracks, mapping)
 

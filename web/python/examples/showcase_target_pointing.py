@@ -86,7 +86,7 @@ class TargetPointing(Scene):
             joints, attachments = arm(shoulder, lengths, color)
             rig = self.retarget_rig_2d(joints=joints, tracks={})
             edge = [(t, (x + side * LABEL_EDGE, y)) for t, x, y in path]
-            tracks = rig.pointing_tracks("wrist", edge, fingertip=FINGERTIP, bend_left=side > 0)
+            tracks = rig.tracks_for_pointing("wrist", edge, fingertip=FINGERTIP, bend_left=side > 0)
             self.add(*(part for _, part, _ in attachments))
             self.bind_rig_2d(phase, joints=joints, tracks=tracks, attachments=attachments)
         label = [

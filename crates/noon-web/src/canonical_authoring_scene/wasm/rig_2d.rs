@@ -167,8 +167,8 @@ impl WasmRetargetedRig2d {
             .map_err(typed_js_error)
     }
 
-    #[wasm_bindgen(js_name = pointingTracks)]
-    pub fn pointing_tracks(
+    #[wasm_bindgen(js_name = tracksForPointing)]
+    pub fn tracks_for_pointing(
         &self,
         wrist: &str,
         targets: Array,
@@ -193,7 +193,7 @@ impl WasmRetargetedRig2d {
             .collect::<Result<Vec<_>, JsValue>>()?;
         let tracks = self
             .0
-            .pointing_tracks(wrist, &targets, fingertip, bend_left)
+            .tracks_for_pointing(wrist, &targets, fingertip, bend_left)
             .map_err(typed_js_error)?;
         let rows = Array::new();
         for track in tracks {
