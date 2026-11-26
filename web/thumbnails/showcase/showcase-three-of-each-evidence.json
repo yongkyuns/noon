@@ -1,43 +1,43 @@
 {
   "schema": 1,
   "publication": "captured-preview",
-  "captureRevision": "1be53fad47cae37a30179ca84ded4cdcbb36ebb1",
+  "captureRevision": "f51a741ac50187e4cfd0017f673229034b5f208e",
   "backend": "webgpu",
   "runtimeBuildIdentity": {
     "schema": 1,
-    "sourceRevision": "1be53fad47cae37a30179ca84ded4cdcbb36ebb1",
+    "sourceRevision": "f51a741ac50187e4cfd0017f673229034b5f208e",
     "files": {
       "worker": {
         "path": "./python-worker.js",
-        "sha256": "596cb1c76f99840eacd9b9e66c81551f4a19da6912367c18b0abd53c66c070dc"
+        "sha256": "444ef447b81589938ac60f28fa59b11f307f25530935520af25b367a39acadfc"
       },
       "wasm": {
         "path": "./pkg/noon_web_bg.wasm",
-        "sha256": "05633994aab1738c57fd71bbb8229df8c92b0a21160aa2c133c5b59355931f7e"
+        "sha256": "52ec056b24b39c80367be8b4e539ecc97f9bb187776defe48fc37eb1a366aa9e"
       },
       "glue": {
         "path": "./pkg/noon_web.js",
-        "sha256": "98a588a280121b360471a7ab9fd9aa5349594e654c13be96704a1a5b5ffb79d6"
+        "sha256": "dc2df9a70618cd184f3297b7fcf345dc538c83905d5617de3dc38abcbc92b0fd"
       },
       "verifier": {
         "path": "./runtime-build-verifier.js",
         "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
       }
     },
-    "buildId": "a6e753e5030d2b172b147a4368e46b7a4fbe4015baaca6e723c294ec996d5e23"
+    "buildId": "1d7d45bdcef89f2cb42f216d834c73d38b2b0ef34778537372b1ef66ab0fa334"
   },
   "posters": [
     {
       "id": "showcase-three-of-each",
-      "captureBuildId": "a6e753e5030d2b172b147a4368e46b7a4fbe4015baaca6e723c294ec996d5e23",
-      "sourceSha256": "c0b73155e4b5d0644fe1a0c7ad38fd3ada5ae5376b9ff163278616bc3caa8877",
+      "captureBuildId": "1d7d45bdcef89f2cb42f216d834c73d38b2b0ef34778537372b1ef66ab0fa334",
+      "sourceSha256": "86191331e5c928793fee0a81120e4c38e50105aeef7203bf6544481a00fc39af",
       "thumbnailTime": 7.75,
       "image": {
         "width": 960,
         "height": 540,
-        "foregroundPixels": 377137,
-        "pngSha256": "59190f585ff83e28bc146c940ff2cf4ca5aeb1a506b2756e9c1ad0eb81f8fa23",
-        "pixelSha256": "8c545e9d7334f62a5f747644b83056afe8c164002d1412b7e8716eba70b94ac6"
+        "foregroundPixels": 377142,
+        "pngSha256": "f1e2aea7a0d5d4b489de0ffce1f91fd04577ec71a15c9c21d98d3ac5138fd112",
+        "pixelSha256": "bb84ac803c662f87db18b9d79324606bb535e7d528ad4c021552b0009a31efc1"
       },
       "sample": {
         "requestedTime": 7.75,
