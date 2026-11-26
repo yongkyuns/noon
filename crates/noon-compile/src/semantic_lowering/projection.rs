@@ -961,11 +961,8 @@ pub(super) fn object_requires_spatial_lowering(
         || state.role() == noon_core::SemanticObjectRole::PointLight3D
         || object_has_mesh_content(state, store)
         || state.spatial_composition_domain() != noon_core::SemanticSpatialCompositionDomain::World
-        || matches!(
-            state.spatial_material(),
-            noon_core::SemanticSpatialMaterial::CairoPath
-                | noon_core::SemanticSpatialMaterial::SketchSilhouette(_)
-        )
+        || state.spatial_material() == noon_core::SemanticSpatialMaterial::CairoPath
+        || state.spatial_material().is_sketch_silhouette()
         || matches!(
             state.transform.orientation,
             noon_core::SemanticOrientation::Spatial(_)
@@ -1115,11 +1112,8 @@ pub(super) fn lower_object_state(
         return Err(SemanticLoweringError::UnsupportedSpatialMaterial { node: semantic_id });
     }
     if mesh_content
-        && matches!(
-            state.spatial_material(),
-            noon_core::SemanticSpatialMaterial::CairoPath
-                | noon_core::SemanticSpatialMaterial::SketchSilhouette(_)
-        )
+        && (state.spatial_material() == noon_core::SemanticSpatialMaterial::CairoPath
+            || state.spatial_material().is_sketch_silhouette())
     {
         return Err(SemanticLoweringError::UnsupportedSpatialMaterial { node: semantic_id });
     }

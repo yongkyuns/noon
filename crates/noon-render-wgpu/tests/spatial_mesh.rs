@@ -1048,6 +1048,109 @@ fn world_path_create_fades_fill_smoothly_over_depth_and_repeats_on_seek() {
 }
 
 #[test]
+fn sphere_sketch_contour_reuses_geometry_when_the_camera_moves() {
+    pollster::block_on(async {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
+            eprintln!("skipping sphere contour raster test: no adapter is available");
+            return;
+        };
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .unwrap();
+        let target = Target::new(&device);
+        for orthographic in [false, true] {
+            let mut store = SemanticStore::new();
+            let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
+            camera.set_role(SemanticObjectRole::Camera3D);
+            camera
+                .set_camera_projection(Some(projection(orthographic)))
+                .unwrap();
+            let start = SemanticWorldTransform3D {
+                translation: SemanticVec3::new(0.0, 0.0, 3.0),
+                ..SemanticWorldTransform3D::IDENTITY
+            };
+            camera.transform = start.into();
+            let camera_id = attach(&mut store, camera);
+            let mesh =
+                store.insert_geometry_mesh(noon_geometry::sphere_mesh(1.0, [64, 32]).unwrap());
+            let mut fill = SemanticObjectState::new(StoredGeometry::Resource(mesh));
+            fill.style = opaque_style(Color::from_hex(0x0000FF));
+            attach(&mut store, fill);
+
+            let circle =
+                noon_geometry::canonical_outline_path(&noon_core::GeometryRef::circle(1.0))
+                    .unwrap();
+            let path = store.insert_geometry_path(circle).unwrap();
+            let mut outline = SemanticObjectState::new(StoredGeometry::Resource(path));
+            outline.set_spatial_material(SemanticSpatialMaterial::SphereSilhouette);
+            outline.style.fill = None;
+            outline.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+            outline.style.stroke_width = 0.14;
+            outline.style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
+            outline.style.sketch_stroke = noon_core::SketchStroke::new(0.7, 27);
+            attach(&mut store, outline);
+            let mut index = SemanticExecutionIndex::new();
+            let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
+                .unwrap()
+                .into_parts();
+            let end = SemanticWorldTransform3D {
+                translation: SemanticVec3::new(0.7, 0.0, 3.0),
+                ..start
+            };
+            compiled
+                .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
+                    id: TrackId::new(0),
+                    object: index.execution_object_id(camera_id).unwrap(),
+                    property: Property::WorldTransform,
+                    values: TrackValues::WorldTransform {
+                        from: WorldTransformTrackEndpoint::from_world(start),
+                        to: WorldTransformTrackEndpoint::from_world(end),
+                    },
+                    timing: TrackTiming::new(0.0, 1.0, RateFunction::Linear),
+                    time_map: CompositionTimeMap::identity(),
+                }))
+                .unwrap();
+
+            let mut scene = SceneInstance::new(compiled);
+            let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
+            renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
+            let mut preparer = FramePreparer::new();
+            let mut draw = |scene: &mut SceneInstance| {
+                render(
+                    &device,
+                    &queue,
+                    &mut renderer,
+                    &mut preparer,
+                    scene,
+                    &target,
+                )
+                .unwrap()
+            };
+            let (_, initial) = draw(&mut scene);
+            // The perspective tangent projects at f/sqrt(d²-r²).
+            let edge_x = if orthographic { 85 } else { 105 };
+            assert!((edge_x - 2..=edge_x + 2).any(|x| pixel(&initial, x, 64)[0] > 150));
+            assert!(pixel(&initial, 64, 64)[2] > 230);
+            scene.advance_to(1.0).unwrap();
+            let (stats, moved) = draw(&mut scene);
+            assert_eq!(
+                (
+                    stats.geometry_bytes,
+                    stats.instance_bytes,
+                    stats.camera_bytes
+                ),
+                (0, 0, 64)
+            );
+            assert!(pixel(&moved, edge_x, 64)[0] < 40);
+            scene.seek(0.0).unwrap();
+            assert_eq!(draw(&mut scene).1, initial);
+        }
+    });
+}
+
+#[test]
 fn fixed_orientation_miter_preserves_frame_geometry_with_anisotropic_clip_scale() {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();

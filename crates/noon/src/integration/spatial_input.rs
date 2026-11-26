@@ -205,6 +205,35 @@ impl SpatialMeshInput {
         .map(|options| Self { options })
         .map_err(|e| invalid("spatial.invalid_mesh", e))
     }
+
+    pub fn sketch_sphere(
+        radius: f64,
+        u_cells: usize,
+        v_cells: usize,
+        fill: &[f64],
+        stroke: &[f64],
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<SpatialMeshFamilyInput, AuthoringFailure> {
+        let (mesh, path) = crate::spatial_authoring::sphere_sketch_options(
+            radius,
+            [u_cells, v_cells],
+            rgba(fill)?,
+            rgba(stroke)?,
+            width,
+            sketch_stroke(roughness, seed)?,
+        )
+        .map_err(AuthoringFailure::from)?;
+        Ok(SpatialMeshFamilyInput {
+            options: vec![mesh],
+            paths: vec![path],
+            cells: Vec::new(),
+            circle_caps: Vec::new(),
+            axial_pose: None,
+        })
+    }
+
     pub fn line_3d(
         start: &[f64],
         end: &[f64],

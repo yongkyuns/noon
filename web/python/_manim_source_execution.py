@@ -100,7 +100,7 @@ _canonical_authoring_context
 _register_top_level _edit_membership _bind_camera_frame
 """.split())
 _SOURCE_LINEAR_MEMBERS = frozenset("background_plane add_coordinates add_vector apply_matrix".split())
-_SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Cube Prism Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
+_SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Cube Prism Sphere Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
 _SOURCE_COLOR_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
 GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
@@ -3470,6 +3470,17 @@ class _SceneOnlySource(ast.NodeVisitor):
                              and values["shade_in_3d"].value is False))
             if node.func.id == "ThreeDAxes":
                 return not node.args and not node.keywords
+            if node.func.id == "Sphere":
+                return (not node.args and self._trusted_noon_binding("Sphere")
+                        and set(values) <= {"center", "radius", "resolution", "fill_color",
+                                            "stroke", "stroke_width"}
+                        and self._trusted_sketch_call(values.get("stroke"))
+                        and ("center" not in values or self._finite_tuple(values["center"], 3))
+                        and ("resolution" not in values
+                             or self._finite_tuple(values["resolution"], 2, integers=True))
+                        and ("fill_color" not in values or self._spatial_color(values["fill_color"]))
+                        and all(self._finite_number(values[name])
+                                for name in ("radius", "stroke_width") if name in values))
             if node.func.id == "Typst":
                 return (len(node.args) == 1 and isinstance(node.args[0], ast.Constant)
                         and isinstance(node.args[0].value, str) and not node.keywords)

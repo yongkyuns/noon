@@ -92,8 +92,8 @@ struct PathInstance {
     fill: [f32; 4],
     stroke: [f32; 4],
     opacity: f32,
-    // A normalized nonnegative f32 leaves its sign bit available for the domain flag.
-    reveal_and_orientation: u32,
+    // A normalized f32 in [0, 1] leaves the two high bits free.
+    reveal_and_flags: u32,
     fixed_anchor: [f32; 3],
     screen_stroke_width: f32,
     background_stroke: [f32; 4],
@@ -569,8 +569,15 @@ impl SpatialPathGpuState {
             }) else {
                 continue;
             };
+            let sphere_silhouette = spatial.material == SemanticSpatialMaterial::SphereSilhouette;
             let silhouette = match spatial.material {
                 SemanticSpatialMaterial::Unlit | SemanticSpatialMaterial::CairoPath => None,
+                SemanticSpatialMaterial::SphereSilhouette
+                    if spatial.composition_domain == Domain::World
+                        && object.content.geometry().is_some() =>
+                {
+                    None
+                }
                 SemanticSpatialMaterial::SketchSilhouette(edge)
                     if edge.is_valid()
                         && spatial.composition_domain == Domain::World
@@ -655,6 +662,9 @@ impl SpatialPathGpuState {
                 } = candidate;
                 validate_style(style, object_alpha, spatial.composition_domain)?;
                 let mut style = visible_path_style(style);
+                if sphere_silhouette {
+                    style.fill = None;
+                }
                 if spatial.material == SemanticSpatialMaterial::CairoPath
                     || spatial.composition_domain != Domain::World
                 {
@@ -749,7 +759,8 @@ impl SpatialPathGpuState {
                     stroke: color(style.stroke),
                     background_stroke: color(style.background_stroke),
                     opacity: object_alpha,
-                    reveal_and_orientation: (reveal.to_bits() & 0x7fff_ffff)
+                    reveal_and_flags: (reveal.to_bits() & 0x3fff_ffff)
+                        | (u32::from(sphere_silhouette) << 30)
                         | (u32::from(fixed) << 31),
                     fixed_anchor: [anchor.x as f32, anchor.y as f32, anchor.z as f32],
                     screen_stroke_width: if screen_stroke(style) {
@@ -921,7 +932,7 @@ impl SpatialPathGpuState {
                 .filter_map(|(_, draw)| draw.as_ref())
                 .any(|draw| {
                     draw.domain == Domain::World
-                        && draw.instance.reveal_and_orientation < 1.0_f32.to_bits()
+                        && (draw.instance.reveal_and_flags & 0x3fff_ffff) < 1.0_f32.to_bits()
                         && self.paths[&draw.key].fill.is_some()
                 })
         {

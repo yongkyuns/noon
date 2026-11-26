@@ -27,6 +27,14 @@ pub enum SemanticSpatialMaterial {
     CairoPath,
     /// Unlit world stroke where one adjacent face faces the camera and the other faces away.
     SketchSilhouette(SilhouetteEdge),
+    /// A retained unit circle projected onto the apparent contour of a unit sphere.
+    SphereSilhouette,
+}
+
+impl SemanticSpatialMaterial {
+    pub fn is_sketch_silhouette(self) -> bool {
+        matches!(self, Self::SketchSilhouette(_) | Self::SphereSilhouette)
+    }
 }
 
 /// Two adjacent face normals symmetric about the local +Z axis of an X-aligned edge.
