@@ -67,17 +67,13 @@ impl Pipelines {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Noon retained Cairo path shader"),
             source: wgpu::ShaderSource::Wgsl(
-                concat!(
-                    include_str!("../spatial_path.wgsl"),
-                    "\n",
+                format!(
+                    "{}\n{}\n{}\n{}\n{}\n{}",
+                    super::PATH_SHADER,
                     include_str!("../spatial_math.wgsl"),
-                    "\n",
                     include_str!("../cairo_lighting.wgsl"),
-                    "\n",
                     include_str!("../../polygon_coverage.wgsl"),
-                    "\n",
                     include_str!("cairo.wgsl"),
-                    "\n",
                     include_str!("../../cairo_color.wgsl")
                 )
                 .into(),

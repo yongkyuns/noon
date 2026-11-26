@@ -420,7 +420,7 @@ pub(super) fn validate_spatial_material_resource(
                 Some(GeometryResource::VectorPath(_))
             ))
         }),
-        SemanticSpatialMaterial::SketchSilhouette(_) | SemanticSpatialMaterial::SphereSilhouette =>
+        material if material.is_sketch_silhouette() =>
             !matches!(material, SemanticSpatialMaterial::SketchSilhouette(edge) if !edge.is_valid())
             && content.geometry().and_then(StoredGeometry::resource_handle).is_some_and(|handle| {
                 matches!(store.geometry_resources().get(handle), Some(GeometryResource::VectorPath(_)))

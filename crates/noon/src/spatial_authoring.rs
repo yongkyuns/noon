@@ -182,12 +182,6 @@ pub(crate) fn sphere_sketch_options(
     width: f64,
     sketch: SketchStroke,
 ) -> Result<(MeshOptions, SpatialPathOptions), AuthoringError> {
-    validate_sketch_edge(stroke, width, sketch)?;
-    if fill.alpha != 1.0 {
-        return Err(AuthoringError::InvalidSketchStroke(
-            "sphere silhouettes require an opaque fill",
-        ));
-    }
     if !(radius as f32).is_finite() || radius as f32 <= 0.0 {
         return Err(AuthoringError::NonFiniteGeometry);
     }
@@ -197,13 +191,76 @@ pub(crate) fn sphere_sketch_options(
     };
     let geometry = noon_geometry::sphere_mesh(1.0, resolution)
         .map_err(|_| AuthoringError::NonFiniteGeometry)?;
+    analytic_sketch_options(
+        geometry,
+        transform,
+        fill,
+        stroke,
+        width,
+        sketch,
+        SemanticSpatialMaterial::SphereSilhouette,
+    )
+}
+
+pub(crate) fn cylinder_sketch_options(
+    [radius, height]: [f64; 2],
+    direction: SemanticVec3,
+    segments: usize,
+    fill: Color,
+    stroke: Color,
+    width: f64,
+    sketch: SketchStroke,
+) -> Result<(MeshOptions, SpatialPathOptions), AuthoringError> {
+    let half = height * 0.5;
+    if [radius, half].into_iter().any(|value| {
+        let value = value as f32;
+        !value.is_finite() || value <= 0.0
+    }) {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    let mut transform = SemanticWorldTransform3D::from_axial_direction(direction, 0.0)
+        .ok_or(AuthoringError::NonFiniteGeometry)?;
+    transform.scale = SemanticVec3::new(radius, radius, half);
+    let geometry = noon_geometry::cylinder_mesh(1.0, 2.0, segments)
+        .map_err(|_| AuthoringError::NonFiniteGeometry)?;
+    let (mut mesh, path) = analytic_sketch_options(
+        geometry,
+        transform,
+        fill,
+        stroke,
+        width,
+        sketch,
+        SemanticSpatialMaterial::CylinderSilhouette,
+    )?;
+    // The shared mesh starts at Z=0. Center it inside the outline's unit cylinder.
+    mesh.transform.translation = transform
+        .transform_point(SemanticVec3::new(0.0, 0.0, -1.0))
+        .ok_or(AuthoringError::NonFiniteGeometry)?;
+    Ok((mesh, path))
+}
+
+fn analytic_sketch_options(
+    geometry: MeshResource,
+    transform: SemanticWorldTransform3D,
+    fill: Color,
+    stroke: Color,
+    width: f64,
+    sketch: SketchStroke,
+    material: SemanticSpatialMaterial,
+) -> Result<(MeshOptions, SpatialPathOptions), AuthoringError> {
+    validate_sketch_edge(stroke, width, sketch)?;
+    if fill.alpha != 1.0 {
+        return Err(AuthoringError::InvalidSketchStroke(
+            "analytic silhouettes require an opaque fill",
+        ));
+    }
     let mut mesh = MeshOptions::new(geometry);
     mesh.transform = transform;
     mesh.style.fill = Some(SemanticPaint::Solid(fill));
     let circle = noon_geometry::canonical_outline_path(&noon_core::GeometryRef::circle(1.0))
         .expect("analytic unit circle");
     let mut path = sketch_edge(circle, transform, stroke, width, sketch, 0);
-    path.material = SemanticSpatialMaterial::SphereSilhouette;
+    path.material = material;
     Ok((mesh, path))
 }
 
@@ -902,6 +959,23 @@ impl Scene {
         sketch: SketchStroke,
     ) -> Result<MobjectFamily, AuthoringError> {
         let (mesh, path) = sphere_sketch_options(radius, resolution, fill, stroke, width, sketch)?;
+        self.mesh_family_with_paths(vec![mesh], vec![path])
+    }
+
+    /// Admit an opaque capped cylinder and its retained projected contour.
+    #[allow(clippy::too_many_arguments)]
+    pub fn cylinder_sketch_silhouette(
+        &mut self,
+        size: [f64; 2],
+        direction: SemanticVec3,
+        segments: usize,
+        fill: Color,
+        stroke: Color,
+        width: f64,
+        sketch: SketchStroke,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        let (mesh, path) =
+            cylinder_sketch_options(size, direction, segments, fill, stroke, width, sketch)?;
         self.mesh_family_with_paths(vec![mesh], vec![path])
     }
 

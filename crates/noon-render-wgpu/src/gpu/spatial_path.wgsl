@@ -27,10 +27,23 @@ struct VertexInput {
     @location(15) background_stroke: vec4<f32>,
 };
 const PATH_BACKGROUND_STROKE_FLAG: u32 = 0x80000000u;
+const SPHERE_CONTOUR: u32 = 1u;
+const FIXED_ORIENTATION: u32 = 2u;
+const CYLINDER_CONTOUR: u32 = 3u;
 
-fn projected_tangent(world: mat4x4<f32>, tangent: vec2<f32>, clip: vec4<f32>, fixed: u32) -> vec2<f32> {
-    if fixed != 0u {
+fn projected_tangent(world: mat4x4<f32>, tangent: vec2<f32>, clip: vec4<f32>,
+        mode: u32, view: ContourView, local: vec2<f32>) -> vec2<f32> {
+    if mode == FIXED_ORIENTATION {
         return (world * vec4<f32>(tangent, 0.0, 0.0)).xy;
+    }
+    if mode == CYLINDER_CONTOUR {
+        if !view.valid {
+            return vec2<f32>(0.0);
+        }
+        // Use a short secant in the retained path's coordinates. Its length is
+        // larger than the search's subpixel quantization, including at a rim.
+        let adjacent = cylinder_point(view, local + stable_unit(tangent) * 0.02).xy;
+        return (adjacent - clip.xy) / fixed_camera.clip_scale;
     }
     let derivative = camera.view_projection * world * vec4<f32>(tangent, 0.0, 0.0);
     return (derivative.xy * clip.w - clip.xy * derivative.w) / fixed_camera.clip_scale;
@@ -51,110 +64,30 @@ struct VertexOutput {
     @location(3) @interpolate(flat) reveal: f32,
 };
 
-// The camera rows are scaled world-space right, up and forward vectors. In
-// perspective the eye is the unique point whose clip X, Y and W are zero.
-struct SphereContour {
-    plane: mat4x4<f32>,
-    to_local: mat3x3<f32>,
-    axis_x: vec3<f32>,
-    axis_y: vec3<f32>,
-    forward: vec3<f32>,
-    eye_local: vec3<f32>,
-    center_clip: vec4<f32>,
-    perspective: bool,
-    visible: bool,
-};
-
-fn projection_row(index: u32) -> vec3<f32> {
-    let p = camera.view_projection;
-    return vec3<f32>(p[0][index], p[1][index], p[2][index]);
-}
-
-fn sphere_contour(world: mat4x4<f32>) -> SphereContour {
-    var contour: SphereContour;
-    let x = world[0].xyz;
-    let y = world[1].xyz;
-    let z = world[2].xyz;
-    let scale_squared = vec3<f32>(dot(x, x), dot(y, y), dot(z, z));
-    if min(min(scale_squared.x, scale_squared.y), scale_squared.z) <= 1e-20 {
-        return contour;
-    }
-    // A semantic world transform is rotation times per-axis scale.
-    contour.to_local = transpose(mat3x3<f32>(
-        x / scale_squared.x, y / scale_squared.y, z / scale_squared.z,
-    ));
-    let view_x = projection_row(0u);
-    let view_y = projection_row(1u);
-    contour.axis_x = view_x / dot(view_x, view_x);
-    contour.axis_y = view_y / dot(view_y, view_y);
-    contour.forward = projection_row(3u);
-    contour.perspective = dot(contour.forward, contour.forward) > 0.0;
-    contour.center_clip = camera.view_projection * world[3];
-    let center = contour.center_clip;
-    var toward = vec3<f32>(0.0);
-    var tangent_offset = 0.0;
-    if contour.perspective {
-        contour.eye_local = contour.to_local * -(contour.axis_x * center.x
-            + contour.axis_y * center.y + contour.forward * center.w);
-        let distance = length(contour.eye_local);
-        if distance <= 1.0 || center.w <= 0.0 {
-            return contour;
-        }
-        toward = contour.eye_local / distance;
-        tangent_offset = 1.0 / distance;
-    } else {
-        contour.forward = normalize(projection_row(2u));
-        toward = normalize(contour.to_local * -contour.forward);
-    }
-    let across = cross(contour.to_local * view_y, toward);
-    if dot(across, across) <= 1e-20 {
-        return contour;
-    }
-    // The camera up vector fixes the phase of the retained sketch around
-    // the tangent circle, independent of the sphere's triangle grid.
-    let radius = sqrt(1.0 - tangent_offset * tangent_offset);
-    let right = normalize(across) * radius;
-    let up = cross(toward, right);
-    contour.plane = world * mat4x4<f32>(
-        vec4<f32>(right, 0.0), vec4<f32>(up, 0.0),
-        vec4<f32>(toward, 0.0), vec4<f32>(toward * tangent_offset, 1.0),
-    );
-    contour.visible = true;
-    return contour;
-}
-
-fn sphere_stroke_depth(contour: SphereContour, world: mat4x4<f32>, clip: vec4<f32>) -> f32 {
-    let xy = clip.xy / clip.w;
-    var direction = contour.to_local * contour.forward;
-    var origin = contour.to_local * (contour.axis_x * (xy.x - contour.center_clip.x)
-        + contour.axis_y * (xy.y - contour.center_clip.y));
-    if contour.perspective {
-        direction = contour.to_local
-            * (contour.forward + contour.axis_x * xy.x + contour.axis_y * xy.y);
-        origin = contour.eye_local;
-    }
-    direction = normalize(direction);
-    let closest = cross(direction, cross(origin, direction));
-    // Use the front surface depth with a half-percent radial margin. Near
-    // tangency this keeps the linearly interpolated ribbon above the fill.
-    let front = sqrt(max(1.01 - dot(closest, closest), 0.0));
-    let nearest = camera.view_projection * world * vec4<f32>(closest - direction * front, 1.0);
-    return nearest.z / nearest.w * clip.w;
-}
-
 fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
     let source_world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
     var world = source_world;
-    let fixed_orientation = input.reveal_and_flags >> 31u;
-    let sphere = (input.reveal_and_flags & 0x40000000u) != 0u;
-    var contour: SphereContour;
-    if sphere {
-        contour = sphere_contour(source_world);
-        world = contour.plane;
+    let mode = input.reveal_and_flags >> 30u;
+    var view: ContourView;
+    if mode == SPHERE_CONTOUR || mode == CYLINDER_CONTOUR {
+        view = contour_view(source_world);
+    }
+    if mode == SPHERE_CONTOUR {
+        world = sphere_plane(view, source_world);
     }
     let local_point = vec4<f32>(input.local, 0.0, 1.0);
     var clip = camera.view_projection * world * local_point;
-    if fixed_orientation != 0u {
+    var cylinder_boundary = vec2<f32>(0.0);
+    if mode == CYLINDER_CONTOUR {
+        if view.valid {
+            let point = cylinder_point(view, input.local);
+            cylinder_boundary = point.boundary;
+            clip = vec4<f32>(point.xy, 0.0, 1.0);
+        } else {
+            clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        }
+    }
+    if mode == FIXED_ORIENTATION {
         // Project the object's effective center, then preserve its world-point
         // offsets in the 2D camera's clip scale. This is intentionally not a
         // camera-facing quaternion billboard.
@@ -173,8 +106,8 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
     }
     if input.stroke_metadata.x > 0.0 {
         let kind = input.stroke_metadata.x;
-        let previous = stable_unit(projected_tangent(world, input.tangent, clip, fixed_orientation));
-        let next = stable_unit(projected_tangent(world, input.extrusion, clip, fixed_orientation));
+        let previous = stable_unit(projected_tangent(world, input.tangent, clip, mode, view, input.local));
+        let next = stable_unit(projected_tangent(world, input.extrusion, clip, mode, view, input.local));
         let turn = previous.x * next.y - previous.y * next.x;
         if kind == 2.0 {
             // Fan/miter origins stay at the path centerline.
@@ -223,13 +156,7 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
         // Project the retained centerline, then expand its stroke in the
         // authoring frame. The homogeneous derivative is the exact projected
         // straight-line direction, including perspective and world rotation.
-        var direction = input.tangent;
-        if fixed_orientation == 0u {
-            let derivative = camera.view_projection * world * vec4<f32>(input.tangent, 0.0, 0.0);
-            direction = (derivative.xy * clip.w - clip.xy * derivative.w) / fixed_camera.clip_scale;
-        } else {
-            direction = (world * vec4<f32>(input.tangent, 0.0, 0.0)).xy;
-        }
+        let direction = projected_tangent(world, input.tangent, clip, mode, view, input.local);
         let largest = max(abs(direction.x), abs(direction.y));
         if largest > 1e-8 && largest <= 3.402823e38 {
             let unit = normalize(direction / largest);
@@ -242,12 +169,15 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
             clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         }
     }
-    if sphere {
-        if contour.visible && clip.w > 0.0 {
-            clip.z = sphere_stroke_depth(contour, source_world, clip);
+    if mode == SPHERE_CONTOUR {
+        if view.valid && clip.w > 0.0 {
+            clip.z = sphere_stroke_depth(view, source_world, clip);
         } else {
             clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         }
+    }
+    if mode == CYLINDER_CONTOUR && view.valid {
+        clip.z = cylinder_stroke_depth(view, source_world, clip.xy, cylinder_boundary);
     }
     var output: VertexOutput;
     output.position = clip;

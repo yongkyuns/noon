@@ -42,10 +42,18 @@ pub fn program() -> Result<LiveProgram<CubeOrbit>, ScriptError> {
 pub(super) fn orbit(
     build: impl FnOnce(&mut Scene) -> Result<MobjectFamily, AuthoringError>,
 ) -> Result<LiveProgram<CubeOrbit>, ScriptError> {
+    orbit_between([0.64, -1.12], [1.1, 0.67], build)
+}
+
+pub(super) fn orbit_between(
+    [phi, theta]: [f64; 2],
+    [end_phi, end_theta]: [f64; 2],
+    build: impl FnOnce(&mut Scene) -> Result<MobjectFamily, AuthoringError>,
+) -> Result<LiveProgram<CubeOrbit>, ScriptError> {
     let mut scene = Scene::new();
     let start = ManimCamera3DProfile {
-        phi: 0.64,
-        theta: -1.12,
+        phi,
+        theta,
         gamma: 0.0,
         focal_distance: 10.0,
         zoom: 1.65,
@@ -58,8 +66,8 @@ pub(super) fn orbit(
     let movement = scene.declare_camera_profile_move(
         &camera,
         ManimCamera3DProfile {
-            phi: 1.1,
-            theta: 0.67,
+            phi: end_phi,
+            theta: end_theta,
             ..start
         },
         AnimationOptions::new()
