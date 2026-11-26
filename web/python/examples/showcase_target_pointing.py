@@ -94,4 +94,6 @@ class TargetPointing(Scene):
             self.bind_sampled(part, phase, "position", [(t, x + offset, y) for t, x, y in path])
         self.wait(1.1)
         self.play(phase.animate.set_value(1), run_time=2.0)
-        self.wait(1.9)
+        self.wait(0.8)
+        self.play(phase.animate.set_value(0), run_time=1.2)
+        self.wait(1.25)

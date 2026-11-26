@@ -64,7 +64,7 @@ const rows = [
   ['showcase-character-rigs','showcase_character_rigs.py','8f4450139597368def1bd3c17cc17cb8fee09d7ccfd3fcb641d85b2ce1146f8b','observed','observed-replay',[], 'observed-complete'],
   ['showcase-shape-characters','showcase_shape_characters.py','aff850534219adffeb89f6e3d5222931b75df8f16b7073ba4ae61159ad6b04df','observed','observed-replay',[], 'observed-complete'],
   ['showcase-drawn-sleeve-fold','showcase_drawn_sleeve_fold.py','5282e636f2d8cfe58b472c8222146f346a95bcf2100e98e3f5f211bdd7c72cbf','incremental','ordinary',[], 'finite-complete', true],
-  ['showcase-target-pointing','showcase_target_pointing.py','e4dd2e92fb22d41388ea1476a7615eca9e0b52d0d0d615d2ccfb5a4723275453','observed','observed-replay',[], 'observed-complete'],
+  ['showcase-target-pointing','showcase_target_pointing.py','3fddd85467b700e9eb2fa85f655f3acc00d9f70fa17ea0d8f79dd2e5191a41b4','observed','observed-replay',[], 'observed-complete'],
   ['showcase-retarget-blink','showcase_retarget_blink.py','8eee8e589bc7a0126df0f98b94af976d33c51e43dd6b5a818cb498045dd62660','observed','observed-replay',[], 'observed-complete'],
 ];
 

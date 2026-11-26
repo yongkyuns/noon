@@ -70,11 +70,8 @@ fn pointing_scene() -> Result<Scene> {
         0.68,
         Color::from_hex(0x293643),
     )?;
-    let label = scene.text(
-        Text::new("LOOK HERE")
-            .with_font_size(25.0)
-            .with_color(Color::WHITE),
-    )?;
+    let label = scene.text(Text::new("LOOK HERE").with_font_size(25.0))?;
+    scene.set_fill(&label, Color::WHITE, 1.0)?;
     scene.add(&label)?;
     for object in [&card, &label] {
         let rows = path
@@ -88,7 +85,12 @@ fn pointing_scene() -> Result<Scene> {
         .play_value(&phase, 1.0)
         .rate_func(RateFunction::Smooth)
         .run_time(2.0)?;
-    scene.wait(1.9)?;
+    scene.wait(0.8)?;
+    scene
+        .play_value(&phase, 0.0)
+        .rate_func(RateFunction::Smooth)
+        .run_time(1.2)?;
+    scene.wait(1.25)?;
     Ok(scene)
 }
 
