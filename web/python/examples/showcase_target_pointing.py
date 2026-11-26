@@ -27,16 +27,13 @@ def disc(radius, fill, center=(0, 0, 0), stroke=None):
                   stroke=stroke, stroke_width=2).move_to(center)
 
 
-def arm(scene, phase, shoulder, lengths, color, side, path):
+def arm(shoulder, lengths, color):
     upper, forearm = lengths
     joints = [
         Joint2D("shoulder", offset=shoulder),
         Joint2D("elbow", "shoulder", (upper, 0)),
         Joint2D("wrist", "elbow", (forearm, 0)),
     ]
-    rig = scene.retarget_rig_2d(joints=joints, tracks={})
-    edge = [(t, (x + side * LABEL_EDGE, y)) for t, x, y in path]
-    tracks = rig.pointing_tracks("wrist", edge, fingertip=FINGERTIP, bend_left=side > 0)
     sleeve = box(upper + 0.18, 0.31, 0.14, color, stroke=INK)
     cuff = box(forearm + 0.12, 0.23, 0.10, color, stroke=INK)
     glove = Polygon((-0.11, -0.085, 0), (0.12, -0.13, 0), (0.20, -0.06, 0),
@@ -45,12 +42,13 @@ def arm(scene, phase, shoulder, lengths, color, side, path):
     glove.set_fill(GLOVE_COLOR, opacity=1).set_stroke(INK, width=1.7)
     shoulder_pin = disc(0.16, SHEET, stroke=INK)
     elbow_pin = disc(0.115, SHEET, stroke=INK)
-    scene.add(sleeve, cuff, glove, shoulder_pin, elbow_pin)
-    scene.bind_rig_2d(phase, joints=joints, tracks=tracks, attachments=[
-        ("shoulder", sleeve, (upper / 2, 0)), ("shoulder", shoulder_pin, (0, 0)),
-        ("elbow", cuff, (forearm / 2, 0)), ("elbow", elbow_pin, (0, 0)),
+    return joints, [
+        ("shoulder", sleeve, (upper / 2, 0)),
+        ("elbow", cuff, (forearm / 2, 0)),
         ("wrist", glove, (0, 0)),
-    ])
+        ("shoulder", shoulder_pin, (0, 0)),
+        ("elbow", elbow_pin, (0, 0)),
+    ]
 
 
 def puppet(x, color, side, tall):
@@ -81,8 +79,16 @@ class TargetPointing(Scene):
         path = [(t / 24, LABEL_START[0] + (LABEL_END[0] - LABEL_START[0]) * t / 24,
                  LABEL_START[1] + (LABEL_END[1] - LABEL_START[1]) * t / 24)
                 for t in range(25)]
-        arm(self, phase, (-3.66, -1.00), (1.70, 1.73), TEAL, -1, path)
-        arm(self, phase, (3.52, -1.50), (2.02, 1.14), PLUM, 1, path)
+        for shoulder, lengths, color, side in [
+            ((-3.66, -1.00), (1.70, 1.73), TEAL, -1),
+            ((3.52, -1.50), (2.02, 1.14), PLUM, 1),
+        ]:
+            joints, attachments = arm(shoulder, lengths, color)
+            rig = self.retarget_rig_2d(joints=joints, tracks={})
+            edge = [(t, (x + side * LABEL_EDGE, y)) for t, x, y in path]
+            tracks = rig.pointing_tracks("wrist", edge, fingertip=FINGERTIP, bend_left=side > 0)
+            self.add(*(part for _, part, _ in attachments))
+            self.bind_rig_2d(phase, joints=joints, tracks=tracks, attachments=attachments)
         label = [
             (box(1.96, 0.68, 0.15, INK), 0),
             (Text("LOOK HERE", font="Arimo", font_size=20, color=SHEET), 0),

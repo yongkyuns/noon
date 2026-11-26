@@ -1164,7 +1164,7 @@ class NestedPose(Scene):
 
         for end in (palette["LABEL_END"], (-0.04, 0.47)):
             code = source + f"\nLABEL_END = {end!r}\n"
-            scene = asyncio.run(run_source(code, filename=str(path), retain_history=True))
+            scene = asyncio.run(run_source(code, filename=str(path), retain_history=True, portable=True))
             view = prepare_view(scene)
             try:
                 frames = [view.capture(time=t, width=width, height=height) for t in times]
