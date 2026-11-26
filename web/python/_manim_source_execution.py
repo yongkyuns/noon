@@ -100,7 +100,7 @@ _canonical_authoring_context
 _register_top_level _edit_membership _bind_camera_frame
 """.split())
 _SOURCE_LINEAR_MEMBERS = frozenset("background_plane add_coordinates add_vector apply_matrix".split())
-_SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
+_SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Cube Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
 _SOURCE_COLOR_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
 GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
@@ -3446,6 +3446,19 @@ class _SceneOnlySource(ast.NodeVisitor):
             values = {keyword.arg: keyword.value for keyword in node.keywords}
             if len(values) != len(node.keywords):
                 return False
+            if node.func.id == "Cube":
+                return (not node.args and self._trusted_noon_binding("Cube")
+                        and set(values) <= {"side_length", "fill_color", "fill_opacity",
+                                            "stroke", "stroke_width", "shade_in_3d"}
+                        and self._trusted_sketch_call(values.get("stroke"))
+                        and all(self._finite_number(values[name])
+                                for name in ("side_length", "stroke_width") if name in values)
+                        and ("fill_color" not in values or self._spatial_color(values["fill_color"]))
+                        and ("fill_opacity" not in values or isinstance(values["fill_opacity"], ast.Constant)
+                             and type(values["fill_opacity"].value) in (int, float)
+                             and values["fill_opacity"].value in (0, 1))
+                        and ("shade_in_3d" not in values or isinstance(values["shade_in_3d"], ast.Constant)
+                             and values["shade_in_3d"].value is False))
             if node.func.id == "ThreeDAxes":
                 return not node.args and not node.keywords
             if node.func.id == "Typst":

@@ -20,6 +20,48 @@ fn cube() -> MeshOptions {
     MeshOptions::new(noon_geometry::cube_mesh(1.0).unwrap())
 }
 
+#[test]
+fn cube_sketch_options_place_one_edge_in_each_supporting_plane() {
+    let (faces, paths) = cube_sketch_options(
+        2.0,
+        Color::BLUE,
+        1.0,
+        Color::WHITE,
+        0.05,
+        noon_core::SketchStroke::new(1.0, 7).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(faces.len(), 6);
+    let mut unique = std::collections::BTreeSet::new();
+    for edge in paths {
+        let corner = |x| {
+            let p = edge
+                .transform
+                .transform_point(SemanticVec3::new(x, 0.0, 0.0))
+                .unwrap();
+            assert!([p.x, p.y, p.z]
+                .iter()
+                .all(|v| (v.abs() - 1.0).abs() < 1e-12));
+            [
+                p.x.is_sign_positive(),
+                p.y.is_sign_positive(),
+                p.z.is_sign_positive(),
+            ]
+        };
+        let mut ends = [corner(-1.0), corner(1.0)];
+        ends.sort();
+        assert!(unique.insert(ends));
+        for offset in [-0.06, 0.06] {
+            let p = edge
+                .transform
+                .transform_point(SemanticVec3::new(0.0, offset, 0.0))
+                .unwrap();
+            assert!(p.x.abs().max(p.y.abs()).max(p.z.abs()) > 1.0);
+        }
+    }
+    assert_eq!(unique.len(), 12);
+}
+
 fn offset_mesh() -> MeshOptions {
     let positions = vec![
         SemanticVec3::new(10.0, 0.0, 0.0),
