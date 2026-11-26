@@ -134,6 +134,52 @@ pub struct SpatialMeshInput {
     pub(crate) options: MeshOptions,
 }
 
+fn rgba(channels: &[f64]) -> Result<Color, AuthoringFailure> {
+    match channels {
+        [red, green, blue, alpha] => color(*red, *green, *blue, *alpha),
+        _ => Err(invalid(
+            "spatial.invalid_color",
+            "expected RGBA color channels",
+        )),
+    }
+}
+
+fn sketch_stroke(roughness: f64, seed: u32) -> Result<noon_core::SketchStroke, AuthoringFailure> {
+    noon_core::SketchStroke::new(roughness, seed).ok_or_else(|| {
+        invalid(
+            "spatial.invalid_sketch_stroke",
+            "sketch roughness must be between 0 and 2",
+        )
+    })
+}
+
+fn polyhedron_input<'a>(
+    vertices: &[f64],
+    faces: &'a [u32],
+) -> Result<(Vec<SemanticVec3>, &'a [[u32; 3]]), AuthoringFailure> {
+    let (vertices, vertex_tail) = vertices.as_chunks::<3>();
+    let (faces, face_tail) = faces.as_chunks::<3>();
+    if !vertex_tail.is_empty() || !face_tail.is_empty() {
+        return Err(invalid(
+            "spatial.invalid_mesh",
+            "polyhedron inputs require triples",
+        ));
+    }
+    if vertices.len() > noon_geometry::MAX_SURFACE_VERTICES
+        || faces.len() > noon_geometry::MAX_SURFACE_CELLS
+    {
+        return Err(invalid(
+            "spatial.invalid_mesh",
+            "polyhedron exceeds the bounded mesh size",
+        ));
+    }
+    let vertices = vertices
+        .iter()
+        .map(|v| SemanticVec3::new(v[0], v[1], v[2]))
+        .collect::<Vec<_>>();
+    Ok((vertices, faces))
+}
+
 #[allow(clippy::too_many_arguments)]
 impl SpatialMeshInput {
     pub fn into_options(self) -> MeshOptions {
@@ -178,30 +224,40 @@ impl SpatialMeshInput {
 
     /// Explicit triangular faces preserve winding and use flat normals.
     pub fn polyhedron(vertices: &[f64], faces: &[u32]) -> Result<Self, AuthoringFailure> {
-        let (vertices, vertex_tail) = vertices.as_chunks::<3>();
-        let (faces, face_tail) = faces.as_chunks::<3>();
-        if !vertex_tail.is_empty() || !face_tail.is_empty() {
-            return Err(invalid(
-                "spatial.invalid_mesh",
-                "polyhedron inputs require triples",
-            ));
-        }
-        if vertices.len() > noon_geometry::MAX_SURFACE_VERTICES
-            || faces.len() > noon_geometry::MAX_SURFACE_CELLS
-        {
-            return Err(invalid(
-                "spatial.invalid_mesh",
-                "polyhedron exceeds the bounded mesh size",
-            ));
-        }
-        let vertices = vertices
-            .iter()
-            .map(|v| SemanticVec3::new(v[0], v[1], v[2]))
-            .collect::<Vec<_>>();
+        let (vertices, faces) = polyhedron_input(vertices, faces)?;
         crate::triangular_polyhedron_mesh(&vertices, faces)
             .map(mesh_options)
             .map(|options| Self { options })
             .map_err(|e| invalid("spatial.invalid_mesh", e))
+    }
+
+    pub fn sketch_polyhedron(
+        vertices: &[f64],
+        faces: &[u32],
+        fill: &[f64],
+        stroke: &[f64],
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<SpatialMeshFamilyInput, AuthoringFailure> {
+        let (vertices, faces) = polyhedron_input(vertices, faces)?;
+        let sketch = sketch_stroke(roughness, seed)?;
+        let (mesh, paths) = crate::spatial_authoring::polyhedron_sketch_options(
+            &vertices,
+            faces,
+            rgba(fill)?,
+            rgba(stroke)?,
+            width,
+            sketch,
+        )
+        .map_err(AuthoringFailure::from)?;
+        Ok(SpatialMeshFamilyInput {
+            options: vec![mesh],
+            cells: Vec::new(),
+            circle_caps: Vec::new(),
+            paths,
+            axial_pose: None,
+        })
     }
 
     pub fn cube(size: f64) -> Result<Self, AuthoringFailure> {
@@ -255,19 +311,7 @@ impl SpatialMeshInput {
         roughness: f64,
         seed: u32,
     ) -> Result<SpatialMeshFamilyInput, AuthoringFailure> {
-        let rgba = |channels: &[f64]| match channels {
-            [red, green, blue, alpha] => color(*red, *green, *blue, *alpha),
-            _ => Err(invalid(
-                "spatial.invalid_color",
-                "expected RGBA color channels",
-            )),
-        };
-        let sketch = noon_core::SketchStroke::new(roughness, seed).ok_or_else(|| {
-            invalid(
-                "spatial.invalid_sketch_stroke",
-                "sketch roughness must be between 0 and 2",
-            )
-        })?;
+        let sketch = sketch_stroke(roughness, seed)?;
         let (options, paths) = crate::spatial_authoring::cube_sketch_options(
             side_length,
             rgba(fill)?,

@@ -69,6 +69,23 @@ impl WasmMeshOptions {
             .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = sketchPolyhedron)]
+    pub fn sketch_polyhedron(
+        vertices: &[f64],
+        faces: &[u32],
+        fill: &[f64],
+        stroke: &[f64],
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<WasmMeshFamilyOptions, JsValue> {
+        input::SpatialMeshInput::sketch_polyhedron(
+            vertices, faces, fill, stroke, width, roughness, seed,
+        )
+        .map(Into::into)
+        .map_err(js_error)
+    }
+
     pub fn cube(size: f64) -> Result<Self, JsValue> {
         input::SpatialMeshInput::cube(size)
             .map(Into::into)

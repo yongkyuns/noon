@@ -64,6 +64,7 @@ pub mod live_updater_lifecycle;
 pub mod markup_text;
 #[cfg(feature = "latex")]
 pub mod matrix;
+pub mod mesh_sketch_creases;
 pub mod mixed_scalar_composition;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod mounted_callout;

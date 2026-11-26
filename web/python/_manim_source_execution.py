@@ -3512,11 +3512,18 @@ class _SceneOnlySource(ast.NodeVisitor):
                             for item in function.body.elts))
         return False
 
-    @staticmethod
-    def _valid_mesh_polyhedron_call(node):
-        keywords = {keyword.arg for keyword in node.keywords}
-        return (len(node.args) == 2 and not any(isinstance(arg, ast.Starred) for arg in node.args)
-                and len(keywords) == len(node.keywords) and keywords <= {"color", "point_lit"})
+    def _valid_mesh_polyhedron_call(self, node):
+        values = {keyword.arg: keyword.value for keyword in node.keywords}
+        if (len(node.args) != 2 or any(isinstance(arg, ast.Starred) for arg in node.args)
+                or len(values) != len(node.keywords)):
+            return False
+        if "stroke" not in values:
+            return set(values) <= {"color", "point_lit"}
+        return (set(values) <= {"color", "point_lit", "stroke", "stroke_width"}
+                and self._trusted_sketch_call(values["stroke"])
+                and ("stroke_width" not in values or self._finite_number(values["stroke_width"]))
+                and ("point_lit" not in values or isinstance(values["point_lit"], ast.Constant)
+                     and values["point_lit"].value is False))
 
     @staticmethod
     def _finite_number(node, *, integers=False):

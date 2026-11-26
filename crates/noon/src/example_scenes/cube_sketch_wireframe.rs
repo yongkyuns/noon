@@ -1,8 +1,8 @@
 //! Native counterpart of the Python cube sketch wireframe.
 use crate::{
-    AnimationOptions, Color, ContinuationEffects, ContinuationScene, ContinuationStep,
-    DeclaredAnimation, LiveContinuation, LiveProgram, MobjectTarget, RateFunction, Scene,
-    ScriptError, SemanticVec3, SketchStroke,
+    AnimationOptions, AuthoringError, Color, ContinuationEffects, ContinuationScene,
+    ContinuationStep, DeclaredAnimation, LiveContinuation, LiveProgram, MobjectFamily,
+    MobjectTarget, RateFunction, Scene, ScriptError, SemanticVec3, SketchStroke,
 };
 use noon_core::ManimCamera3DProfile;
 
@@ -27,6 +27,21 @@ impl LiveContinuation for CubeOrbit {
 }
 
 pub fn program() -> Result<LiveProgram<CubeOrbit>, ScriptError> {
+    orbit(|scene| {
+        scene.cube_sketch_wireframe(
+            2.2,
+            Color::from_hex(0x236B8E),
+            1.0,
+            Color::from_hex(0xACEAD7),
+            0.05,
+            SketchStroke::new(1.15, 27).expect("valid cube sketch"),
+        )
+    })
+}
+
+pub(super) fn orbit(
+    build: impl FnOnce(&mut Scene) -> Result<MobjectFamily, AuthoringError>,
+) -> Result<LiveProgram<CubeOrbit>, ScriptError> {
     let mut scene = Scene::new();
     let start = ManimCamera3DProfile {
         phi: 0.64,
@@ -38,15 +53,8 @@ pub fn program() -> Result<LiveProgram<CubeOrbit>, ScriptError> {
         frame_center: SemanticVec3::ZERO,
     };
     let camera = scene.camera_3d_profile(start, 0.1, 100.0)?;
-    let cube = scene.cube_sketch_wireframe(
-        2.2,
-        Color::from_hex(0x236B8E),
-        1.0,
-        Color::from_hex(0xACEAD7),
-        0.05,
-        SketchStroke::new(1.15, 27).expect("valid cube sketch"),
-    )?;
-    scene.add_many(&[MobjectTarget::Family(&cube)])?;
+    let object = build(&mut scene)?;
+    scene.add_many(&[MobjectTarget::Family(&object)])?;
     let movement = scene.declare_camera_profile_move(
         &camera,
         ManimCamera3DProfile {
