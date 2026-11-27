@@ -1,6 +1,7 @@
 //! Direct Rust counterpart to the Follow the label gallery scene.
 use noon::{
-    Color, Joint2d, JointAttachment2d, Mobject, RateFunction, RetargetedRig2d, Scene, Text,
+    Color, Joint2d, JointAttachment2d, LookAndPoint2d, Mobject, RateFunction, RetargetedRig2d,
+    Scene, Text,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -16,11 +17,16 @@ fn rectangle(scene: &mut Scene, width: f64, height: f64, color: Color) -> Result
 fn pointing_scene() -> Result<Scene> {
     let mut scene = Scene::new();
     let phase = scene.value_tracker(0.0)?;
-    let path: Vec<_> = (0..=24)
+    let outward: Vec<_> = (0..=24)
         .map(|index| {
             let t = f64::from(index) / 24.0;
             (t as f32, [-0.42 + 0.82 * t, -0.34 + 1.16 * t])
         })
+        .collect();
+    let path: Vec<_> = outward
+        .iter()
+        .map(|&(t, p)| (1.0 + t, p))
+        .chain(outward[..24].iter().rev().map(|&(t, p)| (3.0 - t, p)))
         .collect();
     let label_edge = 0.98;
     let fingertip = 0.34;
@@ -32,23 +38,43 @@ fn pointing_scene() -> Result<Scene> {
         let color = Color::from_hex(color);
         let body = rectangle(&mut scene, 1.28, height, color)?;
         scene.set_translation(&body, origin[0] + 0.58 * side, -2.37 + height / 2.0)?;
+        let eye = [origin[0] + 0.58 * side, height - 2.05];
+        let head = rectangle(&mut scene, 0.78, 0.58, color)?;
+        scene.set_translation(&head, eye[0], eye[1])?;
+        let sclera = rectangle(&mut scene, 0.33, 0.22, Color::WHITE)?;
+        scene.set_translation(&sclera, eye[0], eye[1])?;
+        let pupil = rectangle(&mut scene, 0.08, 0.08, Color::from_hex(0x293643))?;
+        let (shoulder_angle, elbow_angle) = if side < 0.0 {
+            (-0.55, 3.45)
+        } else {
+            (-2.78, 2.98)
+        };
         let joints = [
-            ("shoulder", None, origin),
-            ("elbow", Some("shoulder"), [upper, 0.0]),
-            ("wrist", Some("elbow"), [forearm, 0.0]),
+            ("shoulder", None, origin, shoulder_angle),
+            ("elbow", Some("shoulder"), [upper, 0.0], elbow_angle),
+            ("wrist", Some("elbow"), [forearm, 0.0], 0.0),
+            ("gaze", None, eye, std::f64::consts::FRAC_PI_2),
         ]
-        .map(|(name, parent, offset)| Joint2d {
+        .map(|(name, parent, offset, rest_angle)| Joint2d {
             name: name.into(),
             parent: parent.map(str::to_owned),
             offset,
-            rest_angle: 0.0,
+            rest_angle,
         });
         let targets: Vec<_> = path
             .iter()
             .map(|&(t, [x, y])| (t, [x + side * label_edge, y]))
             .collect();
         let rig = RetargetedRig2d::new(joints.to_vec(), &[], &[])?;
-        let tracks = rig.tracks_for_pointing("wrist", &targets, fingertip, side > 0.0)?;
+        let tracks = rig.look_and_point(LookAndPoint2d {
+            wrist: "wrist",
+            gaze: "gaze",
+            targets: &targets,
+            look: [0.0, 0.23],
+            rest: 4.0,
+            fingertip,
+            bend_left: side > 0.0,
+        })?;
         let sleeve = rectangle(&mut scene, upper + 0.10, 0.30, color)?;
         let cuff = rectangle(&mut scene, forearm + 0.10, 0.22, color)?;
         let hand = rectangle(&mut scene, fingertip, 0.13, Color::from_hex(0xEBAC4C))?;
@@ -56,6 +82,7 @@ fn pointing_scene() -> Result<Scene> {
             ("shoulder", sleeve, upper / 2.0),
             ("elbow", cuff, forearm / 2.0),
             ("wrist", hand, fingertip / 2.0),
+            ("gaze", pupil, 0.05),
         ]
         .map(|(joint, object, along)| JointAttachment2d {
             joint: joint.into(),
@@ -80,17 +107,24 @@ fn pointing_scene() -> Result<Scene> {
             .collect();
         scene.bind_sampled(object, &phase, "position", true, rows)?;
     }
-    scene.wait(1.1)?;
     scene
         .play_value(&phase, 1.0)
+        .rate_func(RateFunction::Linear)
+        .run_time(1.1)?;
+    scene
+        .play_value(&phase, 2.0)
         .rate_func(RateFunction::Smooth)
         .run_time(2.0)?;
     scene.wait(0.8)?;
     scene
-        .play_value(&phase, 0.0)
+        .play_value(&phase, 3.0)
         .rate_func(RateFunction::Smooth)
         .run_time(1.2)?;
-    scene.wait(1.25)?;
+    scene
+        .play_value(&phase, 4.0)
+        .rate_func(RateFunction::Linear)
+        .run_time(0.55)?;
+    scene.wait(0.7)?;
     Ok(scene)
 }
 
