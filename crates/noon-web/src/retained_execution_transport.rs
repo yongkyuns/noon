@@ -317,6 +317,7 @@ pub enum TransportSpatialMaterial {
     SketchSilhouette(noon_core::SilhouetteEdge),
     SphereSilhouette,
     CylinderSilhouette,
+    ConeSilhouette,
 }
 
 impl From<SemanticProjection3D> for TransportProjection3D {
@@ -367,6 +368,7 @@ impl TransportSpatialState {
                 SemanticSpatialMaterial::CylinderSilhouette => {
                     TransportSpatialMaterial::CylinderSilhouette
                 }
+                SemanticSpatialMaterial::ConeSilhouette => TransportSpatialMaterial::ConeSilhouette,
             },
             point_light: value.point_light,
             cairo_path_appearance: value.cairo_path_appearance.clone(),
@@ -382,6 +384,7 @@ impl TransportSpatialState {
                 TransportSpatialMaterial::SketchSilhouette(_)
                     | TransportSpatialMaterial::SphereSilhouette
                     | TransportSpatialMaterial::CylinderSilhouette
+                    | TransportSpatialMaterial::ConeSilhouette
             ) && (self.draw_kind != Draw::Planar || self.composition_domain != Domain::World))
         {
             return false;
@@ -506,6 +509,7 @@ impl TransportSpatialState {
                 TransportSpatialMaterial::CylinderSilhouette => {
                     SemanticSpatialMaterial::CylinderSilhouette
                 }
+                TransportSpatialMaterial::ConeSilhouette => SemanticSpatialMaterial::ConeSilhouette,
             },
             point_light: self.point_light,
             cairo_path_appearance: self.cairo_path_appearance.clone(),

@@ -202,8 +202,10 @@ pub(crate) fn sphere_sketch_options(
     )
 }
 
-pub(crate) fn cylinder_sketch_options(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn axial_sketch_options(
     [radius, height]: [f64; 2],
+    material: SemanticSpatialMaterial,
     direction: SemanticVec3,
     segments: usize,
     fill: Color,
@@ -218,21 +220,27 @@ pub(crate) fn cylinder_sketch_options(
     }) {
         return Err(AuthoringError::NonFiniteGeometry);
     }
-    let mut transform = SemanticWorldTransform3D::from_axial_direction(direction, 0.0)
+    let (geometry, offset) = match material {
+        SemanticSpatialMaterial::CylinderSilhouette => {
+            (noon_geometry::cylinder_mesh(1.0, 2.0, segments), 0.0)
+        }
+        // Keep the tip at the authored origin, as in Cone's ordinary profile.
+        SemanticSpatialMaterial::ConeSilhouette => {
+            (noon_geometry::cone_mesh(1.0, 2.0, segments), -half)
+        }
+        _ => {
+            return Err(AuthoringError::InvalidSketchStroke(
+                "expected an axial sketch silhouette",
+            ))
+        }
+    };
+    let geometry = geometry.map_err(|_| AuthoringError::NonFiniteGeometry)?;
+    let mut transform = SemanticWorldTransform3D::from_axial_direction(direction, offset)
         .ok_or(AuthoringError::NonFiniteGeometry)?;
     transform.scale = SemanticVec3::new(radius, radius, half);
-    let geometry = noon_geometry::cylinder_mesh(1.0, 2.0, segments)
-        .map_err(|_| AuthoringError::NonFiniteGeometry)?;
-    let (mut mesh, path) = analytic_sketch_options(
-        geometry,
-        transform,
-        fill,
-        stroke,
-        width,
-        sketch,
-        SemanticSpatialMaterial::CylinderSilhouette,
-    )?;
-    // The shared mesh starts at Z=0. Center it inside the outline's unit cylinder.
+    let (mut mesh, path) =
+        analytic_sketch_options(geometry, transform, fill, stroke, width, sketch, material)?;
+    // The fill mesh starts at Z=0. Both contours use a centered unit axial slab.
     mesh.transform.translation = transform
         .transform_point(SemanticVec3::new(0.0, 0.0, -1.0))
         .ok_or(AuthoringError::NonFiniteGeometry)?;
@@ -974,8 +982,41 @@ impl Scene {
         width: f64,
         sketch: SketchStroke,
     ) -> Result<MobjectFamily, AuthoringError> {
-        let (mesh, path) =
-            cylinder_sketch_options(size, direction, segments, fill, stroke, width, sketch)?;
+        let (mesh, path) = axial_sketch_options(
+            size,
+            SemanticSpatialMaterial::CylinderSilhouette,
+            direction,
+            segments,
+            fill,
+            stroke,
+            width,
+            sketch,
+        )?;
+        self.mesh_family_with_paths(vec![mesh], vec![path])
+    }
+
+    /// Admit an opaque capped cone and its retained projected contour, with the tip at the origin.
+    #[allow(clippy::too_many_arguments)]
+    pub fn cone_sketch_silhouette(
+        &mut self,
+        size: [f64; 2],
+        direction: SemanticVec3,
+        segments: usize,
+        fill: Color,
+        stroke: Color,
+        width: f64,
+        sketch: SketchStroke,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        let (mesh, path) = axial_sketch_options(
+            size,
+            SemanticSpatialMaterial::ConeSilhouette,
+            direction,
+            segments,
+            fill,
+            stroke,
+            width,
+            sketch,
+        )?;
         self.mesh_family_with_paths(vec![mesh], vec![path])
     }
 

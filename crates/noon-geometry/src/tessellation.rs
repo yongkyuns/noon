@@ -533,9 +533,24 @@ pub fn tessellate_projected_screen_stroke(
     stroke_join: StrokeJoin,
     stroke_cap: StrokeCap,
 ) -> Result<TessellatedScreenStroke, GeometryError> {
+    tessellate_projected_screen_stroke_with_tolerance(
+        path,
+        stroke_join,
+        stroke_cap,
+        PATH_TESSELLATION_TOLERANCE,
+    )
+}
+
+/// Retain closer samples where nonlinear projection can bring a sharp corner
+/// into the middle of a locally smooth contour.
+pub fn tessellate_projected_screen_stroke_with_tolerance(
+    path: &VectorPath,
+    stroke_join: StrokeJoin,
+    stroke_cap: StrokeCap,
+    tolerance: f32,
+) -> Result<TessellatedScreenStroke, GeometryError> {
     const FAN_SEGMENTS: usize = 8;
-    let (contours, curve_count) =
-        crate::flatten::flatten_path_with_reveal(path, PATH_TESSELLATION_TOLERANCE)?;
+    let (contours, curve_count) = crate::flatten::flatten_path_with_reveal(path, tolerance)?;
     let mut output = TessellatedScreenStroke::default();
 
     fn push_vertex(

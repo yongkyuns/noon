@@ -22,6 +22,7 @@ pub mod click_glow_pulse;
 #[cfg(all(feature = "code", feature = "bundled-fonts"))]
 pub mod code_block;
 pub mod composed_effects;
+pub mod cone_sketch_silhouette;
 pub mod cube_sketch_wireframe;
 pub mod cyclic_replace;
 pub mod cylinder_sketch_silhouette;

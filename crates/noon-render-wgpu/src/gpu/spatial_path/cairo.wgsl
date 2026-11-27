@@ -60,11 +60,11 @@ struct CairoPathOutput {
     result.end = (b.xy / b.w * vec2<f32>(1.0, -1.0) + vec2<f32>(1.0)) * boundary_metrics.xy * 0.5;
     result.first_color = cairo_color(base, a_world, n0);
     result.last_color = cairo_color(sheen, b_world, n1);
-    result.opacity = input.opacity;
+    result.opacity = input.opacity_reveal.x;
     // Only retained straight, screen-space butt strokes use this filter.
     // Curves, joins, other caps and clipped endpoints retain their old path.
     if cairo_path.metadata.w == 1.0 && (input.surface & 1u) != 0u
-        && (input.reveal_and_flags >> 30u) != FIXED_ORIENTATION {
+        && input.projection != FIXED_ORIENTATION {
         let transform = camera.view_projection * world;
         let first = transform * vec4<f32>(cairo_path.p0.xyz, 1.0);
         let last = transform * vec4<f32>(

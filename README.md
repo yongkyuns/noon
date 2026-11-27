@@ -144,6 +144,10 @@ The [smooth cylinder demo](web/python/examples/cylinder_sketch_silhouette.py) us
 `Cylinder(stroke=SketchStroke(TEAL))` on an opaque, unlit capped cylinder.
 Its retained contour follows the side and visible rim arcs into the end-on view.
 Run the paired Rust demo with `cargo run -p noon-native --example cylinder_sketch_silhouette`.
+The [capped cone demo](web/python/examples/cone_sketch_silhouette.py) uses
+`Cone(show_base=True, stroke=SketchStroke(TEAL))` with opaque, unlit faces.
+The contour follows the apex and base rim through a side-on to base-on orbit.
+Run the paired Rust demo with `cargo run -p noon-native --example cone_sketch_silhouette`.
 Use `obj.set_stroke(SketchStroke(TEAL), width=3)` to style an existing shape,
 text object, or group. `SVGMobject`, `Axes`, and `VGroup` also accept the
 `stroke=` option at construction.
