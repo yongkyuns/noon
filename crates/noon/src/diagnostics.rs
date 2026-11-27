@@ -188,6 +188,7 @@ pub fn execution_frame_value(session: &ExecutionSession) -> Value {
                         noon_core::SemanticSpatialMaterial::SketchSilhouette(_) => "sketch_silhouette",
                         noon_core::SemanticSpatialMaterial::SphereSilhouette => "sphere_silhouette",
                         noon_core::SemanticSpatialMaterial::CylinderSilhouette => "cylinder_silhouette",
+                        noon_core::SemanticSpatialMaterial::ConeSilhouette => "cone_silhouette",
                     },
                     "point_light": state.point_light,
                     "cairo_path_appearance": state.cairo_path_appearance,

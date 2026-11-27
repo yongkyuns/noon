@@ -228,7 +228,8 @@ impl SpatialMeshInput {
         Ok(SpatialMeshFamilyInput::with_sketch_outline(mesh, path))
     }
 
-    pub fn sketch_cylinder(
+    pub fn sketch_axial(
+        material: noon_core::SemanticSpatialMaterial,
         radius: f64,
         height: f64,
         direction: &[f64],
@@ -239,9 +240,10 @@ impl SpatialMeshInput {
         roughness: f64,
         seed: u32,
     ) -> Result<SpatialMeshFamilyInput, AuthoringFailure> {
-        let (mesh, path) = crate::spatial_authoring::cylinder_sketch_options(
+        let (mesh, path) = crate::spatial_authoring::axial_sketch_options(
             [radius, height],
-            vec3(direction, "cylinder direction")?,
+            material,
+            vec3(direction, "direction")?,
             segments,
             rgba(fill)?,
             rgba(stroke)?,

@@ -155,8 +155,46 @@ impl MeshInput {
         roughness: f64,
         seed: u32,
     ) -> Result<MeshFamilyInput, PyErr> {
-        input::SpatialMeshInput::sketch_cylinder(
-            radius, height, &direction, segments, &fill, &stroke, width, roughness, seed,
+        input::SpatialMeshInput::sketch_axial(
+            noon_core::SemanticSpatialMaterial::CylinderSilhouette,
+            radius,
+            height,
+            &direction,
+            segments,
+            &fill,
+            &stroke,
+            width,
+            roughness,
+            seed,
+        )
+        .map(Into::into)
+        .map_err(engine_error)
+    }
+
+    #[staticmethod]
+    #[pyo3(name = "sketchCone")]
+    fn sketch_cone(
+        radius: f64,
+        height: f64,
+        direction: Vec<f64>,
+        segments: usize,
+        fill: Vec<f64>,
+        stroke: Vec<f64>,
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<MeshFamilyInput, PyErr> {
+        input::SpatialMeshInput::sketch_axial(
+            noon_core::SemanticSpatialMaterial::ConeSilhouette,
+            radius,
+            height,
+            &direction,
+            segments,
+            &fill,
+            &stroke,
+            width,
+            roughness,
+            seed,
         )
         .map(Into::into)
         .map_err(engine_error)

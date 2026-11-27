@@ -451,19 +451,24 @@ class Cylinder(Surface):
 
 
 class Cone(Surface):
-    """Manim's radial-angle cone with an optional ordinary Circle base."""
+    """Manim's radial-angle cone, with an optional sketch silhouette when capped."""
 
     def __init__(self, base_radius=1, height=1, direction=(0, 0, 1),
                  show_base=False, v_range=(0, 2 * math.pi), u_min=0,
-                 checkerboard_colors=False, resolution=32,
+                 checkerboard_colors=False, resolution=None,
                  fill_color=_base.BLUE_D, fill_opacity=1,
-                 stroke_color=_DEFAULT_SURFACE_STROKE, stroke_width=0.5,
-                 stroke_opacity=1, shade_in_3d=True, point_lit=False, **kwargs):
-        from _noon_spatial import _vector
+                 stroke_color=_DEFAULT_SURFACE_STROKE, stroke_width=None,
+                 stroke_opacity=1, shade_in_3d=None, point_lit=False, *, stroke=None, **kwargs):
+        from _noon_spatial import _bulk, _vector
 
         _reject(kwargs, ())
         if not isinstance(show_base, bool):
             raise TypeError("show_base requires a boolean")
+        sketch = _as_sketch_stroke(stroke)
+        if shade_in_3d is None:
+            shade_in_3d = sketch is None
+        if stroke_width is None:
+            stroke_width = 0.5 if sketch is None else _compat.MANIM_DEFAULT_STROKE_WIDTH
         if not isinstance(shade_in_3d, bool):
             raise TypeError("shade_in_3d requires a boolean")
         base_radius = _base._ir._finite_number("base_radius", base_radius)
@@ -475,8 +480,26 @@ class Cone(Surface):
         if not math.isfinite(u_max) or u_min < 0.0 or u_min >= u_max:
             raise ValueError("Cone u_min must be finite and within [0, sqrt(base_radius² + height²))")
         v_range = _angular_sweep("Cone v_range", v_range)
+        if resolution is None:
+            resolution = 32 if sketch is None else (1, 96)
         resolution = _grid_resolution(resolution, "Cone")
         direction = _vector(direction)
+
+        if sketch is not None:
+            if not show_base or u_min != 0 or not math.isclose(v_range[1] - v_range[0], 2 * math.pi):
+                raise NotImplementedError("sketch silhouettes require a full capped cone")
+            _require_opaque(fill_opacity)
+            _require_unshaded(shade_in_3d)
+            _require_no_checkerboard(checkerboard_colors)
+            if point_lit is not False:
+                raise NotImplementedError("sketch cone materials are unlit")
+            if stroke_color is not _DEFAULT_SURFACE_STROKE or stroke_opacity != 1:
+                raise TypeError("use SketchStroke to set the opaque cone stroke color")
+            _attach_sketch_solid(
+                self, "sketchCone", (base_radius, height, _bulk(direction), resolution[1]),
+                _color(fill_color), stroke_width, sketch,
+            )
+            return
 
         if show_base and u_min != 0.0:
             raise NotImplementedError("Cone show_base with a truncated radial range is unsupported")

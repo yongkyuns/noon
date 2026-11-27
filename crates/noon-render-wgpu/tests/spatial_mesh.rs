@@ -6,9 +6,9 @@ use noon_core::{
     AnimationOptions, Color, CompositionTimeMap, MeshResource, Property, RateFunction,
     SemanticAnimationCompositionKind, SemanticMutationTransaction, SemanticObjectRole,
     SemanticObjectState, SemanticObjectTrackProperty, SemanticObjectTrackValues, SemanticPaint,
-    SemanticProjection3D, SemanticSpatialMaterial, SemanticStore, SemanticStyle, SemanticTransform,
-    SemanticVec3, SemanticWorldTransform3D, StoredGeometry, TrackDefinition, TrackId, TrackTiming,
-    TrackValues, WorldTransformTrackEndpoint,
+    SemanticProjection3D, SemanticRotation3D, SemanticSpatialMaterial, SemanticStore,
+    SemanticStyle, SemanticTransform, SemanticVec3, SemanticWorldTransform3D, StoredGeometry,
+    TrackDefinition, TrackId, TrackTiming, TrackValues, WorldTransformTrackEndpoint,
 };
 use noon_render_wgpu::text::TextDeviceMetrics;
 use noon_render_wgpu::{
@@ -1047,6 +1047,27 @@ fn world_path_create_fades_fill_smoothly_over_depth_and_repeats_on_seek() {
     });
 }
 
+// A flood from the fill's center must stay inside the ink even at the
+// tip and the two side-to-base joins.
+fn cone_outline_is_closed(pixels: &[u8]) -> bool {
+    let mut seen = vec![false; (WIDTH * HEIGHT) as usize];
+    let mut stack = vec![(WIDTH / 2, HEIGHT / 2)];
+    while let Some((x, y)) = stack.pop() {
+        if pixel(pixels, x, y)[0] > 150 {
+            continue;
+        }
+        let index = (y * WIDTH + x) as usize;
+        if std::mem::replace(&mut seen[index], true) {
+            continue;
+        }
+        if x == 0 || x == WIDTH - 1 || y == 0 || y == HEIGHT - 1 {
+            return false;
+        }
+        stack.extend([(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]);
+    }
+    true
+}
+
 #[test]
 fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
     pollster::block_on(async {
@@ -1060,11 +1081,14 @@ fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
             .await
             .unwrap();
         let target = Target::new(&device);
-        for (cylinder, orthographic, edge_x) in [
-            (false, false, 105),
-            (false, true, 85),
-            (true, false, 123),
-            (true, true, 85),
+        use SemanticSpatialMaterial::{ConeSilhouette, CylinderSilhouette, SphereSilhouette};
+        for (material, orthographic, edge_x) in [
+            (SphereSilhouette, false, 105),
+            (SphereSilhouette, true, 85),
+            (CylinderSilhouette, false, 123),
+            (CylinderSilhouette, true, 85),
+            (ConeSilhouette, false, 97),
+            (ConeSilhouette, true, 85),
         ] {
             let mut store = SemanticStore::new();
             let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
@@ -1072,26 +1096,49 @@ fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
             camera
                 .set_camera_projection(Some(projection(orthographic)))
                 .unwrap();
-            let start = SemanticWorldTransform3D {
-                translation: SemanticVec3::new(0.0, 0.0, 3.0),
+            // The interpolated camera crosses a chord of the orbit. Leave
+            // room for the cone throughout the sweep in this small viewport.
+            let distance = if material == ConeSilhouette { 4.5 } else { 3.0 };
+            let end_on = SemanticWorldTransform3D {
+                translation: SemanticVec3::new(0.0, 0.0, distance),
                 ..SemanticWorldTransform3D::IDENTITY
             };
-            camera.transform = start.into();
-            let camera_id = attach(&mut store, camera);
-            let (mesh, material) = if cylinder {
+            let axial_view = |angle| {
+                let rotation =
+                    SemanticRotation3D::from_axis_angle(SemanticVec3::new(1.0, 0.0, 0.0), angle)
+                        .unwrap();
+                SemanticWorldTransform3D {
+                    rotation,
+                    translation: rotation.rotate_vector(end_on.translation).unwrap(),
+                    ..end_on
+                }
+            };
+            let (start, end) = if material == ConeSilhouette {
                 (
-                    noon_geometry::cylinder_mesh(1.0, 2.0, 96).unwrap(),
-                    SemanticSpatialMaterial::CylinderSilhouette,
+                    axial_view(std::f64::consts::FRAC_PI_2),
+                    axial_view(std::f64::consts::PI),
                 )
             } else {
                 (
-                    noon_geometry::sphere_mesh(1.0, [64, 32]).unwrap(),
-                    SemanticSpatialMaterial::SphereSilhouette,
+                    end_on,
+                    SemanticWorldTransform3D {
+                        translation: SemanticVec3::new(0.7, 0.0, 3.0),
+                        ..end_on
+                    },
                 )
             };
+            camera.transform = start.into();
+            let camera_id = attach(&mut store, camera);
+            let mesh = match material {
+                SphereSilhouette => noon_geometry::sphere_mesh(1.0, [64, 32]),
+                CylinderSilhouette => noon_geometry::cylinder_mesh(1.0, 2.0, 96),
+                ConeSilhouette => noon_geometry::cone_mesh(1.0, 2.0, 96),
+                _ => unreachable!(),
+            }
+            .unwrap();
             let mesh = store.insert_geometry_mesh(mesh);
             let mut fill = SemanticObjectState::new(StoredGeometry::Resource(mesh));
-            if cylinder {
+            if material != SphereSilhouette {
                 fill.transform.translation.z = -1.0;
             }
             fill.style = opaque_style(Color::from_hex(0x0000FF));
@@ -1113,10 +1160,6 @@ fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
             let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
                 .unwrap()
                 .into_parts();
-            let end = SemanticWorldTransform3D {
-                translation: SemanticVec3::new(0.7, 0.0, 3.0),
-                ..start
-            };
             compiled
                 .apply_execution_patch(&ExecutionPatch::AddTrack(TrackDefinition {
                     id: TrackId::new(0),
@@ -1147,10 +1190,33 @@ fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
                 .unwrap()
             };
             let (_, initial) = draw(&mut scene);
-            // A sphere tangent projects at f/sqrt(d²-r²), and the cylinder's
-            // nearest cap projects at f/(d - h/2) in this end-on view.
-            assert!((edge_x - 2..=edge_x + 2).any(|x| pixel(&initial, x, 64)[0] > 150));
+            if material == ConeSilhouette {
+                // The +Z tip projects upward in the side-on camera.
+                let tip_y = if orthographic { 43 } else { 38 };
+                assert!(
+                    (tip_y - 4..=tip_y + 4)
+                        .any(|y| (60..=68).any(|x| pixel(&initial, x, y)[0] > 150)),
+                    "side-on cone tip missing (orthographic={orthographic})"
+                );
+                assert!(
+                    cone_outline_is_closed(&initial),
+                    "side-on cone outline opened at a join (orthographic={orthographic})"
+                );
+            } else {
+                // The tangent sphere projects at f/sqrt(d²-r²), the nearest
+                // cylinder cap at f/(d - h/2).
+                assert!((edge_x - 2..=edge_x + 2).any(|x| pixel(&initial, x, 64)[0] > 150));
+            }
             assert!(pixel(&initial, 64, 64)[2] > 230);
+            if material == ConeSilhouette {
+                scene.advance_to(0.3).unwrap();
+                let (stats, intermediate) = draw(&mut scene);
+                assert_eq!(stats.geometry_bytes, 0);
+                assert!(
+                    cone_outline_is_closed(&intermediate),
+                    "tilted cone outline opened at a join (orthographic={orthographic})"
+                );
+            }
             scene.advance_to(1.0).unwrap();
             let (stats, moved) = draw(&mut scene);
             assert_eq!(
@@ -1161,7 +1227,15 @@ fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
                 ),
                 (0, 0, 64)
             );
-            assert!(pixel(&moved, edge_x, 64)[0] < 40);
+            if material == ConeSilhouette {
+                assert!(
+                    (edge_x - 2..=edge_x + 2).any(|x| pixel(&moved, x, 64)[0] > 150),
+                    "base-on cone rim missing (orthographic={orthographic})"
+                );
+                assert_eq!(pixel(&moved, 64, 64), [0, 0, 255, 255]);
+            } else {
+                assert!(pixel(&moved, edge_x, 64)[0] < 40);
+            }
             scene.seek(0.0).unwrap();
             assert_eq!(draw(&mut scene).1, initial);
         }

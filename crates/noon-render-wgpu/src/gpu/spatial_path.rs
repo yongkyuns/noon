@@ -65,6 +65,7 @@ pub(super) struct Specialization {
     pub stroke_width: u32,
     pub background_stroke_width: u32,
     pub screen_stroke: bool,
+    pub refine_contour: bool,
     pub sketch_stroke: Option<[u32; 2]>,
     pub stroke_join: noon_core::StrokeJoin,
     pub stroke_cap: noon_core::StrokeCap,
@@ -98,8 +99,8 @@ struct PathInstance {
     fill: [f32; 4],
     stroke: [f32; 4],
     opacity: f32,
-    // A normalized f32 in [0, 1] leaves the two high bits free.
-    reveal_and_flags: u32,
+    reveal: f32,
+    projection: u32,
     fixed_anchor: [f32; 3],
     screen_stroke_width: f32,
     background_stroke: [f32; 4],
@@ -216,7 +217,7 @@ const PATH_VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_arr
 ];
 const PATH_INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 11] = wgpu::vertex_attr_array![
     2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4,
-    6 => Float32x4, 7 => Float32x4, 8 => Float32, 9 => Uint32, 10 => Float32x3, 13 => Float32,
+    6 => Float32x4, 7 => Float32x4, 8 => Float32x2, 9 => Uint32, 10 => Float32x3, 13 => Float32,
     15 => Float32x4
 ];
 
@@ -604,6 +605,7 @@ impl SpatialPathGpuState {
             let projection = match spatial.material {
                 SemanticSpatialMaterial::SphereSilhouette => 1,
                 SemanticSpatialMaterial::CylinderSilhouette => 3,
+                SemanticSpatialMaterial::ConeSilhouette => 4,
                 _ => u32::from(fixed) * 2,
             };
             if !fixed && spatial.fixed_orientation_center.is_some() {
@@ -679,13 +681,15 @@ impl SpatialPathGpuState {
                 {
                     style.sketch_stroke = None;
                 }
-                let keyed = match text_key {
+                let mut keyed = match text_key {
                     Some(source) => PathKey {
                         source,
                         specialization: specialization(style),
                     },
                     None => path_key(geometry.as_ref(), resources, style, index as u64)?,
                 };
+                keyed.specialization.refine_contour =
+                    spatial.material == SemanticSpatialMaterial::ConeSilhouette;
                 let cairo = if spatial.material == SemanticSpatialMaterial::CairoPath {
                     let appearance = spatial
                         .cairo_path_appearance
@@ -737,6 +741,7 @@ impl SpatialPathGpuState {
                         style,
                         object_alpha,
                         spatial.composition_domain,
+                        keyed.specialization.refine_contour,
                     )?;
                     if path.indices.is_empty() {
                         continue;
@@ -768,7 +773,8 @@ impl SpatialPathGpuState {
                     stroke: color(style.stroke),
                     background_stroke: color(style.background_stroke),
                     opacity: object_alpha,
-                    reveal_and_flags: (reveal.to_bits() & 0x3fff_ffff) | (projection << 30),
+                    reveal,
+                    projection,
                     fixed_anchor: [anchor.x as f32, anchor.y as f32, anchor.z as f32],
                     screen_stroke_width: if screen_stroke(style) {
                         style.stroke_width
@@ -939,7 +945,7 @@ impl SpatialPathGpuState {
                 .filter_map(|(_, draw)| draw.as_ref())
                 .any(|draw| {
                     draw.domain == Domain::World
-                        && (draw.instance.reveal_and_flags & 0x3fff_ffff) < 1.0_f32.to_bits()
+                        && draw.instance.reveal < 1.0
                         && self.paths[&draw.key].fill.is_some()
                 })
         {
@@ -1334,6 +1340,7 @@ fn path_key(
 fn specialization(style: Style) -> Specialization {
     Specialization {
         screen_stroke: screen_stroke(style),
+        refine_contour: false,
         sketch_stroke: crate::sketch_stroke_key(style),
         stroke_width: if style.stroke.is_some() {
             if screen_stroke(style) {
@@ -1639,12 +1646,13 @@ fn visible_path_style(mut style: Style) -> Style {
 /// Resolve one planar vector outline and tessellate it in its own local frame.
 /// `identity` is used only for inline lightweight geometry, which has no arena
 /// generation/version of its own.
-pub(super) fn tessellate(
+fn tessellate(
     geometry: &GeometryRef,
     resources: &dyn GeometryResourceLookup,
     style: Style,
     object_alpha: f32,
     domain: Domain,
+    refine_contour: bool,
 ) -> Result<TessellatedSpatialPath, SpatialPathError> {
     validate_style(style, object_alpha * style.opacity, domain)?;
     let style = visible_path_style(style);
@@ -1684,16 +1692,25 @@ pub(super) fn tessellate(
     )
     .map_err(|_| SpatialPathError::Tessellation)?;
     let path_stroke_frames = if screen && !screen_line {
-        let tessellate_stroke =
-            if sketch.is_none() && matches!(geometry, GeometryRef::Circle { .. }) {
-                noon_geometry::tessellate_screen_stroke
-            } else {
-                noon_geometry::tessellate_projected_screen_stroke
-            };
-        Some(
-            tessellate_stroke(outline, style.stroke_join, style.stroke_cap)
-                .map_err(|_| SpatialPathError::Tessellation)?,
-        )
+        let frames = if refine_contour {
+            // Depth and direction change quickly across the projected cap rim.
+            // Refine the retained unit contour once before its nonlinear projection.
+            noon_geometry::tessellate_projected_screen_stroke_with_tolerance(
+                outline,
+                style.stroke_join,
+                style.stroke_cap,
+                0.000125,
+            )
+        } else if sketch.is_none() && matches!(geometry, GeometryRef::Circle { .. }) {
+            noon_geometry::tessellate_screen_stroke(outline, style.stroke_join, style.stroke_cap)
+        } else {
+            noon_geometry::tessellate_projected_screen_stroke(
+                outline,
+                style.stroke_join,
+                style.stroke_cap,
+            )
+        };
+        Some(frames.map_err(|_| SpatialPathError::Tessellation)?)
     } else {
         None
     };
@@ -1806,6 +1823,16 @@ pub(super) fn tessellate(
 
 #[cfg(test)]
 mod tests {
+    fn tessellate(
+        geometry: &GeometryRef,
+        resources: &dyn GeometryResourceLookup,
+        style: Style,
+        object_alpha: f32,
+        domain: Domain,
+    ) -> Result<TessellatedSpatialPath, SpatialPathError> {
+        super::tessellate(geometry, resources, style, object_alpha, domain, false)
+    }
+
     #[test]
     fn silhouette_follows_opposite_face_orientation_in_camera_space() {
         let edge = SilhouetteEdge::from_face_normal_dot(0.0).unwrap();
@@ -2389,6 +2416,7 @@ mod tests {
                     stroke_width: 0,
                     background_stroke_width: 0,
                     screen_stroke: false,
+                    refine_contour: false,
                     sketch_stroke: None,
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,
@@ -2424,6 +2452,7 @@ mod tests {
                     stroke_width: 0,
                     background_stroke_width: 0,
                     screen_stroke: false,
+                    refine_contour: false,
                     sketch_stroke: None,
                     stroke_join: noon_core::StrokeJoin::Round,
                     stroke_cap: noon_core::StrokeCap::Round,

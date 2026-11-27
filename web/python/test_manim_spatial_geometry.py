@@ -977,6 +977,14 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(NotImplementedError, "truncated radial range"):
             spatial.Cone(show_base=True, u_min=0.1)
 
+    def test_sketch_cone_rejects_open_and_partial_profiles(self):
+        sketch = noon.SketchStroke(noon.TEAL)
+        for options in ({}, {"show_base": True, "v_range": (0, math.pi)},
+                        {"show_base": True, "u_min": 0.1}):
+            with self.subTest(options=options):
+                with self.assertRaisesRegex(NotImplementedError, "full capped cone"):
+                    spatial.Cone(stroke=sketch, **options)
+
     def test_cone_uses_the_pinned_open_base_default_and_accepts_only_boolean_options(self):
         with patch.object(spatial.Surface, "__init__", autospec=True,
                           return_value=None) as factory:

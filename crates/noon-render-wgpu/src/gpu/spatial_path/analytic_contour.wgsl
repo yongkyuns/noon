@@ -101,7 +101,7 @@ fn sphere_stroke_depth(view: ContourView, world: mat4x4<f32>, clip: vec4<f32>) -
 
 const RAY_LIMIT: f32 = 1e20;
 
-fn cylinder_cap_interval(ray: ContourRay, perspective: bool, half_height: f32) -> vec2<f32> {
+fn axial_interval(ray: ContourRay, perspective: bool, half_height: f32) -> vec2<f32> {
     let first = select(-RAY_LIMIT, 0.0, perspective);
     if abs(ray.direction.z) <= 1e-8 {
         return select(vec2<f32>(1.0, -1.0), vec2<f32>(first, RAY_LIMIT),
@@ -113,7 +113,7 @@ fn cylinder_cap_interval(ray: ContourRay, perspective: bool, half_height: f32) -
 }
 
 fn cylinder_ray_hits(ray: ContourRay, perspective: bool) -> bool {
-    let axial = cylinder_cap_interval(ray, perspective, 1.0);
+    let axial = axial_interval(ray, perspective, 1.0);
     if axial.x > axial.y {
         return false;
     }
@@ -125,12 +125,43 @@ fn cylinder_ray_hits(ray: ContourRay, perspective: bool) -> bool {
     return dot(point, point) <= 1.0;
 }
 
-struct CylinderPoint {
+// A quadratic tests which points along a ray lie inside the cone side:
+// |origin.xy + t * direction.xy|² - ((tip - origin.z - t * direction.z) / 2)².
+fn cone_side(point: vec3<f32>, tip: f32) -> f32 {
+    let radius = (tip - point.z) * 0.5;
+    return dot(point.xy, point.xy) - radius * radius;
+}
+
+fn cone_ray_hits(ray: ContourRay, perspective: bool) -> bool {
+    let axial = axial_interval(ray, perspective, 1.0);
+    if axial.x > axial.y {
+        return false;
+    }
+    let slope = -ray.direction.z * 0.5;
+    let a = dot(ray.direction.xy, ray.direction.xy) - slope * slope;
+    if a > 0.0 {
+        let b = dot(ray.origin.xy, ray.direction.xy) - (1.0 - ray.origin.z) * 0.5 * slope;
+        let t = clamp(-b / a, axial.x, axial.y);
+        return cone_side(ray.origin + t * ray.direction, 1.0) <= 0.0;
+    }
+    // A linear or concave quadratic takes its minimum at a slab endpoint.
+    return cone_side(ray.origin + axial.x * ray.direction, 1.0) <= 0.0
+        || cone_side(ray.origin + axial.y * ray.direction, 1.0) <= 0.0;
+}
+
+fn axial_ray_hits(ray: ContourRay, perspective: bool, cone: bool) -> bool {
+    if cone {
+        return cone_ray_hits(ray, perspective);
+    }
+    return cylinder_ray_hits(ray, perspective);
+}
+
+struct AxialPoint {
     xy: vec2<f32>,
     boundary: vec2<f32>,
 };
 
-fn cylinder_point(view: ContourView, local: vec2<f32>) -> CylinderPoint {
+fn axial_point(view: ContourView, local: vec2<f32>, cone: bool) -> AxialPoint {
     let center = view.center_clip.xy / view.center_clip.w;
     let image_axis = normalize(local * fixed_camera.clip_scale);
     let ray = contour_ray(view, center);
@@ -145,7 +176,7 @@ fn cylinder_point(view: ContourView, local: vec2<f32>) -> CylinderPoint {
         let middle = (inside + outside) * 0.5;
         let candidate = ContourRay(ray.origin + origin_growth * middle,
             ray.direction + direction_growth * middle);
-        if cylinder_ray_hits(candidate, view.perspective) {
+        if axial_ray_hits(candidate, view.perspective, cone) {
             inside = middle;
         } else {
             outside = middle;
@@ -154,13 +185,13 @@ fn cylinder_point(view: ContourView, local: vec2<f32>) -> CylinderPoint {
     let edge = image_axis * inside;
     // Keeping the sketch in image-angle order gives the side and rim one
     // shared phase, including when a side disappears behind the near cap.
-    return CylinderPoint(center + edge * length(local), center + edge);
+    return AxialPoint(center + edge * length(local), center + edge);
 }
 
 fn cylinder_nearest(ray: ContourRay, perspective: bool) -> f32 {
     // A one-percent depth envelope keeps the ribbon above the fill where
     // interpolated triangles cross the sharp cap/side boundary.
-    let axial = cylinder_cap_interval(ray, perspective, 1.01);
+    let axial = axial_interval(ray, perspective, 1.01);
     let radius_squared = 1.0201;
     let axis = ray.direction.xy;
     let origin = ray.origin.xy;
@@ -179,14 +210,63 @@ fn cylinder_nearest(ray: ContourRay, perspective: bool) -> f32 {
     return select(RAY_LIMIT, first, first <= min(axial.y, midpoint + radius));
 }
 
-fn cylinder_stroke_depth(view: ContourView, world: mat4x4<f32>,
-        xy: vec2<f32>, boundary: vec2<f32>) -> f32 {
+fn cone_nearest(ray: ContourRay, perspective: bool) -> f32 {
+    // Use the same small depth envelope as the capped cylinder.
+    let tip = 1.01;
+    let axial = axial_interval(ray, perspective, tip);
+    if axial.x > axial.y {
+        return RAY_LIMIT;
+    }
+    if axial.x > -RAY_LIMIT && cone_side(ray.origin + axial.x * ray.direction, tip) <= 0.0 {
+        return axial.x;
+    }
+    let d = ray.direction;
+    let o = ray.origin;
+    let radius = (tip - o.z) * 0.5;
+    let slope = -d.z * 0.5;
+    let a = dot(d.xy, d.xy) - slope * slope;
+    let b = dot(o.xy, d.xy) - radius * slope;
+    let c = cone_side(o, tip);
+    var first = RAY_LIMIT;
+    if a == 0.0 {
+        if b < 0.0 {
+            first = -c / (2.0 * b);
+        }
+    } else {
+        // This form of b² - ac avoids subtracting large axial distances.
+        let radial = radius * d.xy - slope * o.xy;
+        let lateral = d.x * o.y - d.y * o.x;
+        let discriminant = dot(radial, radial) - lateral * lateral;
+        if discriminant >= 0.0 {
+            let root = sqrt(discriminant);
+            let q = -b - select(-root, root, b >= 0.0);
+            if q != 0.0 {
+                let a_root = q / a;
+                let b_root = c / q;
+                first = select(max(a_root, b_root), min(a_root, b_root), a > 0.0);
+            } else {
+                first = -b / a;
+            }
+        }
+    }
+    return select(RAY_LIMIT, first, first >= axial.x && first <= axial.y);
+}
+
+fn axial_nearest(ray: ContourRay, perspective: bool, cone: bool) -> f32 {
+    if cone {
+        return cone_nearest(ray, perspective);
+    }
+    return cylinder_nearest(ray, perspective);
+}
+
+fn axial_stroke_depth(view: ContourView, world: mat4x4<f32>,
+        xy: vec2<f32>, boundary: vec2<f32>, cone: bool) -> f32 {
     var ray = contour_ray(view, xy);
-    var first = cylinder_nearest(ray, view.perspective);
+    var first = axial_nearest(ray, view.perspective, cone);
     if first == RAY_LIMIT {
         // Ink just outside the solid keeps the depth of the nearby contour.
         ray = contour_ray(view, boundary);
-        first = cylinder_nearest(ray, view.perspective);
+        first = axial_nearest(ray, view.perspective, cone);
     }
     if first == RAY_LIMIT {
         return view.center_clip.z / view.center_clip.w;

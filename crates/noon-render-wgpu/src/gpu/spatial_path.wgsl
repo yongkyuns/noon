@@ -17,8 +17,8 @@ struct VertexInput {
     @location(5) world3: vec4<f32>,
     @location(6) fill: vec4<f32>,
     @location(7) stroke: vec4<f32>,
-    @location(8) opacity: f32,
-    @location(9) reveal_and_flags: u32,
+    @location(8) opacity_reveal: vec2<f32>,
+    @location(9) projection: u32,
     @location(10) fixed_anchor: vec3<f32>,
     @location(11) tangent: vec2<f32>,
     @location(12) extrusion: vec2<f32>,
@@ -30,19 +30,24 @@ const PATH_BACKGROUND_STROKE_FLAG: u32 = 0x80000000u;
 const SPHERE_CONTOUR: u32 = 1u;
 const FIXED_ORIENTATION: u32 = 2u;
 const CYLINDER_CONTOUR: u32 = 3u;
+const CONE_CONTOUR: u32 = 4u;
+
+fn is_axial_contour(mode: u32) -> bool {
+    return mode == CYLINDER_CONTOUR || mode == CONE_CONTOUR;
+}
 
 fn projected_tangent(world: mat4x4<f32>, tangent: vec2<f32>, clip: vec4<f32>,
         mode: u32, view: ContourView, local: vec2<f32>) -> vec2<f32> {
     if mode == FIXED_ORIENTATION {
         return (world * vec4<f32>(tangent, 0.0, 0.0)).xy;
     }
-    if mode == CYLINDER_CONTOUR {
+    if is_axial_contour(mode) {
         if !view.valid {
             return vec2<f32>(0.0);
         }
         // Use a short secant in the retained path's coordinates. Its length is
         // larger than the search's subpixel quantization, including at a rim.
-        let adjacent = cylinder_point(view, local + stable_unit(tangent) * 0.02).xy;
+        let adjacent = axial_point(view, local + stable_unit(tangent) * 0.02, mode == CONE_CONTOUR).xy;
         return (adjacent - clip.xy) / fixed_camera.clip_scale;
     }
     let derivative = camera.view_projection * world * vec4<f32>(tangent, 0.0, 0.0);
@@ -67,9 +72,9 @@ struct VertexOutput {
 fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
     let source_world = mat4x4<f32>(input.world0, input.world1, input.world2, input.world3);
     var world = source_world;
-    let mode = input.reveal_and_flags >> 30u;
+    let mode = input.projection;
     var view: ContourView;
-    if mode == SPHERE_CONTOUR || mode == CYLINDER_CONTOUR {
+    if mode == SPHERE_CONTOUR || is_axial_contour(mode) {
         view = contour_view(source_world);
     }
     if mode == SPHERE_CONTOUR {
@@ -77,11 +82,11 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
     }
     let local_point = vec4<f32>(input.local, 0.0, 1.0);
     var clip = camera.view_projection * world * local_point;
-    var cylinder_boundary = vec2<f32>(0.0);
-    if mode == CYLINDER_CONTOUR {
+    var axial_boundary = vec2<f32>(0.0);
+    if is_axial_contour(mode) {
         if view.valid {
-            let point = cylinder_point(view, input.local);
-            cylinder_boundary = point.boundary;
+            let point = axial_point(view, input.local, mode == CONE_CONTOUR);
+            axial_boundary = point.boundary;
             clip = vec4<f32>(point.xy, 0.0, 1.0);
         } else {
             clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
@@ -176,8 +181,8 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
             clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         }
     }
-    if mode == CYLINDER_CONTOUR && view.valid {
-        clip.z = cylinder_stroke_depth(view, source_world, clip.xy, cylinder_boundary);
+    if is_axial_contour(mode) && view.valid {
+        clip.z = axial_stroke_depth(view, source_world, clip.xy, axial_boundary, mode == CONE_CONTOUR);
     }
     var output: VertexOutput;
     output.position = clip;
@@ -185,9 +190,9 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
     if (input.surface & PATH_BACKGROUND_STROKE_FLAG) != 0u {
         output.color = input.background_stroke;
     }
-    output.opacity = input.opacity;
+    output.opacity = input.opacity_reveal.x;
     output.path_progress = f32((input.surface >> 1u) & 0x00ffffffu) / 16777215.0;
-    output.reveal = bitcast<f32>(input.reveal_and_flags & 0x3fffffffu);
+    output.reveal = input.opacity_reveal.y;
     return output;
 }
 
