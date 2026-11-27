@@ -214,6 +214,8 @@ impl Rig2dBatch {
 #[pyclass(skip_from_py_object, module = "_noon_native")]
 pub struct NativeRetargetedRig2d(noon::RetargetedRig2d);
 
+type PointingCueRow = (String, Vec<(f32, f64, f64)>, [f32; 3], f64, bool);
+
 #[pymethods]
 impl NativeRetargetedRig2d {
     fn pose(&self, phase: f32) -> PyResult<NativeRigPose2d> {
@@ -246,31 +248,40 @@ impl NativeRetargetedRig2d {
             .map_err(engine_error)
     }
 
-    #[pyo3(name = "lookAndPoint")]
-    fn look_and_point(
+    #[pyo3(name = "lookAndPointSequence")]
+    fn look_and_point_sequence(
         &self,
-        wrist: &str,
         gaze: &str,
-        targets: Vec<(f32, f64, f64)>,
-        phases: [f32; 3],
-        fingertip: f64,
-        bend_left: bool,
+        cues: Vec<PointingCueRow>,
     ) -> PyResult<Vec<(String, Vec<[f32; 2]>)>> {
-        let [start, ready, rest] = phases;
-        let targets: Vec<_> = targets
+        let cues: Vec<_> = cues
             .into_iter()
-            .map(|(phase, x, y)| (phase, [x, y]))
+            .map(|(wrist, targets, phases, fingertip, bend_left)| {
+                let targets: Vec<_> = targets
+                    .into_iter()
+                    .map(|(phase, x, y)| (phase, [x, y]))
+                    .collect();
+                (wrist, targets, phases, fingertip, bend_left)
+            })
+            .collect();
+        let gestures: Vec<_> = cues
+            .iter()
+            .map(
+                |(wrist, targets, [start, ready, rest], fingertip, bend_left)| {
+                    noon::LookAndPoint2d {
+                        wrist,
+                        gaze,
+                        targets,
+                        look: [*start, *ready],
+                        rest: *rest,
+                        fingertip: *fingertip,
+                        bend_left: *bend_left,
+                    }
+                },
+            )
             .collect();
         self.0
-            .look_and_point(noon::LookAndPoint2d {
-                wrist,
-                gaze,
-                targets: &targets,
-                look: [start, ready],
-                rest,
-                fingertip,
-                bend_left,
-            })
+            .look_and_point_sequence(&gestures)
             .map(|tracks| {
                 tracks
                     .into_iter()

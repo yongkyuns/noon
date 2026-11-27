@@ -1127,10 +1127,10 @@ class NestedPose(Scene):
             view = prepare_view(scene)
             try:
                 self.assertAlmostEqual(view.duration, 8.51)
-                times = (1.76, 3.56, 5.98)
+                times = (1.76, 3.56, 4.22, 5.98)
                 frames = [view.capture(time=t, width=width, height=height) for t in times]
                 assert_pointing(frames[1], x_term[0], rgb("VARIABLE_COLOR"))
-                assert_pointing(frames[2], two_term[0], rgb("CONSTANT_COLOR"))
+                assert_pointing(frames[3], two_term[0], rgb("CONSTANT_COLOR"))
                 self.assertNotEqual(view.capture(time=8.51, width=width, height=height), frames[-1])
                 for time, expected in reversed(list(zip(times, frames))):
                     self.assertEqual(view.capture(time=time, width=width, height=height), expected)
