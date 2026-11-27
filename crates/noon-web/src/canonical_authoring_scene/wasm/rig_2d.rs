@@ -175,35 +175,38 @@ impl WasmRetargetedRig2d {
         fingertip: f64,
         bend_left: bool,
     ) -> Result<Array, JsValue> {
-        let targets = targets
-            .iter()
-            .map(|row| {
-                let row = row
-                    .dyn_into::<Array>()
-                    .ok()
-                    .filter(|row| row.length() == 3)
-                    .ok_or_else(|| js_error("2D pointing requires (phase, x, y) rows"))?;
-                let number = |index| {
-                    row.get(index).as_f64().ok_or_else(|| {
-                        js_error("2D pointing phases and coordinates require numbers")
-                    })
-                };
-                Ok((number(0)? as f32, [number(1)?, number(2)?]))
-            })
-            .collect::<Result<Vec<_>, JsValue>>()?;
         let tracks = self
             .0
-            .tracks_for_pointing(wrist, &targets, fingertip, bend_left)
+            .tracks_for_pointing(wrist, &pointing_targets(targets)?, fingertip, bend_left)
             .map_err(typed_js_error)?;
-        let rows = Array::new();
-        for track in tracks {
-            let keys = Array::new();
-            for [phase, angle] in track.keys {
-                keys.push(&Array::of2(&phase.into(), &angle.into()));
-            }
-            rows.push(&Array::of2(&track.joint.into(), &keys));
-        }
-        Ok(rows)
+        Ok(joint_track_rows(tracks))
+    }
+
+    #[wasm_bindgen(js_name = lookAndPoint)]
+    pub fn look_and_point(
+        &self,
+        wrist: &str,
+        gaze: &str,
+        targets: Array,
+        phases: Array,
+        fingertip: f64,
+        bend_left: bool,
+    ) -> Result<Array, JsValue> {
+        let [start, ready, rest] = pointing_row(phases.into())?;
+        let targets = pointing_targets(targets)?;
+        let tracks = self
+            .0
+            .look_and_point(noon::LookAndPoint2d {
+                wrist,
+                gaze,
+                targets: &targets,
+                look: [start as f32, ready as f32],
+                rest: rest as f32,
+                fingertip,
+                bend_left,
+            })
+            .map_err(typed_js_error)?;
+        Ok(joint_track_rows(tracks))
     }
 
     #[wasm_bindgen(js_name = artworkTrack)]
@@ -302,6 +305,41 @@ fn artwork_cues(cues: Array) -> Result<Vec<(f32, String)>, JsValue> {
             Ok((phase, name))
         })
         .collect()
+}
+
+fn pointing_row(row: JsValue) -> Result<[f64; 3], JsValue> {
+    let row = row
+        .dyn_into::<Array>()
+        .ok()
+        .filter(|row| row.length() == 3)
+        .ok_or_else(|| js_error("2D pointing requires rows of three numbers"))?;
+    let number = |i| {
+        row.get(i)
+            .as_f64()
+            .ok_or_else(|| js_error("2D pointing phases and coordinates require numbers"))
+    };
+    Ok([number(0)?, number(1)?, number(2)?])
+}
+
+fn pointing_targets(rows: Array) -> Result<Vec<(f32, [f64; 2])>, JsValue> {
+    rows.iter()
+        .map(|row| {
+            let [phase, x, y] = pointing_row(row)?;
+            Ok((phase as f32, [x, y]))
+        })
+        .collect()
+}
+
+fn joint_track_rows(tracks: impl IntoIterator<Item = JointTrack2d>) -> Array {
+    let rows = Array::new();
+    for track in tracks {
+        let keys = Array::new();
+        for [phase, angle] in track.keys {
+            keys.push(&Array::of2(&phase.into(), &angle.into()));
+        }
+        rows.push(&Array::of2(&track.joint.into(), &keys));
+    }
+    rows
 }
 
 fn artwork_pair(row: JsValue) -> Result<Array, JsValue> {

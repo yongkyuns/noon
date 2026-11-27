@@ -3625,6 +3625,23 @@ class _RetargetedRig2d:
                            float(fingertip), bool(bend_left), operation="RetargetedRig2d.tracks_for_pointing")
         return {name: [tuple(key) for key in keys] for name, keys in rows}
 
+    def look_and_point(self, wrist, gaze, targets, *, look, rest, fingertip=0.0, bend_left=True):
+        """Prepare gaze and arm tracks for an ordinary bind_rig_2d call.
+
+        look gives (start, arm starts reaching). Each target row is
+        (phase, (x, y)), from first contact through release. Repeat a point
+        to hold it. Both branches reach their rest poses at rest. The gaze
+        joint is separate from the arm, with local +X pointing at the target.
+        """
+        from _noon_host import array_value
+
+        start, ready = look
+        cues = [(float(phase), float(x), float(y)) for phase, (x, y) in targets]
+        phases = array_value((float(start), float(ready), float(rest)))
+        rows = engine_call(self._handle.lookAndPoint, wrist, gaze, array_value(cues), phases,
+                           float(fingertip), bool(bend_left), operation="RetargetedRig2d.look_and_point")
+        return {name: [tuple(key) for key in keys] for name, keys in rows}
+
     def artwork_track(self, joint, *, poses, cues):
         """Prepare named joint-local drawings with corresponding contours.
 
