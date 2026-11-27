@@ -315,6 +315,7 @@ pub enum TransportSpatialMaterial {
     CairoSurface,
     CairoPath,
     SketchSilhouette(noon_core::SilhouetteEdge),
+    SphereSilhouette,
 }
 
 impl From<SemanticProjection3D> for TransportProjection3D {
@@ -359,6 +360,9 @@ impl TransportSpatialState {
                 SemanticSpatialMaterial::SketchSilhouette(edge) => {
                     TransportSpatialMaterial::SketchSilhouette(edge)
                 }
+                SemanticSpatialMaterial::SphereSilhouette => {
+                    TransportSpatialMaterial::SphereSilhouette
+                }
             },
             point_light: value.point_light,
             cairo_path_appearance: value.cairo_path_appearance.clone(),
@@ -368,13 +372,14 @@ impl TransportSpatialState {
     fn is_valid(&self) -> bool {
         use noon_compile::CompiledSpatialDrawKind as Draw;
         use noon_core::SemanticSpatialCompositionDomain as Domain;
-        if let TransportSpatialMaterial::SketchSilhouette(edge) = self.material {
-            if !edge.is_valid()
-                || self.draw_kind != Draw::Planar
-                || self.composition_domain != Domain::World
-            {
-                return false;
-            }
+        if matches!(self.material, TransportSpatialMaterial::SketchSilhouette(edge) if !edge.is_valid())
+            || (matches!(
+                self.material,
+                TransportSpatialMaterial::SketchSilhouette(_)
+                    | TransportSpatialMaterial::SphereSilhouette
+            ) && (self.draw_kind != Draw::Planar || self.composition_domain != Domain::World))
+        {
+            return false;
         }
         if (self.material == TransportSpatialMaterial::CairoPath)
             != self.cairo_path_appearance.is_some()
@@ -489,6 +494,9 @@ impl TransportSpatialState {
                 TransportSpatialMaterial::CairoPath => SemanticSpatialMaterial::CairoPath,
                 TransportSpatialMaterial::SketchSilhouette(edge) => {
                     SemanticSpatialMaterial::SketchSilhouette(edge)
+                }
+                TransportSpatialMaterial::SphereSilhouette => {
+                    SemanticSpatialMaterial::SphereSilhouette
                 }
             },
             point_light: self.point_light,

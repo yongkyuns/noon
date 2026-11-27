@@ -51,6 +51,23 @@ impl WasmMeshOptions {
             .map(Into::into)
             .map_err(js_error)
     }
+    #[wasm_bindgen(js_name = sketchSphere)]
+    pub fn sketch_sphere(
+        radius: f64,
+        u_cells: usize,
+        v_cells: usize,
+        fill: &[f64],
+        stroke: &[f64],
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<WasmMeshFamilyOptions, JsValue> {
+        input::SpatialMeshInput::sketch_sphere(
+            radius, u_cells, v_cells, fill, stroke, width, roughness, seed,
+        )
+        .map(Into::into)
+        .map_err(js_error)
+    }
     #[wasm_bindgen(js_name = line3D)]
     pub fn line_3d(
         start: &[f64],

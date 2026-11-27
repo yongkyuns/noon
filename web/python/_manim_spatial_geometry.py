@@ -17,7 +17,7 @@ from _noon_spatial import Mesh3D as _Mesh3D, _WorldMobject
 from _manim_compat import _as_color, _manim_stroke_width, _opacity
 from _noon_errors import engine_call
 from _manim_semantic_handles import (
-    _attach_shared_family, _attach_shared_handle,
+    _as_sketch_stroke, _attach_shared_family, _attach_shared_handle,
     _group_target_context, _initialize_shared_wrapper,
     _path_authoring_context,
 )
@@ -84,11 +84,21 @@ def _take_mesh(self, mesh):
         self._canonical_live_target_context = context
 
 
+def _attach_mesh_family(self, candidate, context):
+    from _noon_spatial import _create_mesh_family
+
+    handle = (engine_call(_create_mesh_family, candidate) if context is None
+              else engine_call(context.createMeshFamily, candidate))
+    _initialize_shared_wrapper(self)
+    _attach_shared_family(self, handle, context, _compat.VMobject)
+    if context is not None:
+        self._canonical_live_target_context = context
+
+
 def _initialize_prism_family(
     self, dimensions, fill_color, fill_opacity, stroke_width, shade_in_3d, stroke
 ):
-    from _manim_semantic_handles import _as_sketch_stroke
-    from _noon_spatial import _bulk, _create_mesh_family, _mesh_options, _prism_face_family_options
+    from _noon_spatial import _bulk, _mesh_options, _prism_face_family_options
 
     sketch = _as_sketch_stroke(stroke)
     if fill_opacity is None:
@@ -125,15 +135,7 @@ def _initialize_prism_family(
             _bulk((pen.red, pen.green, pen.blue, pen.alpha)), _manim_stroke_width(stroke_width),
             sketch._roughness, sketch._seed,
         )
-    handle = (
-        engine_call(_create_mesh_family, candidate)
-        if context is None
-        else engine_call(context.createMeshFamily, candidate)
-    )
-    _initialize_shared_wrapper(self)
-    _attach_shared_family(self, handle, context, _compat.VMobject)
-    if context is not None:
-        self._canonical_live_target_context = context
+    _attach_mesh_family(self, candidate, context)
 
 
 class Cube(_WorldMobject, _compat.Group):
@@ -206,7 +208,7 @@ class Surface(_Mesh3D, _compat.Group):
                  stroke_opacity=1, normal=None, shade_in_3d=True,
                  point_lit=False, _analytic_factory=None, _axial_pose=None,
                  _force_surface_family=False, _cairo_circle_caps=(), **kwargs):
-        from _noon_spatial import _bulk, _vector, _surface_plan, _mesh_family_options, _create_mesh_family
+        from _noon_spatial import _bulk, _vector, _surface_plan, _mesh_family_options
         _reject(kwargs, ())
         if not isinstance(shade_in_3d, bool):
             raise TypeError("shade_in_3d requires a boolean")
@@ -301,12 +303,7 @@ class Surface(_Mesh3D, _compat.Group):
         except BaseException:
             candidate.free()
             raise
-        handle = (engine_call(_create_mesh_family, candidate) if context is None
-                  else engine_call(context.createMeshFamily, candidate))
-        _initialize_shared_wrapper(self)
-        _attach_shared_family(self, handle, context, _compat.VMobject)
-        if context is not None:
-            self._canonical_live_target_context = context
+        _attach_mesh_family(self, candidate, context)
 
     def set_fill_by_checkerboard(self, *colors, opacity=1):
         from _noon_spatial import _bulk
@@ -485,8 +482,8 @@ class Cone(Surface):
 class Sphere(Surface):
     """Surface-sampled sphere with the pinned Manim azimuth/polar mapping."""
 
-    def __init__(self, center=(0, 0, 0), radius=1, resolution=(24, 12),
-                 u_range=(0, 2 * math.pi), v_range=(0, math.pi), **kwargs):
+    def __init__(self, center=(0, 0, 0), radius=1, resolution=None,
+                 u_range=(0, 2 * math.pi), v_range=(0, math.pi), *, stroke=None, **kwargs):
         from _noon_spatial import _vector
 
         radius = _base._ir._finite_number("radius", radius)
@@ -503,6 +500,13 @@ class Sphere(Surface):
             raise ValueError("Sphere v_range must be increasing within [0, π]")
 
         self.radius = radius
+        sketch = _as_sketch_stroke(stroke)
+        if sketch is not None:
+            if u_range != (0.0, 2 * math.pi) or v_range != (0.0, math.pi):
+                raise NotImplementedError("sketch silhouettes require a full sphere")
+            self._initialize_sketch(radius, resolution, sketch, **kwargs)
+            self.shift(center)
+            return
 
         def point(u, v):
             sin_v, cos_v = math.sin(v), math.cos(v)
@@ -518,11 +522,37 @@ class Sphere(Surface):
             )
 
         super().__init__(point, u_range=u_range, v_range=v_range,
-                         resolution=resolution, _analytic_factory=analytic_factory,
+                         resolution=(24, 12) if resolution is None else resolution,
+                         _analytic_factory=analytic_factory,
                          **kwargs)
         # Translate the parameterized origin as Manim does; this also works for
         # partial patches whose bounding-box center is not the sphere center.
         self.shift(center)
+
+    def _initialize_sketch(self, radius, resolution, sketch, *, fill_color=_base.BLUE_D,
+                           stroke_width=_compat.MANIM_DEFAULT_STROKE_WIDTH,
+                           fill_opacity=1, shade_in_3d=False, checkerboard_colors=False,
+                           point_lit=False):
+        from _noon_spatial import _bulk, _mesh_options
+
+        _require_opaque(fill_opacity)
+        _require_unshaded(shade_in_3d)
+        _require_no_checkerboard(checkerboard_colors)
+        if point_lit is not False:
+            raise NotImplementedError("sketch sphere materials are unlit")
+        if _mesh_options is None:
+            raise RuntimeError("sketch sphere construction requires the shared Rust authoring host")
+        fill = _color(fill_color)
+        pen = sketch._color
+        cells = _grid_resolution((64, 32) if resolution is None else resolution, "Sphere")
+        context = _path_authoring_context()
+        candidate = engine_call(
+            _mesh_options.sketchSphere, radius, *cells,
+            _bulk((fill.red, fill.green, fill.blue, fill.alpha)),
+            _bulk((pen.red, pen.green, pen.blue, pen.alpha)),
+            _manim_stroke_width(stroke_width), sketch._roughness, sketch._seed,
+        )
+        _attach_mesh_family(self, candidate, context)
 
 
 class Dot3D(Sphere):

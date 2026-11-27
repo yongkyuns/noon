@@ -174,6 +174,39 @@ fn validate_sketch_edge(
     Ok(())
 }
 
+pub(crate) fn sphere_sketch_options(
+    radius: f64,
+    resolution: [usize; 2],
+    fill: Color,
+    stroke: Color,
+    width: f64,
+    sketch: SketchStroke,
+) -> Result<(MeshOptions, SpatialPathOptions), AuthoringError> {
+    validate_sketch_edge(stroke, width, sketch)?;
+    if fill.alpha != 1.0 {
+        return Err(AuthoringError::InvalidSketchStroke(
+            "sphere silhouettes require an opaque fill",
+        ));
+    }
+    if !(radius as f32).is_finite() || radius as f32 <= 0.0 {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    let transform = SemanticWorldTransform3D {
+        scale: SemanticVec3::new(radius, radius, radius),
+        ..SemanticWorldTransform3D::IDENTITY
+    };
+    let geometry = noon_geometry::sphere_mesh(1.0, resolution)
+        .map_err(|_| AuthoringError::NonFiniteGeometry)?;
+    let mut mesh = MeshOptions::new(geometry);
+    mesh.transform = transform;
+    mesh.style.fill = Some(SemanticPaint::Solid(fill));
+    let circle = noon_geometry::canonical_outline_path(&noon_core::GeometryRef::circle(1.0))
+        .expect("analytic unit circle");
+    let mut path = sketch_edge(circle, transform, stroke, width, sketch, 0);
+    path.material = SemanticSpatialMaterial::SphereSilhouette;
+    Ok((mesh, path))
+}
+
 fn sketch_edge(
     path: VectorPath,
     transform: SemanticWorldTransform3D,
@@ -856,6 +889,20 @@ impl Scene {
             sketch,
         )?;
         self.mesh_family_with_paths(meshes, paths)
+    }
+
+    /// Admit an opaque sphere and a retained sketch of its apparent contour.
+    pub fn sphere_sketch_silhouette(
+        &mut self,
+        radius: f64,
+        resolution: [usize; 2],
+        fill: Color,
+        stroke: Color,
+        width: f64,
+        sketch: SketchStroke,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        let (mesh, path) = sphere_sketch_options(radius, resolution, fill, stroke, width, sketch)?;
+        self.mesh_family_with_paths(vec![mesh], vec![path])
     }
 
     /// Admit one opaque polyhedron with a retained sketch path on each crease.

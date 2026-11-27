@@ -136,6 +136,10 @@ omitted. Run the paired Rust demo with `cargo run -p noon-native --example mesh_
 The [silhouette demo](web/python/examples/mesh_sketch_silhouette.py) uses
 `silhouette=True` to keep only the contour as the camera moves. Run the paired
 Rust demo with `cargo run -p noon-native --example mesh_sketch_silhouette`.
+The [smooth sphere demo](web/python/examples/sphere_sketch_silhouette.py) uses
+`Sphere(stroke=SketchStroke(TEAL))` to draw a smooth, seeded silhouette through
+camera motion. The sketch profile uses a full sphere with an opaque, unlit fill.
+Run the paired Rust demo with `cargo run -p noon-native --example sphere_sketch_silhouette`.
 Use `obj.set_stroke(SketchStroke(TEAL), width=3)` to style an existing shape,
 text object, or group. `SVGMobject`, `Axes`, and `VGroup` also accept the
 `stroke=` option at construction.
