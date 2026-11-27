@@ -25,6 +25,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
+const PATH_SHADER: &str = concat!(
+    include_str!("spatial_path.wgsl"),
+    "\n",
+    include_str!("spatial_path/analytic_contour.wgsl"),
+);
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub(super) struct SpatialPathVertex {
@@ -261,11 +267,7 @@ impl PathGpuState {
             bind_group_layouts: &[Some(&layout), Some(&fixed_camera_layout)],
             immediate_size: 0,
         });
-        let source = format!(
-            "{}\n{}",
-            include_str!("spatial_path.wgsl"),
-            include_str!("../cairo_color.wgsl")
-        );
+        let source = format!("{}\n{}", PATH_SHADER, include_str!("../cairo_color.wgsl"));
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Noon retained spatial path shader"),
             source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -569,11 +571,12 @@ impl SpatialPathGpuState {
             }) else {
                 continue;
             };
-            let sphere_silhouette = spatial.material == SemanticSpatialMaterial::SphereSilhouette;
+            let analytic_silhouette = spatial.material.is_analytic_silhouette();
             let silhouette = match spatial.material {
                 SemanticSpatialMaterial::Unlit | SemanticSpatialMaterial::CairoPath => None,
-                SemanticSpatialMaterial::SphereSilhouette
-                    if spatial.composition_domain == Domain::World
+                material
+                    if material.is_analytic_silhouette()
+                        && spatial.composition_domain == Domain::World
                         && object.content.geometry().is_some() =>
                 {
                     None
@@ -597,6 +600,12 @@ impl SpatialPathGpuState {
             }
             let world = lower_world(spatial.world).ok_or(SpatialPathError::InvalidStyle)?;
             let fixed = spatial.composition_domain == Domain::FixedOrientation;
+            // Match the projection modes in spatial_path.wgsl.
+            let projection = match spatial.material {
+                SemanticSpatialMaterial::SphereSilhouette => 1,
+                SemanticSpatialMaterial::CylinderSilhouette => 3,
+                _ => u32::from(fixed) * 2,
+            };
             if !fixed && spatial.fixed_orientation_center.is_some() {
                 return Err(SpatialPathError::InvalidStyle);
             }
@@ -662,7 +671,7 @@ impl SpatialPathGpuState {
                 } = candidate;
                 validate_style(style, object_alpha, spatial.composition_domain)?;
                 let mut style = visible_path_style(style);
-                if sphere_silhouette {
+                if analytic_silhouette {
                     style.fill = None;
                 }
                 if spatial.material == SemanticSpatialMaterial::CairoPath
@@ -759,9 +768,7 @@ impl SpatialPathGpuState {
                     stroke: color(style.stroke),
                     background_stroke: color(style.background_stroke),
                     opacity: object_alpha,
-                    reveal_and_flags: (reveal.to_bits() & 0x3fff_ffff)
-                        | (u32::from(sphere_silhouette) << 30)
-                        | (u32::from(fixed) << 31),
+                    reveal_and_flags: (reveal.to_bits() & 0x3fff_ffff) | (projection << 30),
                     fixed_anchor: [anchor.x as f32, anchor.y as f32, anchor.z as f32],
                     screen_stroke_width: if screen_stroke(style) {
                         style.stroke_width

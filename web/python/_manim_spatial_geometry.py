@@ -95,6 +95,22 @@ def _attach_mesh_family(self, candidate, context):
         self._canonical_live_target_context = context
 
 
+def _attach_sketch_solid(self, constructor, values, fill, stroke_width, sketch):
+    from _noon_spatial import _bulk, _mesh_options
+
+    if _mesh_options is None:
+        raise RuntimeError("sketch solid construction requires the shared Rust authoring host")
+    pen = sketch._color
+    context = _path_authoring_context()
+    candidate = engine_call(
+        getattr(_mesh_options, constructor), *values,
+        _bulk((fill.red, fill.green, fill.blue, fill.alpha)),
+        _bulk((pen.red, pen.green, pen.blue, pen.alpha)),
+        _manim_stroke_width(stroke_width), sketch._roughness, sketch._seed,
+    )
+    _attach_mesh_family(self, candidate, context)
+
+
 def _initialize_prism_family(
     self, dimensions, fill_color, fill_opacity, stroke_width, shade_in_3d, stroke
 ):
@@ -379,11 +395,11 @@ class Cylinder(Surface):
     """Oriented Cylinder whose side and optional Circle ends publish together."""
 
     def __init__(self, radius=1, height=2, direction=(0, 0, 1),
-                 v_range=(0, 2 * math.pi), show_ends=True, resolution=(24, 24),
+                 v_range=(0, 2 * math.pi), show_ends=True, resolution=None,
                  fill_color=_base.BLUE_D, fill_opacity=1,
-                 checkerboard_colors=_DEFAULT_CHECKERBOARD, stroke_width=0.5,
-                 shade_in_3d=True, **kwargs):
-        from _noon_spatial import _vector
+                 checkerboard_colors=None, stroke_width=None,
+                 shade_in_3d=None, *, stroke=None, **kwargs):
+        from _noon_spatial import _bulk, _vector
 
         _reject(kwargs, ())
         if not isinstance(show_ends, bool):
@@ -393,12 +409,32 @@ class Cylinder(Surface):
         height = _base._ir._finite_number("height", height)
         if radius <= 0.0 or height <= 0.0:
             raise ValueError("Cylinder radius and height must be positive")
+        sketch = _as_sketch_stroke(stroke)
+        if checkerboard_colors is None:
+            checkerboard_colors = _DEFAULT_CHECKERBOARD if sketch is None else False
+        if shade_in_3d is None:
+            shade_in_3d = sketch is None
+        if stroke_width is None:
+            stroke_width = 0.5 if sketch is None else _compat.MANIM_DEFAULT_STROKE_WIDTH
         opacity = _opacity("fill_opacity", fill_opacity)
         fill = _color(fill_color)
         direction = _vector(direction)
         if show_ends and opacity != 1.0:
             raise NotImplementedError("Cylinder caps currently require opaque fills")
+        if resolution is None:
+            resolution = (24, 24) if sketch is None else (1, 96)
         resolution = _grid_resolution(resolution, "Cylinder")
+        if sketch is not None:
+            if not show_ends or not math.isclose(v_range[1] - v_range[0], 2 * math.pi):
+                raise NotImplementedError("sketch silhouettes require a full capped cylinder")
+            _require_opaque(opacity)
+            _require_unshaded(shade_in_3d)
+            _require_no_checkerboard(checkerboard_colors)
+            _attach_sketch_solid(
+                self, "sketchCylinder", (radius, height, _bulk(direction), resolution[1]),
+                fill, stroke_width, sketch,
+            )
+            return
         caps = ((radius, -height / 2.0, fill, shade_in_3d),
                 (radius, height / 2.0, fill, shade_in_3d)) if show_ends else ()
 
@@ -533,26 +569,14 @@ class Sphere(Surface):
                            stroke_width=_compat.MANIM_DEFAULT_STROKE_WIDTH,
                            fill_opacity=1, shade_in_3d=False, checkerboard_colors=False,
                            point_lit=False):
-        from _noon_spatial import _bulk, _mesh_options
-
         _require_opaque(fill_opacity)
         _require_unshaded(shade_in_3d)
         _require_no_checkerboard(checkerboard_colors)
         if point_lit is not False:
             raise NotImplementedError("sketch sphere materials are unlit")
-        if _mesh_options is None:
-            raise RuntimeError("sketch sphere construction requires the shared Rust authoring host")
         fill = _color(fill_color)
-        pen = sketch._color
         cells = _grid_resolution((64, 32) if resolution is None else resolution, "Sphere")
-        context = _path_authoring_context()
-        candidate = engine_call(
-            _mesh_options.sketchSphere, radius, *cells,
-            _bulk((fill.red, fill.green, fill.blue, fill.alpha)),
-            _bulk((pen.red, pen.green, pen.blue, pen.alpha)),
-            _manim_stroke_width(stroke_width), sketch._roughness, sketch._seed,
-        )
-        _attach_mesh_family(self, candidate, context)
+        _attach_sketch_solid(self, "sketchSphere", (radius, *cells), fill, stroke_width, sketch)
 
 
 class Dot3D(Sphere):

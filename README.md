@@ -140,6 +140,10 @@ The [smooth sphere demo](web/python/examples/sphere_sketch_silhouette.py) uses
 `Sphere(stroke=SketchStroke(TEAL))` to draw a smooth, seeded silhouette through
 camera motion. The sketch profile uses a full sphere with an opaque, unlit fill.
 Run the paired Rust demo with `cargo run -p noon-native --example sphere_sketch_silhouette`.
+The [smooth cylinder demo](web/python/examples/cylinder_sketch_silhouette.py) uses
+`Cylinder(stroke=SketchStroke(TEAL))` on an opaque, unlit capped cylinder.
+Its retained contour follows the side and visible rim arcs into the end-on view.
+Run the paired Rust demo with `cargo run -p noon-native --example cylinder_sketch_silhouette`.
 Use `obj.set_stroke(SketchStroke(TEAL), width=3)` to style an existing shape,
 text object, or group. `SVGMobject`, `Axes`, and `VGroup` also accept the
 `stroke=` option at construction.

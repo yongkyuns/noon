@@ -150,6 +150,25 @@ impl WasmMeshOptions {
         .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = sketchCylinder)]
+    pub fn sketch_cylinder(
+        radius: f64,
+        height: f64,
+        direction: &[f64],
+        segments: usize,
+        fill: &[f64],
+        stroke: &[f64],
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<WasmMeshFamilyOptions, JsValue> {
+        input::SpatialMeshInput::sketch_cylinder(
+            radius, height, direction, segments, fill, stroke, width, roughness, seed,
+        )
+        .map(Into::into)
+        .map_err(js_error)
+    }
+
     pub fn cylinder(
         radius: f64,
         height: f64,

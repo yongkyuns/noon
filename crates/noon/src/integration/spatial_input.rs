@@ -225,13 +225,31 @@ impl SpatialMeshInput {
             sketch_stroke(roughness, seed)?,
         )
         .map_err(AuthoringFailure::from)?;
-        Ok(SpatialMeshFamilyInput {
-            options: vec![mesh],
-            paths: vec![path],
-            cells: Vec::new(),
-            circle_caps: Vec::new(),
-            axial_pose: None,
-        })
+        Ok(SpatialMeshFamilyInput::with_sketch_outline(mesh, path))
+    }
+
+    pub fn sketch_cylinder(
+        radius: f64,
+        height: f64,
+        direction: &[f64],
+        segments: usize,
+        fill: &[f64],
+        stroke: &[f64],
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<SpatialMeshFamilyInput, AuthoringFailure> {
+        let (mesh, path) = crate::spatial_authoring::cylinder_sketch_options(
+            [radius, height],
+            vec3(direction, "cylinder direction")?,
+            segments,
+            rgba(fill)?,
+            rgba(stroke)?,
+            width,
+            sketch_stroke(roughness, seed)?,
+        )
+        .map_err(AuthoringFailure::from)?;
+        Ok(SpatialMeshFamilyInput::with_sketch_outline(mesh, path))
     }
 
     pub fn line_3d(
@@ -466,6 +484,16 @@ struct CircleCapRequest {
 
 #[allow(clippy::too_many_arguments)]
 impl SpatialMeshFamilyInput {
+    fn with_sketch_outline(mesh: MeshOptions, path: SpatialPathOptions) -> Self {
+        Self {
+            options: vec![mesh],
+            paths: vec![path],
+            cells: Vec::new(),
+            circle_caps: Vec::new(),
+            axial_pose: None,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.options.is_empty()
     }

@@ -1048,11 +1048,11 @@ fn world_path_create_fades_fill_smoothly_over_depth_and_repeats_on_seek() {
 }
 
 #[test]
-fn sphere_sketch_contour_reuses_geometry_when_the_camera_moves() {
+fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
     pollster::block_on(async {
         let instance = wgpu::Instance::default();
         let Ok(adapter) = instance.request_adapter(&Default::default()).await else {
-            eprintln!("skipping sphere contour raster test: no adapter is available");
+            eprintln!("skipping analytic contour raster test: no adapter is available");
             return;
         };
         let (device, queue) = adapter
@@ -1060,7 +1060,12 @@ fn sphere_sketch_contour_reuses_geometry_when_the_camera_moves() {
             .await
             .unwrap();
         let target = Target::new(&device);
-        for orthographic in [false, true] {
+        for (cylinder, orthographic, edge_x) in [
+            (false, false, 105),
+            (false, true, 85),
+            (true, false, 123),
+            (true, true, 85),
+        ] {
             let mut store = SemanticStore::new();
             let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
             camera.set_role(SemanticObjectRole::Camera3D);
@@ -1073,9 +1078,22 @@ fn sphere_sketch_contour_reuses_geometry_when_the_camera_moves() {
             };
             camera.transform = start.into();
             let camera_id = attach(&mut store, camera);
-            let mesh =
-                store.insert_geometry_mesh(noon_geometry::sphere_mesh(1.0, [64, 32]).unwrap());
+            let (mesh, material) = if cylinder {
+                (
+                    noon_geometry::cylinder_mesh(1.0, 2.0, 96).unwrap(),
+                    SemanticSpatialMaterial::CylinderSilhouette,
+                )
+            } else {
+                (
+                    noon_geometry::sphere_mesh(1.0, [64, 32]).unwrap(),
+                    SemanticSpatialMaterial::SphereSilhouette,
+                )
+            };
+            let mesh = store.insert_geometry_mesh(mesh);
             let mut fill = SemanticObjectState::new(StoredGeometry::Resource(mesh));
+            if cylinder {
+                fill.transform.translation.z = -1.0;
+            }
             fill.style = opaque_style(Color::from_hex(0x0000FF));
             attach(&mut store, fill);
 
@@ -1084,7 +1102,7 @@ fn sphere_sketch_contour_reuses_geometry_when_the_camera_moves() {
                     .unwrap();
             let path = store.insert_geometry_path(circle).unwrap();
             let mut outline = SemanticObjectState::new(StoredGeometry::Resource(path));
-            outline.set_spatial_material(SemanticSpatialMaterial::SphereSilhouette);
+            outline.set_spatial_material(material);
             outline.style.fill = None;
             outline.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
             outline.style.stroke_width = 0.14;
@@ -1129,8 +1147,8 @@ fn sphere_sketch_contour_reuses_geometry_when_the_camera_moves() {
                 .unwrap()
             };
             let (_, initial) = draw(&mut scene);
-            // The perspective tangent projects at f/sqrt(d²-r²).
-            let edge_x = if orthographic { 85 } else { 105 };
+            // A sphere tangent projects at f/sqrt(d²-r²), and the cylinder's
+            // nearest cap projects at f/(d - h/2) in this end-on view.
             assert!((edge_x - 2..=edge_x + 2).any(|x| pixel(&initial, x, 64)[0] > 150));
             assert!(pixel(&initial, 64, 64)[2] > 230);
             scene.advance_to(1.0).unwrap();

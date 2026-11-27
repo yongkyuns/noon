@@ -29,11 +29,17 @@ pub enum SemanticSpatialMaterial {
     SketchSilhouette(SilhouetteEdge),
     /// A retained unit circle projected onto the apparent contour of a unit sphere.
     SphereSilhouette,
+    /// A retained unit circle mapped onto the projected boundary of a closed cylinder.
+    CylinderSilhouette,
 }
 
 impl SemanticSpatialMaterial {
     pub fn is_sketch_silhouette(self) -> bool {
-        matches!(self, Self::SketchSilhouette(_) | Self::SphereSilhouette)
+        matches!(self, Self::SketchSilhouette(_)) || self.is_analytic_silhouette()
+    }
+
+    pub fn is_analytic_silhouette(self) -> bool {
+        matches!(self, Self::SphereSilhouette | Self::CylinderSilhouette)
     }
 }
 

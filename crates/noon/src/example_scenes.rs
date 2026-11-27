@@ -24,6 +24,7 @@ pub mod code_block;
 pub mod composed_effects;
 pub mod cube_sketch_wireframe;
 pub mod cyclic_replace;
+pub mod cylinder_sketch_silhouette;
 pub mod dimension_fitting;
 pub mod dissolve;
 pub mod draw_border_then_fill;
