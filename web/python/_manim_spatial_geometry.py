@@ -616,11 +616,11 @@ class Dot3D(Sphere):
 
 
 class Torus(Surface):
-    """Surface-sampled torus using Manim's pinned orientation and defaults."""
+    """Surface-sampled torus with optional sketch styling on its full contours."""
 
     def __init__(self, major_radius=3, minor_radius=1,
                  u_range=(0, 2 * math.pi), v_range=(0, 2 * math.pi),
-                 resolution=(24, 24), **kwargs):
+                 resolution=None, *, stroke=None, **kwargs):
         major_radius = _base._ir._finite_number("major_radius", major_radius)
         minor_radius = _base._ir._finite_number("minor_radius", minor_radius)
         if major_radius <= 0.0 or minor_radius <= 0.0 or minor_radius >= major_radius:
@@ -632,6 +632,13 @@ class Torus(Surface):
 
         self.R = major_radius
         self.r = minor_radius
+        full = u_range == v_range == (0.0, 2 * math.pi)
+        sketch = _as_sketch_stroke(stroke)
+        if sketch is not None:
+            if not full:
+                raise NotImplementedError("sketch silhouettes require a full torus")
+            self._initialize_sketch(resolution, sketch, **kwargs)
+            return
 
         def point(u, v):
             radial = major_radius - minor_radius * math.cos(v)
@@ -642,8 +649,7 @@ class Torus(Surface):
         # The typed native torus factory covers the complete periodic surface;
         # partial ranges still use the checked Surface callback sampler.
         analytic_factory = None
-        if (u_range == (0.0, 2 * math.pi) and
-                v_range == (0.0, 2 * math.pi)):
+        if full:
             def analytic_factory(*, color, point_lit, resolution, u_range, v_range):
                 return _Mesh3D.torus(
                     major_radius, minor_radius, resolution=resolution,
@@ -651,8 +657,21 @@ class Torus(Surface):
                 )
 
         super().__init__(point, u_range=u_range, v_range=v_range,
-                         resolution=resolution, _analytic_factory=analytic_factory,
-                         **kwargs)
+                         resolution=(24, 24) if resolution is None else resolution,
+                         _analytic_factory=analytic_factory, **kwargs)
+
+    def _initialize_sketch(self, resolution, sketch, *, fill_color=_base.BLUE_D,
+                           stroke_width=_compat.MANIM_DEFAULT_STROKE_WIDTH,
+                           fill_opacity=1, shade_in_3d=False, checkerboard_colors=False,
+                           point_lit=False):
+        _require_opaque(fill_opacity)
+        _require_unshaded(shade_in_3d)
+        _require_no_checkerboard(checkerboard_colors)
+        if point_lit is not False:
+            raise NotImplementedError("sketch torus materials are unlit")
+        cells = _grid_resolution((128, 48) if resolution is None else resolution, "Torus")
+        _attach_sketch_solid(self, "sketchTorus", (self.R, self.r, *cells),
+                             _color(fill_color), stroke_width, sketch)
 
 
 def _surface_range(name, value):

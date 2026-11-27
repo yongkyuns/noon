@@ -100,7 +100,7 @@ _canonical_authoring_context
 _register_top_level _edit_membership _bind_camera_frame
 """.split())
 _SOURCE_LINEAR_MEMBERS = frozenset("background_plane add_coordinates add_vector apply_matrix".split())
-_SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Cube Prism Sphere Cylinder Cone Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
+_SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Cube Prism Sphere Cylinder Cone Torus Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
 _SOURCE_COLOR_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
 GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
@@ -3470,28 +3470,29 @@ class _SceneOnlySource(ast.NodeVisitor):
                              and values["shade_in_3d"].value is False))
             if node.func.id == "ThreeDAxes":
                 return not node.args and not node.keywords
-            if node.func.id in {"Sphere", "Cylinder", "Cone"}:
+            if node.func.id in {"Sphere", "Cylinder", "Cone", "Torus"}:
                 sphere = node.func.id == "Sphere"
                 cone = node.func.id == "Cone"
+                torus = node.func.id == "Torus"
                 location = "center" if sphere else "direction"
-                radius = "base_radius" if cone else "radius"
-                shape_options = {"center"} if sphere else {"height", "direction"}
+                radii = {"major_radius", "minor_radius"} if torus else {"base_radius" if cone else "radius"}
+                shape_options = set() if torus else {"center"} if sphere else {"height", "direction"}
                 if cone:
                     show_base = values.get("show_base")
                     if not isinstance(show_base, ast.Constant) or show_base.value is not True:
                         return False
                     shape_options.add("show_base")
                 return (not node.args and self._trusted_noon_binding(node.func.id)
-                        and set(values) <= shape_options | {radius, "resolution", "fill_color",
+                        and set(values) <= shape_options | radii | {"resolution", "fill_color",
                                                           "stroke", "stroke_width"}
                         and self._trusted_sketch_call(values.get("stroke"))
                         and (location not in values or self._finite_tuple(values[location], 3))
                         and ("resolution" not in values
                              or self._finite_tuple(values["resolution"], 2, integers=True)
-                             or cone and self._finite_number(values["resolution"], integers=True))
+                             or (cone or torus) and self._finite_number(values["resolution"], integers=True))
                         and ("fill_color" not in values or self._spatial_color(values["fill_color"]))
                         and all(self._finite_number(values[name])
-                                for name in (radius, "height", "stroke_width") if name in values))
+                                for name in radii | {"height", "stroke_width"} if name in values))
             if node.func.id == "Typst":
                 return (len(node.args) == 1 and isinstance(node.args[0], ast.Constant)
                         and isinstance(node.args[0].value, str) and not node.keywords)

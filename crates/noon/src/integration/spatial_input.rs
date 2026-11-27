@@ -225,7 +225,35 @@ impl SpatialMeshInput {
             sketch_stroke(roughness, seed)?,
         )
         .map_err(AuthoringFailure::from)?;
-        Ok(SpatialMeshFamilyInput::with_sketch_outline(mesh, path))
+        Ok(SpatialMeshFamilyInput::with_sketch_outlines(
+            mesh,
+            vec![path],
+        ))
+    }
+
+    pub fn sketch_torus(
+        major_radius: f64,
+        minor_radius: f64,
+        u_cells: usize,
+        v_cells: usize,
+        fill: &[f64],
+        stroke: &[f64],
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<SpatialMeshFamilyInput, AuthoringFailure> {
+        let (mesh, paths) = crate::spatial_authoring::torus_sketch_options(
+            [major_radius, minor_radius],
+            [u_cells, v_cells],
+            rgba(fill)?,
+            rgba(stroke)?,
+            width,
+            sketch_stroke(roughness, seed)?,
+        )?;
+        Ok(SpatialMeshFamilyInput::with_sketch_outlines(
+            mesh,
+            paths.into(),
+        ))
     }
 
     pub fn sketch_axial(
@@ -251,7 +279,10 @@ impl SpatialMeshInput {
             sketch_stroke(roughness, seed)?,
         )
         .map_err(AuthoringFailure::from)?;
-        Ok(SpatialMeshFamilyInput::with_sketch_outline(mesh, path))
+        Ok(SpatialMeshFamilyInput::with_sketch_outlines(
+            mesh,
+            vec![path],
+        ))
     }
 
     pub fn line_3d(
@@ -486,10 +517,10 @@ struct CircleCapRequest {
 
 #[allow(clippy::too_many_arguments)]
 impl SpatialMeshFamilyInput {
-    fn with_sketch_outline(mesh: MeshOptions, path: SpatialPathOptions) -> Self {
+    fn with_sketch_outlines(mesh: MeshOptions, paths: Vec<SpatialPathOptions>) -> Self {
         Self {
             options: vec![mesh],
-            paths: vec![path],
+            paths,
             cells: Vec::new(),
             circle_caps: Vec::new(),
             axial_pose: None,

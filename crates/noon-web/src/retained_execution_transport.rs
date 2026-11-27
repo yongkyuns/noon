@@ -318,6 +318,7 @@ pub enum TransportSpatialMaterial {
     SphereSilhouette,
     CylinderSilhouette,
     ConeSilhouette,
+    TorusSilhouette(noon_core::TorusContour),
 }
 
 impl From<SemanticProjection3D> for TransportProjection3D {
@@ -369,6 +370,9 @@ impl TransportSpatialState {
                     TransportSpatialMaterial::CylinderSilhouette
                 }
                 SemanticSpatialMaterial::ConeSilhouette => TransportSpatialMaterial::ConeSilhouette,
+                SemanticSpatialMaterial::TorusSilhouette(contour) => {
+                    TransportSpatialMaterial::TorusSilhouette(contour)
+                }
             },
             point_light: value.point_light,
             cairo_path_appearance: value.cairo_path_appearance.clone(),
@@ -379,12 +383,14 @@ impl TransportSpatialState {
         use noon_compile::CompiledSpatialDrawKind as Draw;
         use noon_core::SemanticSpatialCompositionDomain as Domain;
         if matches!(self.material, TransportSpatialMaterial::SketchSilhouette(edge) if !edge.is_valid())
+            || matches!(self.material, TransportSpatialMaterial::TorusSilhouette(contour) if !contour.is_valid())
             || (matches!(
                 self.material,
                 TransportSpatialMaterial::SketchSilhouette(_)
                     | TransportSpatialMaterial::SphereSilhouette
                     | TransportSpatialMaterial::CylinderSilhouette
                     | TransportSpatialMaterial::ConeSilhouette
+                    | TransportSpatialMaterial::TorusSilhouette(_)
             ) && (self.draw_kind != Draw::Planar || self.composition_domain != Domain::World))
         {
             return false;
@@ -510,6 +516,9 @@ impl TransportSpatialState {
                     SemanticSpatialMaterial::CylinderSilhouette
                 }
                 TransportSpatialMaterial::ConeSilhouette => SemanticSpatialMaterial::ConeSilhouette,
+                TransportSpatialMaterial::TorusSilhouette(contour) => {
+                    SemanticSpatialMaterial::TorusSilhouette(contour)
+                }
             },
             point_light: self.point_light,
             cairo_path_appearance: self.cairo_path_appearance.clone(),

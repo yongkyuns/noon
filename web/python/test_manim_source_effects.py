@@ -15,6 +15,7 @@ class SourceEffectsTests(unittest.TestCase):
             "cube_sketch_wireframe.py", "prism_sketch_wireframe.py",
             "mesh_sketch_creases.py", "mesh_sketch_silhouette.py",
             "sphere_sketch_silhouette.py", "cylinder_sketch_silhouette.py", "cone_sketch_silhouette.py",
+            "torus_sketch_silhouette.py",
         ):
             with self.subTest(demo=name):
                 source = Path(__file__).with_name("examples").joinpath(name).read_text()

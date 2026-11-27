@@ -29,6 +29,8 @@ const PATH_SHADER: &str = concat!(
     include_str!("spatial_path.wgsl"),
     "\n",
     include_str!("spatial_path/analytic_contour.wgsl"),
+    "\n",
+    include_str!("spatial_path/torus_contour.wgsl"),
 );
 
 #[repr(C)]
@@ -101,7 +103,7 @@ struct PathInstance {
     opacity: f32,
     reveal: f32,
     projection: u32,
-    fixed_anchor: [f32; 3],
+    placement: [f32; 3],
     screen_stroke_width: f32,
     background_stroke: [f32; 4],
 }
@@ -602,21 +604,28 @@ impl SpatialPathGpuState {
             let world = lower_world(spatial.world).ok_or(SpatialPathError::InvalidStyle)?;
             let fixed = spatial.composition_domain == Domain::FixedOrientation;
             // Match the projection modes in spatial_path.wgsl.
-            let projection = match spatial.material {
-                SemanticSpatialMaterial::SphereSilhouette => 1,
-                SemanticSpatialMaterial::CylinderSilhouette => 3,
-                SemanticSpatialMaterial::ConeSilhouette => 4,
-                _ => u32::from(fixed) * 2,
+            let (projection, tube_radius) = match spatial.material {
+                SemanticSpatialMaterial::SphereSilhouette => (1, 0.0),
+                SemanticSpatialMaterial::CylinderSilhouette => (3, 0.0),
+                SemanticSpatialMaterial::ConeSilhouette => (4, 0.0),
+                SemanticSpatialMaterial::TorusSilhouette(contour) if contour.is_valid() => {
+                    (5 + u32::from(contour.is_inner()), contour.tube_radius())
+                }
+                SemanticSpatialMaterial::TorusSilhouette(_) => {
+                    return Err(SpatialPathError::UnsupportedMaterial)
+                }
+                _ => (u32::from(fixed) * 2, 0.0),
             };
             if !fixed && spatial.fixed_orientation_center.is_some() {
                 return Err(SpatialPathError::InvalidStyle);
             }
-            let anchor = if fixed {
-                spatial
+            let placement = if fixed {
+                let anchor = spatial
                     .fixed_orientation_center
-                    .ok_or(SpatialPathError::MissingAnchor)?
+                    .ok_or(SpatialPathError::MissingAnchor)?;
+                [anchor.x as f32, anchor.y as f32, anchor.z as f32]
             } else {
-                SemanticVec3::ZERO
+                [tube_radius, 0.0, 0.0]
             };
             let painter_rank = if fixed {
                 *effective_ranks
@@ -688,8 +697,11 @@ impl SpatialPathGpuState {
                     },
                     None => path_key(geometry.as_ref(), resources, style, index as u64)?,
                 };
-                keyed.specialization.refine_contour =
-                    spatial.material == SemanticSpatialMaterial::ConeSilhouette;
+                keyed.specialization.refine_contour = matches!(
+                    spatial.material,
+                    SemanticSpatialMaterial::ConeSilhouette
+                        | SemanticSpatialMaterial::TorusSilhouette(_)
+                );
                 let cairo = if spatial.material == SemanticSpatialMaterial::CairoPath {
                     let appearance = spatial
                         .cairo_path_appearance
@@ -775,7 +787,7 @@ impl SpatialPathGpuState {
                     opacity: object_alpha,
                     reveal,
                     projection,
-                    fixed_anchor: [anchor.x as f32, anchor.y as f32, anchor.z as f32],
+                    placement,
                     screen_stroke_width: if screen_stroke(style) {
                         style.stroke_width
                     } else {
@@ -787,7 +799,7 @@ impl SpatialPathGpuState {
                     .iter()
                     .chain(instance.stroke.iter())
                     .chain(instance.background_stroke.iter())
-                    .chain(instance.fixed_anchor.iter())
+                    .chain(instance.placement.iter())
                     .chain([instance.opacity].iter())
                     .any(|value| !value.is_finite())
                 {

@@ -156,12 +156,12 @@ fn axial_ray_hits(ray: ContourRay, perspective: bool, cone: bool) -> bool {
     return cylinder_ray_hits(ray, perspective);
 }
 
-struct AxialPoint {
+struct ProjectedContourPoint {
     xy: vec2<f32>,
     boundary: vec2<f32>,
 };
 
-fn axial_point(view: ContourView, local: vec2<f32>, cone: bool) -> AxialPoint {
+fn axial_point(view: ContourView, local: vec2<f32>, cone: bool) -> ProjectedContourPoint {
     let center = view.center_clip.xy / view.center_clip.w;
     let image_axis = normalize(local * fixed_camera.clip_scale);
     let ray = contour_ray(view, center);
@@ -185,7 +185,7 @@ fn axial_point(view: ContourView, local: vec2<f32>, cone: bool) -> AxialPoint {
     let edge = image_axis * inside;
     // Keeping the sketch in image-angle order gives the side and rim one
     // shared phase, including when a side disappears behind the near cap.
-    return AxialPoint(center + edge * length(local), center + edge);
+    return ProjectedContourPoint(center + edge * length(local), center + edge);
 }
 
 fn cylinder_nearest(ray: ContourRay, perspective: bool) -> f32 {

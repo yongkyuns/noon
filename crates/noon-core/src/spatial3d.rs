@@ -33,6 +33,8 @@ pub enum SemanticSpatialMaterial {
     CylinderSilhouette,
     /// A retained unit circle mapped onto the projected boundary of a capped cone.
     ConeSilhouette,
+    /// One of the two visible boundaries of a complete torus with unit major radius.
+    TorusSilhouette(TorusContour),
 }
 
 impl SemanticSpatialMaterial {
@@ -43,8 +45,49 @@ impl SemanticSpatialMaterial {
     pub fn is_analytic_silhouette(self) -> bool {
         matches!(
             self,
-            Self::SphereSilhouette | Self::CylinderSilhouette | Self::ConeSilhouette
+            Self::SphereSilhouette
+                | Self::CylinderSilhouette
+                | Self::ConeSilhouette
+                | Self::TorusSilhouette(_)
         )
+    }
+
+    pub fn silhouette_is_valid(self) -> bool {
+        match self {
+            Self::SketchSilhouette(edge) => edge.is_valid(),
+            Self::TorusSilhouette(contour) => contour.is_valid(),
+            _ => true,
+        }
+    }
+}
+
+/// Torus tube radius relative to its unit major radius. The sign records the
+/// inner contour, so this descriptor remains at the same size as a crease.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct TorusContour(u32);
+
+impl TorusContour {
+    pub fn new(tube_radius: f64, inner: bool) -> Option<Self> {
+        if !tube_radius.is_finite() || tube_radius <= 0.0 || tube_radius >= 1.0 {
+            return None;
+        }
+        let radius = tube_radius as f32;
+        let contour = Self((if inner { -radius } else { radius }).to_bits());
+        contour.is_valid().then_some(contour)
+    }
+
+    pub fn tube_radius(self) -> f32 {
+        f32::from_bits(self.0).abs()
+    }
+
+    pub fn is_inner(self) -> bool {
+        f32::from_bits(self.0).is_sign_negative()
+    }
+
+    pub fn is_valid(self) -> bool {
+        let radius = self.tube_radius();
+        radius > 0.0 && radius < 1.0
     }
 }
 

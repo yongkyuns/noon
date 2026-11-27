@@ -19,7 +19,7 @@ struct VertexInput {
     @location(7) stroke: vec4<f32>,
     @location(8) opacity_reveal: vec2<f32>,
     @location(9) projection: u32,
-    @location(10) fixed_anchor: vec3<f32>,
+    @location(10) placement: vec3<f32>,
     @location(11) tangent: vec2<f32>,
     @location(12) extrusion: vec2<f32>,
     @location(13) screen_stroke_width: f32,
@@ -31,24 +31,34 @@ const SPHERE_CONTOUR: u32 = 1u;
 const FIXED_ORIENTATION: u32 = 2u;
 const CYLINDER_CONTOUR: u32 = 3u;
 const CONE_CONTOUR: u32 = 4u;
+const TORUS_OUTER: u32 = 5u;
+const TORUS_INNER: u32 = 6u;
+
+fn is_torus_contour(mode: u32) -> bool {
+    return mode == TORUS_OUTER || mode == TORUS_INNER;
+}
 
 fn is_axial_contour(mode: u32) -> bool {
     return mode == CYLINDER_CONTOUR || mode == CONE_CONTOUR;
 }
 
 fn projected_tangent(world: mat4x4<f32>, tangent: vec2<f32>, clip: vec4<f32>,
-        mode: u32, view: ContourView, local: vec2<f32>) -> vec2<f32> {
+        mode: u32, view: ContourView, local: vec2<f32>, tube: f32, hole_open: bool) -> vec2<f32> {
     if mode == FIXED_ORIENTATION {
         return (world * vec4<f32>(tangent, 0.0, 0.0)).xy;
     }
-    if is_axial_contour(mode) {
+    if is_axial_contour(mode) || is_torus_contour(mode) {
         if !view.valid {
             return vec2<f32>(0.0);
         }
         // Use a short secant in the retained path's coordinates. Its length is
         // larger than the search's subpixel quantization, including at a rim.
-        let adjacent = axial_point(view, local + stable_unit(tangent) * 0.02, mode == CONE_CONTOUR).xy;
-        return (adjacent - clip.xy) / fixed_camera.clip_scale;
+        let next = local + stable_unit(tangent) * 0.02;
+        if is_torus_contour(mode) {
+            return (torus_point(view, world, next, tube, mode == TORUS_INNER, hole_open).xy
+                - clip.xy) / fixed_camera.clip_scale;
+        }
+        return (axial_point(view, next, mode == CONE_CONTOUR).xy - clip.xy) / fixed_camera.clip_scale;
     }
     let derivative = camera.view_projection * world * vec4<f32>(tangent, 0.0, 0.0);
     return (derivative.xy * clip.w - clip.xy * derivative.w) / fixed_camera.clip_scale;
@@ -74,19 +84,44 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
     var world = source_world;
     let mode = input.projection;
     var view: ContourView;
-    if mode == SPHERE_CONTOUR || is_axial_contour(mode) {
+    let tube = input.placement.x;
+    var hole_open = false;
+    var stroke_width = input.screen_stroke_width;
+    if mode == SPHERE_CONTOUR || is_axial_contour(mode) || is_torus_contour(mode) {
         view = contour_view(source_world);
+    }
+    if is_torus_contour(mode) && view.valid {
+        let center = view.center_clip.xy / view.center_clip.w;
+        let ray = contour_ray(view, center);
+        let clearance = abs(normalize(ray.direction).z) - tube;
+        hole_open = clearance > 0.0;
+        if view.perspective {
+            // Keep the radial search in front of the camera. The torus's
+            // support along clip W is the unit circle plus the tube radius.
+            let axis = vec3<f32>(dot(view.forward, source_world[0].xyz),
+                dot(view.forward, source_world[1].xyz), dot(view.forward, source_world[2].xyz));
+            view.valid = view.center_clip.w > length(axis.xy) + tube * length(axis);
+        }
+        view.valid = view.valid && (mode != TORUS_INNER || hole_open);
+        if mode == TORUS_INNER {
+            stroke_width *= smoothstep(0.0, tube * 0.08, clearance);
+        }
     }
     if mode == SPHERE_CONTOUR {
         world = sphere_plane(view, source_world);
     }
     let local_point = vec4<f32>(input.local, 0.0, 1.0);
     var clip = camera.view_projection * world * local_point;
-    var axial_boundary = vec2<f32>(0.0);
-    if is_axial_contour(mode) {
+    var boundary = vec2<f32>(0.0);
+    if is_axial_contour(mode) || is_torus_contour(mode) {
         if view.valid {
-            let point = axial_point(view, input.local, mode == CONE_CONTOUR);
-            axial_boundary = point.boundary;
+            var point: ProjectedContourPoint;
+            if is_torus_contour(mode) {
+                point = torus_point(view, source_world, input.local, tube, mode == TORUS_INNER, hole_open);
+            } else {
+                point = axial_point(view, input.local, mode == CONE_CONTOUR);
+            }
+            boundary = point.boundary;
             clip = vec4<f32>(point.xy, 0.0, 1.0);
         } else {
             clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
@@ -96,9 +131,9 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
         // Project the object's effective center, then preserve its world-point
         // offsets in the 2D camera's clip scale. This is intentionally not a
         // camera-facing quaternion billboard.
-        let center_clip = camera.view_projection * vec4<f32>(input.fixed_anchor, 1.0);
+        let center_clip = camera.view_projection * vec4<f32>(input.placement, 1.0);
         let world_point = world * local_point;
-        let world_offset = world_point.xyz - input.fixed_anchor;
+        let world_offset = world_point.xyz - input.placement;
         if center_clip.w > 0.0 {
             clip = vec4<f32>(
                 center_clip.xy / center_clip.w + world_offset.xy * fixed_camera.clip_scale,
@@ -111,8 +146,8 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
     }
     if input.stroke_metadata.x > 0.0 {
         let kind = input.stroke_metadata.x;
-        let previous = stable_unit(projected_tangent(world, input.tangent, clip, mode, view, input.local));
-        let next = stable_unit(projected_tangent(world, input.extrusion, clip, mode, view, input.local));
+        let previous = stable_unit(projected_tangent(world, input.tangent, clip, mode, view, input.local, tube, hole_open));
+        let next = stable_unit(projected_tangent(world, input.extrusion, clip, mode, view, input.local, tube, hole_open));
         let turn = previous.x * next.y - previous.y * next.x;
         if kind == 2.0 {
             // Fan/miter origins stay at the path centerline.
@@ -151,7 +186,7 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
                 offset = (normal * cos(theta) + previous * (input.stroke_metadata.y * sin(theta))) * 0.5;
             }
             clip = vec4<f32>(
-                clip.xy + offset * input.screen_stroke_width * fixed_camera.clip_scale * clip.w,
+                clip.xy + offset * stroke_width * fixed_camera.clip_scale * clip.w,
                 clip.zw,
             );
         } else if kind != 2.0 {
@@ -161,12 +196,12 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
         // Project the retained centerline, then expand its stroke in the
         // authoring frame. The homogeneous derivative is the exact projected
         // straight-line direction, including perspective and world rotation.
-        let direction = projected_tangent(world, input.tangent, clip, mode, view, input.local);
+        let direction = projected_tangent(world, input.tangent, clip, mode, view, input.local, tube, hole_open);
         let largest = max(abs(direction.x), abs(direction.y));
         if largest > 1e-8 && largest <= 3.402823e38 {
             let unit = normalize(direction / largest);
             let normal = vec2<f32>(-unit.y, unit.x);
-            let offset = (unit * input.extrusion.x + normal * input.extrusion.y) * input.screen_stroke_width;
+            let offset = (unit * input.extrusion.x + normal * input.extrusion.y) * stroke_width;
             clip = vec4<f32>(clip.xy + offset * fixed_camera.clip_scale * clip.w, clip.zw);
         } else {
             // An end-on segment has no projected centerline. Collapse it
@@ -182,7 +217,10 @@ fn path_vertex(input: VertexInput, half_miter_limit: f32) -> VertexOutput {
         }
     }
     if is_axial_contour(mode) && view.valid {
-        clip.z = axial_stroke_depth(view, source_world, clip.xy, axial_boundary, mode == CONE_CONTOUR);
+        clip.z = axial_stroke_depth(view, source_world, clip.xy, boundary, mode == CONE_CONTOUR);
+    }
+    if is_torus_contour(mode) && view.valid {
+        clip.z = torus_stroke_depth(view, source_world, clip.xy, boundary, tube);
     }
     var output: VertexOutput;
     output.position = clip;
