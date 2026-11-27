@@ -275,7 +275,7 @@
       "primary_feature": "distributive-property-with-vector-poses",
       "category": "Text and mathematics",
       "path": "python/examples/showcase_three_of_each.py",
-      "features": ["Transform", "MathTypst", "look_and_point", "distributive property"],
+      "features": ["Transform", "MathTypst", "look_and_point_sequence", "distributive property"],
       "duration": 8.51,
       "loop": false,
       "thumbnail_time": 7.75,

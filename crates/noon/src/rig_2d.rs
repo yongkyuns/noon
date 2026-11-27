@@ -458,6 +458,53 @@ impl RetargetedRig2d {
             },
         ])
     }
+
+    /// Prepare ordered look-and-point cues as one set of rig tracks.
+    /// Each cue must reach rest before the next begins. Cues may use the same
+    /// arm or different arms and may share a gaze joint.
+    pub fn look_and_point_sequence<'a>(
+        &self,
+        cues: impl IntoIterator<Item = LookAndPoint2d<'a>>,
+    ) -> Result<Vec<JointTrack2d>, AuthoringError> {
+        let mut tracks: Vec<JointTrack2d> = Vec::new();
+        let mut indices = HashMap::new();
+        let mut previous_rest = f32::NEG_INFINITY;
+        for cue in cues {
+            if cue.look[0] < previous_rest {
+                return Err(invalid(
+                    "look and point cues must be ordered and cannot overlap",
+                ));
+            }
+            previous_rest = cue.rest;
+            for track in self.look_and_point(cue)? {
+                let index = *indices.entry(track.joint.clone()).or_insert(tracks.len());
+                if let Some(existing) = tracks.get_mut(index) {
+                    let [phase, angle] = *existing.keys.last().expect("prepared keys");
+                    // The rest orientation can be a full turn away from zero.
+                    // Keep that orientation through the gap and the next cue.
+                    let skip = usize::from(phase == track.keys[0][0]);
+                    if existing.keys.len() + track.keys.len() - skip > SignalSamples::MAX_KEYS {
+                        return Err(invalid(
+                            "look and point sequence has too many keys for a joint",
+                        ));
+                    }
+                    existing.keys.extend(
+                        track
+                            .keys
+                            .into_iter()
+                            .skip(skip)
+                            .map(|[t, a]| [t, a + angle]),
+                    );
+                } else {
+                    tracks.push(track);
+                }
+            }
+        }
+        if tracks.is_empty() {
+            return Err(invalid("look and point sequence requires a cue"));
+        }
+        Ok(tracks)
+    }
 }
 
 fn nearest_angle(angle: f64, previous: f64) -> f64 {
@@ -1429,6 +1476,62 @@ mod tests {
                 .map(|object| object.transform.translation)
                 .eq(expected));
         }
+    }
+
+    #[test]
+    fn consecutive_cues_keep_the_same_neutral_angle_at_a_shared_boundary() {
+        let joints = vec![
+            joint("base", None, [0.0, 0.0], 0.0),
+            joint("shoulder", Some("base"), [0.0, 0.0], 0.0),
+            joint("elbow", Some("shoulder"), [1.0, 0.0], 0.0),
+            joint("wrist", Some("elbow"), [1.0, 0.0], 0.0),
+            joint("gaze", Some("base"), [0.0, 0.0], 0.0),
+        ];
+        let rig = RetargetedRig2d::new(joints.clone(), &[], &[]).unwrap();
+        let around = [
+            (1.0, [1.0, 0.0]),
+            (2.0, [0.0, 1.0]),
+            (3.0, [-1.0, 0.0]),
+            (4.0, [0.0, -1.0]),
+            (5.0, [1.0, 0.0]),
+        ];
+        let up = [(7.0, [0.0, 1.0])];
+        let first = LookAndPoint2d {
+            wrist: "wrist",
+            gaze: "gaze",
+            targets: &around,
+            look: [0.0, 0.5],
+            rest: 6.0,
+            fingertip: 0.2,
+            bend_left: true,
+        };
+        let second = LookAndPoint2d {
+            targets: &up,
+            look: [6.0, 6.5],
+            rest: 8.0,
+            ..first
+        };
+        assert!(rig
+            .look_and_point_sequence([
+                LookAndPoint2d { ..first },
+                LookAndPoint2d {
+                    look: [5.9, 6.5],
+                    ..second
+                },
+            ])
+            .is_err());
+        let tracks = rig.look_and_point_sequence([first, second]).unwrap();
+        assert_eq!(tracks.len(), 4);
+        let rig = RetargetedRig2d::new(joints, &tracks, &[]).unwrap();
+        let neutral = rig.pose(6.0).unwrap();
+        let lead = rig.pose(6.25).unwrap();
+        assert!((neutral.joint("gaze").unwrap()[2] - TAU).abs() < 1e-5);
+        assert!((lead.joint("gaze").unwrap()[2] - (TAU + PI / 4.0)).abs() < 1e-5);
+        let [nx, ny, _] = neutral.joint("wrist").unwrap();
+        let [lx, ly, _] = lead.joint("wrist").unwrap();
+        assert!((nx - lx).hypot(ny - ly) < 1e-5);
+        let [x, y, angle] = rig.pose(7.0).unwrap().joint("wrist").unwrap();
+        assert!((x + 0.2 * angle.cos()).hypot(y + 0.2 * angle.sin() - 1.0) < 1e-5);
     }
 
     #[test]

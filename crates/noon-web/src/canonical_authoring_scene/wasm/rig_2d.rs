@@ -182,29 +182,57 @@ impl WasmRetargetedRig2d {
         Ok(joint_track_rows(tracks))
     }
 
-    #[wasm_bindgen(js_name = lookAndPoint)]
-    pub fn look_and_point(
-        &self,
-        wrist: &str,
-        gaze: &str,
-        targets: Array,
-        phases: Array,
-        fingertip: f64,
-        bend_left: bool,
-    ) -> Result<Array, JsValue> {
-        let [start, ready, rest] = pointing_row(phases.into())?;
-        let targets = pointing_targets(targets)?;
+    #[wasm_bindgen(js_name = lookAndPointSequence)]
+    pub fn look_and_point_sequence(&self, gaze: &str, cues: Array) -> Result<Array, JsValue> {
+        let cues = cues
+            .iter()
+            .map(|row| {
+                let row = row
+                    .dyn_into::<Array>()
+                    .ok()
+                    .filter(|row| row.length() == 5)
+                    .ok_or_else(|| js_error("look and point requires five entries per cue"))?;
+                let wrist = row
+                    .get(0)
+                    .as_string()
+                    .ok_or_else(|| js_error("expected a wrist name"))?;
+                let targets = row
+                    .get(1)
+                    .dyn_into::<Array>()
+                    .map_err(|_| js_error("expected pointing targets"))?;
+                let phases = pointing_row(row.get(2))?.map(|phase| phase as f32);
+                let fingertip = row
+                    .get(3)
+                    .as_f64()
+                    .ok_or_else(|| js_error("expected a fingertip distance"))?;
+                let bend_left = row
+                    .get(4)
+                    .as_bool()
+                    .ok_or_else(|| js_error("expected an elbow bend direction"))?;
+                Ok((
+                    wrist,
+                    pointing_targets(targets)?,
+                    phases,
+                    fingertip,
+                    bend_left,
+                ))
+            })
+            .collect::<Result<Vec<_>, JsValue>>()?;
         let tracks = self
             .0
-            .look_and_point(noon::LookAndPoint2d {
-                wrist,
-                gaze,
-                targets: &targets,
-                look: [start as f32, ready as f32],
-                rest: rest as f32,
-                fingertip,
-                bend_left,
-            })
+            .look_and_point_sequence(cues.iter().map(
+                |(wrist, targets, [start, ready, rest], fingertip, bend_left)| {
+                    noon::LookAndPoint2d {
+                        wrist,
+                        gaze,
+                        targets,
+                        look: [*start, *ready],
+                        rest: *rest,
+                        fingertip: *fingertip,
+                        bend_left: *bend_left,
+                    }
+                },
+            ))
             .map_err(typed_js_error)?;
         Ok(joint_track_rows(tracks))
     }

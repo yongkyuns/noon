@@ -183,15 +183,15 @@ class ThreeOfEach(Scene):
             Joint2D("right_eye", "guide", (0.174, 0.54), PI / 2),
         ]
         rig = self.retarget_rig_2d(joints=joints, tracks={})
-        point_x = rig.look_and_point(
-            "left_wrist", "gaze", [(1, x_tip[:2]), (1.1, x_tip[:2])],
-            look=(0, 0.24), rest=1.47, fingertip=FINGERTIP,
+        tracks = rig.look_and_point_sequence(
+            "gaze",
+            {"wrist": "left_wrist", "targets": [(1, x_tip[:2]), (1.1, x_tip[:2])],
+             "look": (0, 0.24), "rest": 1.47},
+            {"wrist": "right_wrist", "targets": [(2, two_tip[:2]), (2.1, two_tip[:2])],
+             "look": (1.48, 1.64), "rest": 3, "bend_left": False},
+            fingertip=FINGERTIP,
         )
-        point_two = rig.look_and_point(
-            "right_wrist", "gaze", [(2, two_tip[:2]), (2.1, two_tip[:2])],
-            look=(1.48, 1.64), rest=3, fingertip=FINGERTIP, bend_left=False,
-        )
-        glance = point_x.pop("gaze") + point_two.pop("gaze")
+        glance = tracks.pop("gaze")
         phase = self.value_tracker(0)
         shadow = Ellipse(width=1.82, height=0.21, fill=tint(INK, PAPER, 0.045), fill_opacity=1,
                          stroke=None).move_to((center, -1.72, 0))
@@ -212,7 +212,7 @@ class ThreeOfEach(Scene):
                  *(part for _, part, _ in left_arm + right_arm),
                  robot, head, *(part for _, part, _ in pupils))
         self.bind_rig_2d(phase, joints=joints,
-                         tracks={**point_x, **point_two, "left_eye": glance, "right_eye": glance},
+                         tracks={**tracks, "left_eye": glance, "right_eye": glance},
                          attachments=left_arm + right_arm + pupils)
         self.wait(0.45)
         self.play(LaggedStart(FadeIn(cards[0]), FadeIn(cards[1]), FadeIn(cards[2]),
