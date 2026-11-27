@@ -458,7 +458,8 @@ jobs:
           pactl info
           pactl list short sinks
       - name: Qualify the full gallery shard, including portable no-JSPI controls
-        timeout-minutes: ${{ matrix.browser == 'firefox' && 25 || 20 }}
+        # Firefox's full shard can exceed 25 minutes while completing cases normally.
+        timeout-minutes: ${{ matrix.browser == 'firefox' && 30 || 20 }}
         env:
           NOON_PLAYGROUND_BROWSER: ${{ matrix.browser }}
           NOON_PLAYGROUND_PROFILE: ${{ matrix.profile }}
