@@ -264,8 +264,9 @@ impl NativeRetargetedRig2d {
                 (wrist, targets, phases, fingertip, bend_left)
             })
             .collect();
-        self.0
-            .look_and_point_sequence(cues.iter().map(
+        let gestures: Vec<_> = cues
+            .iter()
+            .map(
                 |(wrist, targets, [start, ready, rest], fingertip, bend_left)| {
                     noon::LookAndPoint2d {
                         wrist,
@@ -277,7 +278,10 @@ impl NativeRetargetedRig2d {
                         bend_left: *bend_left,
                     }
                 },
-            ))
+            )
+            .collect();
+        self.0
+            .look_and_point_sequence(&gestures)
             .map(|tracks| {
                 tracks
                     .into_iter()

@@ -218,9 +218,9 @@ impl WasmRetargetedRig2d {
                 ))
             })
             .collect::<Result<Vec<_>, JsValue>>()?;
-        let tracks = self
-            .0
-            .look_and_point_sequence(cues.iter().map(
+        let gestures: Vec<_> = cues
+            .iter()
+            .map(
                 |(wrist, targets, [start, ready, rest], fingertip, bend_left)| {
                     noon::LookAndPoint2d {
                         wrist,
@@ -232,7 +232,11 @@ impl WasmRetargetedRig2d {
                         bend_left: *bend_left,
                     }
                 },
-            ))
+            )
+            .collect();
+        let tracks = self
+            .0
+            .look_and_point_sequence(&gestures)
             .map_err(typed_js_error)?;
         Ok(joint_track_rows(tracks))
     }
