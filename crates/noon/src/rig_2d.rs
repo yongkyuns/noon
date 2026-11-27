@@ -38,6 +38,22 @@ pub struct JointTrack2d {
     pub keys: Vec<[f32; 2]>,
 }
 
+/// A pointing gesture prepared from one or more scene-space targets.
+pub struct LookAndPoint2d<'a> {
+    pub wrist: &'a str,
+    /// A separate joint whose local +X axis follows the target.
+    pub gaze: &'a str,
+    /// Ordered (phase, point) samples from first contact through release.
+    /// Repeat the point at a later phase to hold a stationary target.
+    pub targets: &'a [(f32, [f64; 2])],
+    /// The gaze starts turning at the first phase. The arm starts reaching at the second.
+    pub look: [f32; 2],
+    /// Phase at which both the arm and gaze are back at rest.
+    pub rest: f32,
+    pub fingertip: f64,
+    pub bend_left: bool,
+}
+
 /// A rigid drawing attached to a joint. Its origin is offset in joint coordinates
 /// and its local +X axis faces along the joint. Its scale and styling are independent.
 pub struct JointAttachment2d {
@@ -356,12 +372,101 @@ impl RetargetedRig2d {
                 tracks.iter_mut().zip(&mut previous_angles).zip(angles)
             {
                 // Unwrap adjacent keys across the atan2 seam.
-                *previous += (angle - *previous + PI).rem_euclid(TAU) - PI;
+                *previous = nearest_angle(angle, *previous);
                 track.keys.push([phase, *previous as f32]);
             }
         }
         Ok(tracks)
     }
+
+    /// Prepare one gaze channel and three arm channels for an ordinary rig binding.
+    /// The arm interpolates joint angles on the way out and back, so neither
+    /// segment stretches. Contact is exact at the authored target samples.
+    pub fn look_and_point(
+        &self,
+        cue: LookAndPoint2d<'_>,
+    ) -> Result<[JointTrack2d; 4], AuthoringError> {
+        let [(contact, first_target), tail @ ..] = cue.targets else {
+            return Err(invalid("look and point requires a target"));
+        };
+        let release = tail.last().map_or(*contact, |&(phase, _)| phase);
+        let [start, ready] = cue.look;
+        if !start.is_finite()
+            || !cue.rest.is_finite()
+            || !(start < ready && ready < *contact && release < cue.rest)
+        {
+            return Err(invalid(
+                "look and point phases must order gaze, reach, target samples, then rest",
+            ));
+        }
+        if cue.targets.len() > SignalSamples::MAX_KEYS - 3 {
+            return Err(invalid("look and point has too many target samples"));
+        }
+        let index = |name: &str| {
+            self.skeleton
+                .names
+                .get(name)
+                .copied()
+                .ok_or_else(|| invalid(format!("unknown look and point joint `{name}`")))
+        };
+        let gaze = index(cue.gaze)?;
+        let [mut shoulder, mut elbow, mut wrist] =
+            self.tracks_for_pointing(cue.wrist, cue.targets, cue.fingertip, cue.bend_left)?;
+        let parents = &self.skeleton.parents;
+        let is_ancestor = |ancestor, child| {
+            std::iter::successors(Some(child), |&joint| parents[joint])
+                .any(|joint| joint == ancestor)
+        };
+        if is_ancestor(gaze, index(cue.wrist)?) || is_ancestor(index(&shoulder.joint)?, gaze) {
+            return Err(invalid(
+                "look and point requires a gaze joint on a separate branch from the arm",
+            ));
+        }
+        for track in [&mut shoulder, &mut elbow, &mut wrist] {
+            track.keys.insert(0, [ready, 0.0]);
+            return_to_rest(&mut track.keys, cue.rest);
+        }
+        let mut keys = Vec::with_capacity(cue.targets.len() + 3);
+        keys.push([start, 0.0]);
+        let mut angle = 0.0;
+        for (phase, target) in
+            std::iter::once((ready, *first_target)).chain(cue.targets.iter().copied())
+        {
+            let base = self.pose(phase)?;
+            let [dx, dy] = subtract(target, base.posed[gaze].position);
+            if (dx.hypot(dy) as f32) == 0.0 {
+                return Err(invalid(format!(
+                    "look target at phase {phase} coincides with gaze joint `{}`",
+                    cue.gaze
+                )));
+            }
+            let parent = parents[gaze].map_or(0.0, |parent| base.posed[parent].heading);
+            angle = nearest_angle(
+                dy.atan2(dx) - parent - self.skeleton.joints[gaze].rest_angle,
+                angle,
+            );
+            keys.push([phase, angle as f32]);
+        }
+        return_to_rest(&mut keys, cue.rest);
+        Ok([
+            shoulder,
+            elbow,
+            wrist,
+            JointTrack2d {
+                joint: cue.gaze.into(),
+                keys,
+            },
+        ])
+    }
+}
+
+fn nearest_angle(angle: f64, previous: f64) -> f64 {
+    previous + (angle - previous + PI).rem_euclid(TAU) - PI
+}
+
+fn return_to_rest(keys: &mut Vec<[f32; 2]>, phase: f32) {
+    let previous = f64::from(keys.last().expect("prepared keys")[1]);
+    keys.push([phase, nearest_angle(0.0, previous) as f32]);
 }
 
 impl RigPose2d {
@@ -1215,6 +1320,115 @@ mod tests {
             )
             .unwrap();
         assert!((shoulder.keys[1][1] - shoulder.keys[0][1]).abs() < 0.2);
+    }
+
+    #[test]
+    fn look_and_point_leads_with_gaze_and_returns_both_branches_to_rest() {
+        let mut scene = Scene::new();
+        let clock = scene.value_tracker(0.0).unwrap();
+        let gaze_origin = Vec2::new(0.0, 0.65);
+        let proportions = [(-2.4, 1.42, 1.55, false), (2.6, 1.81, 1.03, true)];
+        let fingertip = 0.23;
+        let targets = [(1.0, [0.0, 0.0]), (2.0, [0.5, 0.9]), (3.0, [0.5, 0.9])];
+        for (x, upper, lower, bend_left) in proportions {
+            let joints = [
+                joint("body", None, [0.0, 0.0], 0.0),
+                joint("shoulder", Some("body"), [x, 0.0], -0.8),
+                joint("elbow", Some("shoulder"), [upper, 0.0], 0.47),
+                joint("wrist", Some("elbow"), [lower, 0.0], 0.0),
+                joint("gaze", Some("body"), [0.0, f64::from(gaze_origin.y)], 0.0),
+            ];
+            let rig = RetargetedRig2d::new(joints.to_vec(), &[], &[]).unwrap();
+            let cue = LookAndPoint2d {
+                wrist: "wrist",
+                gaze: "gaze",
+                targets: &targets,
+                look: [0.0, 0.4],
+                rest: 4.0,
+                fingertip,
+                bend_left,
+            };
+            assert!(rig
+                .look_and_point(LookAndPoint2d {
+                    gaze: "body",
+                    ..cue
+                })
+                .is_err());
+            let clip = rig.look_and_point(cue).unwrap();
+            let attachments = [
+                ("elbow", 0.0),
+                ("wrist", 0.0),
+                ("wrist", fingertip),
+                ("gaze", 1.0),
+            ]
+            .map(|(joint, along)| {
+                let point = scene.circle(0.1).unwrap();
+                scene.add(&point).unwrap();
+                JointAttachment2d {
+                    offset: [along, 0.0],
+                    ..attachment(joint, &point)
+                }
+            });
+            scene
+                .bind_rig_2d(&clock, &joints, &clip, &attachments)
+                .unwrap();
+        }
+        scene
+            .play_value(&clock, 4.0)
+            .rate_func(RateFunction::Linear)
+            .run_time(4.0)
+            .unwrap();
+        let mut session = scene.execution_session().unwrap();
+        let checkpoints = [0.0, 0.4, 0.75, 1.0, 2.0, 2.6, 3.0, 3.5, 4.0];
+        let mut forward = Vec::<Vec<Vec2>>::new();
+        for time in checkpoints {
+            session.seek(time).unwrap();
+            let positions: Vec<_> = session
+                .frame()
+                .objects
+                .iter()
+                .map(|object| object.transform.translation)
+                .collect();
+            let (arms, remainder) = positions.as_chunks::<4>();
+            assert!(remainder.is_empty());
+            assert_eq!(arms.len(), proportions.len());
+            for (i, (&[elbow, wrist, tip, eye], (x, upper, lower, _))) in
+                arms.iter().zip(proportions).enumerate()
+            {
+                let shoulder = Vec2::new(x as f32, 0.0);
+                assert!(((elbow - shoulder).length() - upper as f32).abs() < 1e-5);
+                assert!(((wrist - elbow).length() - lower as f32).abs() < 1e-5);
+                assert!(((tip - wrist).length() - fingertip as f32).abs() < 1e-5);
+                if time == 0.4 {
+                    assert!((tip - forward[0][4 * i + 2]).length() < 1e-5);
+                    assert!((eye - (gaze_origin + Vec2::new(0.0, -1.0))).length() < 1e-5);
+                }
+                if (1.0..=3.0).contains(&time) {
+                    let [x, y] = if time == 1.0 {
+                        targets[0].1
+                    } else {
+                        targets[1].1
+                    };
+                    assert!((tip - Vec2::new(x as f32, y as f32)).length() < 1e-5);
+                }
+            }
+            if time == 4.0 {
+                assert!(positions
+                    .iter()
+                    .zip(&forward[0])
+                    .all(|(&a, &b)| (a - b).length() < 1e-5));
+            }
+            forward.push(positions);
+        }
+        for (time, expected) in checkpoints.into_iter().zip(forward).rev() {
+            session.seek(time).unwrap();
+            assert!(session
+                .frame()
+                .objects
+                .iter()
+                .map(|object| object.transform.translation)
+                .eq(expected));
+        }
     }
 
     #[test]

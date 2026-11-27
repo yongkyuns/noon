@@ -1702,6 +1702,7 @@ class Scene:
         (target, angle_gain). Use rig.pose(phase) to get joint placements
         or pose.target_for(mobject) to prepare a vector drawing for Transform.
         Use rig.tracks_for_pointing(wrist, targets) to prepare tracks for scene-space cues.
+        Use rig.look_and_point(wrist, gaze, targets, look=..., rest=...) to add gaze and release.
         """
         return _scene_operations()._canonical_retarget_rig_2d(self, joints, tracks, mapping)
 

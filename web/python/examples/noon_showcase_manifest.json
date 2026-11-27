@@ -275,7 +275,7 @@
       "primary_feature": "distributive-property-with-vector-poses",
       "category": "Text and mathematics",
       "path": "python/examples/showcase_three_of_each.py",
-      "features": ["Transform", "MathTypst", "distributive property"],
+      "features": ["Transform", "MathTypst", "look_and_point", "distributive property"],
       "duration": 8.51,
       "loop": false,
       "thumbnail_time": 7.75,
@@ -1173,23 +1173,25 @@
     {
       "id": "showcase-target-pointing",
       "title": "Follow the label",
-      "lesson": "Move a label and see two differently proportioned characters point to its edges. Their elbows bend while both arm segments keep their original lengths.",
+      "lesson": "Two differently proportioned characters look toward a label, point as it moves, then relax. Their elbows bend while both arm segments keep their original lengths.",
       "primary_feature": "target-based-pointing",
       "category": "Motion",
       "path": "python/examples/showcase_target_pointing.py",
-      "features": ["Joint2D", "tracks_for_pointing", "bind_rig_2d"],
+      "features": ["Joint2D", "look_and_point", "bind_rig_2d"],
       "duration": 6.35,
       "loop": false,
       "thumbnail_time": 3.7,
       "thumbnail": "thumbnails/showcase/showcase-target-pointing.png",
       "thumbnail_alt": "A tall teal robot and a short plum robot point to opposite edges of a raised label.",
       "beats": [
-        { "time": 0.55, "label": "Both hands point to the original label" },
+        { "time": 0.25, "label": "The eyes turn before the arms reach" },
+        { "time": 1.1, "label": "Both hands point to the original label" },
         { "time": 2.1, "label": "The arms bend as the label moves" },
         { "time": 3.7, "label": "Both hands reach the new location" },
-        { "time": 4.5, "label": "The hands follow the label back" }
+        { "time": 4.5, "label": "The hands follow the label back" },
+        { "time": 5.95, "label": "Both characters return to rest" }
       ],
-      "still_intervals": [[0, 1.1], [3.1, 3.9], [5.1, 6.35]],
+      "still_intervals": [[3.1, 3.9], [5.65, 6.35]],
       "playback_capability": "deterministic-retained-replay"
     },
     {

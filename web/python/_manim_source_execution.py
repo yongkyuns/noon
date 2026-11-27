@@ -48,7 +48,7 @@ ReplacementTransform Indicate GrowFromCenter AnimationGroup Succession LaggedSta
 LaggedStartMap SpinInFromNothing ShrinkToCenter
 TransformMatchingShapes TransformMatchingTex Rotate MoveAlongPath Restore GrowArrow
 ShowIncreasingSubsets ShowSubmobjectsOneByOne
-ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur Bloom GlowPulse Dissolve SVGMobject
+ValueTracker DecimalNumber Integer Pixels Glow Blur BackdropBlur Bloom GlowPulse Dissolve SVGMobject Joint2D
 """.split())
 _SOURCE_MAPPED_ANIMATION_FACTORIES = frozenset("FadeIn FadeOut".split())
 _SOURCE_FUNCTIONS = frozenset("""
@@ -75,7 +75,7 @@ sum tuple type zip ValueError RuntimeError
 _SOURCE_MEMBERS = frozenset("""
 add remove clear play wait audio video on_click set_drag_targets set_viewer_draggable next_section
 add_foreground_mobject add_foreground_mobjects bring_to_front bring_to_back replace replace_content
-value_tracker bind_position bind_opacity bind_sampled
+value_tracker bind_position bind_opacity bind_sampled bind_rig_2d retarget_rig_2d look_and_point
 shift move_to scale rotate stretch to_edge to_corner next_to align_to arrange
 set_fill set_stroke set_color set_opacity set_emission set_object_opacity set_z_index set_glow remove_glow set_effect
 add_effect remove_effect get_center get_x get_y get_width get_height get_value get_left get_right
