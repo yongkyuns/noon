@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "publication": "captured-preview",
+  "captureRevision": "a0ea24e300241f2632d8a4aaa7ba3616e5088965",
+  "backend": "webgpu",
+  "runtimeBuildIdentity": {
+    "schema": 1,
+    "sourceRevision": "a0ea24e300241f2632d8a4aaa7ba3616e5088965",
+    "files": {
+      "worker": {
+        "path": "./python-worker.js",
+        "sha256": "ecb27459ef66ca290ae0b44ccefcb1cd69a0208741b35eba148d143478ab16c3"
+      },
+      "wasm": {
+        "path": "./pkg/noon_web_bg.wasm",
+        "sha256": "9166745e922c1ee8add58b7a9ca6fd63981667769fbbb9e543d71d6e21ecc8a7"
+      },
+      "glue": {
+        "path": "./pkg/noon_web.js",
+        "sha256": "213a16f9d700cd2ce16e6bea1af75704ef648adbd119256d85db7deb1fde2de8"
+      },
+      "verifier": {
+        "path": "./runtime-build-verifier.js",
+        "sha256": "47fe51ed36b24c81e11a6508130e0964f89a20c7d9ad3b9522e495afe63fbb4d"
+      }
+    },
+    "buildId": "00a55b63edfb6435384c590f883ddf66199e03f7bae2c7b07acd682988351ef1"
+  },
+  "posters": [
+    {
+      "id": "showcase-triangle-straight-angle",
+      "captureBuildId": "00a55b63edfb6435384c590f883ddf66199e03f7bae2c7b07acd682988351ef1",
+      "sourceSha256": "68a9aa2d588a9a418a436127b935378f121321dbd64d61990c3065efb6a1d4d2",
+      "thumbnailTime": 7.8,
+      "image": {
+        "width": 960,
+        "height": 540,
+        "foregroundPixels": 52677,
+        "pngSha256": "f1d739574ca1da5f6d1d9d1d8d9e517c31a9a7eff819c0d7d30cc75502e2a827",
+        "pixelSha256": "edec0feba961beab1367d0d5e61bf12d04d6f5d3841b4661634a12b712c527f3"
+      },
+      "sample": {
+        "requestedTime": 7.8,
+        "publishedTime": 7.8,
+        "authoredDuration": null,
+        "completionProbe": false
+      }
+    }
+  ]
+}

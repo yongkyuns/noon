@@ -39,7 +39,7 @@ _COOPERATIVE_YIELD_QUANTUM_SECONDS = 0.001
 # deliberately a positive capability list, not a blacklist of known I/O calls.
 # Unknown dispatch, descriptors and source hooks keep observed execution.
 _SOURCE_CONSTRUCTORS = frozenset("""
-Scene Circle Ellipse Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon Path
+Scene Circle Ellipse Square Rectangle RoundedRectangle Triangle Polygon RegularPolygon Sector Path
 Dot Line Arrow DoubleArrow DashedLine Underline VMobject VGroup Group Text MarkupText Code MathTypst FunctionGraph
 Intersection Union Exclusion Difference
 Color Vec2 Vec3 VectorPath Create Write Uncreate FadeIn FadeOut Transform AudioSource VideoSource

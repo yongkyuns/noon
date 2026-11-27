@@ -293,6 +293,29 @@
       "playback_capability": "deterministic-retained-replay"
     },
     {
+      "id": "showcase-triangle-straight-angle",
+      "title": "A triangle makes a straight angle",
+      "lesson": "Follow the pointer to each interior angle. Pivot copies of the three wedges and put them together on one line to see the 180° sum.",
+      "primary_feature": "triangle-angle-sum-with-repeated-pointing",
+      "category": "Geometry and layout",
+      "path": "python/examples/showcase_triangle_straight_angle.py",
+      "features": ["look_and_point_sequence", "Sector", "bind_sampled", "MathTypst"],
+      "duration": 8.7,
+      "loop": false,
+      "thumbnail_time": 7.8,
+      "thumbnail": "thumbnails/showcase/showcase-triangle-straight-angle.png",
+      "thumbnail_alt": "A green robot stands beside a colored triangle. Copies of its three corner angles fit together as a semicircle on a straight line.",
+      "beats": [
+        { "time": 1.33, "label": "Point to angle A" },
+        { "time": 2.83, "label": "Point to angle B" },
+        { "time": 4.33, "label": "Point to angle C" },
+        { "time": 6.2, "label": "Pivot and slide the wedges toward the same vertex" },
+        { "time": 7.8, "label": "The three wedges fill a 180° turn" }
+      ],
+      "still_intervals": [[0, 0.5], [1.15, 1.60], [2.65, 3.10], [4.15, 4.60], [7.3, 8.7]],
+      "playback_capability": "deterministic-retained-replay"
+    },
+    {
       "id": "showcase-code-blocks",
       "title": "Code with native syntax highlighting",
       "lesson": "Display Python and CUDA source with native Rust-owned syntax coloring, preserved indentation and line numbers; reveal and move the retained code blocks as normal scene objects.",

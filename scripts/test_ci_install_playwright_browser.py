@@ -118,7 +118,7 @@ sys.exit(int(os.environ['NOON_TEST_INSTALL_STATUS']))
         self.assertIn("python3 -S scripts/test_ci_install_playwright_browser.py", source)
         self.assertIn("node --test --test-concurrency=2 scripts/gallery-shards.test.mjs scripts/playground-stress-observation.test.mjs", source)
         gallery_step = source.split("- name: Qualify the full gallery shard", 1)[1].split("- name:", 1)[0]
-        self.assertIn("timeout-minutes: ${{ matrix.browser == 'firefox' && 25 || 20 }}", gallery_step)
+        self.assertIn("timeout-minutes: ${{ matrix.browser == 'firefox' && 30 || 20 }}", gallery_step)
         self.assertIn('NOON_GALLERY_SHARD_COUNT: "3"', source)
         for name in ["ci-install-playwright-browser.sh", "ci_reference_apt_sources.py", "test_ci_install_playwright_browser.py"]:
             self.assertEqual(source.count('      - "scripts/' + name + '"'), 2)

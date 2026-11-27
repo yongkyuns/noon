@@ -2,6 +2,7 @@
 import ast
 import asyncio
 import json
+from math import cos, pi, sin
 import os
 from pathlib import Path
 from runpy import run_path
@@ -1136,6 +1137,52 @@ class NestedPose(Scene):
                     self.assertEqual(view.capture(time=time, width=width, height=height), expected)
             finally:
                 view.close()
+
+    def test_triangle_angle_lesson_keeps_contact_and_proof_after_an_edit(self):
+        path = ROOT / "web/python/examples/showcase_triangle_straight_angle.py"
+        source = path.read_text()
+        lesson = run_path(str(path))
+        width, height = 960, 540
+
+        def rgb(color):
+            return bytes(round(255 * channel) for channel in (color.red, color.green, color.blue))
+
+        def screen(x, y):
+            return round(width / 2 + x * height / 8), round(height / 2 - y * height / 8)
+
+        def pixel(frame, col, row):
+            offset = (row * width + col) * 4
+            return frame[offset:offset + 3]
+
+        original = lesson["VERTICES"]
+        for vertices in (original, (*original[:2], (-0.05, 1.86))):
+            with self.subTest(vertices=vertices):
+                code = source + f"\nVERTICES = {vertices!r}\n"
+                scene = asyncio.run(run_source(code, filename=str(path), retain_history=True, portable=True))
+                view = prepare_view(scene)
+                try:
+                    self.assertAlmostEqual(view.duration, 8.7)
+                    times = (1.33, 2.83, 4.33, 6.2, 7.8)
+                    frames = [view.capture(time=t, width=width, height=height) for t in times]
+                    for frame, vertex in zip(frames, vertices):
+                        col, row = screen(*vertex)
+                        self.assertTrue(any(
+                            pixel(frame, col + dx, row + dy) == rgb(lesson["GLOVE"])
+                            for dy in range(-8, 9) for dx in range(-8, 9) if dx * dx + dy * dy <= 64
+                        ), vertex)
+                    x, y = lesson["PROOF_CENTER"]
+                    edge = pi
+                    for (_, sweep), color in zip(lesson["corner_angles"](vertices), lesson["ANGLE_COLORS"]):
+                        for fraction in (0.18, 0.50, 0.82):
+                            angle = edge - sweep * fraction
+                            col, row = screen(x + 0.41 * cos(angle), y + 0.41 * sin(angle))
+                            self.assertEqual(pixel(frames[-1], col, row), rgb(color))
+                        edge -= sweep
+                    self.assertAlmostEqual(edge, 0)
+                    for time, expected in reversed(list(zip(times, frames))):
+                        self.assertEqual(view.capture(time=time, width=width, height=height), expected)
+                finally:
+                    view.close()
 
     def test_pointing_gallery_follows_the_label_after_a_source_edit_and_seek(self):
         path = ROOT / "web/python/examples/showcase_target_pointing.py"
