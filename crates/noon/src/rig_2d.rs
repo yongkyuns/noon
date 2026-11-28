@@ -39,6 +39,7 @@ pub struct JointTrack2d {
 }
 
 /// A pointing gesture prepared from one or more scene-space targets.
+#[derive(Clone, Copy)]
 pub struct LookAndPoint2d<'a> {
     pub wrist: &'a str,
     /// A separate joint whose local +X axis follows the target.
@@ -279,18 +280,8 @@ impl RetargetedRig2d {
         bend_left: bool,
     ) -> Result<[JointTrack2d; 3], AuthoringError> {
         let skeleton = &self.skeleton;
-        let wrist_index = *skeleton
-            .names
-            .get(wrist)
-            .ok_or_else(|| invalid(format!("unknown 2D pointing wrist `{wrist}`")))?;
         let parents = &skeleton.parents;
-        let (elbow, shoulder) = parents[wrist_index]
-            .and_then(|elbow| parents[elbow].map(|shoulder| (elbow, shoulder)))
-            .ok_or_else(|| {
-                invalid(format!(
-                    "2D pointing wrist `{wrist}` needs a parent and grandparent"
-                ))
-            })?;
+        let [shoulder, elbow, wrist_index] = self.pointing_chain(wrist)?;
         let [shoulder_joint, elbow_joint, wrist_joint] =
             [shoulder, elbow, wrist_index].map(|index| &skeleton.joints[index]);
         let [ux, uy] = elbow_joint.offset;
@@ -379,6 +370,30 @@ impl RetargetedRig2d {
         Ok(tracks)
     }
 
+    fn pointing_chain(&self, wrist: &str) -> Result<[usize; 3], AuthoringError> {
+        let skeleton = &self.skeleton;
+        let wrist_index = *skeleton
+            .names
+            .get(wrist)
+            .ok_or_else(|| invalid(format!("unknown 2D pointing wrist `{wrist}`")))?;
+        let parents = &skeleton.parents;
+        parents[wrist_index]
+            .and_then(|elbow| parents[elbow].map(|shoulder| [shoulder, elbow, wrist_index]))
+            .ok_or_else(|| {
+                invalid(format!(
+                    "2D pointing wrist `{wrist}` needs a parent and grandparent"
+                ))
+            })
+    }
+
+    fn gaze_joint(&self, name: &str) -> Result<usize, AuthoringError> {
+        self.skeleton
+            .names
+            .get(name)
+            .copied()
+            .ok_or_else(|| invalid(format!("unknown look and point joint `{name}`")))
+    }
+
     /// Prepare one gaze channel and three arm channels for an ordinary rig binding.
     /// The arm interpolates joint angles on the way out and back, so neither
     /// segment stretches. Contact is exact at the authored target samples.
@@ -402,14 +417,7 @@ impl RetargetedRig2d {
         if cue.targets.len() > SignalSamples::MAX_KEYS - 3 {
             return Err(invalid("look and point has too many target samples"));
         }
-        let index = |name: &str| {
-            self.skeleton
-                .names
-                .get(name)
-                .copied()
-                .ok_or_else(|| invalid(format!("unknown look and point joint `{name}`")))
-        };
-        let gaze = index(cue.gaze)?;
+        let gaze = self.gaze_joint(cue.gaze)?;
         let [mut shoulder, mut elbow, mut wrist] =
             self.tracks_for_pointing(cue.wrist, cue.targets, cue.fingertip, cue.bend_left)?;
         let parents = &self.skeleton.parents;
@@ -417,7 +425,9 @@ impl RetargetedRig2d {
             std::iter::successors(Some(child), |&joint| parents[joint])
                 .any(|joint| joint == ancestor)
         };
-        if is_ancestor(gaze, index(cue.wrist)?) || is_ancestor(index(&shoulder.joint)?, gaze) {
+        if is_ancestor(gaze, self.skeleton.names[cue.wrist])
+            || is_ancestor(self.skeleton.names[&shoulder.joint], gaze)
+        {
             return Err(invalid(
                 "look and point requires a gaze joint on a separate branch from the arm",
             ));
@@ -457,6 +467,64 @@ impl RetargetedRig2d {
                 keys,
             },
         ])
+    }
+
+    /// Prepare ordered look-and-point cues as one set of rig tracks.
+    /// Each cue must reach rest before the next begins. Cues may use the same
+    /// arm or different arms and may share a gaze joint.
+    /// Generated tracks replace the original tracks on their joints.
+    pub fn look_and_point_sequence(
+        &self,
+        cues: &[LookAndPoint2d<'_>],
+    ) -> Result<Vec<JointTrack2d>, AuthoringError> {
+        // At any given cue, the joints driven by other cues are at rest.
+        // Ancestors outside the sequence still follow their original tracks.
+        let mut base = self.clone();
+        for cue in cues {
+            let [shoulder, elbow, wrist] = self.pointing_chain(cue.wrist)?;
+            let gaze = self.gaze_joint(cue.gaze)?;
+            for joint in [shoulder, elbow, wrist, gaze] {
+                base.samples[joint] = None;
+            }
+        }
+        let mut tracks: Vec<JointTrack2d> = Vec::new();
+        let mut indices = HashMap::new();
+        let mut previous_rest = f32::NEG_INFINITY;
+        for cue in cues {
+            if cue.look[0] < previous_rest {
+                return Err(invalid(
+                    "look and point cues must be ordered and cannot overlap",
+                ));
+            }
+            previous_rest = cue.rest;
+            for track in base.look_and_point(*cue)? {
+                let index = *indices.entry(track.joint.clone()).or_insert(tracks.len());
+                if let Some(existing) = tracks.get_mut(index) {
+                    let [phase, angle] = *existing.keys.last().expect("prepared keys");
+                    // The rest orientation can be a full turn away from zero.
+                    // Keep that orientation through the gap and the next cue.
+                    let skip = usize::from(phase == track.keys[0][0]);
+                    if existing.keys.len() + track.keys.len() - skip > SignalSamples::MAX_KEYS {
+                        return Err(invalid(
+                            "look and point sequence has too many keys for a joint",
+                        ));
+                    }
+                    existing.keys.extend(
+                        track
+                            .keys
+                            .into_iter()
+                            .skip(skip)
+                            .map(|[t, a]| [t, a + angle]),
+                    );
+                } else {
+                    tracks.push(track);
+                }
+            }
+        }
+        if tracks.is_empty() {
+            return Err(invalid("look and point sequence requires a cue"));
+        }
+        Ok(tracks)
     }
 }
 
@@ -1429,6 +1497,101 @@ mod tests {
                 .map(|object| object.transform.translation)
                 .eq(expected));
         }
+    }
+
+    #[test]
+    fn consecutive_cues_keep_the_same_neutral_angle_at_a_shared_boundary() {
+        let joints = vec![
+            joint("base", None, [0.0, 0.0], 0.0),
+            joint("shoulder", Some("base"), [0.0, 0.0], 0.0),
+            joint("elbow", Some("shoulder"), [1.0, 0.0], 0.0),
+            joint("wrist", Some("elbow"), [1.0, 0.0], 0.0),
+            joint("gaze", Some("base"), [0.0, 0.0], 0.0),
+        ];
+        let rig = RetargetedRig2d::new(joints.clone(), &[], &[]).unwrap();
+        let around = [
+            (1.0, [1.0, 0.0]),
+            (2.0, [0.0, 1.0]),
+            (3.0, [-1.0, 0.0]),
+            (4.0, [0.0, -1.0]),
+            (5.0, [1.0, 0.0]),
+        ];
+        let up = [(7.0, [0.0, 1.0])];
+        let first = LookAndPoint2d {
+            wrist: "wrist",
+            gaze: "gaze",
+            targets: &around,
+            look: [0.0, 0.5],
+            rest: 6.0,
+            fingertip: 0.2,
+            bend_left: true,
+        };
+        let second = LookAndPoint2d {
+            targets: &up,
+            look: [6.0, 6.5],
+            rest: 8.0,
+            ..first
+        };
+        assert!(rig
+            .look_and_point_sequence(&[
+                first,
+                LookAndPoint2d {
+                    look: [5.9, 6.5],
+                    ..second
+                },
+            ])
+            .is_err());
+        let tracks = rig.look_and_point_sequence(&[first, second]).unwrap();
+        assert_eq!(tracks.len(), 4);
+        let rig = RetargetedRig2d::new(joints, &tracks, &[]).unwrap();
+        let neutral = rig.pose(6.0).unwrap();
+        let lead = rig.pose(6.25).unwrap();
+        assert!((neutral.joint("gaze").unwrap()[2] - TAU).abs() < 1e-5);
+        assert!((lead.joint("gaze").unwrap()[2] - (TAU + PI / 4.0)).abs() < 1e-5);
+        let [nx, ny, _] = neutral.joint("wrist").unwrap();
+        let [lx, ly, _] = lead.joint("wrist").unwrap();
+        assert!((nx - lx).hypot(ny - ly) < 1e-5);
+        let [x, y, angle] = rig.pose(7.0).unwrap().joint("wrist").unwrap();
+        assert!((x + 0.2 * angle.cos()).hypot(y + 0.2 * angle.sin() - 1.0) < 1e-5);
+    }
+
+    #[test]
+    fn a_sequence_solves_against_the_rest_pose_of_replaced_ancestors() {
+        let joints = vec![
+            joint("body", None, [0.0, 0.0], 0.0),
+            joint("shoulder", Some("body"), [0.0, 0.0], 0.0),
+            joint("elbow", Some("shoulder"), [1.0, 0.0], 0.0),
+            joint("wrist", Some("elbow"), [1.0, 0.0], 0.0),
+            joint("second_shoulder", Some("shoulder"), [1.0, 0.0], 0.0),
+            joint("second_elbow", Some("second_shoulder"), [1.0, 0.0], 0.0),
+            joint("second_wrist", Some("second_elbow"), [1.0, 0.0], 0.0),
+            joint("gaze", Some("body"), [0.0, 0.5], 0.0),
+        ];
+        let existing = [JointTrack2d {
+            joint: "shoulder".into(),
+            keys: vec![[0.0, std::f32::consts::FRAC_PI_2]],
+        }];
+        let base = RetargetedRig2d::new(joints.clone(), &existing, &[]).unwrap();
+        let first = LookAndPoint2d {
+            wrist: "wrist",
+            gaze: "gaze",
+            targets: &[(1.0, [1.0, 0.0])],
+            look: [0.0, 0.5],
+            rest: 2.0,
+            fingertip: 0.0,
+            bend_left: true,
+        };
+        let second = LookAndPoint2d {
+            wrist: "second_wrist",
+            targets: &[(3.0, [1.5, 1.0])],
+            look: [2.0, 2.5],
+            rest: 4.0,
+            ..first
+        };
+        let tracks = base.look_and_point_sequence(&[first, second]).unwrap();
+        let rig = RetargetedRig2d::new(joints, &tracks, &[]).unwrap();
+        let [x, y, _] = rig.pose(3.0).unwrap().joint("second_wrist").unwrap();
+        assert!((x - 1.5).hypot(y - 1.0) < 1e-5);
     }
 
     #[test]

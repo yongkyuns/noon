@@ -113,12 +113,13 @@ async function volume(value) {
   }, value);
 }
 async function seek(time) {
-  await page.locator("#scrubber").evaluate((input, target) => {
+  const committedTime = await page.locator("#scrubber").evaluate((input, target) => {
     input.value = String(target);
     input.dispatchEvent(new Event("input", { bubbles: true }));
+    // The input handler seeks synchronously. Playback may advance before the next browser call.
+    return audioQualification.renderer.time();
   }, time);
-  await page.waitForFunction(target =>
-    Math.abs(Number(document.querySelector("#scrubber").value) - target) < 0.001, time);
+  assert.equal(committedTime, time, "scrubber input must seek the renderer to the requested time");
 }
 // Known authored coordinates of this test scene. Production JavaScript neither
 // knows these positions nor chooses a control action; real pointer occurrences

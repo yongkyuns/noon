@@ -3633,13 +3633,26 @@ class _RetargetedRig2d:
         to hold it. Both branches reach their rest poses at rest. The gaze
         joint is separate from the arm, with local +X pointing at the target.
         """
+        return self.look_and_point_sequence(gaze, {
+            "wrist": wrist, "targets": targets, "look": look, "rest": rest, "bend_left": bend_left,
+        }, fingertip=fingertip)
+
+    def look_and_point_sequence(self, gaze, *cues, fingertip=0.0):
+        """Prepare ordered gestures with one gaze joint and any number of wrists.
+
+        Each cue is a dict with wrist, targets, look and rest. A cue may also
+        set bend_left and override fingertip. One gesture reaches rest before
+        the next begins. The returned dictionary can be bound as one rig.
+        """
         from _noon_host import array_value
 
-        start, ready = look
-        cues = [(float(phase), float(x), float(y)) for phase, (x, y) in targets]
-        phases = array_value((float(start), float(ready), float(rest)))
-        rows = engine_call(self._handle.lookAndPoint, wrist, gaze, array_value(cues), phases,
-                           float(fingertip), bool(bend_left), operation="RetargetedRig2d.look_and_point")
+        def cue_row(wrist, targets, *, look, rest, fingertip=fingertip, bend_left=True):
+            start, ready = look
+            points = [(float(phase), float(x), float(y)) for phase, (x, y) in targets]
+            return wrist, points, (float(start), float(ready), float(rest)), float(fingertip), bool(bend_left)
+
+        rows = engine_call(self._handle.lookAndPointSequence, gaze, array_value([cue_row(**cue) for cue in cues]),
+                           operation="RetargetedRig2d.look_and_point_sequence")
         return {name: [tuple(key) for key in keys] for name, keys in rows}
 
     def artwork_track(self, joint, *, poses, cues):
