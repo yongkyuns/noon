@@ -27,7 +27,7 @@ required-features = ["native-text", "typst", "bundled-fonts"]
 noon = { version = "0.1.0", path = "../noon", default-features = false }
 noon-core = { version = "0.1.0", path = "../noon-core" }
 noon-render-wgpu = { version = "0.1.0", path = "../noon-render-wgpu", default-features = false, features = ["native"] }
-pollster = "=1.0.1"
+pollster = "=1.0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std"] }

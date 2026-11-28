@@ -13,5 +13,5 @@ description = "Renderer-independent semantic core for Noon"
 wgsl-effects = ["dep:naga"]
 
 [dependencies]
-naga = { version = "=30.0.1", default-features = false, features = ["wgsl-in"], optional = true }
+naga = { version = "=30.0.2", default-features = false, features = ["wgsl-in"], optional = true }
 serde = { version = "1", features = ["derive", "rc"] }

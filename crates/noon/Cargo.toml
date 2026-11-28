@@ -41,7 +41,7 @@ name = "glow_scene_playback"
 required-features = ["typst", "bundled-fonts"]
 
 [dependencies]
-num-bigint = { version = "=0.4.8", default-features = false }
+num-bigint = { version = "=0.5.1", default-features = false }
 serde_json = { version = "1", optional = true }
 noon-compile = { version = "0.1.0", path = "../noon-compile" }
 noon-core = { version = "0.1.0", path = "../noon-core" }
@@ -53,7 +53,7 @@ swash = { version = "=0.2.10", optional = true }
 syntect = { version = "=5.3.0", optional = true, default-features = false, features = ["parsing", "regex-fancy", "dump-load"] }
 two-face = { version = "=0.5.2", optional = true, default-features = false, features = ["syntect-fancy"] }
 typst-assets = { version = "=0.15.1", features = ["fonts"], optional = true }
-usvg = { version = "=0.48.1", default-features = false }
+usvg = { version = "=0.49.0", default-features = false }
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -64,7 +64,7 @@ tempfile = { version = "=3.27.0", optional = true }
 serde_json = "1"
 noon-render-wgpu = { path = "../noon-render-wgpu", default-features = false, features = ["ci-noop", "native"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"] }
-pollster = "=1.0.1"
+pollster = "=1.0.3"
 
 [[test]]
 name = "retained_images"
