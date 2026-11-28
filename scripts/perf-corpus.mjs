@@ -55,20 +55,24 @@ const server = spawn(
 server.stdout.on("data", (chunk) => (serverOutput += chunk));
 server.stderr.on("data", (chunk) => (serverOutput += chunk));
 
+const results = [];
+let activeCase = null;
+let failure = null;
 let browser = null;
 try {
   await waitForServer();
   browser = await chromium.launch({ channel: "chromium", headless: browserMode === "headless",
     args: gpuMode === null ? defaultBrowserArgs(backend) : browserArgs(backend, { gpuMode }) });
-  const results = [];
   let failedBudgets = 0;
   let failedGpuQualifications = 0;
   for (const definition of cases) {
+    activeCase = { id: definition.id };
     const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
     const sourceFile = path.join(repoRoot, "web", definition.source.slice(2));
     const sourceSha256Before = createHash("sha256")
       .update(await readFile(sourceFile))
       .digest("hex");
+    activeCase.sourceSha256 = sourceSha256Before;
     const query = new URLSearchParams({
       source: definition.source,
       context: JSON.stringify(definition.context ?? {}),
@@ -93,6 +97,7 @@ try {
       throw new Error(`${definition.id}: ${await page.locator("#status").textContent()}`);
     }
     const report = await page.evaluate(() => window.__NOON_SCENE_PERF__);
+    activeCase.report = report;
     const runtimeExpectations = validateRuntimeExpectations(report, definition);
     assert.ok(runtimeExpectations.passed,
       `${definition.id}: runtime expectations failed: ${runtimeExpectations.failures.join("; ")}`);
@@ -187,9 +192,16 @@ try {
         `p95 ${format(report.cadence.frameIntervalMs?.p95)} ms, ` +
         `${evaluation.passed ? "budget ok" : evaluation.complete ? "BUDGET FAIL" : "BUDGET INCOMPLETE"}`,
     );
+    activeCase = null;
     await page.close();
   }
 
+  if (failedGpuQualifications > 0) process.exitCode = 3;
+  else if (enforce && failedBudgets > 0) process.exitCode = 2;
+} catch (error) {
+  failure = { ...activeCase, error: String(error) };
+  throw error;
+} finally {
   const artifact = {
     schemaVersion: 1,
     benchmark: "Noon realistic authored performance corpus",
@@ -208,20 +220,30 @@ try {
       gpuMode,
       includeSamples, includeRendererSamples, includeStageTimings,
       rendererMetricsSampling: "sparse",
-      runtimeBuildIdentityIncluded: results.every(({ report }) => report.runtimeBuild != null),
+      runtimeBuildIdentityIncluded: results.length > 0 && results.every(({ report }) => report.runtimeBuild != null),
       diagnosticInstrumentationMayAffectTiming: includeRendererSamples || includeStageTimings,
     },
     workingTree,
     results,
+    ...(failure === null ? {} : { failure }),
   };
-  await mkdir(path.dirname(artifactPath), { recursive: true });
-  await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
-  console.log(`Wrote ${path.relative(repoRoot, artifactPath)}`);
-  if (failedGpuQualifications > 0) process.exitCode = 3;
-  else if (enforce && failedBudgets > 0) process.exitCode = 2;
-} finally {
-  await browser?.close();
-  server.kill("SIGTERM");
+  try {
+    await mkdir(path.dirname(artifactPath), { recursive: true });
+    await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
+    console.log(`Wrote ${path.relative(repoRoot, artifactPath)}`);
+  } catch (error) {
+    if (failure === null) throw error;
+    console.error("Could not retain performance corpus evidence:", error);
+  } finally {
+    try {
+      await browser?.close();
+    } catch (error) {
+      if (failure === null) throw error;
+      console.error("Could not close the performance corpus browser:", error);
+    } finally {
+      server.kill("SIGTERM");
+    }
+  }
 }
 
 async function waitForServer() {
