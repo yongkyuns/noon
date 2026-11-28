@@ -671,7 +671,7 @@ fn cairo_surface_retains_projected_clamped_gradient_and_only_updates_light() {
         assert_eq!(initial.resident_meshes, 1);
         // Authored vertices/triangles and one retained appearance uniform.
         // Ordinary mesh vertex/instance layouts stay intact.
-        assert_eq!(initial.geometry_bytes, 4 * 24 + 6 * 4 + 368);
+        assert_eq!(initial.geometry_bytes, 4 * 24 + 6 * 4 + 384);
         // Independent analytic stops: clamp(.8 + .5) = 1; .8 + .5/27.
         // At the center their midpoint is .909259..., not clamp(1.059259...).
         let center = pixel(&pixels, WIDTH / 2, HEIGHT / 2);
@@ -2574,7 +2574,7 @@ fn cairo_boundary_test_scene_with_straight_controls(
     curved_fill: bool,
     straight_controls: bool,
 ) -> (SceneInstance, noon_core::ObjectId) {
-    let (store, surface_node) = cairo_boundary_test_store(
+    let (store, surface_node, _) = cairo_boundary_test_store(
         with_occluder,
         sloped_unlit,
         curved_fill,
@@ -2594,8 +2594,12 @@ fn cairo_boundary_test_store(
     sloped_unlit: bool,
     curved_fill: bool,
     straight_controls: bool,
-    bottom_control_y: Option<f64>,
-) -> (SemanticStore, noon_core::SemanticNodeId) {
+    horizontal_controls: Option<[f64; 2]>,
+) -> (
+    SemanticStore,
+    noon_core::SemanticNodeId,
+    noon_core::SemanticNodeId,
+) {
     assert!(!(with_occluder && sloped_unlit));
     assert!(!(sloped_unlit && curved_fill));
     let mut store = SemanticStore::new();
@@ -2609,7 +2613,7 @@ fn cairo_boundary_test_store(
         }))
         .unwrap();
     camera.transform.translation.z = 5.0;
-    attach(&mut store, camera);
+    let camera_node = attach(&mut store, camera);
 
     let positions = if sloped_unlit {
         vec![
@@ -2630,6 +2634,8 @@ fn cairo_boundary_test_store(
     let mesh = if sloped_unlit {
         mesh
     } else {
+        let [bottom, top] =
+            horizontal_controls.unwrap_or([if curved_fill { -1.5 } else { -0.5 }, 0.5]);
         mesh.with_cairo_appearance(noon_core::CairoSurfaceAppearance {
             p0: SemanticVec3::new(-0.5, -0.5, 0.0),
             p6: SemanticVec3::new(0.5, 0.5, 0.0),
@@ -2639,24 +2645,16 @@ fn cairo_boundary_test_store(
             span_p3_p6: SemanticVec3::new(0.0, -1.0, 0.0),
             boundary_controls: (curved_fill || straight_controls).then_some([
                 [
-                    SemanticVec3::new(
-                        -1.0 / 6.0,
-                        bottom_control_y.unwrap_or(if curved_fill { -1.5 } else { -0.5 }),
-                        0.0,
-                    ),
-                    SemanticVec3::new(
-                        1.0 / 6.0,
-                        bottom_control_y.unwrap_or(if curved_fill { -1.5 } else { -0.5 }),
-                        0.0,
-                    ),
+                    SemanticVec3::new(-1.0 / 6.0, bottom, 0.0),
+                    SemanticVec3::new(1.0 / 6.0, bottom, 0.0),
                 ],
                 [
                     SemanticVec3::new(0.5, -1.0 / 6.0, 0.0),
                     SemanticVec3::new(0.5, 1.0 / 6.0, 0.0),
                 ],
                 [
-                    SemanticVec3::new(1.0 / 6.0, 0.5, 0.0),
-                    SemanticVec3::new(-1.0 / 6.0, 0.5, 0.0),
+                    SemanticVec3::new(1.0 / 6.0, top, 0.0),
+                    SemanticVec3::new(-1.0 / 6.0, top, 0.0),
                 ],
                 [
                     SemanticVec3::new(-0.5, 1.0 / 6.0, 0.0),
@@ -2722,7 +2720,7 @@ fn cairo_boundary_test_store(
     light.set_role(SemanticObjectRole::PointLight3D);
     attach(&mut store, light);
 
-    (store, surface_node)
+    (store, surface_node, camera_node)
 }
 
 #[test]
@@ -2898,10 +2896,14 @@ fn cairo_curved_fill_preserves_perimeter_area_for_each_winding() {
         eprintln!("Cairo curved area adapter: {:?}", adapter.get_info());
         let (device, queue) = adapter.request_device(&Default::default()).await.unwrap();
         let target = Target::new(&device);
-        // Four chords sample outward and concave cubics with known trapezoid
-        // areas. The strongest concavity excludes the original quad center
-        // from its fan kernel and must select a proven planar center instead.
-        for (control_y, expected_area) in [(-1.5, 1504.0), (-0.25, 904.0), (0.0, 784.0)] {
+        // Each curved edge contributes four trapezoids. In the last case the
+        // opposing insets each remove 288 square pixels and leave no fan kernel.
+        for (controls, expected_area, opacities) in [
+            ([-1.5, 0.5], 1504.0, &[1.0][..]),
+            ([-0.25, 0.5], 904.0, &[1.0][..]),
+            ([0.0, 0.5], 784.0, &[1.0, 0.45][..]),
+            ([0.1, -0.1], 448.0, &[1.0, 0.45][..]),
+        ] {
             let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
             renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
             renderer.set_camera(
@@ -2909,18 +2911,15 @@ fn cairo_curved_fill_preserves_perimeter_area_for_each_winding() {
                 Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap(),
             );
             let mut preparer = FramePreparer::new();
-            let (store, node) =
-                cairo_boundary_test_store(false, false, true, false, Some(control_y));
+            let (store, node, _) =
+                cairo_boundary_test_store(false, false, true, false, Some(controls));
             let mut index = SemanticExecutionIndex::new();
             let (compiled, _) = lower_semantic_execution(&store, &mut index)
                 .unwrap()
                 .into_parts();
             let object = index.execution_object_id(node).unwrap();
             let mut scene = SceneInstance::new(compiled);
-            for opacity in [1.0, 0.45] {
-                if opacity < 1.0 && control_y != 0.0 {
-                    continue;
-                }
+            for &opacity in opacities {
                 scene
                     .apply_execution_patch(&ExecutionPatch::SetStyle {
                         fill_paint: None,
@@ -2978,7 +2977,7 @@ fn cairo_curved_fill_preserves_perimeter_area_for_each_winding() {
                                 .map(|p| f64::from(p[0]) / 255.0)
                                 .sum();
                             let expected_area = expected_area * area_scale * f64::from(opacity);
-                            eprintln!("Cairo curved area: control={control_y} opacity={opacity} mirror={mirror} angle={angle} offset={offset} area={area} expected={expected_area}");
+                            eprintln!("Cairo curved area: controls={controls:?} opacity={opacity} mirror={mirror} angle={angle} offset={offset} area={area} expected={expected_area}");
                             assert!(
                                 (area - expected_area).abs() <= 2.0,
                                 "{area} versus {expected_area}"
@@ -3017,7 +3016,8 @@ fn cairo_concave_planar_proxy_preserves_sloped_depth() {
         let mut renderer = GpuRenderer::new(&device, &queue, FORMAT);
         renderer.set_viewport(&device, &queue, WIDTH, HEIGHT);
         let mut preparer = FramePreparer::new();
-        let (store, node) = cairo_boundary_test_store(true, false, true, false, Some(0.0));
+        let (store, node, camera) =
+            cairo_boundary_test_store(true, false, true, false, Some([0.1, -0.1]));
         let mut index = SemanticExecutionIndex::new();
         let (compiled, _) = lower_semantic_execution(&store, &mut index)
             .unwrap()
@@ -3081,6 +3081,32 @@ fn cairo_concave_planar_proxy_preserves_sloped_depth() {
             }
             assert_eq!(edge[3], 255);
         }
+        scene
+            .apply_execution_patch(&ExecutionPatch::SetSemanticTransform {
+                object: index.execution_object_id(camera).unwrap(),
+                transform: SemanticWorldTransform3D::new(
+                    SemanticVec3::new(0.25, 0.0, 5.0),
+                    noon_core::SemanticRotation3D::IDENTITY,
+                    SemanticVec3::new(1.0, 1.0, 1.0),
+                )
+                .unwrap()
+                .into(),
+            })
+            .unwrap();
+        let (stats, _) = render(
+            &device,
+            &queue,
+            &mut renderer,
+            &mut preparer,
+            &mut scene,
+            &target,
+        )
+        .unwrap();
+        assert_eq!(
+            stats.geometry_bytes, 0,
+            "camera motion reuses the two mesh resources"
+        );
+        assert_eq!(stats.resident_meshes, 2);
     });
 }
 
@@ -3102,7 +3128,7 @@ fn adjacent_cairo_cells_blend_independent_pixel_coverage_without_reupload() {
         let camera = Camera2D::new(noon_core::Vec2::ZERO, noon_core::Vec2::new(4.0, 4.0)).unwrap();
         renderer.set_camera(&queue, camera);
         let mut preparer = FramePreparer::new();
-        let (mut store, original) = cairo_boundary_test_store(false, false, false, true, None);
+        let (mut store, original, _) = cairo_boundary_test_store(false, false, false, true, None);
         let mut cell = store
             .semantic_object_state_checked(original)
             .unwrap()

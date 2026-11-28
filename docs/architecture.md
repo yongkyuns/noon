@@ -1797,12 +1797,12 @@ bounds and depth ordering include the curves. The renderer derives these buffers
 once. Sampled Cairo fills filter their complete projected face with the shared
 polygon pixel-coverage kernel, including subpixel cells; their screen fringe
 stays within padded face bounds. Curved fills integrate signed perimeter edges
-over the pixel box once, without clipping every fan triangle. For planar sampled
-faces, staging replaces an invalid fan anchor only when the area centroid passes
-every oriented perimeter half-plane. Those corrected planar faces use a bounded
-screen box with the original depth plane as disposable filter support; the
-signed perimeter remains authoritative for coverage. Complex concavity beyond
-that retained profile awaits qualification in [#2744](https://github.com/yongkyuns/noon/issues/2744).
+over the pixel box once, without clipping every fan triangle. A simple planar
+ring with an invalid fan anchor uses a padded screen box on the face's depth
+plane. This covers concave rings even when no fan center exists. Both fill and
+border use the retained sampled perimeter. The proxy requires a valid
+projection and its padded box to lie within the camera depth range. Other views,
+non-planar faces and non-simple rings use the sampled fan path. [#2744](https://github.com/yongkyuns/noon/issues/2744)
 Border quads retain analytic pixel coverage
 and screen-space extrusion during camera movement. Ordinary mesh vertex and
 instance layouts remain unchanged. Cairo-only scenes need no multisample target.

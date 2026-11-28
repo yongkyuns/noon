@@ -888,8 +888,9 @@ fn align_closed_contour_preserving_winding(source: &[Vec2], target: &[Vec2]) -> 
         .collect()
 }
 
-fn polygon_is_simple(points: &[Vec2]) -> bool {
-    if points.len() < 3 {
+/// Check a finite closed polygon ring without a repeated closing vertex.
+pub fn polygon_is_simple(points: &[Vec2]) -> bool {
+    if points.len() < 3 || points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
         return false;
     }
     let count = points.len();
