@@ -1047,9 +1047,8 @@ fn world_path_create_fades_fill_smoothly_over_depth_and_repeats_on_seek() {
     });
 }
 
-// A flood from the fill's center must stay inside the ink even at the
-// tip and the two side-to-base joins.
-fn cone_outline_is_closed(pixels: &[u8]) -> bool {
+// A flood from the projected center must stay inside the closed ink.
+fn outline_encloses_center(pixels: &[u8]) -> bool {
     let mut seen = vec![false; (WIDTH * HEIGHT) as usize];
     let mut stack = vec![(WIDTH / 2, HEIGHT / 2)];
     while let Some((x, y)) = stack.pop() {
@@ -1081,7 +1080,11 @@ fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
             .await
             .unwrap();
         let target = Target::new(&device);
-        use SemanticSpatialMaterial::{ConeSilhouette, CylinderSilhouette, SphereSilhouette};
+        use SemanticSpatialMaterial::{
+            ConeSilhouette, CylinderSilhouette, SphereSilhouette, TorusSilhouette,
+        };
+        let torus_outer = TorusSilhouette(noon_core::TorusContour::new(0.36, false).unwrap());
+        let torus_inner = TorusSilhouette(noon_core::TorusContour::new(0.36, true).unwrap());
         for (material, orthographic, edge_x) in [
             (SphereSilhouette, false, 105),
             (SphereSilhouette, true, 85),
@@ -1089,16 +1092,34 @@ fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
             (CylinderSilhouette, true, 85),
             (ConeSilhouette, false, 97),
             (ConeSilhouette, true, 85),
+            (torus_outer, false, 113),
+            (torus_outer, true, 93),
         ] {
             let mut store = SemanticStore::new();
             let mut camera = SemanticObjectState::new(StoredGeometry::Circle { radius: 0.0 });
             camera.set_role(SemanticObjectRole::Camera3D);
+            let close_torus = material == torus_outer && !orthographic;
+            let camera_projection = if close_torus {
+                SemanticProjection3D::Perspective {
+                    vertical_fov_radians: 2.0,
+                    near: 0.1,
+                    far: 30.0,
+                }
+            } else {
+                projection(orthographic)
+            };
             camera
-                .set_camera_projection(Some(projection(orthographic)))
+                .set_camera_projection(Some(camera_projection))
                 .unwrap();
             // The interpolated camera crosses a chord of the orbit. Leave
             // room for the cone throughout the sweep in this small viewport.
-            let distance = if material == ConeSilhouette { 4.5 } else { 3.0 };
+            let distance = if close_torus {
+                2.5
+            } else if matches!(material, ConeSilhouette | TorusSilhouette(_)) {
+                4.5
+            } else {
+                3.0
+            };
             let end_on = SemanticWorldTransform3D {
                 translation: SemanticVec3::new(0.0, 0.0, distance),
                 ..SemanticWorldTransform3D::IDENTITY
@@ -1118,6 +1139,14 @@ fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
                     axial_view(std::f64::consts::FRAC_PI_2),
                     axial_view(std::f64::consts::PI),
                 )
+            } else if material == torus_outer {
+                // The perspective camera starts inside the bounding sphere,
+                // but the entire ring is visible in front of the camera.
+                let mut start = end_on;
+                if close_torus {
+                    start.translation.z = 1.3;
+                }
+                (start, axial_view(std::f64::consts::FRAC_PI_2))
             } else {
                 (
                     end_on,
@@ -1133,12 +1162,13 @@ fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
                 SphereSilhouette => noon_geometry::sphere_mesh(1.0, [64, 32]),
                 CylinderSilhouette => noon_geometry::cylinder_mesh(1.0, 2.0, 96),
                 ConeSilhouette => noon_geometry::cone_mesh(1.0, 2.0, 96),
+                TorusSilhouette(_) => noon_geometry::torus_mesh(1.0, 0.36, [128, 48]),
                 _ => unreachable!(),
             }
             .unwrap();
             let mesh = store.insert_geometry_mesh(mesh);
             let mut fill = SemanticObjectState::new(StoredGeometry::Resource(mesh));
-            if material != SphereSilhouette {
+            if matches!(material, CylinderSilhouette | ConeSilhouette) {
                 fill.transform.translation.z = -1.0;
             }
             fill.style = opaque_style(Color::from_hex(0x0000FF));
@@ -1148,14 +1178,22 @@ fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
                 noon_geometry::canonical_outline_path(&noon_core::GeometryRef::circle(1.0))
                     .unwrap();
             let path = store.insert_geometry_path(circle).unwrap();
-            let mut outline = SemanticObjectState::new(StoredGeometry::Resource(path));
-            outline.set_spatial_material(material);
-            outline.style.fill = None;
-            outline.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
-            outline.style.stroke_width = 0.14;
-            outline.style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
-            outline.style.sketch_stroke = noon_core::SketchStroke::new(0.7, 27);
-            attach(&mut store, outline);
+            for outline_material in [
+                Some(material),
+                (material == torus_outer).then_some(torus_inner),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let mut outline = SemanticObjectState::new(StoredGeometry::Resource(path));
+                outline.set_spatial_material(outline_material);
+                outline.style.fill = None;
+                outline.style.stroke = Some(SemanticPaint::Solid(Color::WHITE));
+                outline.style.stroke_width = 0.14;
+                outline.style.stroke_width_mode = noon_core::StrokeWidthMode::ScreenSpace;
+                outline.style.sketch_stroke = noon_core::SketchStroke::new(0.7, 27);
+                attach(&mut store, outline);
+            }
             let mut index = SemanticExecutionIndex::new();
             let (mut compiled, _) = lower_semantic_execution(&store, &mut index)
                 .unwrap()
@@ -1199,21 +1237,29 @@ fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
                     "side-on cone tip missing (orthographic={orthographic})"
                 );
                 assert!(
-                    cone_outline_is_closed(&initial),
+                    outline_encloses_center(&initial),
                     "side-on cone outline opened at a join (orthographic={orthographic})"
                 );
             } else {
                 // The tangent sphere projects at f/sqrt(d²-r²), the nearest
-                // cylinder cap at f/(d - h/2).
+                // cylinder cap at f/(d - h/2). A face-on torus has a
+                // projected outer radius close to f*(R + r)/d.
                 assert!((edge_x - 2..=edge_x + 2).any(|x| pixel(&initial, x, 64)[0] > 150));
             }
-            assert!(pixel(&initial, 64, 64)[2] > 230);
+            if material == torus_outer {
+                let inner_x = if orthographic { 78 } else { 83 };
+                assert_eq!(pixel(&initial, 64, 64), [0, 0, 0, 255]);
+                assert!((inner_x - 2..=inner_x + 2).any(|x| pixel(&initial, x, 64)[0] > 150));
+                assert!(outline_encloses_center(&initial));
+            } else {
+                assert!(pixel(&initial, 64, 64)[2] > 230);
+            }
             if material == ConeSilhouette {
                 scene.advance_to(0.3).unwrap();
                 let (stats, intermediate) = draw(&mut scene);
                 assert_eq!(stats.geometry_bytes, 0);
                 assert!(
-                    cone_outline_is_closed(&intermediate),
+                    outline_encloses_center(&intermediate),
                     "tilted cone outline opened at a join (orthographic={orthographic})"
                 );
             }
@@ -1233,6 +1279,16 @@ fn analytic_sketch_contours_reuse_geometry_when_the_camera_moves() {
                     "base-on cone rim missing (orthographic={orthographic})"
                 );
                 assert_eq!(pixel(&moved, 64, 64), [0, 0, 255, 255]);
+            } else if material == torus_outer {
+                assert_eq!(pixel(&moved, 64, 64), [0, 0, 255, 255]);
+                assert!(
+                    outline_encloses_center(&moved),
+                    "edge-on torus needs an unbroken outer contour"
+                );
+                assert!(
+                    (58..=70).all(|x| pixel(&moved, x, 64)[0] < 40),
+                    "inner ink persists after the hole closes"
+                );
             } else {
                 assert!(pixel(&moved, edge_x, 64)[0] < 40);
             }

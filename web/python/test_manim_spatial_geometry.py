@@ -964,6 +964,10 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         candidate.free.assert_not_called()
         detached_create.assert_called_once_with(candidate)
 
+    def test_sketch_torus_requires_the_full_periodic_surface(self):
+        with self.assertRaisesRegex(NotImplementedError, "full torus"):
+            spatial.Torus(u_range=(0, math.pi), stroke=noon.SketchStroke(noon.TEAL))
+
     def test_capped_cone_adds_ordinary_base_to_shared_surface_family(self):
         with patch.object(spatial.Surface, "__init__", autospec=True,
                           return_value=None) as initialize:

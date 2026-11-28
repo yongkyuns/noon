@@ -130,6 +130,7 @@ pub mod text_source_parts;
 #[cfg(all(feature = "native-text", feature = "bundled-fonts"))]
 pub mod text_write;
 pub mod timed_composition;
+pub mod torus_sketch_silhouette;
 #[cfg(feature = "latex")]
 pub mod variable;
 pub mod vector_space;

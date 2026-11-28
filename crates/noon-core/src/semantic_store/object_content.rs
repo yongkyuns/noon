@@ -1032,7 +1032,7 @@ impl SemanticObjectState {
     pub fn spatial_declaration_is_valid(&self) -> bool {
         let material = self.spatial_material();
         if material.is_sketch_silhouette()
-            && (matches!(material, SemanticSpatialMaterial::SketchSilhouette(edge) if !edge.is_valid())
+            && (!material.silhouette_is_valid()
                 || self.role != SemanticObjectRole::Ordinary
                 || self.spatial_composition_domain() != SemanticSpatialCompositionDomain::World)
         {

@@ -148,6 +148,10 @@ The [capped cone demo](web/python/examples/cone_sketch_silhouette.py) uses
 `Cone(show_base=True, stroke=SketchStroke(TEAL))` with opaque, unlit faces.
 The contour follows the apex and base rim through a side-on to base-on orbit.
 Run the paired Rust demo with `cargo run -p noon-native --example cone_sketch_silhouette`.
+The [torus sketch demo](web/python/examples/torus_sketch_silhouette.py) uses
+`Torus(stroke=SketchStroke(TEAL))` with an opaque, unlit fill. Its inner rim
+closes as the camera approaches edge-on while the outer contour stays visible.
+Run the paired Rust demo with `cargo run -p noon-native --example torus_sketch_silhouette`.
 Use `obj.set_stroke(SketchStroke(TEAL), width=3)` to style an existing shape,
 text object, or group. `SVGMobject`, `Axes`, and `VGroup` also accept the
 `stroke=` option at construction.

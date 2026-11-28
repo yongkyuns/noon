@@ -63,6 +63,33 @@ impl MeshInput {
         .map_err(engine_error)
     }
     #[staticmethod]
+    #[pyo3(name = "sketchTorus")]
+    fn sketch_torus(
+        major_radius: f64,
+        minor_radius: f64,
+        u_cells: usize,
+        v_cells: usize,
+        fill: Vec<f64>,
+        stroke: Vec<f64>,
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<MeshFamilyInput, PyErr> {
+        input::SpatialMeshInput::sketch_torus(
+            major_radius,
+            minor_radius,
+            u_cells,
+            v_cells,
+            &fill,
+            &stroke,
+            width,
+            roughness,
+            seed,
+        )
+        .map(Into::into)
+        .map_err(engine_error)
+    }
+    #[staticmethod]
     #[pyo3(name = "line3D")]
     fn line_3d(
         start: Vec<f64>,

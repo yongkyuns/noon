@@ -5,7 +5,7 @@ use noon_core::{
     Color, GeometryResource, MeshResource, SemanticCairoPathAppearance, SemanticCamera3D,
     SemanticMutationTransaction, SemanticNodeCreation, SemanticObjectRole, SemanticObjectState,
     SemanticPaint, SemanticSpatialMaterial, SemanticStyle, SemanticVec3, SemanticWorldTransform3D,
-    SketchStroke, StoredGeometry, StrokeWidthMode, VectorPath,
+    SketchStroke, StoredGeometry, StrokeWidthMode, TorusContour, VectorPath,
 };
 use noon_geometry::{CairoSurfaceGrid, SurfaceGrid};
 use std::{rc::Rc, sync::Arc};
@@ -245,6 +245,42 @@ pub(crate) fn axial_sketch_options(
         .transform_point(SemanticVec3::new(0.0, 0.0, -1.0))
         .ok_or(AuthoringError::NonFiniteGeometry)?;
     Ok((mesh, path))
+}
+
+pub(crate) fn torus_sketch_options(
+    [major_radius, minor_radius]: [f64; 2],
+    resolution: [usize; 2],
+    fill: Color,
+    stroke: Color,
+    width: f64,
+    sketch: SketchStroke,
+) -> Result<(MeshOptions, [SpatialPathOptions; 2]), AuthoringError> {
+    if !(major_radius as f32).is_finite() || major_radius as f32 <= 0.0 {
+        return Err(AuthoringError::NonFiniteGeometry);
+    }
+    let tube_radius = minor_radius / major_radius;
+    let outer = TorusContour::new(tube_radius, false).ok_or(AuthoringError::NonFiniteGeometry)?;
+    let inner = TorusContour::new(tube_radius, true).ok_or(AuthoringError::NonFiniteGeometry)?;
+    let geometry = noon_geometry::torus_mesh(1.0, f64::from(outer.tube_radius()), resolution)
+        .map_err(|_| AuthoringError::NonFiniteGeometry)?;
+    let transform = SemanticWorldTransform3D {
+        scale: SemanticVec3::new(major_radius, major_radius, major_radius),
+        ..SemanticWorldTransform3D::IDENTITY
+    };
+    let (mesh, outline) = analytic_sketch_options(
+        geometry,
+        transform,
+        fill,
+        stroke,
+        width,
+        sketch,
+        SemanticSpatialMaterial::TorusSilhouette(outer),
+    )?;
+    let mut inner_outline = outline.clone();
+    inner_outline.material = SemanticSpatialMaterial::TorusSilhouette(inner);
+    inner_outline.style.sketch_stroke =
+        SketchStroke::new(f64::from(sketch.roughness()), sketch.seed().wrapping_add(1));
+    Ok((mesh, [outline, inner_outline]))
 }
 
 fn analytic_sketch_options(
@@ -1018,6 +1054,20 @@ impl Scene {
             sketch,
         )?;
         self.mesh_family_with_paths(vec![mesh], vec![path])
+    }
+
+    /// Admit a full opaque torus with retained outer and inner projected contours.
+    pub fn torus_sketch_silhouette(
+        &mut self,
+        radii: [f64; 2],
+        resolution: [usize; 2],
+        fill: Color,
+        stroke: Color,
+        width: f64,
+        sketch: SketchStroke,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        let (mesh, paths) = torus_sketch_options(radii, resolution, fill, stroke, width, sketch)?;
+        self.mesh_family_with_paths(vec![mesh], paths.into())
     }
 
     /// Admit one opaque polyhedron with a retained sketch path on each crease.

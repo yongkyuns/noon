@@ -3570,7 +3570,7 @@ pub(crate) fn valid_compiled_spatial(spatial: Option<&CompiledSpatialState>) -> 
         return true;
     };
     if spatial.material.is_sketch_silhouette()
-        && (matches!(spatial.material, noon_core::SemanticSpatialMaterial::SketchSilhouette(edge) if !edge.is_valid())
+        && (!spatial.material.silhouette_is_valid()
             || spatial.draw_kind != CompiledSpatialDrawKind::Planar
             || spatial.composition_domain != noon_core::SemanticSpatialCompositionDomain::World
             || spatial.camera_projection.is_some()
