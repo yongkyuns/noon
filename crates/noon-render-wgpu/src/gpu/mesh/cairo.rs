@@ -10,8 +10,10 @@ use noon_core::{CairoSurfaceAppearance, SemanticVec3};
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub(super) struct Uniform {
     points_and_spans: [[f32; 4]; 6],
-    // W is the sampled perimeter count; its sign selects proven planar support.
+    // W is the sampled perimeter count.
     center: [f32; 4],
+    // X and Y complete a depth plane through perimeter[0]. Z enables the proxy.
+    proxy_plane: [u32; 4],
     perimeter: [[f32; 4]; 16],
 }
 
@@ -20,7 +22,7 @@ impl Uniform {
         value: &CairoSurfaceAppearance,
         positions: &[SemanticVec3],
         vertices: &[super::Vertex],
-        planar_proxy: bool,
+        planar_proxy: Option<[u32; 2]>,
     ) -> Result<Self, SpatialPrepareError> {
         let center = if value.boundary_controls.is_some() {
             let [x, y, z] = vertices
@@ -59,12 +61,9 @@ impl Uniform {
                 center.x as f32,
                 center.y as f32,
                 center.z as f32,
-                if planar_proxy {
-                    -(count as f32)
-                } else {
-                    count as f32
-                },
+                count as f32,
             ],
+            proxy_plane: planar_proxy.map_or([0; 4], |[a, b]| [a, b, 1, 0]),
             perimeter,
         };
         if result
@@ -200,21 +199,21 @@ mod tests {
             span_p3_p6: SemanticVec3::new(0., -1., 0.),
             boundary_controls: None,
         };
-        assert_eq!(std::mem::size_of::<Uniform>(), 368);
+        assert_eq!(std::mem::size_of::<Uniform>(), 384);
         assert_eq!(std::mem::size_of::<super::super::Vertex>(), 24);
         assert_eq!(std::mem::size_of::<super::super::Instance>(), 128);
         let positions = [SemanticVec3::ZERO, SemanticVec3::new(1., 1., 0.)];
-        let uniform = Uniform::lower(&value, &positions, &[], false).unwrap();
+        let uniform = Uniform::lower(&value, &positions, &[], None).unwrap();
         assert_eq!(uniform.points_and_spans[1], [1., 1., 0., 0.]);
         value.boundary_controls = Some([[SemanticVec3::ZERO; 2]; 4]);
         assert_eq!(
-            Uniform::lower(&value, &positions, &[], false),
+            Uniform::lower(&value, &positions, &[], None),
             Err(SpatialPrepareError::UnrepresentableVertex)
         );
         value.boundary_controls = None;
         value.p6.x = f64::MAX;
         assert_eq!(
-            Uniform::lower(&value, &positions, &[], false),
+            Uniform::lower(&value, &positions, &[], None),
             Err(SpatialPrepareError::UnrepresentableVertex)
         );
     }

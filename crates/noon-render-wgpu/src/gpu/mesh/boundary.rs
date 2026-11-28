@@ -3,7 +3,7 @@
 
 use super::{SpatialPrepareError, Vertex};
 use bytemuck::{Pod, Zeroable};
-use noon_core::{MeshResource, SemanticVec3};
+use noon_core::{MeshResource, SemanticVec3, Vec2};
 use std::collections::BTreeMap;
 
 #[repr(C)]
@@ -90,7 +90,7 @@ pub(super) fn vertices(mesh: &MeshResource) -> Result<Vec<EdgeVertex>, SpatialPr
 pub(super) struct FillGeometry {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
-    pub planar_proxy: bool,
+    pub planar_proxy: Option<[u32; 2]>,
 }
 
 /// Cairo face fans share the retained border subdivision.
@@ -100,7 +100,7 @@ pub(super) fn fill_geometry(mesh: &MeshResource) -> Result<FillGeometry, Spatial
         return Ok(FillGeometry {
             vertices: corners,
             indices: mesh.indices().to_vec(),
-            planar_proxy: false,
+            planar_proxy: None,
         });
     };
     let Some(controls) = appearance.boundary_controls else {
@@ -108,7 +108,7 @@ pub(super) fn fill_geometry(mesh: &MeshResource) -> Result<FillGeometry, Spatial
         return Ok(FillGeometry {
             vertices: corners,
             indices: mesh.indices().to_vec(),
-            planar_proxy: false,
+            planar_proxy: None,
         });
     };
     let points = mesh.positions();
@@ -138,7 +138,7 @@ pub(super) fn fill_geometry(mesh: &MeshResource) -> Result<FillGeometry, Spatial
             });
         }
     }
-    let (center, planar_proxy) = planar_fan_center(&vertices[1..], vertices[0].position);
+    let (center, planar_proxy) = planar_fill_support(&vertices[1..], vertices[0].position);
     vertices[0].position = center;
     let count = vertices.len() as u32;
     let mut indices = Vec::with_capacity(48);
@@ -152,9 +152,9 @@ pub(super) fn fill_geometry(mesh: &MeshResource) -> Result<FillGeometry, Spatial
     })
 }
 
-/// Keep the existing anchor unless a planar ring proves a better fan center.
-/// This bounded staging calculation never runs for camera or light changes.
-fn planar_fan_center(vertices: &[Vertex], original: [f32; 3]) -> ([f32; 3], bool) {
+/// Select depth-plane support for a planar ring with an invalid fan anchor.
+/// The four-chord perimeter remains authoritative for the fill and border.
+fn planar_fill_support(vertices: &[Vertex], original: [f32; 3]) -> ([f32; 3], Option<[u32; 2]>) {
     let origin = vertices[0].position.map(f64::from);
     let points: Vec<[f64; 3]> = vertices
         .iter()
@@ -173,14 +173,14 @@ fn planar_fan_center(vertices: &[Vertex], original: [f32; 3]) -> ([f32; 3], bool
         .expect("three coordinate axes");
     let area = normal[axis];
     if area == 0.0 {
-        return (original, false);
+        return (original, None);
     }
     let scale = points.iter().flatten().fold(1.0_f64, |s, v| s.max(v.abs()));
     if points.iter().any(|p| {
         let distance: f64 = p.iter().zip(normal).map(|(p, n)| p * n).sum();
         distance.abs() > area.abs() * scale * 1e-6
     }) {
-        return (original, false);
+        return (original, None);
     }
     let u = (axis + 1) % 3;
     let v = (axis + 2) % 3;
@@ -197,7 +197,23 @@ fn planar_fan_center(vertices: &[Vertex], original: [f32; 3]) -> ([f32; 3], bool
             })
     };
     if in_kernel(original) {
-        return (original, false);
+        return (original, None);
+    }
+    let contour_scale = points
+        .iter()
+        .map(|point| point[u].abs().max(point[v].abs()))
+        .fold(0.0_f64, f64::max);
+    let contour: Vec<_> = points
+        .iter()
+        .map(|point| {
+            Vec2::new(
+                (point[u] / contour_scale) as f32,
+                (point[v] / contour_scale) as f32,
+            )
+        })
+        .collect();
+    if !noon_geometry::polygon_is_simple(&contour) {
+        return (original, None);
     }
     let mut centroid = [0.0; 3];
     for (a, b) in points.iter().zip(points.iter().cycle().skip(1)) {
@@ -207,13 +223,26 @@ fn planar_fan_center(vertices: &[Vertex], original: [f32; 3]) -> ([f32; 3], bool
         }
     }
     let candidate = std::array::from_fn(|axis| (origin[axis] + centroid[axis]) as f32);
-    if candidate.iter().all(|value| value.is_finite()) && in_kernel(candidate) {
-        (candidate, true)
+    let center = if candidate.iter().all(|value| value.is_finite()) && in_kernel(candidate) {
+        // Keep the better fan for views where the planar proxy is clipped.
+        candidate
     } else {
-        // Non-planar or empty-kernel faces need a different topology; never
-        // silently substitute an unproved center for their existing geometry.
-        (original, false)
-    }
+        original
+    };
+    // Pick a wide basis from the plane through perimeter[0]. Consecutive
+    // perimeter chords can be nearly collinear or even collapse together.
+    let length_squared = |point: [f64; 3]| point[u] * point[u] + point[v] * point[v];
+    let second = (1..points.len())
+        .max_by(|&a, &b| length_squared(points[a]).total_cmp(&length_squared(points[b])))
+        .expect("a nonzero-area ring has multiple points");
+    let third = (1..points.len())
+        .max_by(|&a, &b| {
+            cross(&points[second], &points[a])
+                .abs()
+                .total_cmp(&cross(&points[second], &points[b]).abs())
+        })
+        .expect("a nonzero-area ring has multiple points");
+    (center, Some([second as u32, third as u32]))
 }
 
 fn topology(mesh: &MeshResource) -> BTreeMap<(u32, u32), (u32, u32)> {
@@ -300,7 +329,7 @@ mod tests {
     use noon_core::SemanticVec3;
 
     #[test]
-    fn planar_fan_center_checks_each_edge_and_retains_nonplanar_geometry() {
+    fn planar_fill_support_checks_winding_and_rejects_nonplanar_or_crossing_rings() {
         let ring = [
             [-0.5, -0.5, 0.0],
             [-0.25, -0.21875, 0.0],
@@ -323,13 +352,13 @@ mod tests {
                 if reversed {
                     vertices.reverse();
                 }
-                let (center, planar_proxy) = planar_fan_center(&vertices, original);
-                assert!(planar_proxy);
+                let (center, planar_proxy) = planar_fill_support(&vertices, original);
+                assert!(planar_proxy.is_some());
                 let shifted_axis = (4 - axis) % 3;
                 assert!((center[shifted_axis] - original[shifted_axis] - 0.10905612).abs() < 1e-6);
-                assert_eq!(planar_fan_center(&vertices, center), (center, false));
+                assert_eq!(planar_fill_support(&vertices, center), (center, None));
                 vertices[0].position[(5 - axis) % 3] += 0.05;
-                assert_eq!(planar_fan_center(&vertices, original), (original, false));
+                assert_eq!(planar_fill_support(&vertices, original), (original, None));
             }
         }
         let empty_kernel: Vec<_> = [
@@ -348,15 +377,28 @@ mod tests {
             normal: [0.0; 3],
         })
         .collect();
+        let (center, plane) = planar_fill_support(&empty_kernel, [0.0, -0.25, 0.0]);
+        assert_eq!(center, [0.0, -0.25, 0.0]);
+        let [second, third] = plane.unwrap().map(|index| index as usize);
+        assert_ne!(second, third);
+        assert_ne!(
+            empty_kernel[second].position[1],
+            empty_kernel[0].position[1]
+        );
+        let crossing =
+            [[0., 0., 0.], [2., 2., 0.], [0., 2., 0.], [3., 0., 0.]].map(|position| Vertex {
+                position,
+                normal: [0.; 3],
+            });
         assert_eq!(
-            planar_fan_center(&empty_kernel, [0.0, -0.25, 0.0]),
-            ([0.0, -0.25, 0.0], false)
+            planar_fill_support(&crossing, [1., 1., 0.]),
+            ([1., 1., 0.], None)
         );
         let collapsed = [Vertex {
             position: [0.0; 3],
             normal: [0.0; 3],
         }; 4];
-        assert_eq!(planar_fan_center(&collapsed, [0.0; 3]), ([0.0; 3], false));
+        assert_eq!(planar_fill_support(&collapsed, [0.0; 3]), ([0.0; 3], None));
     }
 
     #[test]
