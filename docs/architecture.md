@@ -1806,13 +1806,17 @@ that retained profile awaits qualification in [#2744](https://github.com/yongkyu
 Border quads retain analytic pixel coverage
 and screen-space extrusion during camera movement. Ordinary mesh vertex and
 instance layouts remain unchanged. Cairo-only scenes need no multisample target.
-Translucency is bounded to
-individual triangle or canonical quad cells. Opaque world geometry populates
-depth first; translucent and Cairo cells paint each fill and border together in
-camera-depth order, with authored painter order breaking ties. Color-only cell
-changes preserve that cached order. Cairo-compatible
-Surface gradients and six-face Cube/Prism materials have pinned, bounded raster
-profiles. General intersecting transparent solids remain outside the profile.
+Translucency uses individual triangle or canonical quad cells. Opaque world
+geometry populates depth first. Translucent and Cairo cells paint each fill and
+border together in camera-depth order, with authored painter order breaking
+ties. Color-only cell changes preserve that cached order. Uniform translucent
+Surface fills use the shared cell family, including unshaded fills with zero
+stroke width. Cube and Prism use six retained faces. The qualified overlap
+profile covers uniform-fill convex boxes and non-intersecting surface layers
+when overlapping objects occupy separate view-depth ranges. Camera motion can
+reverse their draw order while reusing mesh resources. Intersecting or cyclic
+overlaps require per-pixel ordering evidence and a separate contract.
+[#2745](https://github.com/yongkyuns/noon/issues/2745)
 
 Cairo World-path miter joins use Cairo's 10× limit; the ordinary World-path
 profile retains its 4× limit. ThreeDAxes inherits Cairo miter joins on its tips.
@@ -1941,7 +1945,7 @@ Track new capability batches and qualification with the owners below.
 | Workstream | Current qualification and owner |
 | --- | --- |
 | Camera/reference qualification | [#254](https://github.com/yongkyuns/noon/issues/254) retains all seven pinned ManimCE originals and their dispositions. #1879 records their selected analytic-camera/explicit-font state and raster qualification, including #2252's original zoom replay. Preserve the original sampled-clock and host-font observations separately; a declared profile does not establish unrestricted exact Manim parity. Callback replay classification remains explicit. |
-| Common 3D rendering and defaults | #1879 records the qualified bounded Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image profiles in #1891. Camera qualification and native point lighting have separate profiles. The next transparency slice covers simple translucent solids and non-intersecting surfaces. [Surface concavity #2744](https://github.com/yongkyuns/noon/issues/2744) · [Staged transparency #2745](https://github.com/yongkyuns/noon/issues/2745) |
+| Common 3D rendering and defaults | #1879 records the qualified bounded Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image profiles in #1891. Camera qualification and native point lighting have separate profiles. The retained partial-opacity profile covers convex boxes and separated surface layers. [Surface concavity #2744](https://github.com/yongkyuns/noon/issues/2744) · [Bounded transparency #2745](https://github.com/yongkyuns/noon/issues/2745) |
 | Geometry, axes and vector-space breadth | #1879 records the qualified bounded primitive ranges/orientations/open ends, ThreeDAxes labels/configuration/tips, animated vector addition, and coordinate-label/ghost-vector helpers in #1891. Further options require their own selected capability and paired evidence. |
 | Performance and pacing | [#1653](https://github.com/yongkyuns/noon/issues/1653) owns physical Mac/iPhone pacing and attribution, pinned cumulative anchors, representative 3D workloads, and separate authoring/runtime/preparation/locality/upload/package metrics. The five spatial workloads have separate functional and Mac measurement evidence; the fixed Product Gate anchor measures five general gallery workloads. #1900 records three alternating Mac baseline/candidate pairs; occasional long frames and means below the strict 60 FPS requirement remain unqualified. Reuse the existing repeated-pair Product Gate and camera diagnostics; software-GPU or emulated-browser results do not qualify physical-device smoothness. |
 
