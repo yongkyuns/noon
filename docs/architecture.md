@@ -1750,8 +1750,8 @@ The architecture above does not create a new roadmap phase or runtime owner. Exi
 usability, compatibility and qualification remain.**
 [#956](https://github.com/yongkyuns/noon/issues/956) records the completed
 world/camera/resource/depth, surface/solid/light, composition and vector-space
-profiles. [#1879](https://github.com/yongkyuns/noon/issues/1879) owns their
-remaining rendering/API work and coordinates the existing qualification owners.
+profiles. The bounded rendering/API follow-up and its qualification evidence
+are recorded in [#1879](https://github.com/yongkyuns/noon/issues/1879).
 Do not reopen the completed substrate or interpret its completion as full Manim
 3D support or as “only D6 remains.”
 
@@ -1802,7 +1802,7 @@ faces, staging replaces an invalid fan anchor only when the area centroid passes
 every oriented perimeter half-plane. Those corrected planar faces use a bounded
 screen box with the original depth plane as disposable filter support; the
 signed perimeter remains authoritative for coverage. Complex concavity beyond
-that retained profile remains unqualified under #1879.
+that retained profile awaits qualification in [#2744](https://github.com/yongkyuns/noon/issues/2744).
 Border quads retain analytic pixel coverage
 and screen-space extrusion during camera movement. Ordinary mesh vertex and
 instance layouts remain unchanged. Cairo-only scenes need no multisample target.
@@ -1944,7 +1944,7 @@ this overview is not another implementation checklist.
 | Workstream | Current qualification and owner |
 | --- | --- |
 | Camera/reference qualification | [#254](https://github.com/yongkyuns/noon/issues/254) retains all seven pinned ManimCE originals and their dispositions. #1879 records their selected analytic-camera/explicit-font state and raster qualification, including #2252's original zoom replay. Preserve the original sampled-clock and host-font observations separately; a declared profile does not establish unrestricted exact Manim parity. Callback replay classification remains explicit. |
-| Common 3D rendering and defaults | #1879 records the qualified bounded Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image profiles in #1891. Camera qualification remains separate from these material profiles; native point lighting remains distinct from Cairo compatibility, and general intersecting transparency remains separate. |
+| Common 3D rendering and defaults | #1879 records the qualified bounded Cairo Surface and solid-face materials, World-path appearance/strokes, default axes appearance, and mixed depth/text/image profiles in #1891. Camera qualification and native point lighting have separate profiles. The next transparency slice covers simple translucent solids and non-intersecting surfaces. [Surface concavity #2744](https://github.com/yongkyuns/noon/issues/2744) · [Staged transparency #2745](https://github.com/yongkyuns/noon/issues/2745) |
 | Geometry, axes and vector-space breadth | #1879 records the qualified bounded primitive ranges/orientations/open ends, ThreeDAxes labels/configuration/tips, animated vector addition, and coordinate-label/ghost-vector helpers in #1891. Further options require their own selected capability and paired evidence. |
 | Performance and pacing | [#1653](https://github.com/yongkyuns/noon/issues/1653) owns physical Mac/iPhone pacing and attribution, pinned cumulative anchors, representative 3D workloads, and separate authoring/runtime/preparation/locality/upload/package metrics. The five spatial workloads have separate functional and Mac measurement evidence; the fixed Product Gate anchor measures five general gallery workloads. #1900 records three alternating Mac baseline/candidate pairs; occasional long frames and means below the strict 60 FPS requirement remain unqualified. Reuse the existing repeated-pair Product Gate and camera diagnostics; software-GPU or emulated-browser results do not qualify physical-device smoothness. |
 
