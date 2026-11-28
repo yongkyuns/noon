@@ -185,6 +185,37 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         candidate.free.assert_called_once()
         detached_create.assert_not_called()
 
+    def test_translucent_unshaded_surface_uses_shared_cells_without_strokes(self):
+        import _noon_spatial as native
+
+        for fill, opacity in [(noon.RED, 0.5), (noon.Color(0.8, 0.2, 0.1, 0.5), 1.0)]:
+            with self.subTest(fill=fill, opacity=opacity):
+                candidate = Mock()
+                plan = SimpleNamespace(
+                    parameters=lambda: (0, 0, 0, 1, 1, 0, 1, 1),
+                    finishCells=Mock(return_value=candidate),
+                    free=Mock(),
+                )
+                family = _family_handle()
+                with patch.object(native, "_surface_plan", return_value=plan), \
+                     patch.object(native, "_mesh_family_options", object()), \
+                     patch.object(native, "_bulk", side_effect=tuple), \
+                     patch.object(native, "_create_mesh_family", return_value=family), \
+                     patch.object(spatial, "_path_authoring_context", return_value=None):
+                    surface = spatial.Surface(
+                        lambda u, v: (u, v, 0), resolution=(1, 1), shade_in_3d=False,
+                        checkerboard_colors=False, stroke_width=0,
+                        fill_color=fill, fill_opacity=opacity,
+                    )
+
+                plan.finishCells.assert_called_once_with(
+                    (0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0), (),
+                )
+                candidate.setFill.assert_called_once_with(
+                    fill.red, fill.green, fill.blue, fill.alpha, opacity,
+                )
+                self.assertIs(surface._semantic_family_handle, family)
+
     def test_surface_live_binding_error_preserves_typed_error_without_freeing_consumed_options(self):
         import _noon_spatial as native
 

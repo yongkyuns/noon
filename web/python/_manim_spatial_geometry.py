@@ -274,7 +274,7 @@ class Surface(_Mesh3D, _compat.Group):
         opacity = _opacity("fill opacity", fill_opacity)
         stroke_opacity = _opacity("stroke opacity", stroke_opacity)
         stroke_width = _manim_stroke_width(stroke_width)
-        fill = _color(fill_color)
+        fill = _as_color("fill_color", fill_color)
         stroke = _as_color("stroke_color", stroke_color)
         if checkerboard_colors is not False:
             try:
@@ -286,8 +286,7 @@ class Surface(_Mesh3D, _compat.Group):
             checkerboard_colors = tuple(_color(value, "checkerboard color")
                                         for value in checkerboard_colors)
         if (checkerboard_colors is False and stroke_width == 0.0 and not shade_in_3d
-                and not _force_surface_family):
-            _require_opaque(fill_opacity)
+                and opacity == 1.0 and fill.alpha == 1.0 and not _force_surface_family):
             if _analytic_factory is not None and normal is None:
                 # Analytic solids share Surface's fully validated opt-out
                 # profile, but keep their typed Rust geometry factory.
