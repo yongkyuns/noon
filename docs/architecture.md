@@ -1779,9 +1779,9 @@ distinct retained material profiles; native point lighting remains a separate
 explicit profile. Unsupported option combinations still reject instead of
 silently substituting another result. The bounded extensions below have paired
 Rust/Python and backend qualification in
-[#1891](https://github.com/yongkyuns/noon/pull/1891); this does not qualify the
-untouched camera examples recorded in #254 and owned by #1879. The opaque indexed-mesh profile remains
-available without cell-family overhead.
+[#1891](https://github.com/yongkyuns/noon/pull/1891). The pinned camera examples
+have their own qualification records in [#254](https://github.com/yongkyuns/noon/issues/254).
+The opaque indexed-mesh profile remains available without cell-family overhead.
 
 Sampled `Surface` cell families retain UV roles on ordinary semantic mesh
 objects. The default `shade_in_3d=True` path records Cairo-compatible endpoint
@@ -1936,10 +1936,7 @@ physical-device 60 FPS evidence.
 
 ### Remaining capability and qualification
 
-The next work extends these profiles rather than replacing their architecture.
-Detailed batches, dependencies and evidence belong in
-[#1879](https://github.com/yongkyuns/noon/issues/1879) and its linked owners;
-this overview is not another implementation checklist.
+Track new capability batches and qualification with the owners below.
 
 | Workstream | Current qualification and owner |
 | --- | --- |
