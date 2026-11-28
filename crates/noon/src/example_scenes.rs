@@ -58,6 +58,7 @@ pub mod hand_drawn_paths;
 pub mod hatch_paint;
 pub mod image_fill;
 pub mod image_glow;
+pub mod line3d_sketch_silhouette;
 pub mod line_passing_flash;
 pub mod linear_gradient;
 pub mod live_geometry_construction;

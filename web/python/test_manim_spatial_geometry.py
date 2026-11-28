@@ -929,6 +929,27 @@ class SpatialGeometryAdapterTests(unittest.TestCase):
         self.assertEqual(semantic._family_member_handle(mesh), ("family", family))
         self.assertIs(mesh.submobjects[0]._semantic_handle, member)
 
+    def test_line3d_membership_accepts_sketch_family_and_plain_mesh(self):
+        import _noon_spatial as native
+
+        fill, outline = (
+            SimpleNamespace(semanticSlot=slot, semanticGeneration=1) for slot in (1, 2)
+        )
+        family = _family_handle((fill, outline))
+        with patch.object(native, "_mesh_options", Mock()), \
+             patch.object(native, "_create_mesh_family", return_value=family), \
+             patch.object(spatial, "_path_authoring_context", return_value=None), \
+             patch("_noon_host.array_value", side_effect=tuple):
+            sketch = spatial.Line3D(stroke=noon.SketchStroke(noon.TEAL))
+        with patch.object(Mesh3D, "line3d", return_value=SimpleNamespace(_semantic_handle=fill)):
+            plain = spatial.Line3D(checkerboard_colors=False, shade_in_3d=False, stroke_width=0)
+
+        self.assertEqual(semantic._family_member_handle(sketch), ("family", family))
+        self.assertEqual([leaf._semantic_handle for leaf in sketch.submobjects], [fill, outline])
+        self.assertIsInstance(sketch, spatial.Line3D)
+        self.assertNotIsInstance(plain, compat.Group)
+        self.assertEqual(semantic._family_member_handle(plain), ("mobject", fill))
+
     def test_prism_family_setter_failure_frees_unconsumed_options_once(self):
         import _noon_spatial as native
 

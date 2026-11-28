@@ -100,7 +100,7 @@ _canonical_authoring_context
 _register_top_level _edit_membership _bind_camera_frame
 """.split())
 _SOURCE_LINEAR_MEMBERS = frozenset("background_plane add_coordinates add_vector apply_matrix".split())
-_SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Cube Prism Sphere Cylinder Cone Torus Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
+_SOURCE_SPATIAL_CONSTRUCTORS = frozenset("Cube Prism Sphere Cylinder Cone Torus Line3D Dot3D Mesh3D ThreeDAxes Typst WorldTransformTo".split())
 _SOURCE_COLOR_CONSTANTS = frozenset("""
 BLACK WHITE BLUE BLUE_A BLUE_B BLUE_C BLUE_D BLUE_E GREEN GREEN_A GREEN_B GREEN_C
 GREEN_D GREEN_E RED RED_A RED_B RED_C RED_D RED_E YELLOW ORANGE PINK LIGHT_PINK
@@ -3470,6 +3470,23 @@ class _SceneOnlySource(ast.NodeVisitor):
                              and values["shade_in_3d"].value is False))
             if node.func.id == "ThreeDAxes":
                 return not node.args and not node.keywords
+            if node.func.id == "Line3D":
+                positional = ("start", "end", "thickness", "color", "resolution",
+                              "checkerboard_colors", "stroke_width", "shade_in_3d")
+                if len(node.args) > len(positional) or set(positional[:len(node.args)]) & values.keys():
+                    return False
+                values.update(zip(positional, node.args))
+                return (self._trusted_noon_binding(node.func.id)
+                        and set(values) <= set(positional) | {"stroke"}
+                        and self._trusted_sketch_call(values.get("stroke"))
+                        and all(self._finite_tuple(values[name], 3)
+                                for name in ("start", "end") if name in values)
+                        and all(self._finite_number(values[name])
+                                for name in ("thickness", "stroke_width") if name in values)
+                        and all(isinstance(values[name], ast.Constant) and values[name].value is False
+                                for name in ("checkerboard_colors", "shade_in_3d") if name in values)
+                        and ("resolution" not in values or self._finite_number(values["resolution"], integers=True))
+                        and ("color" not in values or self._spatial_color(values["color"])))
             if node.func.id in {"Sphere", "Cylinder", "Cone", "Torus"}:
                 sphere = node.func.id == "Sphere"
                 cone = node.func.id == "Cone"

@@ -15,12 +15,18 @@ class SourceEffectsTests(unittest.TestCase):
             "cube_sketch_wireframe.py", "prism_sketch_wireframe.py",
             "mesh_sketch_creases.py", "mesh_sketch_silhouette.py",
             "sphere_sketch_silhouette.py", "cylinder_sketch_silhouette.py", "cone_sketch_silhouette.py",
-            "torus_sketch_silhouette.py",
+            "torus_sketch_silhouette.py", "line3d_sketch_silhouette.py",
         ):
             with self.subTest(demo=name):
                 source = Path(__file__).with_name("examples").joinpath(name).read_text()
                 self.assertEqual(source_execution_proof(source, auto_prepare_latex=True),
                                  {"admitted": True, "reason": None})
+
+    def test_sketch_line3d_prepares_explicit_unshaded_options(self):
+        source = Path(__file__).with_name("examples").joinpath("line3d_sketch_silhouette.py").read_text()
+        source = source.replace("stroke=SketchStroke", "checkerboard_colors=False, shade_in_3d=False, stroke=SketchStroke")
+        self.assertTrue(source_execution_proof(source)["admitted"])
+        self.assertFalse(source_execution_proof(source.replace("shade_in_3d=False", "shade_in_3d=True"))["admitted"])
 
     def test_helper_proof_work_scales_with_call_sites(self):
         def visits(count):

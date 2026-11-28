@@ -76,6 +76,38 @@ fn prism_sketch_options_place_one_edge_in_each_supporting_plane() {
     assert_eq!(unique.len(), 12);
 }
 
+#[test]
+fn line_3d_sketch_places_the_fill_and_outline_on_the_same_tube() {
+    let start = SemanticVec3::new(1.0, -2.0, 3.0);
+    let end = SemanticVec3::new(2.0, 0.0, -1.0);
+    let sketch = SketchStroke::new(0.8, 27).unwrap();
+    let build = |ends, radius| {
+        line_3d_sketch_options(ends, radius, 24, Color::BLUE, Color::WHITE, 0.05, sketch)
+    };
+    let (mesh, outline) = build([start, end], 0.4).unwrap();
+    assert_eq!(
+        outline.material,
+        SemanticSpatialMaterial::CylinderSilhouette
+    );
+    assert_eq!(outline.style.sketch_stroke, Some(sketch));
+    for (transform, low, high) in [(mesh.transform, 0.0, 2.0), (outline.transform, -1.0, 1.0)] {
+        for (z, endpoint) in [(low, start), (high, end)] {
+            let cap = transform
+                .transform_point(SemanticVec3::new(0.0, 0.0, z))
+                .unwrap();
+            assert!(
+                (cap.x - endpoint.x)
+                    .hypot(cap.y - endpoint.y)
+                    .hypot(cap.z - endpoint.z)
+                    < 1e-12
+            );
+        }
+        assert_eq!((transform.scale.x, transform.scale.y), (0.4, 0.4));
+    }
+    assert!(build([start, start], 0.4).is_err());
+    assert!(build([start, end], 0.0).is_err());
+}
+
 fn offset_mesh() -> MeshOptions {
     let positions = vec![
         SemanticVec3::new(10.0, 0.0, 0.0),

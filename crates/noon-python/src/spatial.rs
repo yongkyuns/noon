@@ -102,6 +102,25 @@ impl MeshInput {
             .map_err(engine_error)
     }
     #[staticmethod]
+    #[pyo3(name = "sketchLine3D")]
+    fn sketch_line_3d(
+        start: Vec<f64>,
+        end: Vec<f64>,
+        thickness: f64,
+        segments: usize,
+        fill: Vec<f64>,
+        stroke: Vec<f64>,
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<MeshFamilyInput, PyErr> {
+        input::SpatialMeshInput::sketch_line_3d(
+            &start, &end, thickness, segments, &fill, &stroke, width, roughness, seed,
+        )
+        .map(Into::into)
+        .map_err(engine_error)
+    }
+    #[staticmethod]
     fn polyhedron(vertices: Vec<f64>, faces: Vec<u32>) -> Result<Self, PyErr> {
         input::SpatialMeshInput::polyhedron(&vertices, &faces)
             .map(Into::into)

@@ -106,6 +106,25 @@ impl WasmMeshOptions {
             .map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = sketchLine3D)]
+    pub fn sketch_line_3d(
+        start: &[f64],
+        end: &[f64],
+        thickness: f64,
+        segments: usize,
+        fill: &[f64],
+        stroke: &[f64],
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<WasmMeshFamilyOptions, JsValue> {
+        input::SpatialMeshInput::sketch_line_3d(
+            start, end, thickness, segments, fill, stroke, width, roughness, seed,
+        )
+        .map(Into::into)
+        .map_err(js_error)
+    }
+
     pub fn polyhedron(vertices: &[f64], faces: &[u32]) -> Result<Self, JsValue> {
         input::SpatialMeshInput::polyhedron(vertices, faces)
             .map(Into::into)
