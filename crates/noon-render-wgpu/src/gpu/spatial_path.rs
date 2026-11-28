@@ -699,7 +699,8 @@ impl SpatialPathGpuState {
                 };
                 keyed.specialization.refine_contour = matches!(
                     spatial.material,
-                    SemanticSpatialMaterial::ConeSilhouette
+                    SemanticSpatialMaterial::CylinderSilhouette
+                        | SemanticSpatialMaterial::ConeSilhouette
                         | SemanticSpatialMaterial::TorusSilhouette(_)
                 );
                 let cairo = if spatial.material == SemanticSpatialMaterial::CairoPath {

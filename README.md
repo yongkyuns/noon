@@ -152,6 +152,10 @@ The [torus sketch demo](web/python/examples/torus_sketch_silhouette.py) uses
 `Torus(stroke=SketchStroke(TEAL))` with an opaque, unlit fill. Its inner rim
 closes as the camera approaches edge-on while the outer contour stays visible.
 Run the paired Rust demo with `cargo run -p noon-native --example torus_sketch_silhouette`.
+The [sketched Line3D demo](web/python/examples/line3d_sketch_silhouette.py) uses
+`Line3D(start, end, thickness=0.62, stroke=SketchStroke(TEAL))` to sketch the
+capped tube between two endpoints. Thickness is the tube radius.
+Run the paired Rust demo with `cargo run -p noon-native --example line3d_sketch_silhouette`.
 Use `obj.set_stroke(SketchStroke(TEAL), width=3)` to style an existing shape,
 text object, or group. `SVGMobject`, `Axes`, and `VGroup` also accept the
 `stroke=` option at construction.

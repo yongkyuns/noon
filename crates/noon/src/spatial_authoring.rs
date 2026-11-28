@@ -247,6 +247,37 @@ pub(crate) fn axial_sketch_options(
     Ok((mesh, path))
 }
 
+pub(crate) fn line_3d_sketch_options(
+    [start, end]: [SemanticVec3; 2],
+    thickness: f64,
+    segments: usize,
+    fill: Color,
+    stroke: Color,
+    width: f64,
+    sketch: SketchStroke,
+) -> Result<(MeshOptions, SpatialPathOptions), AuthoringError> {
+    let (direction, height) =
+        noon_geometry::line_3d_axis(start, end).map_err(|_| AuthoringError::NonFiniteGeometry)?;
+    let (mut mesh, mut outline) = axial_sketch_options(
+        [thickness, height],
+        SemanticSpatialMaterial::CylinderSilhouette,
+        direction,
+        segments,
+        fill,
+        stroke,
+        width,
+        sketch,
+    )?;
+    // The mesh starts at the first cap; the analytic unit slab is centered.
+    mesh.transform.translation = start;
+    outline.transform.translation = SemanticVec3::new(
+        start.x.midpoint(end.x),
+        start.y.midpoint(end.y),
+        start.z.midpoint(end.z),
+    );
+    Ok((mesh, outline))
+}
+
 pub(crate) fn torus_sketch_options(
     [major_radius, minor_radius]: [f64; 2],
     resolution: [usize; 2],
@@ -1029,6 +1060,24 @@ impl Scene {
             sketch,
         )?;
         self.mesh_family_with_paths(vec![mesh], vec![path])
+    }
+
+    /// Admit a capped tube between two endpoints and its retained sketch contour.
+    /// Thickness is the tube radius, as in the plain Line3D mesh.
+    #[allow(clippy::too_many_arguments)]
+    pub fn line_3d_sketch_silhouette(
+        &mut self,
+        endpoints: [SemanticVec3; 2],
+        thickness: f64,
+        segments: usize,
+        fill: Color,
+        stroke: Color,
+        width: f64,
+        sketch: SketchStroke,
+    ) -> Result<MobjectFamily, AuthoringError> {
+        let (mesh, outline) =
+            line_3d_sketch_options(endpoints, thickness, segments, fill, stroke, width, sketch)?;
+        self.mesh_family_with_paths(vec![mesh], vec![outline])
     }
 
     /// Admit an opaque capped cone and its retained projected contour, with the tip at the origin.

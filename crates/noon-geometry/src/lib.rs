@@ -32,7 +32,7 @@ pub use smoothing::{
     SplineBoundary,
 };
 mod mesh_helpers;
-pub use mesh_helpers::{line_3d_mesh, triangular_polyhedron_mesh};
+pub use mesh_helpers::{line_3d_axis, line_3d_mesh, triangular_polyhedron_mesh};
 
 pub use solids::{
     cone_mesh, cone_mesh_range, cone_parts, cone_parts_range, cube_mesh, cylinder_mesh,

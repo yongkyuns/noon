@@ -302,6 +302,32 @@ impl SpatialMeshInput {
         .map_err(|e| invalid("spatial.invalid_mesh", e))
     }
 
+    pub fn sketch_line_3d(
+        start: &[f64],
+        end: &[f64],
+        thickness: f64,
+        segments: usize,
+        fill: &[f64],
+        stroke: &[f64],
+        width: f64,
+        roughness: f64,
+        seed: u32,
+    ) -> Result<SpatialMeshFamilyInput, AuthoringFailure> {
+        let (mesh, outline) = crate::spatial_authoring::line_3d_sketch_options(
+            [vec3(start, "start")?, vec3(end, "end")?],
+            thickness,
+            segments,
+            rgba(fill)?,
+            rgba(stroke)?,
+            width,
+            sketch_stroke(roughness, seed)?,
+        )?;
+        Ok(SpatialMeshFamilyInput::with_sketch_outlines(
+            mesh,
+            vec![outline],
+        ))
+    }
+
     /// Explicit triangular faces preserve winding and use flat normals.
     pub fn polyhedron(vertices: &[f64], faces: &[u32]) -> Result<Self, AuthoringFailure> {
         let (vertices, faces) = polyhedron_input(vertices, faces)?;

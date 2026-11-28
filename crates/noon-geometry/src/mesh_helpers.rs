@@ -3,6 +3,22 @@ use crate::surface::normalize;
 use crate::{cylinder_mesh, SurfaceError, MAX_SURFACE_CELLS, MAX_SURFACE_VERTICES};
 use noon_core::{MeshResource, SemanticRotation3D, SemanticVec3};
 
+/// Return an endpoint-defined tube's axis vector and length.
+pub fn line_3d_axis(
+    start: SemanticVec3,
+    end: SemanticVec3,
+) -> Result<(SemanticVec3, f64), SurfaceError> {
+    if !start.is_finite() || !end.is_finite() {
+        return Err(SurfaceError::NonFinitePosition);
+    }
+    let axis = SemanticVec3::new(end.x - start.x, end.y - start.y, end.z - start.z);
+    let length = axis.x.hypot(axis.y).hypot(axis.z);
+    if !length.is_finite() || length <= 0.0 {
+        return Err(SurfaceError::InvalidRange);
+    }
+    Ok((axis, length))
+}
+
 /// A closed cylindrical line with world-space endpoints. Like Manim's Line3D,
 /// `thickness` is the cylinder radius. Geometry is prepared once; ordinary world
 /// transforms animate the retained resource.
@@ -12,15 +28,11 @@ pub fn line_3d_mesh(
     thickness: f64,
     segments: usize,
 ) -> Result<MeshResource, SurfaceError> {
-    if !start.is_finite() || !end.is_finite() {
-        return Err(SurfaceError::NonFinitePosition);
-    }
-    let delta = SemanticVec3::new(end.x - start.x, end.y - start.y, end.z - start.z);
-    let length = delta.x.hypot(delta.y).hypot(delta.z);
-    if !length.is_finite() || length <= 0.0 || !thickness.is_finite() || thickness <= 0.0 {
+    let (axis, length) = line_3d_axis(start, end)?;
+    if !thickness.is_finite() || thickness <= 0.0 {
         return Err(SurfaceError::InvalidRange);
     }
-    let direction = normalize(delta).ok_or(SurfaceError::InvalidRange)?;
+    let direction = normalize(axis).ok_or(SurfaceError::InvalidRange)?;
     let sine = direction.x.hypot(direction.y);
     let rotation = if sine > 0.0 {
         SemanticRotation3D::from_axis_angle(
