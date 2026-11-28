@@ -13,13 +13,15 @@ const MANIM_DEFAULT_CLEAR_COLOR: wgpu::Color = wgpu::Color {
 mod wasm {
     use crate::audio_output::{ViewerAudioControls, WebAudioOutput};
     use crate::browser_pointer_input::{
-        self, BrowserPointerBinding, BrowserPointerInput, BrowserPointerKind, BrowserPointerTarget,
+        self, BrowserPointerAdmissionError, BrowserPointerBinding, BrowserPointerInput,
+        BrowserPointerKind, BrowserPointerTarget,
     };
     use crate::direct_pointer_presentation::DirectPointerPresentation;
     use noon::integration::scene_execution::{self, ExecutionSession};
     use noon::integration::{
         ForwardSample, ForwardSampleStatus, NativePointerInputPublication, NativePointerInputToken,
-        PointerSelectionPresentation, RendererPublication,
+        PointerFrameError, PointerFrameSnapshot, PointerFrameView, PointerSelectionPresentation,
+        RendererPublication,
     };
     use noon::{
         LiveContinuation, LiveProgram, LiveProgramStatus, RustHostCallbackTable, SceneExecution,
@@ -462,13 +464,6 @@ mod wasm {
         ) -> Result<noon_core::Camera2DState, noon::integration::PointerFrameError> {
             BrowserPointerTarget::inspection_camera(&self.program)
         }
-        fn capture_pointer_frame(
-            &self,
-            view: noon::integration::PointerFrameView,
-        ) -> Result<noon::integration::PointerFrameSnapshot, noon::integration::PointerFrameError>
-        {
-            BrowserPointerTarget::capture_pointer_frame(&self.program, view)
-        }
         fn validate_pointer_frame(
             &self,
             frame: &noon::integration::PointerFrameSnapshot,
@@ -483,6 +478,31 @@ mod wasm {
             view: noon::integration::PointerFrameView,
         ) -> Result<NativePointerInputToken, noon::integration::PointerFrameError> {
             BrowserPointerTarget::pointer_input_token_for_frame(&self.program, frame, view)
+        }
+        fn capture_pointer_frame(
+            &mut self,
+            view: PointerFrameView,
+        ) -> Result<PointerFrameSnapshot, PointerFrameError> {
+            self.program.capture_pointer_frame(view)
+        }
+        fn pointer_frame_needs_refresh(&self, frame: &PointerFrameSnapshot) -> bool {
+            frame.needs_input_refresh(self.program.session())
+        }
+        fn validate_pointer_position(
+            &mut self,
+            frame: &PointerFrameSnapshot,
+            view: PointerFrameView,
+            surface: Vec2,
+        ) -> Result<(), BrowserPointerAdmissionError> {
+            self.program.validate_pointer_position(frame, view, surface)
+        }
+        fn pointer_frame_token(
+            &mut self,
+            frame: &PointerFrameSnapshot,
+            view: PointerFrameView,
+            surface: Vec2,
+        ) -> Result<NativePointerInputToken, BrowserPointerAdmissionError> {
+            self.program.pointer_frame_token(frame, view, surface)
         }
         fn observe_pointer_frame(
             &mut self,
@@ -676,6 +696,7 @@ mod wasm {
                 DirectSourceAuthority::Prepared(playback) => playback.reader.publication_context(),
             }
         }
+        #[cfg(any(debug_assertions, feature = "renderer-smoke"))]
         fn inspection_view_revision(&self) -> u64 {
             match &self.authority {
                 DirectSourceAuthority::Session { session, .. } => {
@@ -779,6 +800,26 @@ mod wasm {
                 #[cfg(feature = "prepared-prefix")]
                 DirectSourceAuthority::Prepared(playback) => playback.seek(time).map_err(js_error),
             }
+        }
+
+        fn capture_pointer_presentation(
+            &mut self,
+            presentation: &DirectPointerPresentation,
+            camera: Camera2DState,
+        ) -> Result<Option<PointerFrameSnapshot>, JsValue> {
+            match &mut self.authority {
+                DirectSourceAuthority::Session { session, .. } => {
+                    presentation.capture(session.as_mut(), camera)
+                }
+                DirectSourceAuthority::Program(program) => {
+                    presentation.capture(program.as_mut(), camera)
+                }
+                #[cfg(feature = "prepared-prefix")]
+                DirectSourceAuthority::Prepared(playback) => {
+                    presentation.capture(&mut playback.reader, camera)
+                }
+            }
+            .map_err(js_error)
         }
 
         fn refresh_pointer_hover(
@@ -3241,16 +3282,13 @@ mod wasm {
                 .map_err(js_error)?
             };
             let camera = self.renderer.camera();
-            let pointer_frame = self
-                .pointer_presentation
-                .capture(
-                    self.source.pointer_target(),
-                    Camera2DState {
-                        center: camera.center,
-                        height: camera.world_size.y,
-                    },
-                )
-                .map_err(js_error)?;
+            let pointer_frame = self.source.capture_pointer_presentation(
+                &self.pointer_presentation,
+                Camera2DState {
+                    center: camera.center,
+                    height: camera.world_size.y,
+                },
+            )?;
             let half_extent = camera.world_size * 0.5;
             let presentation = self.source.pointer_selection_presentation();
             let overlay = presentation

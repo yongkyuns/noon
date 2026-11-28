@@ -110,10 +110,8 @@ struct Host {
 }
 impl Host {
     fn present(&mut self) {
-        let frame = self
-            .presentation
-            .capture(&self.reader, self.reader.inspection_camera().unwrap())
-            .unwrap();
+        let camera = self.reader.inspection_camera().unwrap();
+        let frame = self.presentation.capture(&mut self.reader, camera).unwrap();
         self.reader.take_renderer_publication();
         // Model the existing canvas host's successful submit/present boundary.
         self.presentation.did_present(frame);
@@ -190,10 +188,8 @@ fn prefix_browser_capture_is_not_presentation_and_click_works_after_source_drop(
     let object = source.session.execution_object_id(node).unwrap();
     let before = host.reader.frame().clone();
     let context = host.reader.publication_context();
-    let captured = host
-        .presentation
-        .capture(&host.reader, host.reader.inspection_camera().unwrap())
-        .unwrap();
+    let camera = host.reader.inspection_camera().unwrap();
+    let captured = host.presentation.capture(&mut host.reader, camera).unwrap();
     assert!(captured.is_some());
     assert!(!host.send(BrowserPointerKind::Press, 1).unwrap());
     assert_eq!(host.sequence, 0);
@@ -406,7 +402,7 @@ fn prefix_browser_worker_requires_render_ack_and_rejects_delayed_receipt() {
             },
         )
         .unwrap();
-    let frame = worker.capture(&host.reader).unwrap();
+    let frame = worker.capture(&mut host.reader).unwrap();
     host.reader.take_renderer_publication();
     worker.issue(7, 0, frame);
     let receipt = WorkerPointerReceipt {
@@ -449,7 +445,7 @@ fn prefix_browser_worker_requires_render_ack_and_rejects_delayed_receipt() {
     assert_eq!(host.reader.selected_pointer_target(), Some(source.node));
     host.reader.seek(0.75).unwrap();
     assert!(worker.needs_delta(&host.reader));
-    let frame = worker.capture(&host.reader).unwrap();
+    let frame = worker.capture(&mut host.reader).unwrap();
     worker.issue(7, 1, frame);
     assert!(!worker.note_presented(&mut host.reader, receipt).unwrap());
     assert!(!worker

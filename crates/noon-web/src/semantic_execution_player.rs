@@ -142,9 +142,12 @@ pub struct SemanticExecutionPlayer {
     callback_geometry_sources: GeometryResourceArena,
     clock: PlaybackClock,
     video: BrowserVideoReadiness,
-    /// Admission-time endpoint of the finite audio profile, derived from the
+    /// Admission-time endpoint of finite audio/scene-control playback, derived from the
     /// existing runtime/scalar schedules. It is never advanced by device time.
-    finite_audio_end: Option<f64>,
+    finite_transport_end: Option<f64>,
+    /// One committed viewer request awaiting platform audio activation, never
+    /// another input queue or execution authority.
+    pending_scene_control: Option<audio::PendingSceneControl>,
     finite_export: Option<export::FiniteExport>,
     section_navigation: noon::SceneSectionNavigation,
     encoder: RetainedFamilyExecutionDeltaEncoder,
@@ -394,7 +397,10 @@ impl SemanticExecutionPlayer {
         if !duration.is_finite() || duration <= 0.0 {
             return Err(format!("invalid playback duration {duration}"));
         }
-        if session.has_required_callbacks() || session.has_audio() {
+        if session.has_required_callbacks()
+            || session.has_audio()
+            || session.has_playback_controls()
+        {
             Ok(PlaybackClock::once())
         } else {
             PlaybackClock::looping(duration).map_err(|error| error.to_string())
@@ -479,7 +485,7 @@ impl SemanticExecutionPlayer {
         transport_session: u32,
     ) -> Result<Self, String> {
         let session = source.session();
-        Self::require_worker_execution_profile(session)?;
+        let finite_end = Self::require_worker_execution_profile(session)?;
         let clock = Self::playback_clock(session, duration)?;
         let resource_bundle = Self::resource_bundle_for(session)?;
         let encoder = RetainedFamilyExecutionDeltaEncoder::new_with_resources(
@@ -490,9 +496,8 @@ impl SemanticExecutionPlayer {
             .encode_binary()
             .map_err(|error| error.to_string())?;
         Ok(Self {
-            finite_audio_end: session
-                .has_audio()
-                .then(|| duration.max(session.finite_timeline_end_time().unwrap())),
+            finite_transport_end: finite_end.map(|end| duration.max(end)),
+            pending_scene_control: None,
             finite_export: None,
             section_navigation: Default::default(),
             source,
@@ -566,24 +571,26 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())
     }
 
-    fn require_worker_execution_profile(session: &ExecutionSession) -> Result<(), String> {
-        if session.has_audio()
-            && (session.finite_timeline_end_time().is_none() || session.replay_scope_active())
-        {
-            return Err("worker audio requires a complete finite immutable timeline without source history or callbacks (#2263)".into());
-        }
+    fn require_worker_execution_profile(session: &ExecutionSession) -> Result<Option<f64>, String> {
         if session.has_playback_controls() {
-            return Err(
-                "scene playback controls through the Python/render worker channel are not available yet; use the finite direct Rust/WASM playback host (#2263)".into(),
-            );
+            return session.finite_playback_end_time().map(Some).ok_or_else(|| {
+                "scene playback controls require a complete finite immutable timeline without source history, callbacks or external input drivers (#2263)".into()
+            });
         }
-        Ok(())
+        if !session.has_audio() {
+            return Ok(None);
+        }
+        session.finite_timeline_end_time().filter(|_| !session.replay_scope_active()).map(Some).ok_or_else(||
+            "worker audio requires a complete finite immutable timeline without source history or callbacks (#2263)".into())
     }
 
     /// Request bounded history only for sequential source execution. Pre-authored
     /// immutable plans already contain their complete timeline and need no journal.
     #[cfg(any(target_arch = "wasm32", test))]
     pub(crate) fn begin_replay_retention(&mut self) -> Result<(), String> {
+        if self.source.session().has_playback_controls() {
+            return Err("scene playback controls require immutable execution (#2263)".into());
+        }
         self.source
             .session_mut()
             .begin_replay_retention(noon_runtime::ReplayLimits::default())
@@ -603,20 +610,11 @@ impl SemanticExecutionPlayer {
             );
         }
         self.validate_live_loop_duration(duration)?;
-        let finite_audio_end = if self.source.session().has_audio() {
-            Some(
-                duration.max(
-                    self.source
-                        .session()
-                        .finite_timeline_end_time()
-                        .ok_or("worker audio lost finite admission")?,
-                ),
-            )
-        } else {
-            None
-        };
+        let session = self.source.session();
+        let finite_transport_end =
+            Self::require_worker_execution_profile(session)?.map(|end| duration.max(end));
         let mut clock = self.clock.clone();
-        if !self.source.session().has_required_callbacks() && !self.source.session().has_audio() {
+        if !session.has_required_callbacks() && finite_transport_end.is_none() {
             clock
                 .set_loop_duration(duration)
                 .map_err(|error| error.to_string())?;
@@ -634,7 +632,8 @@ impl SemanticExecutionPlayer {
             .map_err(|error| error.to_string())?;
         self.video = BrowserVideoReadiness::default();
         self.clock = clock;
-        self.finite_audio_end = finite_audio_end;
+        self.pending_scene_control = None;
+        self.finite_transport_end = finite_transport_end;
         self.resource_bundle = resource_bundle;
         self.encoder = encoder;
         self.worker_pointer_presentation = Default::default();
@@ -1139,7 +1138,7 @@ impl SemanticExecutionPlayer {
         let mut wake = self.source.session().wake_state();
         if callback_blocked || !self.clock.is_playing() || self.video.waiting() {
             wake = wake.without_timeline_wake();
-        } else if let Some(end) = self.finite_audio_end {
+        } else if let Some(end) = self.finite_transport_end {
             wake = wake.with_additional_timeline(TimelineWakeState::Deadline(end));
         } else if let Some(loop_duration) = self.clock.loop_duration() {
             // A completed authored wait has duration even without animated
@@ -1370,6 +1369,11 @@ impl SemanticExecutionPlayer {
         &mut self,
         targets: &[noon::Mobject],
     ) -> Result<(), String> {
+        if self.source.session().has_playback_controls() && !targets.is_empty() {
+            return Err(
+                "scene playback controls do not admit live translation dragging (#2263)".into(),
+            );
+        }
         self.with_live_session(|live| live.set_translation_drag_targets(targets.iter()))
             .map_err(|error| error.to_string())
     }
@@ -1475,12 +1479,13 @@ impl SemanticExecutionPlayer {
             .map_err(|e| e.to_string())?;
         #[cfg(any(target_arch = "wasm32", test))]
         let (pointer_frame, pointer_refresh, planar_enabled) = {
-            let target = pointer_input::PlayerPointerTarget {
+            let mut target = pointer_input::PlayerPointerTarget {
                 source: &mut self.source,
                 translation_drag_undo: &mut self.translation_drag_undo,
+                control_publication: None,
             };
             (
-                self.worker_pointer_presentation.capture(&target)?,
+                self.worker_pointer_presentation.capture(&mut target)?,
                 self.worker_pointer_presentation.needs_delta(&target),
                 self.finite_export.is_none() && target.uses_planar_viewer_input(),
             )
@@ -2502,13 +2507,13 @@ impl SemanticExecutionPlayer {
             .scene_time(timestamp_ms)
             .map_err(|error| error.to_string())?;
         let requested = self
-            .finite_audio_end
+            .finite_transport_end
             .map_or(requested, |end| requested.min(end));
         let Some(requested) = self.video_tick_time(requested) else {
             return Ok(None);
         };
         let phase = self.advance_to_callback_phase(requested)?;
-        if self.finite_audio_end == Some(requested) {
+        if self.finite_transport_end == Some(requested) {
             clock.seek(requested).map_err(|error| error.to_string())?;
             clock.pause();
         }
@@ -2958,14 +2963,29 @@ impl SemanticExecutionPlayer {
         let mut target = pointer_input::PlayerPointerTarget {
             source,
             translation_drag_undo,
+            control_publication: None,
         };
-        worker_pointer_presentation.submit(
+        let accepted = worker_pointer_presentation.submit(
             &mut target,
             browser_pointer_binding,
             next_native_event_sequence,
             envelope.input,
             envelope.presentation,
-        )
+        );
+        if matches!(accepted, Ok(true)) {
+            if let Some(publication) = target.control_publication {
+                self.pending_scene_control = Some(audio::PendingSceneControl {
+                    sequence: publication.input().sequence(),
+                    publication: publication.publication(),
+                    action: publication.playback_control().expect("captured control"),
+                });
+            } else if envelope.input.cancellation().is_some() {
+                self.pending_scene_control = None;
+            }
+        } else {
+            self.pending_scene_control = None;
+        }
+        accepted
     }
 
     /// Whether the preview can undo its most recent authored translation drag.
@@ -3061,8 +3081,14 @@ impl SemanticExecutionPlayer {
         let mut target = pointer_input::PlayerPointerTarget {
             source,
             translation_drag_undo,
+            control_publication: None,
         };
-        worker_pointer_presentation.scroll(&mut target, browser_pointer_binding, input)
+        let changed =
+            worker_pointer_presentation.scroll(&mut target, browser_pointer_binding, input)?;
+        if changed == Some(true) {
+            self.pending_scene_control = None;
+        }
+        Ok(changed)
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3070,6 +3096,7 @@ impl SemanticExecutionPlayer {
     pub fn set_browser_pointer_view_json(&mut self, json: &str) -> Result<(), String> {
         let view =
             serde_json::from_str(json).map_err(|e| format!("invalid pointer view JSON: {e}"))?;
+        let changed = self.worker_pointer_presentation.view() != Some(view);
         let Self {
             source,
             translation_drag_undo,
@@ -3081,13 +3108,18 @@ impl SemanticExecutionPlayer {
         let mut target = pointer_input::PlayerPointerTarget {
             source,
             translation_drag_undo,
+            control_publication: None,
         };
         worker_pointer_presentation.set_view(
             &mut target,
             browser_pointer_binding,
             next_native_event_sequence,
             view,
-        )
+        )?;
+        if changed {
+            self.pending_scene_control = None;
+        }
+        Ok(())
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -3098,6 +3130,7 @@ impl SemanticExecutionPlayer {
         let mut target = pointer_input::PlayerPointerTarget {
             source: &mut self.source,
             translation_drag_undo: &mut self.translation_drag_undo,
+            control_publication: None,
         };
         self.worker_pointer_presentation
             .note_presented(&mut target, receipt)
@@ -3119,13 +3152,18 @@ impl SemanticExecutionPlayer {
         let mut target = pointer_input::PlayerPointerTarget {
             source,
             translation_drag_undo,
+            control_publication: None,
         };
-        worker_pointer_presentation.invalidate(
+        let invalidated = worker_pointer_presentation.invalidate(
             &mut target,
             browser_pointer_binding,
             next_native_event_sequence,
             receipt,
-        )
+        )?;
+        if invalidated {
+            self.pending_scene_control = None;
+        }
+        Ok(invalidated)
     }
 
     /// Decode one ordered native event at the genuine worker control-port boundary.
@@ -3273,13 +3311,13 @@ impl SemanticExecutionPlayer {
     pub fn tick_delta_json(&mut self, timestamp_ms: f64) -> Result<Option<String>, String> {
         let mut clock = self.clock.clone();
         let time = clock.scene_time(timestamp_ms).map_err(|e| e.to_string())?;
-        let time = self.finite_audio_end.map_or(time, |end| time.min(end));
+        let time = self.finite_transport_end.map_or(time, |end| time.min(end));
         let Some(time) = self.video_tick_time(time) else {
             return Ok(None);
         };
         scene_execution::evaluate(self.source.scene_mut(), time)
             .map_err(|error| error.to_string())?;
-        if self.finite_audio_end == Some(time) {
+        if self.finite_transport_end == Some(time) {
             clock.seek(time).map_err(|error| error.to_string())?;
             clock.pause();
         }
@@ -3319,8 +3357,8 @@ impl SemanticExecutionPlayer {
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = seekDeltaJson))]
     pub fn seek_delta_json(&mut self, time: f64) -> Result<Option<String>, String> {
         self.no_change_presentation = None;
-        if self.finite_audio_end.is_some_and(|end| time > end) {
-            return Err("audio seek exceeds the finite timeline".into());
+        if self.finite_transport_end.is_some_and(|end| time > end) {
+            return Err("playback seek exceeds the finite timeline".into());
         }
         if self.source.session().has_required_callbacks() {
             return Err(
@@ -3335,6 +3373,7 @@ impl SemanticExecutionPlayer {
         self.video
             .demand(self.source.session().video_rasters(), time);
         self.clock = clock;
+        self.pending_scene_control = None;
         #[cfg(any(target_arch = "wasm32", test))]
         self.clear_translation_drag_undo();
         self.encoded_delta(false)
@@ -3342,7 +3381,7 @@ impl SemanticExecutionPlayer {
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen(js_name = setLoopDuration))]
     pub fn set_loop_duration(&mut self, duration: f64) -> Result<(), String> {
-        if self.source.session().has_audio() {
+        if self.source.session().has_audio() || self.source.session().has_playback_controls() {
             if !duration.is_finite()
                 || duration <= 0.0
                 || duration
@@ -3350,13 +3389,12 @@ impl SemanticExecutionPlayer {
                         .source
                         .session()
                         .finite_timeline_end_time()
-                        .ok_or("worker audio lost finite admission")?
+                        .ok_or("worker playback lost finite admission")?
             {
-                return Err(
-                    "audio playback duration must include the complete finite timeline".into(),
-                );
+                return Err("playback duration must include the complete finite timeline".into());
             }
-            self.finite_audio_end = Some(duration);
+            self.pending_scene_control = None;
+            self.finite_transport_end = Some(duration);
             return Ok(());
         }
         if self.source.session().has_required_callbacks() {
@@ -3381,16 +3419,19 @@ impl SemanticExecutionPlayer {
         self.clock.pause();
     }
     pub fn pause(&mut self) {
+        self.pending_scene_control = None;
         self.pause_clock();
         #[cfg(any(target_arch = "wasm32", test))]
         self.worker_pointer_presentation.refresh_paused_viewer(
             &pointer_input::PlayerPointerTarget {
                 source: &mut self.source,
                 translation_drag_undo: &mut self.translation_drag_undo,
+                control_publication: None,
             },
         );
     }
     pub fn resume(&mut self) {
+        self.pending_scene_control = None;
         // A sealed snapshot has no authored interval. Native interactions still
         // use their independent clock when the renderer needs another wake.
         if self.source.session().replay_end_time() == Some(0.0) {

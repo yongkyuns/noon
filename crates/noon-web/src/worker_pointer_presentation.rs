@@ -1,7 +1,7 @@
-//! Collection-time worker association. Authored input requires the latest
-//! coherent presentation, and a captured drag retains its original mapping.
-//! Viewer-only picking can use a bounded window of acknowledged pick roots,
-//! sharing immutable geometry and unchanged branches across frames.
+//! Collection-time worker association. Authored input retains bounded actual
+//! acknowledged metadata and uses the shared point-specific compatibility proof.
+//! Viewer picking retains bounded immutable roots. An acquired drag keeps its
+//! original mapping until release or invalidation.
 use serde::{Deserialize, Serialize};
 
 const MAX_JS_INTEGER: u64 = (1_u64 << 53) - 1;
@@ -94,6 +94,8 @@ mod admission {
     use noon::PlanarViewerPointer;
     use noon_core::Vec2;
 
+    const RETAINED_FRAMES: usize = 8;
+
     #[derive(Clone, Copy, Debug)]
     struct RejectedSource {
         source: u64,
@@ -108,10 +110,9 @@ mod admission {
         frame: PointerFrameSnapshot,
     }
 
-    /// The last presented mapping, pinned when a press acquires a drag. Motion
-    /// and acknowledgements use independent worker channels: a later receipt
-    /// can reach the engine before an occurrence collected against an older one.
-    /// Keeping this one mapping avoids retaining presentation history.
+    /// One actual render-owner acknowledgement and its original issued metadata.
+    /// Ordinary occurrences retain an exact bounded association. A press that
+    /// acquires a drag independently pins one mapping across later motion.
     struct PresentedFrame {
         receipt: WorkerPointerReceipt,
         frame: PointerFrameSnapshot,
@@ -202,8 +203,9 @@ mod admission {
     #[derive(Default)]
     pub(crate) struct WorkerPointerPresentation {
         view: Option<PointerPresentationView>,
-        issued: Option<IssuedFrame>,
+        issued: VecDeque<IssuedFrame>,
         presented: Option<WorkerPointerReceipt>,
+        acknowledged: VecDeque<PresentedFrame>,
         presented_frame: Option<PresentedFrame>,
         retired_presentation: u64,
         spatial_cache: noon::SpatialPickCache,
@@ -302,7 +304,7 @@ mod admission {
             snapshot: bool,
             planar_enabled: bool,
         ) {
-            let Some(issued) = self.issued.as_ref() else {
+            let Some(issued) = self.issued.back() else {
                 self.spatial_cache = noon::SpatialPickCache::default();
                 self.planar_cache = noon::PlanarPickCache::default();
                 return;
@@ -452,12 +454,13 @@ mod admission {
             target.cancel_spatial_pointer_gestures();
             target.cancel_planar_viewer_pointer();
             if let Some(old) = self.presented {
-                self.retired_presentation = old.presentation;
+                self.retired_presentation = self.retired_presentation.max(old.presentation);
             }
             self.view = Some(view);
-            self.issued = None;
+            self.issued.clear();
             self.retire_viewer_frames();
             self.presented = None;
+            self.acknowledged.clear();
             self.presented_frame = None;
             self.refresh_pending = true;
             Ok(())
@@ -465,7 +468,7 @@ mod admission {
 
         pub(crate) fn capture(
             &self,
-            target: &(impl BrowserPointerTarget + ?Sized),
+            target: &mut (impl BrowserPointerTarget + ?Sized),
         ) -> Result<Option<PointerFrameSnapshot>, String> {
             self.view
                 .filter(|view| view.drawable())
@@ -482,7 +485,7 @@ mod admission {
 
         /// A static scene may opt into viewer input after its first picture.
         pub(crate) fn refresh_planar_viewer(&mut self) {
-            if self.issued.is_some() {
+            if !self.issued.is_empty() {
                 self.refresh_pending = true;
             }
         }
@@ -511,14 +514,15 @@ mod admission {
         }
 
         fn issued_frame_is_stale(&self, target: &(impl BrowserPointerTarget + ?Sized)) -> bool {
-            self.issued.as_ref().is_some_and(|issued| {
-                target
-                    .validate_pointer_frame(
-                        &issued.frame,
-                        issued.frame.view(),
-                        crate::browser_pointer_input::PointerFrameValidation::Input,
-                    )
-                    .is_err_and(|error| browser_pointer_input::recoverable_frame_error(&error))
+            self.issued.back().is_some_and(|issued| {
+                target.pointer_frame_needs_refresh(&issued.frame)
+                    || target
+                        .validate_pointer_frame(
+                            &issued.frame,
+                            issued.frame.view(),
+                            crate::browser_pointer_input::PointerFrameValidation::Input,
+                        )
+                        .is_err_and(|error| browser_pointer_input::recoverable_frame_error(&error))
             })
         }
 
@@ -529,7 +533,7 @@ mod admission {
         ) {
             if self
                 .issued
-                .as_ref()
+                .back()
                 .zip(frame)
                 .is_some_and(|(previous, next)| {
                     previous.frame.inspection_revision() != next.inspection_revision()
@@ -545,13 +549,39 @@ mod admission {
             sequence: u64,
             frame: Option<PointerFrameSnapshot>,
         ) {
-            self.issued = frame.map(|frame| IssuedFrame {
+            let Some(frame) = frame else {
+                self.issued.clear();
+                self.acknowledged.clear();
+                self.refresh_pending = false;
+                return;
+            };
+            if self
+                .issued
+                .back()
+                .is_some_and(|issued| issued.session == session && sequence <= issued.sequence)
+            {
+                // An issued transport identity cannot be reused to replace its
+                // captured publication, including after an older entry is evicted.
+                return;
+            }
+            if self
+                .issued
+                .back()
+                .is_some_and(|issued| issued.session != session)
+            {
+                self.issued.clear();
+                self.acknowledged.clear();
+            }
+            if self.issued.len() == RETAINED_FRAMES {
+                self.issued.pop_front();
+            }
+            self.issued.push_back(IssuedFrame {
                 session,
                 sequence,
                 frame,
             });
             // Keep the last actual presentation for ordered surface invalidation.
-            // Admission still requires its IDs to match this newly issued frame.
+            // Issuing another delta never invents an acknowledgement for it.
             self.refresh_pending = false;
         }
 
@@ -562,19 +592,32 @@ mod admission {
         ) -> Result<bool, String> {
             receipt.validate()?;
             let viewer_presented = self.note_viewer_presented(receipt);
-            let Some(issued) = self.issued.as_ref() else {
+            let Some(latest) = self.issued.back() else {
                 return Ok(viewer_presented);
             };
-            if receipt.session != issued.session
-                || receipt.sequence != issued.sequence
-                || receipt.view_revision != issued.frame.view().revision()
+            let Some(view) = self.view.filter(|view| view.drawable()) else {
+                return Ok(false);
+            };
+            if receipt.session != latest.session
+                || (receipt.sequence != latest.sequence
+                    && !target.supports_compatible_pointer_receipts())
+                || receipt.view_revision != view.revision
                 || receipt.presentation <= self.retired_presentation
-                || self
-                    .presented
-                    .is_some_and(|old| receipt.presentation <= old.presentation && receipt != old)
+                || self.presented.is_some_and(|old| {
+                    (receipt.presentation <= old.presentation && receipt != old)
+                        || (receipt.session == old.session && receipt.sequence < old.sequence)
+                })
             {
                 return Ok(viewer_presented);
             }
+            let Some(issued) = self.issued.iter().find(|issued| {
+                issued.session == receipt.session
+                    && issued.sequence == receipt.sequence
+                    && issued.frame.view().revision() == receipt.view_revision
+                    && issued.frame.view().viewport() == Vec2::new(view.width, view.height)
+            }) else {
+                return Ok(false);
+            };
             // A delayed renderer receipt may still describe the held contact's
             // visible mapping. Refresh hover only if that frame is current;
             // observing an older frame must not retarget the current session.
@@ -589,6 +632,15 @@ mod admission {
                 target
                     .observe_pointer_frame(&issued.frame)
                     .map_err(|error| error.to_string())?;
+            }
+            if self.presented != Some(receipt) {
+                if self.acknowledged.len() == RETAINED_FRAMES {
+                    self.acknowledged.pop_front();
+                }
+                self.acknowledged.push_back(PresentedFrame {
+                    receipt,
+                    frame: issued.frame.clone(),
+                });
             }
             self.presented = Some(receipt);
             if !target.translation_drag_active() {
@@ -608,25 +660,42 @@ mod admission {
             receipt: WorkerPointerReceipt,
         ) -> Result<bool, String> {
             receipt.validate()?;
-            if self.presented != Some(receipt)
-                && self
+            let latest = self.presented == Some(receipt)
+                || self
                     .presented_viewer
                     .back()
-                    .is_none_or(|(last, _)| *last != receipt)
+                    .is_some_and(|(last, _)| *last == receipt);
+            if !latest
+                && !self
+                    .acknowledged
+                    .iter()
+                    .any(|presented| presented.receipt == receipt)
             {
                 return Ok(false);
             }
             // The physical source can deliver its eventual real release, but the
-            // gesture cannot cross an unavailable surface.
-            browser_pointer_input::cancel_browser_pointer_input(target, binding, sequence, false)?;
-            target.cancel_spatial_pointer_gestures();
-            target.cancel_planar_viewer_pointer();
-            self.retire_viewer_frames();
-            self.retired_presentation = receipt.presentation;
-            self.presented = None;
-            self.presented_frame = None;
-            self.refresh_pending = true;
-            Ok(true)
+            // gesture cannot cross an unavailable current surface. An older
+            // acknowledgement retires only its records, not a newer gesture.
+            if latest {
+                target.cancel_spatial_pointer_gestures();
+                target.cancel_planar_viewer_pointer();
+                self.retire_viewer_frames();
+                browser_pointer_input::cancel_browser_pointer_input(
+                    target, binding, sequence, false,
+                )?;
+            }
+            self.retired_presentation = self.retired_presentation.max(receipt.presentation);
+            let retired = self.retired_presentation;
+            self.acknowledged
+                .retain(|presented| presented.receipt.presentation > retired);
+            if latest {
+                self.presented = None;
+                self.presented_frame = None;
+                self.refresh_pending = true;
+            }
+            // Issued metadata can still describe a later actual repaint, which
+            // must carry a new presentation counter above the retired watermark.
+            Ok(latest)
         }
 
         /// None rejects an obsolete/unpresented occurrence; Some(false) is an
@@ -666,7 +735,7 @@ mod admission {
             if self.view != Some(registered) {
                 return Ok(None);
             }
-            let Some(issued) = self.issued.as_ref() else {
+            let Some(issued) = self.issued.back() else {
                 self.refresh_pending = true;
                 return Ok(None);
             };
@@ -717,10 +786,11 @@ mod admission {
                 BrowserPointerBinding::retire_after_inspection(binding);
                 target.cancel_planar_viewer_pointer();
                 self.retire_viewer_frames();
-                self.retired_presentation = receipt.presentation;
+                self.retired_presentation = self.retired_presentation.max(receipt.presentation);
                 self.presented = None;
+                self.acknowledged.clear();
                 self.presented_frame = None;
-                self.issued = None;
+                self.issued.clear();
                 self.refresh_pending = true;
             }
             Ok(Some(changed))
@@ -836,9 +906,10 @@ mod admission {
                     target, binding, sequence, true,
                 )?;
                 if let Some(old) = self.presented {
-                    self.retired_presentation = old.presentation;
+                    self.retired_presentation = self.retired_presentation.max(old.presentation);
                 }
                 self.presented = None;
+                self.acknowledged.clear();
                 self.presented_frame = None;
                 self.refresh_pending = true;
                 return Ok(false);
@@ -859,13 +930,15 @@ mod admission {
                     BrowserPointerKind::Move | BrowserPointerKind::Release
                 );
             if captured_continuation {
-                let captured_frame = receipt.and_then(|receipt| {
-                    self.presented_frame.as_ref().and_then(|presented| {
-                        self.presented
-                            .filter(|latest| presented.contains_drag_receipt(receipt, *latest))
-                            .map(|_| presented.frame.clone())
-                    })
-                });
+                let captured_frame = receipt
+                    .filter(|receipt| receipt.presentation > self.retired_presentation)
+                    .and_then(|receipt| {
+                        self.presented_frame.as_ref().and_then(|presented| {
+                            self.presented
+                                .filter(|latest| presented.contains_drag_receipt(receipt, *latest))
+                                .map(|_| presented.frame.clone())
+                        })
+                    });
                 if let Some(frame) = captured_frame {
                     match browser_pointer_input::submit_captured_browser_pointer_input(
                         target, binding, sequence, input, &frame,
@@ -892,22 +965,18 @@ mod admission {
             let interested = binding.is_some()
                 || target.has_native_pointer_subscribers()
                 || (target.default_viewer_selection() && input.kind == BrowserPointerKind::Press);
-            if let (true, false, Some(receipt), Some(issued)) = (
-                interested,
-                captured_continuation,
-                receipt,
-                self.issued.as_ref(),
-            ) {
-                if self.presented == Some(receipt)
-                    && receipt.session == issued.session
-                    && receipt.sequence == issued.sequence
+            if let (true, false, Some(receipt)) = (interested, captured_continuation, receipt) {
+                if let Some(presented) = self
+                    .acknowledged
+                    .iter()
+                    .find(|presented| presented.receipt == receipt)
                 {
                     match browser_pointer_input::submit_presented_browser_pointer_input(
                         target,
                         binding,
                         sequence,
                         input,
-                        &issued.frame,
+                        &presented.frame,
                     ) {
                         Ok(_) => {
                             self.rejected = None;
@@ -916,7 +985,7 @@ mod admission {
                                 // IDs never authorize a new hit or replace it.
                                 self.presented_frame = Some(PresentedFrame {
                                     receipt,
-                                    frame: issued.frame.clone(),
+                                    frame: presented.frame.clone(),
                                 });
                             }
                             return Ok(true);
@@ -937,7 +1006,7 @@ mod admission {
             });
             // Only produce work when the issued frame itself is obsolete. An old
             // occurrence must not cause a feedback loop of identical fresh deltas.
-            if self.issued.is_none() {
+            if self.issued.is_empty() {
                 self.refresh_pending = self.view.is_some();
             }
             Ok(false)

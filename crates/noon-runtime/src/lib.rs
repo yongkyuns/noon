@@ -230,6 +230,10 @@ pub struct SceneInstance {
     last_patch_stats: RuntimePatchStats,
     changes: FrameChanges,
     spatial_changes: FrameChanges,
+    // Presentation changes which do not affect the spatial index still require
+    // independent picking-damage evidence. Renderer changes may be consumed
+    // before a delayed pointer occurrence reaches its original frame.
+    nonspatial_changes: FrameChanges,
     pending_spatial_anchor_groups: BTreeSet<u32>,
     pending_spatial_anchor_rows: BTreeSet<usize>,
     reactive: Option<ReactiveRuntime>,
@@ -289,6 +293,7 @@ impl Clone for SceneInstance {
             last_patch_stats: self.last_patch_stats,
             changes: self.changes.clone(),
             spatial_changes: self.spatial_changes.clone(),
+            nonspatial_changes: self.nonspatial_changes.clone(),
             pending_spatial_anchor_groups: self.pending_spatial_anchor_groups.clone(),
             pending_spatial_anchor_rows: self.pending_spatial_anchor_rows.clone(),
             reactive: self.reactive.clone(),
@@ -401,6 +406,7 @@ impl SceneInstance {
             last_patch_stats: RuntimePatchStats::default(),
             changes: FrameChanges::all(),
             spatial_changes: FrameChanges::all(),
+            nonspatial_changes: FrameChanges::default(),
             pending_spatial_anchor_groups: BTreeSet::new(),
             pending_spatial_anchor_rows: BTreeSet::new(),
             reactive: None,
@@ -622,6 +628,18 @@ impl SceneInstance {
     /// Consume derived spatial invalidation for the execution-session index owner.
     pub fn take_spatial_changes(&mut self) -> FrameChanges {
         std::mem::take(&mut self.spatial_changes)
+    }
+
+    /// Consume paint-only and other nonspatial row changes for the session's
+    /// original-point picking proof. This is independent of renderer dirtiness:
+    /// paint animation must not force a spatial-index geometry update.
+    pub fn take_nonspatial_changes(&mut self) -> FrameChanges {
+        std::mem::take(&mut self.nonspatial_changes)
+    }
+
+    pub(crate) fn mark_nonspatial_changed(&mut self, object_index: usize) {
+        self.changes.insert(object_index);
+        self.nonspatial_changes.insert(object_index);
     }
 
     pub(crate) fn mark_changed(&mut self, object_index: usize) {
@@ -1204,7 +1222,7 @@ impl SceneInstance {
                 ..RuntimePatchStats::default()
             };
             if channel.property.is_effect() {
-                self.changes.insert(channel.object_index as usize);
+                self.mark_nonspatial_changed(channel.object_index as usize);
             } else {
                 self.mark_changed(channel.object_index as usize);
             }
@@ -1300,7 +1318,7 @@ impl SceneInstance {
                     && content == self.frame.objects[object_index].content
                     && text_bounds == self.frame.objects[object_index].text_bounds
             }) {
-                self.changes.insert(object_index);
+                self.mark_nonspatial_changed(object_index);
             } else {
                 self.mark_changed(object_index);
             }
@@ -1432,7 +1450,7 @@ impl SceneInstance {
             ExecutionPatch::SetEffects { .. } | ExecutionPatch::SetDrawEnabled { .. }
         ) {
             if self.frame.objects[index] != before {
-                self.changes.insert(index);
+                self.mark_nonspatial_changed(index);
             }
         } else {
             self.reapply_reactive_for_object(index);
@@ -1443,7 +1461,7 @@ impl SceneInstance {
                         && before.content == self.frame.objects[index].content
                         && before.text_bounds == self.frame.objects[index].text_bounds
                 }) {
-                    self.changes.insert(index);
+                    self.mark_nonspatial_changed(index);
                 } else {
                     self.mark_changed(index);
                 }
@@ -1838,7 +1856,7 @@ impl SceneInstance {
                     self.reposition_painter_row(channel.object_index as usize);
                 }
                 if channel.property == Property::Fill {
-                    self.changes.insert(channel.object_index as usize);
+                    self.mark_nonspatial_changed(channel.object_index as usize);
                 } else {
                     self.mark_changed(channel.object_index as usize);
                 }

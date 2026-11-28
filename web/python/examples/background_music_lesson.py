@@ -2,6 +2,7 @@
 
 Paired with noon::example_scenes::background_music_lesson. Every point and music
 clip is declared before execution; Rust owns interpolation, seeking and audio.
+Five scene buttons use shared playback commands without Python callbacks.
 """
 from noon import *
 
@@ -45,8 +46,56 @@ for x, heading, explanation in [
     (0, "02  NEGATIVE", "-2 becomes -4"),
     (4.3, "03  ZERO", "0 stays 0"),
 ]:
-    label(heading, 18, x, -2.95, INPUT_BLUE)
-    label(explanation, 18, x, -3.35, MUTED)
+    label(heading, 16, x, -2.70, INPUT_BLUE)
+    label(explanation, 16, x, -2.98, MUTED)
+
+# The shared Rust picker targets the filled rectangles. Keep icon strokes
+# unfilled and labels outside the button so their decoration does not hide it.
+for control_x, caption, action in [
+    (-3.6, "PREVIOUS", PlaybackControl.PREVIOUS_SECTION),
+    (-1.8, "PLAY / PAUSE", PlaybackControl.TOGGLE_PLAYBACK),
+    (0, "NEXT", PlaybackControl.NEXT_SECTION),
+    (1.8, "RESTART", PlaybackControl.RESTART),
+    (3.6, "SOUND ON / OFF", PlaybackControl.TOGGLE_AUDIO_MUTED),
+]:
+    control_y = -3.45
+    button = Rectangle(width=1.55, height=0.48, color=GUIDE, stroke_width=1.8).set_fill(PANEL, opacity=1)
+    result.add(button.move_to((control_x, control_y, 0)))
+    result.on_click_playback(button, action)
+    segments = {
+        PlaybackControl.PREVIOUS_SECTION: [
+            ((-0.24, 0), (0.14, 0)), ((-0.24, 0), (-0.02, 0.17)),
+            ((-0.24, 0), (-0.02, -0.17)), ((-0.35, -0.17), (-0.35, 0.17)),
+        ],
+        PlaybackControl.TOGGLE_PLAYBACK: [
+            ((-0.30, -0.17), (-0.30, 0.17)), ((-0.30, 0.17), (-0.03, 0)),
+            ((-0.03, 0), (-0.30, -0.17)), ((0.14, -0.17), (0.14, 0.17)),
+            ((0.30, -0.17), (0.30, 0.17)),
+        ],
+        PlaybackControl.NEXT_SECTION: [
+            ((0.24, 0), (-0.14, 0)), ((0.24, 0), (0.02, 0.17)),
+            ((0.24, 0), (0.02, -0.17)), ((0.35, -0.17), (0.35, 0.17)),
+        ],
+        PlaybackControl.RESTART: [
+            ((-0.18, 0.20), (-0.18, -0.02)), ((-0.18, -0.02), (0.04, -0.02)),
+        ],
+        PlaybackControl.TOGGLE_AUDIO_MUTED: [
+            ((-0.30, -0.08), (-0.30, 0.08)), ((-0.30, 0.08), (-0.18, 0.08)),
+            ((-0.18, 0.08), (-0.02, 0.20)), ((-0.02, 0.20), (-0.02, -0.20)),
+            ((-0.02, -0.20), (-0.18, -0.08)), ((-0.18, -0.08), (-0.30, -0.08)),
+            ((0.13, 0.14), (0.23, 0)), ((0.23, 0), (0.13, -0.14)),
+        ],
+    }[action]
+    for start, end in segments:
+        result.add(Line(
+            (control_x + 0.65 * start[0], control_y + 0.65 * start[1], 0),
+            (control_x + 0.65 * end[0], control_y + 0.65 * end[1], 0),
+            color=INK, stroke_width=2,
+        ).set_fill(opacity=0))
+    if action == PlaybackControl.RESTART:
+        ring = Circle(radius=0.125, color=INK, stroke_width=2).set_fill(opacity=0)
+        result.add(ring.move_to((control_x, control_y, 0)))
+    label(caption, 12, control_x, -3.84, MUTED)
 
 input_point = Circle(radius=0.18, stroke_width=0).set_fill(INPUT_BLUE, opacity=1)
 output_point = Circle(radius=0.18, stroke_width=0).set_fill(OUTPUT_GOLD, opacity=1)

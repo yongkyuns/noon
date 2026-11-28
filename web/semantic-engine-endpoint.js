@@ -20,13 +20,15 @@ const SOURCE_CONTINUATION_PLAYBACK_CONTROLS = new Set([
   "set_loop_duration",
   "advance_to",
   "seek_section",
+  "scene_control",
 ]);
 // A denied replay capability is not a denial of forward execution. Pause and
 // advance_to keep the existing callback-aware, non-rewinding Rust path; only
 // controls that can restart/loop the historical plan require replay admission.
 const REPLAY_DEPENDENT_CONTROLS = new Set([
-  "resume", "seek", "restart_playback", "set_loop_duration", "seek_section",
+  "resume", "seek", "restart_playback", "set_loop_duration", "seek_section", "scene_control",
 ]);
+const TRANSPORT_CONTROLS = new Set(["pause", "resume", "seek", "seek_section", "restart_playback"]);
 const FINITE_EXPORT_CONTROLS = new Set([
   "begin_finite_export", "sample_finite_export", "acknowledge_finite_export",
   "finite_export_audio", "cancel_finite_export",
@@ -547,6 +549,8 @@ export async function attachSemanticEngine(
     const time = type === "state" && pacing === SEMANTIC_PACING_REALTIME
       ? player.playbackTimeAt(performance.now()) : player.time();
     const playing = player.isPlaying();
+    const finiteDuration = player.finitePlaybackDuration?.() ??
+      (hasAudio ? player.finiteAudioDuration() : null);
     const presentationReceipt = type === "state" && !playing && hasAudio &&
       continuation === null && !completedStaticSource && replayUnavailable === null
       ? confirmedPresentationReceipt() : null;
@@ -557,7 +561,7 @@ export async function attachSemanticEngine(
       sections,
       hasAudio,
       ...(hasVideo ? { buffering: player.videoWaiting(), videoReadyUntil: player.videoReadyUntil() ?? null } : {}),
-      ...(hasAudio ? { durationSeconds: player.finiteAudioDuration() } : {}),
+      ...(finiteDuration != null ? { durationSeconds: finiteDuration } : {}),
       ...(presentationReceipt === null ? {} : { presentationReceipt }),
       ...(player.spatialNavigation === true ? { spatialNavigation: true } : {}),
       ...(typeof player.viewerPointerMotion === "boolean" ? { viewerPointerMotion: player.viewerPointerMotion } : {}),
@@ -1273,53 +1277,12 @@ export async function attachSemanticEngine(
       let noTargetSectionQuery = false;
       let finiteExport;
       let audioBlock;
-      try {
-        if (player?.finiteExportActive?.() && !FINITE_EXPORT_CONTROLS.has(message.type) && message.type !== "debug_frame") {
-          throw new Error("finite export owns paused execution until capture completes");
-        }
+      let sceneControl;
+      let sceneControlAction;
+      let sceneControlApplied;
+      // Authored and host controls share the same Rust operations and picture barrier.
+      async function applyPlaybackControl(message) {
         switch (message.type) {
-          case "begin_finite_export":
-            latestTick = null;
-            finiteExport = JSON.parse(player.beginFiniteExportJson(JSON.stringify(message.frameOptions)));
-            observeExecutionWake(performance.now(), true);
-            break;
-          case "sample_finite_export": {
-            latestTick = null;
-            finiteExport = JSON.parse(player.finiteExportStatusJson());
-            let publication = null;
-            if (finiteExport.kind === "needs_sample") {
-              if (prepared !== null) {
-                const before = player.preparedTime();
-                finiteExport = JSON.parse(player.observeFiniteExportJson());
-                if (finiteExport.observation.published_time !== before) {
-                  publication = drainAndSendDelta();
-                  if (publication === null) throw new Error("history export lost its selected publication");
-                }
-              } else {
-                // A held terminal frame retains the exact completed epoch.
-                if (finiteExport.target_time !== player.time()) {
-                  await advanceToAuthoredTime(finiteExport.target_time);
-                }
-                finiteExport = JSON.parse(player.observeFiniteExportJson());
-              }
-            }
-            presentationReceipt = await awaitPresentation(publication);
-            if (prepared !== null && finiteExport.kind === "sample" &&
-                presentationReceipt?.time !== finiteExport.observation.published_time) {
-              throw new Error("history export requires the exact displayed sample");
-            }
-            break;
-          }
-          case "acknowledge_finite_export":
-            finiteExport = JSON.parse(player.acknowledgeFiniteExportJson(JSON.stringify(message.observation)));
-            break;
-          case "finite_export_audio":
-            audioBlock = player.mixFiniteExportAudioBlock(BigInt(message.firstFrame), message.frameCount);
-            break;
-          case "cancel_finite_export":
-            player.cancelFiniteExport();
-            observeExecutionWake(performance.now(), true);
-            break;
           case "pause": {
             latestTick = null;
             if (sourceFinished && (completedStaticSource || replayUnavailable !== null)) break;
@@ -1371,9 +1334,10 @@ export async function attachSemanticEngine(
               context.setSourcePlaybackPlaying(true);
               break;
             }
-            if (hasAudio || hasVideo) {
+            const finiteEnd = player.finitePlaybackDuration?.() ?? player.finiteAudioDuration?.();
+            if (hasAudio || hasVideo || finiteEnd != null) {
               await awaitPresentation(null);
-              if (currentPlayerTime() === player.finiteAudioDuration()) {
+              if (finiteEnd != null && currentPlayerTime() === finiteEnd) {
                 await awaitPresentation(send(player.seekDeltaJson(0)));
               }
             } else if (prepared !== null) {
@@ -1412,12 +1376,6 @@ export async function attachSemanticEngine(
             else if (!hasAudio) observeExecutionWake(performance.now(), true);
             break;
           }
-          case "set_loop_duration":
-            if (prepared !== null) player.setPreparedLoopDuration(message.loopDurationSeconds);
-            else player.setLoopDuration(message.loopDurationSeconds);
-            if (prepared !== null) observePreparedWaiting("loop-policy");
-            observeExecutionWake(performance.now());
-            break;
           case "seek":
           case "seek_section":
           case "restart_playback": {
@@ -1488,6 +1446,95 @@ export async function attachSemanticEngine(
             }
             break;
           }
+        }
+      }
+
+      async function applySceneControl(action) {
+        switch (action) {
+          case "toggle_playback":
+            return applyPlaybackControl({ type: player.isPlaying() ? "pause" : "resume" });
+          case "restart":
+            return applyPlaybackControl({ type: "restart_playback" });
+          case "previous_section":
+          case "next_section":
+            return applyPlaybackControl({ type: "seek_section", previous: action === "previous_section" });
+          case "toggle_audio_muted":
+            // Gain belongs to the viewer's output and is applied on acknowledgement.
+            return;
+          default:
+            throw new Error(`unsupported scene playback action ${action}`);
+        }
+      }
+
+      try {
+        if (player?.finiteExportActive?.() && !FINITE_EXPORT_CONTROLS.has(message.type) && message.type !== "debug_frame") {
+          throw new Error("finite export owns paused execution until capture completes");
+        }
+        switch (message.type) {
+          case "begin_finite_export":
+            latestTick = null;
+            finiteExport = JSON.parse(player.beginFiniteExportJson(JSON.stringify(message.frameOptions)));
+            observeExecutionWake(performance.now(), true);
+            break;
+          case "sample_finite_export": {
+            latestTick = null;
+            finiteExport = JSON.parse(player.finiteExportStatusJson());
+            let publication = null;
+            if (finiteExport.kind === "needs_sample") {
+              if (prepared !== null) {
+                const before = player.preparedTime();
+                finiteExport = JSON.parse(player.observeFiniteExportJson());
+                if (finiteExport.observation.published_time !== before) {
+                  publication = drainAndSendDelta();
+                  if (publication === null) throw new Error("history export lost its selected publication");
+                }
+              } else {
+                // A held terminal frame retains the exact completed epoch.
+                if (finiteExport.target_time !== player.time()) {
+                  await advanceToAuthoredTime(finiteExport.target_time);
+                }
+                finiteExport = JSON.parse(player.observeFiniteExportJson());
+              }
+            }
+            presentationReceipt = await awaitPresentation(publication);
+            if (prepared !== null && finiteExport.kind === "sample" &&
+                presentationReceipt?.time !== finiteExport.observation.published_time) {
+              throw new Error("history export requires the exact displayed sample");
+            }
+            break;
+          }
+          case "acknowledge_finite_export":
+            finiteExport = JSON.parse(player.acknowledgeFiniteExportJson(JSON.stringify(message.observation)));
+            break;
+          case "finite_export_audio":
+            audioBlock = player.mixFiniteExportAudioBlock(BigInt(message.firstFrame), message.frameCount);
+            break;
+          case "cancel_finite_export":
+            player.cancelFiniteExport();
+            observeExecutionWake(performance.now(), true);
+            break;
+          case "pause":
+          case "resume":
+          case "seek":
+          case "seek_section":
+          case "restart_playback":
+            await applyPlaybackControl(message);
+            break;
+          case "set_loop_duration":
+            if (prepared !== null) player.setPreparedLoopDuration(message.loopDurationSeconds);
+            else player.setLoopDuration(message.loopDurationSeconds);
+            if (prepared !== null) observePreparedWaiting("loop-policy");
+            observeExecutionWake(performance.now());
+            break;
+          case "scene_control": {
+            const action = player.takeSceneControl(BigInt(message.sequence));
+            sceneControlApplied = action != null && message.cancel !== true;
+            if (sceneControlApplied) {
+              sceneControlAction = action;
+              await applySceneControl(action);
+            }
+            break;
+          }
           case "undo_translation_drag": {
             latestTick = null;
             if (player.undoTranslationDrag()) {
@@ -1555,8 +1602,29 @@ export async function attachSemanticEngine(
           case "spatial_inspection":
           case "pointer_fill_selection":
           case "browser_pointer_view": {
+            const previousSceneControl = message.type === "browser_pointer_input"
+              ? player?.pendingSceneControlJson?.() : null;
             pointerInputAccepted = applyNativeInput(message);
             if (player === null) break;
+            if (message.type === "browser_pointer_input" && pointerInputAccepted === true) {
+              const pending = player.pendingSceneControlJson?.();
+              if (pending != null && pending !== previousSceneControl) {
+                const request = JSON.parse(pending);
+                if (hasAudio && request.action === "toggle_playback" && !player.isPlaying()) {
+                  // This is the only action that crosses an asynchronous device
+                  // unlock. Rust retains its one sequence/publication receipt.
+                  sceneControl = request;
+                } else {
+                  const action = player.takeSceneControl(BigInt(request.sequence));
+                  sceneControlApplied = action != null;
+                  if (sceneControlApplied) {
+                    sceneControlAction = action;
+                    await applySceneControl(action);
+                    await awaitPresentation(null);
+                  }
+                }
+              }
+            }
             const publication = drainAndSendDelta();
             // Unavailable mappings cannot be presented. Acknowledging their
             // registration authorizes no input and must not block the reveal
@@ -1580,7 +1648,8 @@ export async function attachSemanticEngine(
         }
         if (stopped) break;
         if (prepared !== null && !FINITE_EXPORT_CONTROLS.has(message.type)) prepared.wakeSource();
-        if (hasAudio && ["pause", "resume", "seek", "seek_section", "restart_playback"].includes(message.type)) {
+        if (hasAudio && (TRANSPORT_CONTROLS.has(message.type) ||
+            (sceneControlApplied && sceneControlAction !== "toggle_audio_muted"))) {
           // A control changes both outputs at one accepted Rust clock sample.
           // Presentation precedes the new device anchor; no device clock drives
           // the runtime and no frontend cursor is retained.
@@ -1622,6 +1691,9 @@ export async function attachSemanticEngine(
           ...(presentationReceipt === null ? {} : { presentationReceipt }),
           ...(finiteExport === undefined ? {} : { finiteExport }),
           ...(audioBlock === undefined ? {} : { audioBlock }),
+          ...(sceneControl === undefined ? {} : { sceneControl }),
+          ...(sceneControlApplied === undefined ? {} : { sceneControlApplied }),
+          ...(sceneControlAction === undefined ? {} : { sceneControlAction }),
           ...(message.type === "browser_pointer_input" ? { pointerInputAccepted } : {}),
           ...(message.type === "inspection_scroll" ? { inspectionScrollChanged: pointerInputAccepted ?? null } : {}),
         }, audioBlock === undefined ? [] : [audioBlock.buffer]);
@@ -1746,6 +1818,7 @@ export async function attachSemanticEngine(
     stopped = true;
     if (transport !== null) emitExecutionWake("idle", null, true);
     if (prepared === null && player !== null) {
+      player.cancelSceneControl?.();
       if (pendingPhaseJson !== null) {
         const interruption = new Error("canonical callback phase interrupted by endpoint stop");
         if (typeof player.interruptCallbackPhaseJson === "function") {
@@ -1885,7 +1958,7 @@ export async function attachSemanticEngine(
           return;
         }
         if (receiverFailed) throw new Error("prepared receiver failed; replace the receiver before further controls");
-        if (!FINITE_EXPORT_CONTROLS.has(message.type) && !["pause", "resume", "seek", "seek_section", "restart_playback", "undo_translation_drag", "set_loop_duration", "advance_to",
+        if (!FINITE_EXPORT_CONTROLS.has(message.type) && !["pause", "resume", "seek", "seek_section", "restart_playback", "scene_control", "undo_translation_drag", "set_loop_duration", "advance_to",
           "sample_to_authored_time", "debug_frame",
           "native_state_input", "native_event", "browser_pointer_input", "browser_pointer_view", "pointer_fill_selection", "inspection_scroll", "spatial_inspection",
         ].includes(message.type)) {
@@ -1963,8 +2036,18 @@ export async function attachSemanticEngine(
         if (message.type === "seek_section" && typeof message.previous !== "boolean") {
           throw new Error("section navigation direction must be boolean");
         }
+        if (message.type === "scene_control" &&
+            (typeof message.sequence !== "string" || !/^(0|[1-9][0-9]*)$/.test(message.sequence) ||
+             message.sequence.length > 20 || BigInt(message.sequence) > 0xffffffffffffffffn ||
+             (message.cancel !== undefined && typeof message.cancel !== "boolean"))) {
+          throw new Error("scene playback completion requires an exact input sequence and boolean cancellation");
+        }
         if (controls.length >= MAX_PENDING_SEMANTIC_CONTROLS) {
           throw new Error("semantic control queue is full; wait for pending commands before retrying");
+        }
+        if (TRANSPORT_CONTROLS.has(message.type) || message.type === "set_loop_duration" ||
+            message.type === "begin_finite_export" || message.type === "advance_to") {
+          player?.cancelSceneControl?.();
         }
         controlEnqueueEpochMs.set(message, performance.timeOrigin + performance.now());
         controls.push(message);

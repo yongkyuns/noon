@@ -35,7 +35,7 @@ impl BrowserPointerTarget for PrefixReader {
         PrefixReader::inspection_camera(self)
     }
     fn capture_pointer_frame(
-        &self,
+        &mut self,
         view: PointerFrameView,
     ) -> Result<PointerFrameSnapshot, PointerFrameError> {
         PrefixReader::capture_pointer_frame(self, view)

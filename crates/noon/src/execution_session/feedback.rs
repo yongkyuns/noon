@@ -194,8 +194,8 @@ mod tests {
             scene.add_many(&[(&circle).into()]).unwrap();
         }
         let source = std::rc::Rc::clone(scene.integration_store());
-        let execution = scene.into_execution().unwrap();
-        let session = execution.session();
+        let mut execution = scene.into_execution().unwrap();
+        let session = execution.session_mut();
         let view = session
             .inspection_pointer_view(1, Vec2::new(800.0, 450.0))
             .unwrap();

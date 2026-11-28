@@ -14,7 +14,7 @@ const rows = [
   ['showcase-dynamic-scene','showcase_dynamic_scene.py','bcc689a8cb5d71eefc2afdf69b187260ebf0df5029cc67cca08db43d01541dca','incremental','ordinary',[], 'looped'],
   ['showcase-group-opacity','showcase_group_opacity.py','6a139b18b7ff1d32bef0a20481927061c91dbdc2f1e0c5a1425e3162ecd91da5','incremental','ordinary',[], 'looped'],
   ['showcase-mounted-callout','showcase_mounted_callout.py','a44f44093c25e72b21937f038f25d6b9220c03a1adcfb617e95a69e7488d5b14','incremental','ordinary',[], 'looped'],
-  ['showcase-background-music','background_music_lesson.py','b5bcced4ffb30c44b4bf476e16ae1416a6fad072d2f0df88edd98346a4711a40','immutable','immutable',['audio','sections'], 'finite-complete'],
+  ['showcase-background-music','background_music_lesson.py','5ff28d11f7789cf79123d8af307fa48b1dd677ff484bbcbd02f991aa0c8e842e','immutable','immutable',['audio','sections'], 'finite-complete'],
   ['showcase-entrances-exits','showcase_entrances_exits.py','55818966017c4643b8abb1fab036164f28fc9c019b2ce3b415e28679c1911f73','incremental','ordinary',[], 'looped'],
   ['showcase-timing','showcase_timing.py','d0fa3d4e2281f066a2aaa35ae1f5b3e1272b5a2f1d202437a80a457c238e7c2b','incremental','ordinary',[], 'looped'],
   ['showcase-gpu-glow','showcase_gpu_glow.py','526c40036c50a960cdb2b6e01e13178f5d989e1f7680ca7e14af856063be49da','incremental','ordinary',[], 'looped'],

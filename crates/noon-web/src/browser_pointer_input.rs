@@ -8,13 +8,14 @@ use noon::integration::{
     NativePointerInputPublication, NativePointerInputToken, PointerFrameError,
     PointerFrameSnapshot, PointerFrameView,
 };
-use noon::{ExecutionSessionInputError, LiveContinuation, LiveProgram};
+use noon::{ExecutionSessionInputError, LiveContinuation, LiveProgram, LiveProgramError};
 
 pub(crate) fn recoverable_frame_error(error: &PointerFrameError) -> bool {
     matches!(
         error,
         PointerFrameError::ViewChanged
             | PointerFrameError::CameraMismatch
+            | PointerFrameError::PickingChanged
             | PointerFrameError::Input(
                 ExecutionSessionInputError::ForeignPointerRuntime
                     | ExecutionSessionInputError::StalePointerPublication { .. }
@@ -53,7 +54,7 @@ pub(crate) trait BrowserPointerTarget {
     fn translation_drag_active(&self) -> bool;
     fn inspection_camera(&self) -> Result<noon_core::Camera2DState, PointerFrameError>;
     fn capture_pointer_frame(
-        &self,
+        &mut self,
         view: PointerFrameView,
     ) -> Result<PointerFrameSnapshot, PointerFrameError>;
     fn validate_pointer_frame(
@@ -73,6 +74,31 @@ pub(crate) trait BrowserPointerTarget {
         viewport: Vec2,
     ) -> Result<PointerFrameView, PointerFrameError> {
         PointerFrameView::new(revision, viewport, self.inspection_camera()?)
+    }
+    /// Only targets that can prove point compatibility retain stale authored receipts.
+    fn supports_compatible_pointer_receipts(&self) -> bool {
+        false
+    }
+    fn pointer_frame_needs_refresh(&self, _frame: &PointerFrameSnapshot) -> bool {
+        false
+    }
+    fn validate_pointer_position(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        _surface: Vec2,
+    ) -> Result<(), BrowserPointerAdmissionError> {
+        self.validate_pointer_frame(frame, view, PointerFrameValidation::Input)?;
+        Ok(())
+    }
+    fn pointer_frame_token(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        _surface: Vec2,
+    ) -> Result<NativePointerInputToken, BrowserPointerAdmissionError> {
+        self.pointer_input_token_for_frame(frame, view)
+            .map_err(Into::into)
     }
     fn observe_pointer_frame(
         &mut self,
@@ -127,6 +153,15 @@ impl From<&str> for BrowserPointerAdmissionError {
 impl From<PointerFrameError> for BrowserPointerAdmissionError {
     fn from(error: PointerFrameError) -> Self {
         Self::Frame(error)
+    }
+}
+
+fn live_frame_error<E: std::fmt::Display>(
+    error: LiveProgramError<E>,
+) -> BrowserPointerAdmissionError {
+    match error {
+        LiveProgramError::PointerFrame(error) => BrowserPointerAdmissionError::Frame(error),
+        error => BrowserPointerAdmissionError::Input(error.to_string()),
     }
 }
 
@@ -229,12 +264,6 @@ impl BrowserPointerTarget for noon::SceneExecution {
     fn inspection_camera(&self) -> Result<noon_core::Camera2DState, PointerFrameError> {
         ExecutionSession::inspection_camera(self.session())
     }
-    fn capture_pointer_frame(
-        &self,
-        view: PointerFrameView,
-    ) -> Result<PointerFrameSnapshot, PointerFrameError> {
-        ExecutionSession::capture_pointer_frame(self.session(), view)
-    }
     fn validate_pointer_frame(
         &self,
         frame: &PointerFrameSnapshot,
@@ -257,6 +286,35 @@ impl BrowserPointerTarget for noon::SceneExecution {
         view: PointerFrameView,
     ) -> Result<NativePointerInputToken, PointerFrameError> {
         frame.input_token(self.session(), view)
+    }
+    fn capture_pointer_frame(
+        &mut self,
+        view: PointerFrameView,
+    ) -> Result<PointerFrameSnapshot, PointerFrameError> {
+        self.session_mut().capture_pointer_frame(view)
+    }
+    fn pointer_frame_needs_refresh(&self, frame: &PointerFrameSnapshot) -> bool {
+        frame.needs_input_refresh(self.session())
+    }
+    fn validate_pointer_position(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<(), BrowserPointerAdmissionError> {
+        frame
+            .validate_position(self.session_mut(), view, surface)
+            .map_err(Into::into)
+    }
+    fn pointer_frame_token(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<NativePointerInputToken, BrowserPointerAdmissionError> {
+        frame
+            .input_token_at(self.session_mut(), view, surface)
+            .map_err(Into::into)
     }
     fn observe_pointer_frame(
         &mut self,
@@ -316,12 +374,6 @@ where
     ) -> Result<noon_core::Camera2DState, noon::integration::PointerFrameError> {
         (self.session()).inspection_camera()
     }
-    fn capture_pointer_frame(
-        &self,
-        view: noon::integration::PointerFrameView,
-    ) -> Result<noon::integration::PointerFrameSnapshot, noon::integration::PointerFrameError> {
-        (self.session()).capture_pointer_frame(view)
-    }
     fn validate_pointer_frame(
         &self,
         frame: &noon::integration::PointerFrameSnapshot,
@@ -346,6 +398,33 @@ where
         view: noon::integration::PointerFrameView,
     ) -> Result<NativePointerInputToken, noon::integration::PointerFrameError> {
         frame.input_token(self.session(), view)
+    }
+    fn capture_pointer_frame(
+        &mut self,
+        view: PointerFrameView,
+    ) -> Result<PointerFrameSnapshot, PointerFrameError> {
+        self.capture_pointer_frame(view)
+    }
+    fn pointer_frame_needs_refresh(&self, frame: &PointerFrameSnapshot) -> bool {
+        frame.needs_input_refresh(self.session())
+    }
+    fn validate_pointer_position(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<(), BrowserPointerAdmissionError> {
+        self.validate_pointer_frame_position(frame, view, surface)
+            .map_err(live_frame_error)
+    }
+    fn pointer_frame_token(
+        &mut self,
+        frame: &PointerFrameSnapshot,
+        view: PointerFrameView,
+        surface: Vec2,
+    ) -> Result<NativePointerInputToken, BrowserPointerAdmissionError> {
+        self.pointer_frame_input_token(frame, view, surface)
+            .map_err(live_frame_error)
     }
     fn observe_pointer_frame(
         &mut self,
@@ -634,7 +713,7 @@ fn submit_pointer(
             let view = PointerFrameView::new(wire.view_revision, viewport, camera)?;
             match admission {
                 PositionalAdmission::Presented => {
-                    target.validate_pointer_frame(frame, view, PointerFrameValidation::Input)?
+                    target.validate_pointer_position(frame, view, surface)?;
                 }
                 PositionalAdmission::CapturedGesture => target.validate_pointer_frame(
                     frame,
@@ -658,7 +737,7 @@ fn submit_pointer(
             });
         }
     }
-    let token = target.pointer_token().map_err(|error| error.to_string())?;
+    let mut token = target.pointer_token().map_err(|error| error.to_string())?;
     if token.pointer() != pointer || token.context().view_revision != wire.view_revision {
         return Err("browser pointer session binding has been replaced".into());
     }
@@ -677,7 +756,7 @@ fn submit_pointer(
             let view = PointerFrameView::new(wire.view_revision, viewport, camera)?;
             match admission {
                 PositionalAdmission::Presented => {
-                    target.pointer_input_token_for_frame(frame, view)?;
+                    token = target.pointer_frame_token(frame, view, surface)?;
                 }
                 PositionalAdmission::CapturedGesture => {
                     target.validate_pointer_frame(
